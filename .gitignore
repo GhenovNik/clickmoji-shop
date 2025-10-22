@@ -51,5 +51,10 @@ prisma/dev.db-journal
 .settings/
 *.sublime-*
 
+# Claude Code
+.claude/settings.local.json
+
 # OS
 Thumbs.db
+
+/src/generated/prisma

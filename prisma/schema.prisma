@@ -1,0 +1,153 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// Пользователь
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  name      String?
+  password  String
+  image     String?
+  role      UserRole @default(USER)
+
+  lists     List[]
+  favorites Favorite[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("users")
+}
+
+enum UserRole {
+  USER
+  ADMIN
+}
+
+// Категория продуктов
+model Category {
+  id       String    @id @default(cuid())
+  name     String    @unique
+  nameEn   String    // английское название для поиска
+  emoji    String
+  order    Int       @unique
+
+  products Product[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("categories")
+}
+
+// Продукт (товар)
+model Product {
+  id          String   @id @default(cuid())
+  name        String
+  nameEn      String   // английское название для поиска
+  emoji       String   // unicode emoji или URL кастомной картинки
+  isCustom    Boolean  @default(false)
+  imageUrl    String?  // для кастомных emoji
+
+  categoryId  String
+  category    Category @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+
+  variants    ProductVariant[]
+  items       Item[]
+  favorites   Favorite[]
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([categoryId])
+  @@index([name])
+  @@map("products")
+}
+
+// Разновидность продукта (например: белый хлеб, багет)
+model ProductVariant {
+  id        String  @id @default(cuid())
+  name      String
+  nameEn    String
+  emoji     String
+
+  productId String
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  items     Item[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([productId])
+  @@map("product_variants")
+}
+
+// Список покупок
+model List {
+  id        String   @id @default(cuid())
+  name      String
+  isActive  Boolean  @default(false)
+
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  items     Item[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+  @@index([userId, isActive])
+  @@map("lists")
+}
+
+// Элемент списка (товар в списке)
+model Item {
+  id          String   @id @default(cuid())
+  isPurchased Boolean  @default(false)
+
+  listId      String
+  list        List     @relation(fields: [listId], references: [id], onDelete: Cascade)
+
+  productId   String
+  product     Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  variantId   String?
+  variant     ProductVariant? @relation(fields: [variantId], references: [id], onDelete: SetNull)
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  purchasedAt DateTime?
+
+  @@unique([listId, productId, variantId]) // нельзя добавить один товар дважды
+  @@index([listId])
+  @@index([productId])
+  @@map("items")
+}
+
+// Избранные товары
+model Favorite {
+  id        String   @id @default(cuid())
+
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  productId String
+  product   Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  usageCount Int     @default(0) // сколько раз добавлялся в список
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId, productId])
+  @@index([userId])
+  @@map("favorites")
+}
