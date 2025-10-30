@@ -58,8 +58,8 @@ export default function CategoriesPage() {
             >
               <div className="text-center">
                 <div className="text-6xl mb-3">{category.emoji}</div>
-                <h3 className="font-semibold text-lg mb-1">{category.name}</h3>
-                <p className="text-sm text-gray-500">
+                <h3 className="font-semibold text-lg mb-1 text-gray-900">{category.name}</h3>
+                <p className="text-sm text-gray-600">
                   {category._count.products} товаров
                 </p>
               </div>

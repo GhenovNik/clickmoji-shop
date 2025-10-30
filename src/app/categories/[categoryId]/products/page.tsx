@@ -94,7 +94,7 @@ export default function ProductsPage() {
               >
                 <div className="text-center">
                   <div className="text-4xl mb-2">{product.emoji}</div>
-                  <p className="text-sm font-medium">{product.name}</p>
+                  <p className="text-sm font-medium text-gray-900">{product.name}</p>
                 </div>
               </button>
             );
