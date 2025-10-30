@@ -71,13 +71,14 @@ export default function CategoriesPage() {
           ))}
         </div>
 
-        {/* Back to Home */}
-        <div className="text-center mt-8">
-          <Link
-            href="/"
-            className="text-blue-600 hover:text-blue-800 underline"
-          >
-            ← На главную
+        {/* Navigation */}
+        <div className="flex items-center justify-center gap-6 mt-8">
+          <Link href="/history" className="text-blue-600 hover:text-blue-800 underline">
+            История покупок
+          </Link>
+          <span className="text-gray-400">•</span>
+          <Link href="/" className="text-blue-600 hover:text-blue-800 underline">
+            На главную
           </Link>
         </div>
       </div>

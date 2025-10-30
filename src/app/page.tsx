@@ -25,6 +25,12 @@ export default function Home() {
           >
             Мой список
           </Link>
+          <Link
+            href="/history"
+            className="inline-block bg-purple-600 hover:bg-purple-700 text-white px-8 py-4 rounded-xl font-semibold text-lg transition-colors shadow-lg hover:shadow-xl"
+          >
+            📜 История
+          </Link>
         </div>
       </div>
     </div>
