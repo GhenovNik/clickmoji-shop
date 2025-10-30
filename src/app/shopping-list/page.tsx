@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { useShoppingList } from '@/store/shopping-list';
 
 export default function ShoppingListPage() {
-  const { items, togglePurchased, removeItem, clearPurchased, clearAll } =
+  const { items, togglePurchased, removeItem, clearPurchased, clearAll, completeList } =
     useShoppingList();
 
   const pendingItems = items.filter((item) => !item.isPurchased);
@@ -136,27 +136,46 @@ export default function ShoppingListPage() {
         )}
 
         {/* Action Buttons */}
-        <div className="flex gap-4">
-          <Link
-            href="/categories"
-            className="flex-1 bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-xl font-semibold text-center transition-colors"
-          >
-            + Добавить товары
-          </Link>
+        <div className="space-y-4">
+          <div className="flex gap-4">
+            <Link
+              href="/categories"
+              className="flex-1 bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-xl font-semibold text-center transition-colors"
+            >
+              + Добавить товары
+            </Link>
+            {items.length > 0 && (
+              <button
+                onClick={clearAll}
+                className="bg-red-500 hover:bg-red-600 text-white px-6 py-3 rounded-xl font-semibold transition-colors"
+              >
+                Очистить всё
+              </button>
+            )}
+          </div>
+
           {items.length > 0 && (
             <button
-              onClick={clearAll}
-              className="bg-red-500 hover:bg-red-600 text-white px-6 py-3 rounded-xl font-semibold transition-colors"
+              onClick={() => {
+                if (confirm('Завершить покупки и сохранить список в историю?')) {
+                  completeList();
+                }
+              }}
+              className="w-full bg-green-600 hover:bg-green-700 text-white px-6 py-3 rounded-xl font-semibold transition-colors"
             >
-              Очистить всё
+              ✓ Завершить покупки
             </button>
           )}
         </div>
 
-        {/* Back to Home */}
-        <div className="text-center mt-8">
+        {/* Navigation */}
+        <div className="flex items-center justify-center gap-6 mt-8">
+          <Link href="/history" className="text-blue-600 hover:text-blue-800 underline">
+            История покупок
+          </Link>
+          <span className="text-gray-400">•</span>
           <Link href="/" className="text-blue-600 hover:text-blue-800 underline">
-            ← На главную
+            На главную
           </Link>
         </div>
       </div>
