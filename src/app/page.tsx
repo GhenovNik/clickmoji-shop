@@ -12,12 +12,20 @@ export default function Home() {
           🍅 🥒 🧅 🥛 🍞 🥚
         </div>
 
-        <Link
-          href="/categories"
-          className="inline-block bg-blue-600 hover:bg-blue-700 text-white px-8 py-4 rounded-xl font-semibold text-lg transition-colors shadow-lg hover:shadow-xl"
-        >
-          Начать покупки
-        </Link>
+        <div className="flex flex-col sm:flex-row gap-4 justify-center">
+          <Link
+            href="/categories"
+            className="inline-block bg-blue-600 hover:bg-blue-700 text-white px-8 py-4 rounded-xl font-semibold text-lg transition-colors shadow-lg hover:shadow-xl"
+          >
+            Начать покупки
+          </Link>
+          <Link
+            href="/shopping-list"
+            className="inline-block bg-green-600 hover:bg-green-700 text-white px-8 py-4 rounded-xl font-semibold text-lg transition-colors shadow-lg hover:shadow-xl"
+          >
+            Мой список
+          </Link>
+        </div>
       </div>
     </div>
   );

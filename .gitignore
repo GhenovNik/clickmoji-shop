@@ -53,6 +53,7 @@ prisma/dev.db-journal
 
 # Claude Code
 .claude/settings.local.json
+CLAUDE.MD
 
 # OS
 Thumbs.db

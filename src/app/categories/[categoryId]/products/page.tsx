@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
+import { useShoppingList } from '@/store/shopping-list';
 
 type Product = {
   id: string;
@@ -20,6 +21,7 @@ export default function ProductsPage() {
   const params = useParams();
   const router = useRouter();
   const categoryId = params.categoryId as string;
+  const addItems = useShoppingList((state) => state.addItems);
 
   const [products, setProducts] = useState<Product[]>([]);
   const [selectedProducts, setSelectedProducts] = useState<Set<string>>(new Set());
@@ -51,9 +53,17 @@ export default function ProductsPage() {
   };
 
   const handleAddToList = () => {
-    // TODO: Implement add to shopping list
-    alert(`Добавлено ${selectedProducts.size} товаров в список!`);
-    router.push('/categories');
+    const selectedItems = products
+      .filter((product) => selectedProducts.has(product.id))
+      .map((product) => ({
+        productId: product.id,
+        name: product.name,
+        emoji: product.emoji,
+        categoryName: product.category.name,
+      }));
+
+    addItems(selectedItems);
+    router.push('/shopping-list');
   };
 
   if (loading) {
