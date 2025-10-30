@@ -72,8 +72,8 @@ export default function ProductsPage() {
         {/* Header */}
         <div className="text-center mb-8">
           <div className="text-6xl mb-2">{category?.emoji}</div>
-          <h1 className="text-4xl font-bold mb-2">{category?.name}</h1>
-          <p className="text-gray-600">Выберите товары одним нажатием</p>
+          <h1 className="text-4xl font-bold mb-2 text-gray-900">{category?.name}</h1>
+          <p className="text-gray-700">Выберите товары одним нажатием</p>
         </div>
 
         {/* Products Grid */}
