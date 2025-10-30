@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
+import ProductSearch from '@/components/ProductSearch';
 
 type Category = {
   id: string;
@@ -45,7 +46,10 @@ export default function CategoriesPage() {
         {/* Header */}
         <div className="text-center mb-8">
           <h1 className="text-4xl font-bold mb-2 text-gray-900">🛒 Выберите категорию</h1>
-          <p className="text-gray-700">Выберите категорию товаров для списка покупок</p>
+          <p className="text-gray-700 mb-6">Выберите категорию товаров для списка покупок</p>
+
+          {/* Search */}
+          <ProductSearch />
         </div>
 
         {/* Categories Grid */}
