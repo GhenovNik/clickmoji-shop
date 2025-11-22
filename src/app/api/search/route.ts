@@ -1,6 +1,22 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 
+interface ProductSearchResult {
+  id: string;
+  name: string;
+  nameEn: string;
+  emoji: string;
+  isCustom: boolean;
+  imageUrl: string | null;
+  category: {
+    id: string;
+    name: string;
+    emoji: string;
+  };
+  sim_score: number;
+  match_priority: number;
+}
+
 export async function GET(request: Request) {
   try {
     const { searchParams } = new URL(request.url);
@@ -13,7 +29,7 @@ export async function GET(request: Request) {
     const searchTerm = query.toLowerCase().trim();
 
     // Use PostgreSQL similarity search with pg_trgm for fuzzy matching
-    const products = await prisma.$queryRaw<any[]>`
+    const products = await prisma.$queryRaw<ProductSearchResult[]>`
       SELECT
         p.id,
         p.name,
