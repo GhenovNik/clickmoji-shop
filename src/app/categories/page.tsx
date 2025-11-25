@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
+import { useSession } from 'next-auth/react';
 import ProductSearch from '@/components/ProductSearch';
 
 type Category = {
@@ -10,12 +11,13 @@ type Category = {
   nameEn: string;
   emoji: string;
   order: number;
-  _count: {
+  _count?: {
     products: number;
   };
 };
 
 export default function CategoriesPage() {
+  const { data: session } = useSession();
   const [categories, setCategories] = useState<Category[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -31,6 +33,20 @@ export default function CategoriesPage() {
         setLoading(false);
       });
   }, []);
+
+  // Prepare categories list with Favorites as first item (if user is logged in)
+  const displayCategories = session?.user
+    ? [
+        {
+          id: 'favorites',
+          name: 'Избранное',
+          nameEn: 'Favorites',
+          emoji: '⭐',
+          order: -1,
+        } as Category,
+        ...categories,
+      ]
+    : categories;
 
   if (loading) {
     return (
@@ -54,18 +70,20 @@ export default function CategoriesPage() {
 
         {/* Categories Grid */}
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
-          {categories.map((category) => (
+          {displayCategories.map((category) => (
             <Link
               key={category.id}
-              href={`/categories/${category.id}/products`}
+              href={category.id === 'favorites' ? '/categories/favorites' : `/categories/${category.id}/products`}
               className="bg-white rounded-2xl p-6 shadow-lg hover:shadow-xl transition-all hover:scale-105 cursor-pointer"
             >
               <div className="text-center">
                 <div className="text-6xl mb-3">{category.emoji}</div>
                 <h3 className="font-semibold text-lg mb-1 text-gray-900">{category.name}</h3>
-                <p className="text-sm text-gray-600">
-                  {category._count.products} товаров
-                </p>
+                {category._count && (
+                  <p className="text-sm text-gray-600">
+                    {category._count.products} товаров
+                  </p>
+                )}
               </div>
             </Link>
           ))}

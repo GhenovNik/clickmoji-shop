@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
+import { useSession } from 'next-auth/react';
 import { useShoppingList } from '@/store/shopping-list';
 
 type Product = {
@@ -22,9 +23,11 @@ export default function ProductsPage() {
   const router = useRouter();
   const categoryId = params.categoryId as string;
   const addItems = useShoppingList((state) => state.addItems);
+  const { data: session } = useSession();
 
   const [products, setProducts] = useState<Product[]>([]);
   const [selectedProducts, setSelectedProducts] = useState<Set<string>>(new Set());
+  const [favoriteProducts, setFavoriteProducts] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -40,6 +43,21 @@ export default function ProductsPage() {
       });
   }, [categoryId]);
 
+  // Загружаем избранное если пользователь авторизован
+  useEffect(() => {
+    if (session?.user) {
+      fetch('/api/favorites')
+        .then((res) => res.json())
+        .then((favorites) => {
+          const favoriteIds = new Set<string>(favorites.map((fav: { product: { id: string } }) => fav.product.id));
+          setFavoriteProducts(favoriteIds);
+        })
+        .catch((error) => {
+          console.error('Error loading favorites:', error);
+        });
+    }
+  }, [session]);
+
   const toggleProduct = (productId: string) => {
     setSelectedProducts((prev) => {
       const newSet = new Set(prev);
@@ -50,6 +68,41 @@ export default function ProductsPage() {
       }
       return newSet;
     });
+  };
+
+  const toggleFavorite = async (productId: string, e: React.MouseEvent) => {
+    e.stopPropagation(); // Prevent product selection
+
+    if (!session?.user) {
+      alert('Войдите чтобы добавить товары в избранное');
+      return;
+    }
+
+    const isFavorite = favoriteProducts.has(productId);
+
+    try {
+      if (isFavorite) {
+        // Удаляем из избранного
+        await fetch(`/api/favorites?productId=${productId}`, {
+          method: 'DELETE',
+        });
+        setFavoriteProducts((prev) => {
+          const newSet = new Set(prev);
+          newSet.delete(productId);
+          return newSet;
+        });
+      } else {
+        // Добавляем в избранное
+        await fetch('/api/favorites', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ productId }),
+        });
+        setFavoriteProducts((prev) => new Set([...prev, productId]));
+      }
+    } catch (error) {
+      console.error('Error toggling favorite:', error);
+    }
   };
 
   const handleAddToList = () => {
@@ -90,23 +143,45 @@ export default function ProductsPage() {
         <div className="grid grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
           {products.map((product) => {
             const isSelected = selectedProducts.has(product.id);
+            const isFavorite = favoriteProducts.has(product.id);
             return (
-              <button
-                key={product.id}
-                onClick={() => toggleProduct(product.id)}
-                className={`
-                  bg-white rounded-2xl p-4 shadow-md transition-all
-                  ${isSelected
-                    ? 'ring-4 ring-green-500 scale-95'
-                    : 'hover:shadow-lg hover:scale-105'
-                  }
-                `}
-              >
-                <div className="text-center">
-                  <div className="text-4xl mb-2">{product.emoji}</div>
-                  <p className="text-sm font-medium text-gray-900">{product.name}</p>
-                </div>
-              </button>
+              <div key={product.id} className="relative">
+                <button
+                  onClick={() => toggleProduct(product.id)}
+                  className={`
+                    w-full bg-white rounded-2xl p-4 shadow-md transition-all
+                    ${isSelected
+                      ? 'ring-4 ring-green-500 scale-95'
+                      : 'hover:shadow-lg hover:scale-105'
+                    }
+                  `}
+                >
+                  <div className="text-center">
+                    <div className="text-4xl mb-2">{product.emoji}</div>
+                    <p className="text-sm font-medium text-gray-900">{product.name}</p>
+                  </div>
+                </button>
+
+                {/* Favorite button */}
+                {session?.user && (
+                  <button
+                    onClick={(e) => toggleFavorite(product.id, e)}
+                    className={`
+                      absolute -top-2 -right-2 w-8 h-8 rounded-full shadow-lg
+                      flex items-center justify-center transition-all
+                      ${isFavorite
+                        ? 'bg-yellow-400 hover:bg-yellow-500 scale-110'
+                        : 'bg-white hover:bg-yellow-100'
+                      }
+                    `}
+                    title={isFavorite ? 'Убрать из избранного' : 'Добавить в избранное'}
+                  >
+                    <span className="text-xl">
+                      {isFavorite ? '⭐' : '☆'}
+                    </span>
+                  </button>
+                )}
+              </div>
             );
           })}
         </div>
