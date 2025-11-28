@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { useSession } from 'next-auth/react';
-import { useShoppingList } from '@/store/shopping-list';
+import { useLists } from '@/store/lists';
 
 type Product = {
   id: string;
@@ -22,13 +22,24 @@ export default function ProductsPage() {
   const params = useParams();
   const router = useRouter();
   const categoryId = params.categoryId as string;
-  const addItems = useShoppingList((state) => state.addItems);
   const { data: session } = useSession();
+  const { lists, activeListId, setLists } = useLists();
 
   const [products, setProducts] = useState<Product[]>([]);
   const [selectedProducts, setSelectedProducts] = useState<Set<string>>(new Set());
   const [favoriteProducts, setFavoriteProducts] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
+  const [adding, setAdding] = useState(false);
+
+  // Load lists
+  useEffect(() => {
+    if (session?.user && lists.length === 0) {
+      fetch('/api/lists')
+        .then((res) => res.json())
+        .then((data) => setLists(data))
+        .catch((error) => console.error('Error loading lists:', error));
+    }
+  }, [session, lists.length, setLists]);
 
   useEffect(() => {
     fetch(`/api/products?categoryId=${categoryId}`)
@@ -105,18 +116,46 @@ export default function ProductsPage() {
     }
   };
 
-  const handleAddToList = () => {
+  const handleAddToList = async () => {
+    if (!activeListId) {
+      alert('Сначала выберите список');
+      return;
+    }
+
+    setAdding(true);
+
     const selectedItems = products
       .filter((product) => selectedProducts.has(product.id))
       .map((product) => ({
         productId: product.id,
-        name: product.name,
-        emoji: product.emoji,
-        categoryName: product.category.name,
       }));
 
-    addItems(selectedItems);
-    router.push('/shopping-list');
+    try {
+      await fetch(`/api/lists/${activeListId}/items`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ items: selectedItems }),
+      });
+
+      // Refresh lists to update counts
+      const listsResponse = await fetch('/api/lists');
+      if (listsResponse.ok) {
+        const listsData = await listsResponse.json();
+        setLists(listsData);
+      }
+
+      // Navigate to active list or lists page
+      if (activeListId) {
+        router.push(`/lists/${activeListId}`);
+      } else {
+        router.push('/lists');
+      }
+    } catch (error) {
+      console.error('Error adding items to list:', error);
+      alert('Ошибка при добавлении товаров');
+    } finally {
+      setAdding(false);
+    }
   };
 
   if (loading) {
@@ -206,9 +245,10 @@ export default function ProductsPage() {
             </div>
             <button
               onClick={handleAddToList}
-              className="bg-green-500 hover:bg-green-600 text-white px-8 py-3 rounded-xl font-semibold transition-colors"
+              disabled={adding}
+              className="bg-green-500 hover:bg-green-600 text-white px-8 py-3 rounded-xl font-semibold transition-colors disabled:opacity-50"
             >
-              Добавить в список
+              {adding ? 'Добавление...' : 'Добавить в список'}
             </button>
           </div>
         </div>

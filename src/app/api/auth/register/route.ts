@@ -37,13 +37,19 @@ export async function POST(request: Request) {
       },
     });
 
-    // Создание первого списка покупок для пользователя
-    await prisma.list.create({
-      data: {
-        name: 'Мой список',
-        isActive: true,
+    // Создание базовых списков покупок для пользователя
+    const defaultLists = [
+      { name: 'На неделю', isActive: true },
+      { name: 'Для вечеринки', isActive: false },
+      { name: 'На выходные', isActive: false },
+      { name: 'Чтобы выжить', isActive: false },
+    ];
+
+    await prisma.list.createMany({
+      data: defaultLists.map((list) => ({
+        ...list,
         userId: user.id,
-      },
+      })),
     });
 
     return NextResponse.json(

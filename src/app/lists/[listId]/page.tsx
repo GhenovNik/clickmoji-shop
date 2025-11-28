@@ -1,11 +1,131 @@
 'use client';
 
+import { useEffect, useState } from 'react';
+import { useSession } from 'next-auth/react';
+import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { useShoppingList } from '@/store/shopping-list';
+import { useLists, type List } from '@/store/lists';
 
-export default function ShoppingListPage() {
-  const { items, togglePurchased, removeItem, clearPurchased, clearAll, completeList } =
-    useShoppingList();
+type Item = {
+  id: string;
+  isPurchased: boolean;
+  product: {
+    id: string;
+    name: string;
+    emoji: string;
+    category: {
+      name: string;
+    };
+  };
+};
+
+export default function ShoppingListPage({ params }: { params: { listId: string } }) {
+  const router = useRouter();
+  const { data: session } = useSession();
+  const { setLists, setActiveList } = useLists();
+  const listId = params.listId;
+
+  const [list, setList] = useState<any>(null);
+  const [items, setItems] = useState<Item[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  // Load list and items
+  useEffect(() => {
+    if (!session?.user) {
+      router.push('/auth/signin');
+      return;
+    }
+
+    if (!listId) return;
+
+    // Set as active list
+    setActiveList(listId);
+
+    // Load list details
+    fetchListItems();
+  }, [session, router, listId]);
+
+  const fetchListItems = async () => {
+    setLoading(true);
+    try {
+      const response = await fetch(`/api/lists/${listId}`);
+      if (response.ok) {
+        const data = await response.json();
+        setList(data);
+        setItems(data.items || []);
+      }
+    } catch (error) {
+      console.error('Error fetching list items:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const togglePurchased = async (itemId: string) => {
+    const item = items.find((i) => i.id === itemId);
+    if (!item) return;
+
+    // Optimistic update
+    setItems((prev) =>
+      prev.map((i) =>
+        i.id === itemId ? { ...i, isPurchased: !i.isPurchased } : i
+      )
+    );
+
+    try {
+      await fetch(`/api/lists/${listId}/items/${itemId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ isPurchased: !item.isPurchased }),
+      });
+    } catch (error) {
+      console.error('Error toggling item:', error);
+      // Revert on error
+      setItems((prev) =>
+        prev.map((i) =>
+          i.id === itemId ? { ...i, isPurchased: item.isPurchased } : i
+        )
+      );
+    }
+  };
+
+  const removeItem = async (itemId: string) => {
+
+    // Optimistic update
+    setItems((prev) => prev.filter((i) => i.id !== itemId));
+
+    try {
+      await fetch(`/api/lists/${listId}/items/${itemId}`, {
+        method: 'DELETE',
+      });
+      fetchListItems(); // Refresh items
+    } catch (error) {
+      console.error('Error removing item:', error);
+      fetchListItems();
+    }
+  };
+
+  const clearPurchased = async () => {
+    const purchasedItems = items.filter((item) => item.isPurchased);
+    for (const item of purchasedItems) {
+      await removeItem(item.id);
+    }
+  };
+
+  const clearAll = async () => {
+    if (!confirm('Удалить все товары из списка?')) return;
+    for (const item of items) {
+      await removeItem(item.id);
+    }
+  };
+
+  if (loading || !session?.user) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="text-2xl">Loading...</div>
+      </div>
+    );
+  }
 
   const pendingItems = items.filter((item) => !item.isPurchased);
   const purchasedItems = items.filter((item) => item.isPurchased);
@@ -17,28 +137,29 @@ export default function ShoppingListPage() {
           {/* Back Button */}
           <div className="mb-6">
             <Link
-              href="/"
+              href="/lists"
               className="inline-flex items-center gap-2 text-blue-600 hover:text-blue-800 font-medium"
             >
               <span>←</span>
-              <span>На главную</span>
+              <span>К спискам</span>
             </Link>
           </div>
 
-          <div className="flex items-center justify-center" style={{ minHeight: 'calc(100vh - 200px)' }}>
+          <div
+            className="flex items-center justify-center"
+            style={{ minHeight: 'calc(100vh - 200px)' }}
+          >
             <div className="text-center">
               <div className="text-8xl mb-4">🛒</div>
               <h1 className="text-3xl font-bold mb-4 text-gray-900">
-                Список покупок пуст
+                {list?.name || 'Список'} пуст
               </h1>
-              <p className="text-gray-700 mb-8">
-                Добавьте товары из категорий
-              </p>
+              <p className="text-gray-700 mb-8">Добавьте товары из категорий</p>
               <Link
                 href="/categories"
                 className="inline-block bg-blue-600 hover:bg-blue-700 text-white px-8 py-3 rounded-xl font-semibold transition-colors"
               >
-                Выбрать товары
+                Добавить товары
               </Link>
             </div>
           </div>
@@ -48,24 +169,22 @@ export default function ShoppingListPage() {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 p-6">
+    <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 p-6 pb-32">
       <div className="max-w-2xl mx-auto">
         {/* Back Button */}
         <div className="mb-6">
           <Link
-            href="/"
+            href="/lists"
             className="inline-flex items-center gap-2 text-blue-600 hover:text-blue-800 font-medium"
           >
             <span>←</span>
-            <span>На главную</span>
+            <span>К спискам</span>
           </Link>
         </div>
 
         {/* Header */}
         <div className="text-center mb-8">
-          <h1 className="text-4xl font-bold mb-2 text-gray-900">
-            🛒 Список покупок
-          </h1>
+          <h1 className="text-4xl font-bold mb-2 text-gray-900">🛒 {list?.name || 'Список'}</h1>
           <p className="text-gray-700">
             {pendingItems.length} товаров осталось купить
           </p>
@@ -74,9 +193,7 @@ export default function ShoppingListPage() {
         {/* Pending Items */}
         {pendingItems.length > 0 && (
           <div className="mb-8">
-            <h2 className="text-xl font-semibold mb-4 text-gray-900">
-              Нужно купить
-            </h2>
+            <h2 className="text-xl font-semibold mb-4 text-gray-900">Нужно купить</h2>
             <div className="space-y-3">
               {pendingItems.map((item) => (
                 <div
@@ -89,11 +206,11 @@ export default function ShoppingListPage() {
                   />
                   <div className="flex-1">
                     <div className="flex items-center gap-2">
-                      <span className="text-3xl">{item.emoji}</span>
+                      <span className="text-3xl">{item.product.emoji}</span>
                       <div>
-                        <p className="font-medium text-gray-900">{item.name}</p>
+                        <p className="font-medium text-gray-900">{item.product.name}</p>
                         <p className="text-sm text-gray-500">
-                          {item.categoryName}
+                          {item.product.category.name}
                         </p>
                       </div>
                     </div>
@@ -138,13 +255,13 @@ export default function ShoppingListPage() {
                   </button>
                   <div className="flex-1">
                     <div className="flex items-center gap-2">
-                      <span className="text-3xl">{item.emoji}</span>
+                      <span className="text-3xl">{item.product.emoji}</span>
                       <div>
                         <p className="font-medium text-gray-900 line-through">
-                          {item.name}
+                          {item.product.name}
                         </p>
                         <p className="text-sm text-gray-500">
-                          {item.categoryName}
+                          {item.product.category.name}
                         </p>
                       </div>
                     </div>
@@ -179,19 +296,6 @@ export default function ShoppingListPage() {
               </button>
             )}
           </div>
-
-          {items.length > 0 && (
-            <button
-              onClick={() => {
-                if (confirm('Завершить покупки и сохранить список в историю?')) {
-                  completeList();
-                }
-              }}
-              className="w-full bg-green-600 hover:bg-green-700 text-white px-6 py-3 rounded-xl font-semibold transition-colors"
-            >
-              ✓ Завершить покупки
-            </button>
-          )}
         </div>
 
         {/* Navigation */}
