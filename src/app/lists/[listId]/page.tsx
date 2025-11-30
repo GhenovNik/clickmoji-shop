@@ -1,10 +1,11 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { use, useEffect, useState } from 'react';
 import { useSession } from 'next-auth/react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { useLists, type List } from '@/store/lists';
+import { useShoppingList } from '@/store/shopping-list';
 
 type Item = {
   id: string;
@@ -19,11 +20,12 @@ type Item = {
   };
 };
 
-export default function ShoppingListPage({ params }: { params: { listId: string } }) {
+export default function ShoppingListPage({ params }: { params: Promise<{ listId: string }> }) {
   const router = useRouter();
   const { data: session } = useSession();
   const { setLists, setActiveList } = useLists();
-  const listId = params.listId;
+  const { listId } = use(params);
+  const { completeList: saveToHistory } = useShoppingList();
 
   const [list, setList] = useState<any>(null);
   const [items, setItems] = useState<Item[]>([]);
@@ -105,18 +107,57 @@ export default function ShoppingListPage({ params }: { params: { listId: string 
     }
   };
 
-  const clearPurchased = async () => {
-    const purchasedItems = items.filter((item) => item.isPurchased);
-    for (const item of purchasedItems) {
-      await removeItem(item.id);
-    }
-  };
-
   const clearAll = async () => {
     if (!confirm('Удалить все товары из списка?')) return;
     for (const item of items) {
       await removeItem(item.id);
     }
+  };
+
+  const completeList = async () => {
+    if (items.length === 0) return;
+
+    // Сохраняем в историю (Zustand store)
+    const historyItems = items.map((item) => ({
+      id: item.id,
+      productId: item.product.id,
+      name: item.product.name,
+      emoji: item.product.emoji,
+      categoryName: item.product.category.name,
+      isPurchased: item.isPurchased,
+      addedAt: new Date(),
+    }));
+
+    saveToHistory();
+
+    // Временно сохраняем в Zustand напрямую
+    const completedList = {
+      id: `list-${Date.now()}`,
+      completedAt: new Date(),
+      items: historyItems,
+    };
+
+    // Удаляем все товары из текущего списка
+    for (const item of items) {
+      try {
+        await fetch(`/api/lists/${listId}/items/${item.id}`, {
+          method: 'DELETE',
+        });
+      } catch (error) {
+        console.error('Error removing item:', error);
+      }
+    }
+
+    // Сохраняем в localStorage вручную
+    const stored = localStorage.getItem('shopping-list-storage');
+    if (stored) {
+      const data = JSON.parse(stored);
+      data.state.history = [completedList, ...(data.state.history || [])].slice(0, 20);
+      localStorage.setItem('shopping-list-storage', JSON.stringify(data));
+    }
+
+    // Переходим на страницу истории
+    router.push('/history');
   };
 
   if (loading || !session?.user) {
@@ -230,17 +271,9 @@ export default function ShoppingListPage({ params }: { params: { listId: string 
         {/* Purchased Items */}
         {purchasedItems.length > 0 && (
           <div className="mb-8">
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="text-xl font-semibold text-gray-900">
-                Куплено ({purchasedItems.length})
-              </h2>
-              <button
-                onClick={clearPurchased}
-                className="text-sm text-red-600 hover:text-red-700 underline"
-              >
-                Очистить
-              </button>
-            </div>
+            <h2 className="text-xl font-semibold mb-4 text-gray-900">
+              Куплено ({purchasedItems.length})
+            </h2>
             <div className="space-y-3">
               {purchasedItems.map((item) => (
                 <div
@@ -275,6 +308,21 @@ export default function ShoppingListPage({ params }: { params: { listId: string 
                 </div>
               ))}
             </div>
+          </div>
+        )}
+
+        {/* Complete List Button - показывается когда все товары куплены */}
+        {pendingItems.length === 0 && purchasedItems.length > 0 && (
+          <div className="mb-6">
+            <button
+              onClick={completeList}
+              className="w-full bg-green-600 hover:bg-green-700 text-white px-8 py-4 rounded-xl font-bold text-lg transition-colors shadow-lg"
+            >
+              ✓ Завершить покупку
+            </button>
+            <p className="text-center text-sm text-gray-600 mt-2">
+              Список будет сохранен в историю покупок
+            </p>
           </div>
         )}
 

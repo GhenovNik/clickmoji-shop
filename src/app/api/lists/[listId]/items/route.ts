@@ -5,7 +5,7 @@ import { auth } from '@/lib/auth';
 // POST /api/lists/[listId]/items - добавить товары в список
 export async function POST(
   request: Request,
-  { params }: { params: { listId: string } }
+  { params }: { params: Promise<{ listId: string }> }
 ) {
   try {
     const session = await auth();
@@ -17,10 +17,12 @@ export async function POST(
       );
     }
 
+    const { listId } = await params;
+
     // Проверяем что список принадлежит пользователю
     const list = await prisma.list.findUnique({
       where: {
-        id: params.listId,
+        id: listId,
         userId: session.user.id,
       },
     });
@@ -50,7 +52,7 @@ export async function POST(
       try {
         const createdItem = await prisma.item.create({
           data: {
-            listId: params.listId,
+            listId: listId,
             productId: item.productId,
             variantId: item.variantId || null,
           },

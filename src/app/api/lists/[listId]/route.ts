@@ -5,7 +5,7 @@ import { auth } from '@/lib/auth';
 // GET /api/lists/[listId] - получить конкретный список
 export async function GET(
   request: Request,
-  { params }: { params: { listId: string } }
+  { params }: { params: Promise<{ listId: string }> }
 ) {
   try {
     const session = await auth();
@@ -17,9 +17,11 @@ export async function GET(
       );
     }
 
+    const { listId } = await params;
+
     const list = await prisma.list.findUnique({
       where: {
-        id: params.listId,
+        id: listId,
         userId: session.user.id,
       },
       include: {
@@ -60,7 +62,7 @@ export async function GET(
 // PUT /api/lists/[listId] - обновить список
 export async function PUT(
   request: Request,
-  { params }: { params: { listId: string } }
+  { params }: { params: Promise<{ listId: string }> }
 ) {
   try {
     const session = await auth();
@@ -72,12 +74,13 @@ export async function PUT(
       );
     }
 
+    const { listId } = await params;
     const { name, isActive } = await request.json();
 
     // Проверяем что список принадлежит пользователю
     const existingList = await prisma.list.findUnique({
       where: {
-        id: params.listId,
+        id: listId,
         userId: session.user.id,
       },
     });
@@ -104,7 +107,7 @@ export async function PUT(
 
     const list = await prisma.list.update({
       where: {
-        id: params.listId,
+        id: listId,
       },
       data: {
         ...(name && { name: name.trim() }),
@@ -132,7 +135,7 @@ export async function PUT(
 // DELETE /api/lists/[listId] - удалить список
 export async function DELETE(
   request: Request,
-  { params }: { params: { listId: string } }
+  { params }: { params: Promise<{ listId: string }> }
 ) {
   try {
     const session = await auth();
@@ -144,10 +147,12 @@ export async function DELETE(
       );
     }
 
+    const { listId } = await params;
+
     // Проверяем что список принадлежит пользователю
     const list = await prisma.list.findUnique({
       where: {
-        id: params.listId,
+        id: listId,
         userId: session.user.id,
       },
     });
@@ -162,7 +167,7 @@ export async function DELETE(
     // Удаляем список (items удалятся автоматически благодаря onDelete: Cascade)
     await prisma.list.delete({
       where: {
-        id: params.listId,
+        id: listId,
       },
     });
 

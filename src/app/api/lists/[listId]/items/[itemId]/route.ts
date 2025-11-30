@@ -5,7 +5,7 @@ import { auth } from '@/lib/auth';
 // PUT /api/lists/[listId]/items/[itemId] - обновить товар
 export async function PUT(
   request: Request,
-  { params }: { params: { listId: string; itemId: string } }
+  { params }: { params: Promise<{ listId: string; itemId: string }> }
 ) {
   try {
     const session = await auth();
@@ -17,10 +17,12 @@ export async function PUT(
       );
     }
 
+    const { listId, itemId } = await params;
+
     // Проверяем что список принадлежит пользователю
     const list = await prisma.list.findUnique({
       where: {
-        id: params.listId,
+        id: listId,
         userId: session.user.id,
       },
     });
@@ -36,8 +38,8 @@ export async function PUT(
 
     const item = await prisma.item.update({
       where: {
-        id: params.itemId,
-        listId: params.listId,
+        id: itemId,
+        listId: listId,
       },
       data: {
         isPurchased,
@@ -66,7 +68,7 @@ export async function PUT(
 // DELETE /api/lists/[listId]/items/[itemId] - удалить товар
 export async function DELETE(
   request: Request,
-  { params }: { params: { listId: string; itemId: string } }
+  { params }: { params: Promise<{ listId: string; itemId: string }> }
 ) {
   try {
     const session = await auth();
@@ -78,10 +80,12 @@ export async function DELETE(
       );
     }
 
+    const { listId, itemId } = await params;
+
     // Проверяем что список принадлежит пользователю
     const list = await prisma.list.findUnique({
       where: {
-        id: params.listId,
+        id: listId,
         userId: session.user.id,
       },
     });
@@ -95,8 +99,8 @@ export async function DELETE(
 
     await prisma.item.delete({
       where: {
-        id: params.itemId,
-        listId: params.listId,
+        id: itemId,
+        listId: listId,
       },
     });
 

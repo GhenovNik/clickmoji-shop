@@ -188,7 +188,7 @@ export default function ListsPage() {
                 onChange={(e) => setNewListName(e.target.value)}
                 onKeyPress={(e) => e.key === 'Enter' && createList()}
                 placeholder="Название списка"
-                className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 mb-4"
+                className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 mb-4 text-gray-900"
                 autoFocus
               />
               <div className="flex gap-4">
@@ -197,7 +197,7 @@ export default function ListsPage() {
                     setShowCreateModal(false);
                     setNewListName('');
                   }}
-                  className="flex-1 px-6 py-3 border border-gray-300 rounded-xl font-semibold hover:bg-gray-50 transition-colors"
+                  className="flex-1 px-6 py-3 bg-red-500 hover:bg-red-600 text-white rounded-xl font-semibold transition-colors"
                 >
                   Отмена
                 </button>

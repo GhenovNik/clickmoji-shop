@@ -4,17 +4,62 @@ import { useShoppingList } from '@/store/shopping-list';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
+import { useSession } from 'next-auth/react';
 
 export default function HistoryPage() {
   const history = useShoppingList((state) => state.history);
-  const restoreFromHistory = useShoppingList((state) => state.restoreFromHistory);
   const deleteFromHistory = useShoppingList((state) => state.deleteFromHistory);
   const router = useRouter();
+  const { data: session } = useSession();
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [restoring, setRestoring] = useState(false);
 
-  const handleRestore = (historyId: string) => {
-    restoreFromHistory(historyId);
-    router.push('/lists');
+  const handleRestore = async (historyId: string) => {
+    if (!session?.user) {
+      alert('Войдите в систему для восстановления списка');
+      return;
+    }
+
+    const historyList = history.find((list) => list.id === historyId);
+    if (!historyList) return;
+
+    setRestoring(true);
+
+    try {
+      // Создаем новый список с названием по дате
+      const listName = `Список от ${formatDate(historyList.completedAt)}`;
+
+      const createResponse = await fetch('/api/lists', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: listName, isActive: false }),
+      });
+
+      if (!createResponse.ok) {
+        throw new Error('Failed to create list');
+      }
+
+      const newList = await createResponse.json();
+
+      // Добавляем товары в новый список
+      const items = historyList.items.map((item) => ({
+        productId: item.productId,
+      }));
+
+      await fetch(`/api/lists/${newList.id}/items`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ items }),
+      });
+
+      // Переходим к новому списку
+      router.push(`/lists/${newList.id}`);
+    } catch (error) {
+      console.error('Error restoring list:', error);
+      alert('Ошибка при восстановлении списка');
+    } finally {
+      setRestoring(false);
+    }
   };
 
   const handleDelete = (historyId: string) => {
@@ -36,6 +81,17 @@ export default function HistoryPage() {
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 p-6">
       <div className="max-w-4xl mx-auto">
+        {/* Back Button */}
+        <div className="mb-6">
+          <Link
+            href="/"
+            className="inline-flex items-center gap-2 text-blue-600 hover:text-blue-800 font-medium"
+          >
+            <span>←</span>
+            <span>На главную</span>
+          </Link>
+        </div>
+
         {/* Header */}
         <div className="text-center mb-8">
           <h1 className="text-4xl font-bold mb-2 text-gray-900">📜 История покупок</h1>
@@ -51,10 +107,10 @@ export default function HistoryPage() {
               Завершенные списки покупок будут отображаться здесь
             </p>
             <Link
-              href="/categories"
+              href="/lists"
               className="inline-block bg-blue-600 text-white px-6 py-3 rounded-xl hover:bg-blue-700 transition-colors"
             >
-              Начать покупки
+              К спискам покупок
             </Link>
           </div>
         ) : (
@@ -92,9 +148,10 @@ export default function HistoryPage() {
                       <div className="flex gap-2 mb-4 pt-4">
                         <button
                           onClick={() => handleRestore(list.id)}
-                          className="flex-1 bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors font-semibold"
+                          disabled={restoring}
+                          className="flex-1 bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors font-semibold disabled:opacity-50"
                         >
-                          Восстановить
+                          {restoring ? 'Восстановление...' : 'Восстановить в новый список'}
                         </button>
                         <button
                           onClick={() => handleDelete(list.id)}
@@ -130,15 +187,6 @@ export default function HistoryPage() {
           </div>
         )}
 
-        {/* Back to Shopping List */}
-        <div className="text-center mt-8">
-          <Link
-            href="/lists"
-            className="text-blue-600 hover:text-blue-800 underline"
-          >
-            ← К спискам покупок
-          </Link>
-        </div>
       </div>
     </div>
   );
