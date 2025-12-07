@@ -8,13 +8,25 @@ export const authConfig: NextAuthConfig = {
     authorized({ auth, request: { nextUrl } }) {
       const isLoggedIn = !!auth?.user;
       const pathname = nextUrl.pathname;
+      const userRole = auth?.user?.role;
 
       // Публичные маршруты
       const publicRoutes = ['/', '/login', '/register'];
       const isPublicRoute = publicRoutes.includes(pathname);
 
-      // API маршруты - пропускаем
+      // API маршруты - пропускаем (проверка роли будет в самих API)
       if (pathname.startsWith('/api')) {
+        return true;
+      }
+
+      // Проверка доступа к админ-панели
+      if (pathname.startsWith('/admin')) {
+        if (!isLoggedIn) {
+          return false; // Редирект на /login
+        }
+        if (userRole !== 'ADMIN') {
+          return Response.redirect(new URL('/', nextUrl));
+        }
         return true;
       }
 

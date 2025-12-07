@@ -33,8 +33,18 @@ export default function UserMenu() {
     );
   }
 
+  const isAdmin = session.user?.role === 'ADMIN';
+
   return (
     <div className="flex items-center gap-3">
+      {isAdmin && (
+        <Link
+          href="/admin"
+          className="text-sm bg-purple-600 hover:bg-purple-700 text-white px-3 py-1.5 rounded-lg transition-colors"
+        >
+          Админ-панель
+        </Link>
+      )}
       <span className="text-sm text-gray-700">
         {session.user?.name || session.user?.email}
       </span>
