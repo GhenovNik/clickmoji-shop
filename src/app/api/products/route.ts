@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
+import { auth } from '@/lib/auth';
 
 export async function GET(request: Request) {
   try {
@@ -7,10 +8,23 @@ export async function GET(request: Request) {
     const categoryId = searchParams.get('categoryId');
 
     if (!categoryId) {
-      return NextResponse.json(
-        { error: 'categoryId is required' },
-        { status: 400 }
-      );
+      // Если categoryId не указан, возвращаем все продукты
+      const products = await prisma.product.findMany({
+        include: {
+          variants: true,
+          category: {
+            select: {
+              id: true,
+              name: true,
+              emoji: true,
+            },
+          },
+        },
+        orderBy: {
+          name: 'asc',
+        },
+      });
+      return NextResponse.json(products);
     }
 
     const products = await prisma.product.findMany({
@@ -37,6 +51,56 @@ export async function GET(request: Request) {
     console.error('Error fetching products:', error);
     return NextResponse.json(
       { error: 'Failed to fetch products' },
+      { status: 500 }
+    );
+  }
+}
+
+export async function POST(request: Request) {
+  try {
+    const session = await auth();
+    if (!session || session.user.role !== 'ADMIN') {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
+    const body = await request.json();
+    const { name, nameEn, emoji, categoryId, isCustom, imageUrl } = body;
+
+    // Валидация: emoji обязателен только если не используется кастомное изображение
+    if (!name || !nameEn || !categoryId) {
+      return NextResponse.json(
+        { error: 'Missing required fields: name, nameEn, categoryId' },
+        { status: 400 }
+      );
+    }
+
+    if (!isCustom && !emoji) {
+      return NextResponse.json(
+        { error: 'Emoji is required for non-custom products' },
+        { status: 400 }
+      );
+    }
+
+    const product = await prisma.product.create({
+      data: {
+        name,
+        nameEn,
+        emoji,
+        categoryId,
+        isCustom: isCustom || false,
+        imageUrl: imageUrl || null,
+      },
+      include: {
+        variants: true,
+        category: true,
+      },
+    });
+
+    return NextResponse.json(product);
+  } catch (error) {
+    console.error('Error creating product:', error);
+    return NextResponse.json(
+      { error: 'Failed to create product' },
       { status: 500 }
     );
   }
