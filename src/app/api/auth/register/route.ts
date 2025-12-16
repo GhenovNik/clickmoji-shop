@@ -39,10 +39,11 @@ export async function POST(request: Request) {
 
     // Создание базовых списков покупок для пользователя
     const defaultLists = [
-      { name: 'На неделю', isActive: true },
-      { name: 'Для вечеринки', isActive: false },
+      { name: 'Основной', isActive: true },
       { name: 'На выходные', isActive: false },
-      { name: 'Чтобы выжить', isActive: false },
+      { name: 'Праздники', isActive: false },
+      { name: 'Для вечеринки', isActive: false },
+      { name: 'Срочное', isActive: false },
     ];
 
     await prisma.list.createMany({
