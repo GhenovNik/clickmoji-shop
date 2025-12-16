@@ -35,13 +35,35 @@ export async function POST(request: Request) {
     }
 
     const body = await request.json();
-    const { name, nameEn, emoji, order } = body;
+    const { name, nameEn, emoji, order, isCustom, imageUrl } = body;
 
-    if (!name || !nameEn || !emoji || order === undefined) {
+    if (!name || !nameEn || order === undefined) {
       return NextResponse.json(
-        { error: 'Missing required fields' },
+        { error: 'Missing required fields: name, nameEn, order' },
         { status: 400 }
       );
+    }
+
+    // Either emoji or imageUrl must be provided
+    if (!emoji && !imageUrl) {
+      return NextResponse.json(
+        { error: 'Either emoji or custom image (imageUrl) is required' },
+        { status: 400 }
+      );
+    }
+
+    // Проверяем, занят ли этот order
+    const existingCategory = await prisma.category.findFirst({
+      where: { order },
+    });
+
+    if (existingCategory) {
+      // Сдвигаем все категории с order >= указанного на +1
+      await prisma.$executeRaw`
+        UPDATE categories
+        SET "order" = "order" + 1
+        WHERE "order" >= ${order}
+      `;
     }
 
     const category = await prisma.category.create({
@@ -50,6 +72,8 @@ export async function POST(request: Request) {
         nameEn,
         emoji,
         order,
+        isCustom: isCustom || false,
+        imageUrl: imageUrl || null,
       },
     });
 

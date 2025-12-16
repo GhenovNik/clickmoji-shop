@@ -5,16 +5,17 @@ const prisma = new PrismaClient();
 async function main() {
   console.log('🌱 Starting seed...');
 
-  // Очистка существующих данных (в порядке зависимостей)
-  await prisma.favorite.deleteMany();
-  await prisma.item.deleteMany();
-  await prisma.list.deleteMany();
-  await prisma.productVariant.deleteMany();
-  await prisma.product.deleteMany();
-  await prisma.category.deleteMany();
-  await prisma.user.deleteMany();
+  // Проверяем, есть ли уже категории
+  const existingCount = await prisma.category.count();
 
-  console.log('🧹 Cleaned existing data');
+  if (existingCount > 0) {
+    console.log(`ℹ️  Database already has ${existingCount} categories.`);
+    console.log('💡 Skipping seed to preserve existing data.');
+    console.log('   To reset and re-seed, manually delete categories first.');
+    return;
+  }
+
+  console.log('📦 Creating default categories and products...');
 
   // Создание категорий и продуктов
   const categories = [

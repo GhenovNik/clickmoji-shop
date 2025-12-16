@@ -14,7 +14,39 @@ export async function PUT(
 
     const { categoryId } = await params;
     const body = await request.json();
-    const { name, nameEn, emoji, order } = body;
+    const { name, nameEn, emoji, order, isCustom, imageUrl } = body;
+
+    // Если меняется order, нужно обработать конфликты
+    if (order !== undefined) {
+      const currentCategory = await prisma.category.findUnique({
+        where: { id: categoryId },
+      });
+
+      if (currentCategory && currentCategory.order !== order) {
+        // Проверяем, занят ли новый order другой категорией
+        const conflictingCategory = await prisma.category.findFirst({
+          where: {
+            order,
+            id: { not: categoryId },
+          },
+        });
+
+        if (conflictingCategory) {
+          // Временно устанавливаем очень большой order для текущей категории
+          await prisma.category.update({
+            where: { id: categoryId },
+            data: { order: 999999 },
+          });
+
+          // Сдвигаем все категории с order >= нового значения на +1
+          await prisma.$executeRaw`
+            UPDATE categories
+            SET "order" = "order" + 1
+            WHERE "order" >= ${order} AND id != ${categoryId}
+          `;
+        }
+      }
+    }
 
     const category = await prisma.category.update({
       where: { id: categoryId },
@@ -23,6 +55,8 @@ export async function PUT(
         ...(nameEn && { nameEn }),
         ...(emoji && { emoji }),
         ...(order !== undefined && { order }),
+        ...(isCustom !== undefined && { isCustom }),
+        ...(imageUrl !== undefined && { imageUrl }),
       },
     });
 

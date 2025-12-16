@@ -35,7 +35,9 @@ model Category {
   id       String    @id @default(cuid())
   name     String    @unique
   nameEn   String    // английское название для поиска
-  emoji    String
+  emoji    String    // unicode emoji или URL кастомной картинки
+  isCustom Boolean   @default(false)
+  imageUrl String?   // для кастомных emoji
   order    Int       @unique
 
   products Product[]
