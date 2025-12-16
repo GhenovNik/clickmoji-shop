@@ -37,6 +37,10 @@ export default function AdminProductsPage() {
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc');
   const [emojiResults, setEmojiResults] = useState<Array<{ emoji: string; label: string; shortcodes?: string[] }>>([]);
   const [searchingEmoji, setSearchingEmoji] = useState(false);
+  const [generatingAI, setGeneratingAI] = useState(false);
+  const [showBulkImport, setShowBulkImport] = useState(false);
+  const [bulkImportText, setBulkImportText] = useState('');
+  const [bulkImporting, setBulkImporting] = useState(false);
 
   const { startUpload } = useUploadThing("productImage");
 
@@ -98,6 +102,41 @@ export default function AdminProductsPage() {
       alert('Ошибка при поиске emoji');
     } finally {
       setSearchingEmoji(false);
+    }
+  };
+
+  const generateAIEmoji = async () => {
+    if (!formData.name) {
+      alert('Введите название продукта для генерации иконки');
+      return;
+    }
+
+    setGeneratingAI(true);
+    try {
+      const res = await fetch('/api/emoji/generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ productName: formData.name }),
+      });
+
+      const data = await res.json();
+
+      if (res.ok && data.imageUrl) {
+        // Автоматически устанавливаем сгенерированное изображение
+        setFormData({
+          ...formData,
+          imageUrl: data.imageUrl,
+          isCustom: true,
+        });
+        alert('✅ AI иконка успешно сгенерирована!');
+      } else {
+        alert(data.error || 'Ошибка при генерации иконки');
+      }
+    } catch (error) {
+      console.error('Error generating AI emoji:', error);
+      alert('Ошибка при генерации иконки');
+    } finally {
+      setGeneratingAI(false);
     }
   };
 
@@ -200,6 +239,60 @@ export default function AdminProductsPage() {
     setEmojiResults([]);
   };
 
+  const handleBulkImport = async () => {
+    if (!bulkImportText.trim()) {
+      alert('Введите названия продуктов (по одному на строке)');
+      return;
+    }
+
+    // Разбиваем текст на строки и фильтруем пустые
+    const productNames = bulkImportText
+      .split('\n')
+      .map(line => line.trim())
+      .filter(line => line.length > 0);
+
+    if (productNames.length === 0) {
+      alert('Не найдено названий продуктов');
+      return;
+    }
+
+    setBulkImporting(true);
+
+    try {
+      const res = await fetch('/api/products/bulk-import', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ productNames }),
+      });
+
+      const data = await res.json();
+
+      if (res.ok) {
+        const { results } = data;
+        alert(
+          `✅ Импорт завершен!\n` +
+          `Добавлено: ${results.success.length}\n` +
+          `Ошибок: ${results.failed.length}`
+        );
+
+        if (results.failed.length > 0) {
+          console.log('Failed products:', results.failed);
+        }
+
+        setShowBulkImport(false);
+        setBulkImportText('');
+        await fetchProducts();
+      } else {
+        alert(`Ошибка: ${data.error || 'Не удалось импортировать продукты'}`);
+      }
+    } catch (error) {
+      console.error('Bulk import error:', error);
+      alert('Ошибка при импорте продуктов');
+    } finally {
+      setBulkImporting(false);
+    }
+  };
+
   // Обработчик клика на заголовок для сортировки
   const handleSort = (field: 'name' | 'category') => {
     if (sortField === field) {
@@ -246,12 +339,20 @@ export default function AdminProductsPage() {
           </Link>
           <div className="flex justify-between items-center">
             <h1 className="text-4xl font-bold text-gray-900">Продукты</h1>
-            <button
-              onClick={() => setShowForm(!showForm)}
-              className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded-lg font-semibold transition-colors"
-            >
-              {showForm ? 'Отмена' : '+ Добавить продукт'}
-            </button>
+            <div className="flex gap-3">
+              <button
+                onClick={() => setShowBulkImport(!showBulkImport)}
+                className="bg-purple-600 hover:bg-purple-700 text-white px-6 py-2 rounded-lg font-semibold transition-colors"
+              >
+                📦 Множественное добавление
+              </button>
+              <button
+                onClick={() => setShowForm(!showForm)}
+                className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded-lg font-semibold transition-colors"
+              >
+                {showForm ? 'Отмена' : '+ Добавить продукт'}
+              </button>
+            </div>
           </div>
         </div>
 
@@ -324,6 +425,15 @@ export default function AdminProductsPage() {
                       className="px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-lg font-semibold transition-colors disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
                     >
                       {searchingEmoji ? 'Поиск...' : '🔍 Подобрать'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={generateAIEmoji}
+                      disabled={generatingAI || !formData.name}
+                      className="px-4 py-2 bg-gradient-to-r from-pink-600 to-purple-600 hover:from-pink-700 hover:to-purple-700 text-white rounded-lg font-semibold transition-colors disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
+                      title="Сгенерировать иконку с помощью AI"
+                    >
+                      {generatingAI ? '⏳ Генерация...' : '🎨 AI'}
                     </button>
                   </div>
                   {emojiResults.length > 0 && (
@@ -487,7 +597,7 @@ export default function AdminProductsPage() {
                           ? 'bg-purple-100 text-purple-800'
                           : 'bg-green-100 text-green-800'
                       }`}>
-                        {product.isCustom ? 'Кастом' : 'Emoji'}
+                        {product.isCustom ? 'Custom' : 'Emoji'}
                       </span>
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
@@ -510,6 +620,72 @@ export default function AdminProductsPage() {
             </table>
           </div>
         </div>
+
+        {/* Bulk Import Modal */}
+        {showBulkImport && (
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+            <div className="bg-white rounded-xl shadow-2xl max-w-2xl w-full mx-4 max-h-[90vh] overflow-hidden flex flex-col">
+              <div className="p-6 border-b border-gray-200">
+                <h2 className="text-2xl font-bold text-gray-900">
+                  📦 Множественное добавление продуктов
+                </h2>
+                <p className="text-sm text-gray-500 mt-2">
+                  Введите названия продуктов (по одному на строке). AI автоматически переведет их на русский и английский, распределит по категориям и подберет emoji.
+                </p>
+              </div>
+
+              <div className="flex-1 overflow-y-auto p-6">
+                <div className="mb-4">
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Названия продуктов (по одному на строке):
+                  </label>
+                  <textarea
+                    value={bulkImportText}
+                    onChange={(e) => setBulkImportText(e.target.value)}
+                    placeholder="авокадо&#10;хумус&#10;тофу&#10;кинза&#10;базилик"
+                    className="w-full h-64 px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent text-gray-900 font-mono"
+                    disabled={bulkImporting}
+                  />
+                  <p className="text-xs text-gray-500 mt-2">
+                    Продуктов: {bulkImportText.split('\n').filter(l => l.trim()).length}
+                  </p>
+                </div>
+
+                <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-4">
+                  <h3 className="text-sm font-semibold text-blue-900 mb-2">ℹ️ Как это работает:</h3>
+                  <ul className="text-sm text-blue-800 space-y-1">
+                    <li>• AI переведет названия на русский и английский</li>
+                    <li>• Автоматически распределит по существующим категориям</li>
+                    <li>• Подберет Unicode emoji (🍎, 🥕) где возможно</li>
+                    <li>• Если emoji не найден, будет использован 📦</li>
+                  </ul>
+                </div>
+              </div>
+
+              <div className="p-6 border-t border-gray-200 bg-gray-50">
+                <div className="flex gap-3">
+                  <button
+                    onClick={handleBulkImport}
+                    disabled={bulkImporting || !bulkImportText.trim()}
+                    className="flex-1 bg-purple-600 hover:bg-purple-700 text-white px-6 py-3 rounded-lg font-semibold transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {bulkImporting ? '⏳ Обработка...' : '🚀 Импортировать'}
+                  </button>
+                  <button
+                    onClick={() => {
+                      setShowBulkImport(false);
+                      setBulkImportText('');
+                    }}
+                    disabled={bulkImporting}
+                    className="px-6 py-3 bg-gray-500 hover:bg-gray-600 text-white rounded-lg font-semibold transition-colors disabled:opacity-50"
+                  >
+                    Отмена
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
