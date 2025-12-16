@@ -142,7 +142,7 @@ export default function AdminCategoriesPage() {
         try {
           const uploadedFiles = await startUpload([selectedFile]);
           if (uploadedFiles && uploadedFiles[0]) {
-            uploadedImageUrl = uploadedFiles[0].url;
+            uploadedImageUrl = uploadedFiles[0].ufsUrl;
           }
         } catch (uploadError) {
           console.error('Upload error:', uploadError);
@@ -164,6 +164,7 @@ export default function AdminCategoriesPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           ...formData,
+          emoji: formData.emoji || '📦', // Дефолтное значение если пустое
           imageUrl: uploadedImageUrl,
           isCustom: !!uploadedImageUrl,
         }),
@@ -447,9 +448,26 @@ export default function AdminCategoriesPage() {
                       className="w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100"
                     />
                     {selectedFile && (
-                      <p className="text-xs text-gray-600 mt-2">
-                        Выбрано: {selectedFile.name}
-                      </p>
+                      <div className="mt-3 p-3 bg-white rounded-lg border border-blue-200">
+                        <div className="flex items-center gap-3">
+                          <img
+                            src={URL.createObjectURL(selectedFile)}
+                            alt="Preview"
+                            className="w-16 h-16 object-contain bg-gray-50 rounded-lg p-2 shadow-sm"
+                          />
+                          <div className="flex-1">
+                            <p className="text-sm font-medium text-gray-900">{selectedFile.name}</p>
+                            <p className="text-xs text-gray-500 mt-1">Файл будет загружен при сохранении</p>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => setSelectedFile(null)}
+                            className="text-red-600 hover:text-red-700 text-sm font-medium"
+                          >
+                            Удалить
+                          </button>
+                        </div>
+                      </div>
                     )}
                   </div>
                 </div>
