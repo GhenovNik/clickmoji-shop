@@ -52,29 +52,33 @@ export async function POST(request: Request) {
       );
     }
 
-    // Проверяем, занят ли этот order
-    const existingCategory = await prisma.category.findFirst({
-      where: { order },
-    });
+    // Выполняем сдвиг и создание в транзакции
+    const category = await prisma.$transaction(async (tx) => {
+      // Проверяем, занят ли этот order
+      const existingCategory = await tx.category.findFirst({
+        where: { order },
+      });
 
-    if (existingCategory) {
-      // Сдвигаем все категории с order >= указанного на +1
-      await prisma.$executeRaw`
-        UPDATE categories
-        SET "order" = "order" + 1
-        WHERE "order" >= ${order}
-      `;
-    }
+      if (existingCategory) {
+        // Сдвигаем все категории с order >= указанного на +1
+        await tx.$executeRaw`
+          UPDATE categories
+          SET "order" = "order" + 1
+          WHERE "order" >= ${order}
+        `;
+      }
 
-    const category = await prisma.category.create({
-      data: {
-        name,
-        nameEn,
-        emoji,
-        order,
-        isCustom: isCustom || false,
-        imageUrl: imageUrl || null,
-      },
+      // Создаём новую категорию
+      return await tx.category.create({
+        data: {
+          name,
+          nameEn,
+          emoji,
+          order,
+          isCustom: isCustom || false,
+          imageUrl: imageUrl || null,
+        },
+      });
     });
 
     return NextResponse.json(category);
