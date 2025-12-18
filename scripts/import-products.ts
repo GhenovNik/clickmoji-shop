@@ -13,7 +13,7 @@
  */
 
 import { PrismaClient } from '@prisma/client';
-import { GoogleGenerativeAI } from '@google/generative-ai';
+import { GoogleGenAI } from '@google/genai';
 import { readFileSync } from 'fs';
 import { join } from 'path';
 
@@ -35,9 +35,9 @@ async function main() {
   console.log('📦 Starting bulk product import...\n');
 
   // Check for API key
-  const apiKey = process.env.GEMINI_API_KEY;
+  const apiKey = process.env.GOOGLE_GENAI_API_KEY || process.env.GEMINI_API_KEY;
   if (!apiKey) {
-    console.error('❌ GEMINI_API_KEY not found in environment variables');
+    console.error('❌ GOOGLE_GENAI_API_KEY or GEMINI_API_KEY not found in environment variables');
     process.exit(1);
   }
 
@@ -74,8 +74,8 @@ async function main() {
   console.log(`📚 Found ${categories.length} categories in database\n`);
 
   // Initialize Gemini
-  const genAI = new GoogleGenerativeAI(apiKey);
-  const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash-lite' });
+  const genAI = new GoogleGenAI({ apiKey });
+  const model = genAI.models.generateContent;
 
   // Create prompt for batch processing
   const categoriesStr = categories.map(c => `${c.nameEn} (${c.name})`).join(', ');
@@ -107,8 +107,11 @@ Respond ONLY with valid JSON array in this exact format:
   console.log('🤖 Processing products with Gemini AI...\n');
 
   try {
-    const result = await model.generateContent(prompt);
-    const responseText = result.response.text();
+    const result = await genAI.models.generateContent({
+      model: 'gemini-2.0-flash-exp',
+      contents: prompt,
+    });
+    const responseText = result.text;
 
     // Extract JSON from response (handle markdown code blocks)
     let jsonStr = responseText.trim();
