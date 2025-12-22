@@ -121,6 +121,10 @@ Respond ONLY with valid JSON array in this exact format:
       jsonStr = jsonStr.replace(/```\n?/g, '').trim();
     }
 
+    // Clean control characters that might break JSON parsing
+    // Replace control characters (except \n, \r, \t) with space
+    jsonStr = jsonStr.replace(/[\x00-\x08\x0B-\x0C\x0E-\x1F\x7F]/g, ' ');
+
     const processedProducts: ProcessedProduct[] = JSON.parse(jsonStr);
 
     console.log(`✅ AI processed ${processedProducts.length} products\n`);
@@ -136,6 +140,22 @@ Respond ONLY with valid JSON array in this exact format:
 
       if (!category) {
         console.warn(`⚠️  Skipping "${product.nameRu}" - category "${product.categoryName}" not found`);
+        skipCount++;
+        continue;
+      }
+
+      // Check if product already exists (by name or nameEn)
+      const existingProduct = await prisma.product.findFirst({
+        where: {
+          OR: [
+            { name: product.nameRu },
+            { nameEn: product.nameEn },
+          ],
+        },
+      });
+
+      if (existingProduct) {
+        console.log(`  ⏭️  ${product.nameRu} (${product.nameEn}) - already exists, skipping`);
         skipCount++;
         continue;
       }

@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { auth } from '@/lib/auth';
-import { GoogleGenerativeAI } from '@google/generative-ai';
+import { GoogleGenAI } from '@google/genai';
 
 interface ProcessedProduct {
   nameRu: string;
@@ -28,10 +28,10 @@ export async function POST(request: Request) {
     }
 
     // Check for API key
-    const apiKey = process.env.GEMINI_API_KEY;
+    const apiKey = process.env.GOOGLE_GENAI_API_KEY || process.env.GEMINI_API_KEY;
     if (!apiKey) {
       return NextResponse.json(
-        { error: 'GEMINI_API_KEY not configured' },
+        { error: 'GOOGLE_GENAI_API_KEY or GEMINI_API_KEY not configured' },
         { status: 500 }
       );
     }
@@ -49,8 +49,7 @@ export async function POST(request: Request) {
     }
 
     // Initialize Gemini
-    const genAI = new GoogleGenerativeAI(apiKey);
-    const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash-lite' });
+    const genAI = new GoogleGenAI({ apiKey });
 
     // Create prompt for batch processing
     const categoriesStr = categories.map(c => `${c.nameEn} (${c.name})`).join(', ');
@@ -81,8 +80,11 @@ Respond ONLY with valid JSON array in this exact format:
 
     console.log('🤖 Processing products with Gemini AI...');
 
-    const result = await model.generateContent(prompt);
-    const responseText = result.response.text();
+    const result = await genAI.models.generateContent({
+      model: 'gemini-2.0-flash-exp',
+      contents: prompt,
+    });
+    const responseText = result.text;
 
     // Extract JSON from response (handle markdown code blocks)
     let jsonStr = responseText.trim();
@@ -92,12 +94,17 @@ Respond ONLY with valid JSON array in this exact format:
       jsonStr = jsonStr.replace(/```\n?/g, '').trim();
     }
 
+    // Clean control characters that might break JSON parsing
+    // Replace control characters (except \n, \r, \t) with space
+    jsonStr = jsonStr.replace(/[\x00-\x08\x0B-\x0C\x0E-\x1F\x7F]/g, ' ');
+
     const processedProducts: ProcessedProduct[] = JSON.parse(jsonStr);
 
     // Match categories and insert products
     const results = {
       success: [] as any[],
       failed: [] as any[],
+      skipped: [] as any[],
     };
 
     for (const product of processedProducts) {
@@ -109,6 +116,25 @@ Respond ONLY with valid JSON array in this exact format:
         results.failed.push({
           product,
           reason: `Category "${product.categoryName}" not found`,
+        });
+        continue;
+      }
+
+      // Check if product already exists (by name or nameEn)
+      const existingProduct = await prisma.product.findFirst({
+        where: {
+          OR: [
+            { name: product.nameRu },
+            { nameEn: product.nameEn },
+          ],
+        },
+      });
+
+      if (existingProduct) {
+        results.skipped.push({
+          name: product.nameRu,
+          nameEn: product.nameEn,
+          reason: 'Product already exists',
         });
         continue;
       }
@@ -141,7 +167,7 @@ Respond ONLY with valid JSON array in this exact format:
     }
 
     return NextResponse.json({
-      message: `Imported ${results.success.length} products, ${results.failed.length} failed`,
+      message: `Imported ${results.success.length} products, ${results.skipped.length} skipped (duplicates), ${results.failed.length} failed`,
       results,
     });
 

@@ -106,8 +106,8 @@ export default function AdminProductsPage() {
   };
 
   const generateAIEmoji = async () => {
-    if (!formData.name) {
-      alert('Введите название продукта для генерации иконки');
+    if (!formData.nameEn) {
+      alert('Введите название продукта (EN) для генерации иконки');
       return;
     }
 
@@ -116,7 +116,7 @@ export default function AdminProductsPage() {
       const res = await fetch('/api/emoji/generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ productName: formData.name }),
+        body: JSON.stringify({ productName: formData.nameEn }),
       });
 
       const data = await res.json();
@@ -429,7 +429,7 @@ export default function AdminProductsPage() {
                     <button
                       type="button"
                       onClick={generateAIEmoji}
-                      disabled={generatingAI || !formData.name}
+                      disabled={generatingAI || !formData.nameEn}
                       className="px-4 py-2 bg-gradient-to-r from-pink-600 to-purple-600 hover:from-pink-700 hover:to-purple-700 text-white rounded-lg font-semibold transition-colors disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
                       title="Сгенерировать иконку с помощью AI"
                     >
