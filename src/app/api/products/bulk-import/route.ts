@@ -86,6 +86,13 @@ Respond ONLY with valid JSON array in this exact format:
     });
     const responseText = result.text;
 
+    if (!responseText) {
+      return NextResponse.json(
+        { error: 'No response from AI' },
+        { status: 500 }
+      );
+    }
+
     // Extract JSON from response (handle markdown code blocks)
     let jsonStr = responseText.trim();
     if (jsonStr.startsWith('```json')) {
