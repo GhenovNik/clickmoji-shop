@@ -307,8 +307,8 @@ export default function AdminCategoriesPage() {
           >
             ← Назад в админ-панель
           </Link>
-          <div className="flex justify-between items-center">
-            <h1 className="text-4xl font-bold text-gray-900">Категории</h1>
+          <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4">
+            <h1 className="text-3xl sm:text-4xl font-bold text-gray-900">Категории</h1>
             <button
               onClick={() => {
                 if (!showForm) {
@@ -320,9 +320,9 @@ export default function AdminCategoriesPage() {
                 }
                 setShowForm(!showForm);
               }}
-              className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded-lg font-semibold transition-colors"
+              className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded-lg font-semibold transition-colors whitespace-nowrap"
             >
-              {showForm ? 'Отмена' : '+ Добавить категорию'}
+              {showForm ? 'Отмена' : '+ Добавить'}
             </button>
           </div>
         </div>

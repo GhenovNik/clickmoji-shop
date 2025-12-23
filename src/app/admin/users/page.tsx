@@ -189,18 +189,18 @@ export default function AdminUsersPage() {
           >
             ← Назад в админ-панель
           </Link>
-          <div className="flex justify-between items-center">
+          <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4">
             <div>
-              <h1 className="text-4xl font-bold text-gray-900">Пользователи</h1>
+              <h1 className="text-3xl sm:text-4xl font-bold text-gray-900">Пользователи</h1>
               <p className="text-gray-600 mt-2">
                 Всего пользователей: {users.length}
               </p>
             </div>
             <button
               onClick={() => setShowForm(!showForm)}
-              className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded-lg font-semibold transition-colors"
+              className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded-lg font-semibold transition-colors whitespace-nowrap"
             >
-              {showForm ? 'Отмена' : '+ Добавить пользователя'}
+              {showForm ? 'Отмена' : '+ Добавить'}
             </button>
           </div>
         </div>
@@ -269,10 +269,10 @@ export default function AdminUsersPage() {
                 </div>
               </div>
 
-              <div className="flex gap-4">
+              <div className="flex flex-col sm:flex-row gap-4">
                 <button
                   type="submit"
-                  className="bg-green-600 hover:bg-green-700 text-white px-6 py-2 rounded-lg font-semibold transition-colors"
+                  className="flex-1 sm:flex-none bg-green-600 hover:bg-green-700 text-white px-6 py-2 rounded-lg font-semibold transition-colors"
                 >
                   {editingUser ? 'Сохранить изменения' : 'Создать пользователя'}
                 </button>
@@ -280,7 +280,7 @@ export default function AdminUsersPage() {
                   <button
                     type="button"
                     onClick={resetForm}
-                    className="bg-gray-500 hover:bg-gray-600 text-white px-6 py-2 rounded-lg font-semibold transition-colors"
+                    className="flex-1 sm:flex-none bg-gray-500 hover:bg-gray-600 text-white px-6 py-2 rounded-lg font-semibold transition-colors"
                   >
                     Отмена
                   </button>
@@ -290,7 +290,8 @@ export default function AdminUsersPage() {
           </div>
         )}
 
-        <div className="bg-white rounded-xl shadow-md overflow-hidden">
+        {/* Desktop Table View */}
+        <div className="hidden md:block bg-white rounded-xl shadow-md overflow-hidden">
           <div className="overflow-x-auto">
             <table className="w-full">
               <thead className="bg-gray-50 border-b border-gray-200">
@@ -408,6 +409,63 @@ export default function AdminUsersPage() {
               </tbody>
             </table>
           </div>
+        </div>
+
+        {/* Mobile Card View */}
+        <div className="md:hidden space-y-4">
+          {sortedUsers.map((user) => (
+            <div key={user.id} className="bg-white rounded-xl shadow-md p-4">
+              <div className="flex items-start justify-between gap-3 mb-3">
+                <div className="flex-1 min-w-0">
+                  <h3 className="font-semibold text-gray-900 truncate">{user.email}</h3>
+                  <p className="text-sm text-gray-600 mt-1">{user.name || '—'}</p>
+                </div>
+                <span className={`px-2 py-1 text-xs font-semibold rounded-full flex-shrink-0 ${
+                  user.role === 'ADMIN'
+                    ? 'bg-purple-100 text-purple-800'
+                    : 'bg-green-100 text-green-800'
+                }`}>
+                  {user.role === 'ADMIN' ? 'Админ' : 'USER'}
+                </span>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3 mb-3 text-sm">
+                <div>
+                  <p className="text-gray-500 text-xs">Списков</p>
+                  <p className="font-medium text-gray-900">{user._count.lists}</p>
+                </div>
+                <div>
+                  <p className="text-gray-500 text-xs">Завершено</p>
+                  <p className="font-medium text-gray-900">{user.completedSessions}</p>
+                </div>
+                <div>
+                  <p className="text-gray-500 text-xs">Избранное</p>
+                  <p className="font-medium text-gray-900">{user._count.favorites}</p>
+                </div>
+                <div>
+                  <p className="text-gray-500 text-xs">Регистрация</p>
+                  <p className="font-medium text-gray-900">
+                    {new Date(user.createdAt).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: '2-digit' })}
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex gap-2 pt-3 border-t border-gray-100">
+                <button
+                  onClick={() => handleEdit(user)}
+                  className="flex-1 bg-blue-50 text-blue-700 px-3 py-2 rounded-lg text-sm font-medium hover:bg-blue-100 transition-colors"
+                >
+                  Редактировать
+                </button>
+                <button
+                  onClick={() => handleDelete(user.id)}
+                  className="flex-1 bg-red-50 text-red-700 px-3 py-2 rounded-lg text-sm font-medium hover:bg-red-100 transition-colors"
+                >
+                  Удалить
+                </button>
+              </div>
+            </div>
+          ))}
         </div>
       </div>
     </div>

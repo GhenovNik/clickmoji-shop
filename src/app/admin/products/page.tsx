@@ -337,20 +337,20 @@ export default function AdminProductsPage() {
           >
             ← Назад в админ-панель
           </Link>
-          <div className="flex justify-between items-center">
-            <h1 className="text-4xl font-bold text-gray-900">Продукты</h1>
-            <div className="flex gap-3">
+          <div className="flex flex-col gap-4">
+            <h1 className="text-3xl sm:text-4xl font-bold text-gray-900">Продукты</h1>
+            <div className="flex flex-col sm:flex-row gap-3">
               <button
                 onClick={() => setShowBulkImport(!showBulkImport)}
-                className="bg-purple-600 hover:bg-purple-700 text-white px-6 py-2 rounded-lg font-semibold transition-colors"
+                className="flex-1 sm:flex-none bg-purple-600 hover:bg-purple-700 text-white px-6 py-2 rounded-lg font-semibold transition-colors whitespace-nowrap"
               >
-                📦 Множественное добавление
+                📦 Массовый импорт
               </button>
               <button
                 onClick={() => setShowForm(!showForm)}
-                className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded-lg font-semibold transition-colors"
+                className="flex-1 sm:flex-none bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded-lg font-semibold transition-colors whitespace-nowrap"
               >
-                {showForm ? 'Отмена' : '+ Добавить продукт'}
+                {showForm ? 'Отмена' : '+ Добавить'}
               </button>
             </div>
           </div>
@@ -409,7 +409,7 @@ export default function AdminProductsPage() {
                   <label className="block text-sm font-medium text-gray-700 mb-1">
                     Emoji (по умолчанию) {!formData.isCustom && '*'}
                   </label>
-                  <div className="flex gap-2">
+                  <div className="flex flex-col sm:flex-row gap-2">
                     <input
                       type="text"
                       value={formData.emoji}
@@ -506,7 +506,7 @@ export default function AdminProductsPage() {
                 )}
               </div>
 
-              <div className="flex gap-4">
+              <div className="flex flex-col sm:flex-row gap-4">
                 <button
                   type="submit"
                   disabled={uploading}
@@ -677,10 +677,10 @@ export default function AdminProductsPage() {
 
         {/* Bulk Import Modal */}
         {showBulkImport && (
-          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-            <div className="bg-white rounded-xl shadow-2xl max-w-2xl w-full mx-4 max-h-[90vh] overflow-hidden flex flex-col">
-              <div className="p-6 border-b border-gray-200">
-                <h2 className="text-2xl font-bold text-gray-900">
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+            <div className="bg-white rounded-xl shadow-2xl max-w-2xl w-full max-h-[90vh] overflow-hidden flex flex-col">
+              <div className="p-4 sm:p-6 border-b border-gray-200">
+                <h2 className="text-xl sm:text-2xl font-bold text-gray-900">
                   📦 Множественное добавление продуктов
                 </h2>
                 <p className="text-sm text-gray-500 mt-2">
@@ -717,7 +717,7 @@ export default function AdminProductsPage() {
               </div>
 
               <div className="p-6 border-t border-gray-200 bg-gray-50">
-                <div className="flex gap-3">
+                <div className="flex flex-col sm:flex-row gap-3">
                   <button
                     onClick={handleBulkImport}
                     disabled={bulkImporting || !bulkImportText.trim()}
@@ -731,7 +731,7 @@ export default function AdminProductsPage() {
                       setBulkImportText('');
                     }}
                     disabled={bulkImporting}
-                    className="px-6 py-3 bg-gray-500 hover:bg-gray-600 text-white rounded-lg font-semibold transition-colors disabled:opacity-50"
+                    className="flex-1 sm:flex-none px-6 py-3 bg-gray-500 hover:bg-gray-600 text-white rounded-lg font-semibold transition-colors disabled:opacity-50"
                   >
                     Отмена
                   </button>
