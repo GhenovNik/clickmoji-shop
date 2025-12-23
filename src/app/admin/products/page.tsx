@@ -528,7 +528,8 @@ export default function AdminProductsPage() {
           </div>
         )}
 
-        <div className="bg-white rounded-xl shadow-md overflow-hidden">
+        {/* Desktop Table View */}
+        <div className="hidden md:block bg-white rounded-xl shadow-md overflow-hidden">
           <div className="overflow-x-auto">
             <table className="w-full">
               <thead className="bg-gray-50 border-b border-gray-200">
@@ -619,6 +620,59 @@ export default function AdminProductsPage() {
               </tbody>
             </table>
           </div>
+        </div>
+
+        {/* Mobile Card View */}
+        <div className="md:hidden space-y-4">
+          {sortedProducts.map((product) => (
+            <div key={product.id} className="bg-white rounded-xl shadow-md p-4">
+              <div className="flex items-start gap-4 mb-3">
+                <div className="flex-shrink-0">
+                  {product.isCustom && product.imageUrl ? (
+                    <img
+                      src={product.imageUrl}
+                      alt={product.name}
+                      className="w-16 h-16 object-contain"
+                    />
+                  ) : (
+                    <span className="text-5xl">{product.emoji}</span>
+                  )}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-start justify-between gap-2 mb-1">
+                    <div className="flex-1">
+                      <h3 className="font-semibold text-gray-900">{product.name}</h3>
+                      <p className="text-sm text-gray-500">{product.nameEn}</p>
+                    </div>
+                    <span className={`px-2 py-1 text-xs font-semibold rounded-full flex-shrink-0 ${
+                      product.isCustom
+                        ? 'bg-purple-100 text-purple-800'
+                        : 'bg-green-100 text-green-800'
+                    }`}>
+                      {product.isCustom ? 'Custom' : 'Emoji'}
+                    </span>
+                  </div>
+                  <p className="text-sm text-gray-600 mt-1">
+                    {product.category.emoji} {product.category.name}
+                  </p>
+                </div>
+              </div>
+              <div className="flex gap-2 pt-3 border-t border-gray-100">
+                <button
+                  onClick={() => handleEdit(product)}
+                  className="flex-1 bg-blue-50 text-blue-700 px-3 py-2 rounded-lg text-sm font-medium hover:bg-blue-100 transition-colors"
+                >
+                  Редактировать
+                </button>
+                <button
+                  onClick={() => handleDelete(product.id)}
+                  className="flex-1 bg-red-50 text-red-700 px-3 py-2 rounded-lg text-sm font-medium hover:bg-red-100 transition-colors"
+                >
+                  Удалить
+                </button>
+              </div>
+            </div>
+          ))}
         </div>
 
         {/* Bulk Import Modal */}
