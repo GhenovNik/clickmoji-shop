@@ -513,7 +513,8 @@ export default function AdminCategoriesPage() {
           </div>
         )}
 
-        <div className="bg-white rounded-xl shadow-md overflow-hidden">
+        {/* Desktop Table View */}
+        <div className="hidden md:block bg-white rounded-xl shadow-md overflow-hidden">
           <table className="w-full">
             <thead className="bg-gray-50 border-b border-gray-200">
               <tr>
@@ -584,6 +585,61 @@ export default function AdminCategoriesPage() {
               ))}
             </tbody>
           </table>
+        </div>
+
+        {/* Mobile Card View */}
+        <div className="md:hidden space-y-4">
+          {categories.map((category) => (
+            <div key={category.id} className="bg-white rounded-xl shadow-md p-4">
+              <div className="flex items-start gap-4 mb-4">
+                <div className="text-4xl flex-shrink-0">
+                  {category.isCustom && category.imageUrl ? (
+                    <img
+                      src={category.imageUrl}
+                      alt={category.name}
+                      className="w-12 h-12 object-contain"
+                    />
+                  ) : (
+                    category.emoji
+                  )}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 mb-1">
+                    <h3 className="font-semibold text-gray-900">{category.name}</h3>
+                    <span className="text-xs bg-gray-100 text-gray-600 px-2 py-1 rounded">
+                      #{category.order}
+                    </span>
+                  </div>
+                  <p className="text-sm text-gray-500">{category.nameEn}</p>
+                  <p className="text-sm text-gray-600 mt-1">
+                    📦 {category._count?.products || 0} товаров
+                  </p>
+                </div>
+              </div>
+              <div className="flex flex-wrap gap-2 pt-3 border-t border-gray-100">
+                {(category._count?.products || 0) > 0 && (
+                  <button
+                    onClick={() => handleManageProducts(category)}
+                    className="flex-1 min-w-[120px] bg-purple-50 text-purple-700 px-3 py-2 rounded-lg text-sm font-medium hover:bg-purple-100 transition-colors"
+                  >
+                    Продукты ({category._count?.products})
+                  </button>
+                )}
+                <button
+                  onClick={() => handleEdit(category)}
+                  className="flex-1 min-w-[120px] bg-blue-50 text-blue-700 px-3 py-2 rounded-lg text-sm font-medium hover:bg-blue-100 transition-colors"
+                >
+                  Редактировать
+                </button>
+                <button
+                  onClick={() => handleDelete(category.id)}
+                  className="flex-1 min-w-[120px] bg-red-50 text-red-700 px-3 py-2 rounded-lg text-sm font-medium hover:bg-red-100 transition-colors"
+                >
+                  Удалить
+                </button>
+              </div>
+            </div>
+          ))}
         </div>
 
         {/* Product Management Modal */}
