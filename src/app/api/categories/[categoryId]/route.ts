@@ -16,35 +16,44 @@ export async function PUT(
     const body = await request.json();
     const { name, nameEn, emoji, order, isCustom, imageUrl } = body;
 
-    // Если меняется order, нужно обработать конфликты
+    // Если меняется order, нужно обработать конфликты с unique constraint
     if (order !== undefined) {
       const currentCategory = await prisma.category.findUnique({
         where: { id: categoryId },
       });
 
       if (currentCategory && currentCategory.order !== order) {
-        // Проверяем, занят ли новый order другой категорией
-        const conflictingCategory = await prisma.category.findFirst({
-          where: {
-            order,
-            id: { not: categoryId },
-          },
-        });
-
-        if (conflictingCategory) {
-          // Временно устанавливаем очень большой order для текущей категории
-          await prisma.category.update({
-            where: { id: categoryId },
-            data: { order: 999999 },
+        // Используем транзакцию для атомарного обмена порядков
+        await prisma.$transaction(async (tx) => {
+          // Проверяем, занят ли новый order другой категорией
+          const conflictingCategory = await tx.category.findFirst({
+            where: {
+              order,
+              id: { not: categoryId },
+            },
           });
 
-          // Сдвигаем все категории с order >= нового значения на +1
-          await prisma.$executeRaw`
-            UPDATE categories
-            SET "order" = "order" + 1
-            WHERE "order" >= ${order} AND id != ${categoryId}
-          `;
-        }
+          if (conflictingCategory) {
+            // Swap порядков: меняем местами
+            // 1. Временно устанавливаем отрицательное значение для текущей категории
+            await tx.category.update({
+              where: { id: categoryId },
+              data: { order: -1 },
+            });
+
+            // 2. Устанавливаем старый order текущей категории для конфликтующей
+            await tx.category.update({
+              where: { id: conflictingCategory.id },
+              data: { order: currentCategory.order },
+            });
+
+            // 3. Устанавливаем новый order для текущей категории
+            await tx.category.update({
+              where: { id: categoryId },
+              data: { order },
+            });
+          }
+        });
       }
     }
 
