@@ -362,7 +362,7 @@ export default function AdminCategoriesPage() {
                   <label className="block text-sm font-medium text-gray-700 mb-1">
                     Emoji
                   </label>
-                  <div className="flex gap-2">
+                  <div className="flex flex-col sm:flex-row gap-2">
                     <input
                       type="text"
                       value={formData.emoji}
@@ -371,23 +371,25 @@ export default function AdminCategoriesPage() {
                       placeholder="🍎"
                       required={!selectedFile && !formData.imageUrl}
                     />
-                    <button
-                      type="button"
-                      onClick={searchEmoji}
-                      disabled={searchingEmoji || !formData.name}
-                      className="px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-lg font-semibold transition-colors disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
-                    >
-                      {searchingEmoji ? 'Поиск...' : '🔍 Подобрать'}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={generateAIEmoji}
-                      disabled={generatingAI || !formData.name}
-                      className="px-4 py-2 bg-gradient-to-r from-pink-600 to-purple-600 hover:from-pink-700 hover:to-purple-700 text-white rounded-lg font-semibold transition-colors disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
-                      title="Сгенерировать иконку с помощью AI (для справки)"
-                    >
-                      {generatingAI ? '⏳' : '🎨'}
-                    </button>
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        onClick={searchEmoji}
+                        disabled={searchingEmoji || !formData.name}
+                        className="flex-1 sm:flex-none px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-lg font-semibold transition-colors disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
+                      >
+                        {searchingEmoji ? 'Поиск...' : '🔍 Подобрать'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={generateAIEmoji}
+                        disabled={generatingAI || !formData.name}
+                        className="flex-1 sm:flex-none px-4 py-2 bg-gradient-to-r from-pink-600 to-purple-600 hover:from-pink-700 hover:to-purple-700 text-white rounded-lg font-semibold transition-colors disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
+                        title="Сгенерировать иконку с помощью AI (для справки)"
+                      >
+                        {generatingAI ? '⏳' : '🎨'}
+                      </button>
+                    </div>
                   </div>
                   {emojiResults.length > 0 && (
                     <div className="mt-2 flex flex-wrap gap-2 p-2 bg-gray-50 rounded-lg border border-gray-200">
@@ -491,11 +493,11 @@ export default function AdminCategoriesPage() {
                   </p>
                 </div>
               </div>
-              <div className="flex gap-4">
+              <div className="flex flex-col sm:flex-row gap-4">
                 <button
                   type="submit"
                   disabled={uploading}
-                  className="bg-green-600 hover:bg-green-700 text-white px-6 py-2 rounded-lg font-semibold transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="flex-1 bg-green-600 hover:bg-green-700 text-white px-6 py-2 rounded-lg font-semibold transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   {uploading ? '⏳ Загрузка...' : (editingCategory ? 'Сохранить изменения' : 'Создать категорию')}
                 </button>
@@ -503,7 +505,7 @@ export default function AdminCategoriesPage() {
                   <button
                     type="button"
                     onClick={resetForm}
-                    className="bg-gray-500 hover:bg-gray-600 text-white px-6 py-2 rounded-lg font-semibold transition-colors"
+                    className="flex-1 sm:flex-none bg-gray-500 hover:bg-gray-600 text-white px-6 py-2 rounded-lg font-semibold transition-colors"
                   >
                     Отмена
                   </button>
@@ -644,10 +646,10 @@ export default function AdminCategoriesPage() {
 
         {/* Product Management Modal */}
         {showProductsModal && selectedCategory && (
-          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-            <div className="bg-white rounded-xl shadow-2xl max-w-3xl w-full mx-4 max-h-[90vh] overflow-hidden flex flex-col">
-              <div className="p-6 border-b border-gray-200">
-                <h2 className="text-2xl font-bold text-gray-900">
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+            <div className="bg-white rounded-xl shadow-2xl max-w-3xl w-full max-h-[90vh] overflow-hidden flex flex-col">
+              <div className="p-4 sm:p-6 border-b border-gray-200">
+                <h2 className="text-xl sm:text-2xl font-bold text-gray-900">
                   Управление продуктами: {selectedCategory.name}
                 </h2>
                 <p className="text-sm text-gray-500 mt-1">
@@ -695,7 +697,7 @@ export default function AdminCategoriesPage() {
               </div>
 
               {categoryProducts.length > 0 && (
-                <div className="p-6 border-t border-gray-200 bg-gray-50">
+                <div className="p-4 sm:p-6 border-t border-gray-200 bg-gray-50">
                   <div className="mb-4">
                     <label className="block text-sm font-medium text-gray-700 mb-2">
                       Переместить в категорию:
@@ -716,7 +718,7 @@ export default function AdminCategoriesPage() {
                     </select>
                   </div>
 
-                  <div className="flex gap-3">
+                  <div className="flex flex-col sm:flex-row gap-3">
                     <button
                       onClick={handleMoveProducts}
                       disabled={selectedProductIds.length === 0 || !targetCategoryId}
@@ -730,7 +732,7 @@ export default function AdminCategoriesPage() {
                         setSelectedProductIds([]);
                         setTargetCategoryId('');
                       }}
-                      className="px-6 py-2 bg-gray-500 hover:bg-gray-600 text-white rounded-lg font-semibold transition-colors"
+                      className="flex-1 sm:flex-none px-6 py-2 bg-gray-500 hover:bg-gray-600 text-white rounded-lg font-semibold transition-colors"
                     >
                       Отмена
                     </button>
