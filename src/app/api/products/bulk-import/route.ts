@@ -109,9 +109,9 @@ Respond ONLY with valid JSON array in this exact format:
 
     // Match categories and insert products
     const results = {
-      success: [] as any[],
-      failed: [] as any[],
-      skipped: [] as any[],
+      success: [] as Array<{ id: string; name: string; nameEn: string; emoji: string; category: string }>,
+      failed: [] as Array<{ product: ProcessedProduct; reason: string }>,
+      skipped: [] as Array<{ name: string; nameEn?: string; reason: string }>,
     };
 
     for (const product of processedProducts) {

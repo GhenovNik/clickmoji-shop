@@ -67,7 +67,12 @@ export default function AdminUsersPage() {
         : '/api/users';
       const method = editingUser ? 'PUT' : 'POST';
 
-      const body: any = {
+      const body: {
+        email: string;
+        name: string | null;
+        role: 'USER' | 'ADMIN';
+        password?: string;
+      } = {
         email: formData.email,
         name: formData.name || null,
         role: formData.role,

@@ -65,9 +65,9 @@ export async function POST(
           },
         });
         createdItems.push(createdItem);
-      } catch (error: any) {
+      } catch (error: unknown) {
         // Игнорируем ошибки уникальности (товар уже в списке)
-        if (error.code !== 'P2002') {
+        if (typeof error === 'object' && error !== null && 'code' in error && (error as { code: string }).code !== 'P2002') {
           throw error;
         }
       }

@@ -18,7 +18,13 @@ export async function PUT(
     const { email, name, password, role, image } = body;
 
     // Подготавливаем данные для обновления
-    const updateData: any = {};
+    const updateData: {
+      email?: string;
+      name?: string | null;
+      password?: string;
+      role?: 'USER' | 'ADMIN';
+      image?: string | null;
+    } = {};
 
     if (email) {
       // Проверяем, не занят ли email другим пользователем

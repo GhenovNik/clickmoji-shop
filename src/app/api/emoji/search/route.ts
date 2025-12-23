@@ -13,8 +13,8 @@ type EmojiEntry = {
 };
 
 // Build combined RU/EN dataset once per module load
-const dataset: EmojiEntry[] = (ruData as any[]).map((ruItem) => {
-  const enItem = (enData as any[]).find((i) => i.hexcode === ruItem.hexcode) || {};
+const dataset: EmojiEntry[] = (ruData as EmojiEntry[]).map((ruItem) => {
+  const enItem = (enData as EmojiEntry[]).find((i) => i.hexcode === ruItem.hexcode) || {} as Partial<EmojiEntry>;
   return {
     emoji: ruItem.emoji,
     label: ruItem.label || enItem.label || '',

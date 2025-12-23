@@ -4,7 +4,7 @@ import { use, useEffect, useState } from 'react';
 import { useSession } from 'next-auth/react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { useLists, type List } from '@/store/lists';
+import { useLists } from '@/store/lists';
 import { useShoppingList } from '@/store/shopping-list';
 
 type Item = {
@@ -20,14 +20,20 @@ type Item = {
   };
 };
 
+type ListData = {
+  id: string;
+  name: string;
+  items: Item[];
+};
+
 export default function ShoppingListPage({ params }: { params: Promise<{ listId: string }> }) {
   const router = useRouter();
   const { data: session } = useSession();
-  const { setLists, setActiveList } = useLists();
+  const { setActiveList } = useLists();
   const { listId } = use(params);
   const { completeList: saveToHistory } = useShoppingList();
 
-  const [list, setList] = useState<any>(null);
+  const [list, setList] = useState<ListData | null>(null);
   const [items, setItems] = useState<Item[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -45,6 +51,7 @@ export default function ShoppingListPage({ params }: { params: Promise<{ listId:
 
     // Load list details
     fetchListItems();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session, router, listId]);
 
   const fetchListItems = async () => {
