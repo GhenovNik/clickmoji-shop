@@ -13,17 +13,21 @@ type EmojiEntry = {
 };
 
 // Build combined RU/EN dataset once per module load
-const dataset: EmojiEntry[] = (ruData as EmojiEntry[]).map((ruItem) => {
-  const enItem = (enData as EmojiEntry[]).find((i) => i.hexcode === ruItem.hexcode) || {} as Partial<EmojiEntry>;
-  return {
-    emoji: ruItem.emoji,
-    label: ruItem.label || enItem.label || '',
-    group: ruItem.group ?? enItem.group,
-    tags: ruItem.tags || enItem.tags || [],
-    shortcodes: ruItem.shortcodes || enItem.shortcodes || [],
-    hexcode: ruItem.hexcode,
-  };
-}).filter((item) => !!item.emoji && !!item.label);
+const dataset: EmojiEntry[] = (ruData as EmojiEntry[])
+  .map((ruItem) => {
+    const enItem =
+      (enData as EmojiEntry[]).find((i) => i.hexcode === ruItem.hexcode) ||
+      ({} as Partial<EmojiEntry>);
+    return {
+      emoji: ruItem.emoji,
+      label: ruItem.label || enItem.label || '',
+      group: ruItem.group ?? enItem.group,
+      tags: ruItem.tags || enItem.tags || [],
+      shortcodes: ruItem.shortcodes || enItem.shortcodes || [],
+      hexcode: ruItem.hexcode,
+    };
+  })
+  .filter((item) => !!item.emoji && !!item.label);
 
 const fuse = new Fuse(dataset, {
   keys: [
@@ -44,7 +48,7 @@ export async function GET(request: Request) {
       return NextResponse.json({ error: 'Query parameter required' }, { status: 400 });
     }
 
-    const results = fuse.search(query.toLowerCase(), { limit: 30 }).map(({ item }) => ({
+    const results = fuse.search(query.toLowerCase(), { limit: 5 }).map(({ item }) => ({
       emoji: item.emoji,
       label: item.label,
       group: item.group,
@@ -59,9 +63,6 @@ export async function GET(request: Request) {
     });
   } catch (error) {
     console.error('Error searching emoji:', error);
-    return NextResponse.json(
-      { error: 'Failed to search emoji' },
-      { status: 500 },
-    );
+    return NextResponse.json({ error: 'Failed to search emoji' }, { status: 500 });
   }
 }

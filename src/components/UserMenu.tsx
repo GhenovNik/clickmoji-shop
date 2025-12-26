@@ -17,10 +17,7 @@ export default function UserMenu() {
   if (!session) {
     return (
       <div className="flex items-center gap-3">
-        <Link
-          href="/login"
-          className="text-sm text-gray-600 hover:text-gray-900 transition-colors"
-        >
+        <Link href="/login" className="text-sm text-gray-600 hover:text-gray-900 transition-colors">
           Войти
         </Link>
         <Link
@@ -45,9 +42,7 @@ export default function UserMenu() {
           Админ-панель
         </Link>
       )}
-      <span className="text-sm text-gray-700">
-        {session.user?.name || session.user?.email}
-      </span>
+      <span className="text-sm text-gray-700">{session.user?.name || session.user?.email}</span>
       <button
         onClick={() => signOut({ callbackUrl: '/' })}
         className="text-sm text-red-600 hover:text-red-700 transition-colors"

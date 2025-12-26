@@ -8,10 +8,7 @@ export async function POST() {
     const session = await auth();
 
     if (!session?.user?.id) {
-      return NextResponse.json(
-        { error: 'Unauthorized' },
-        { status: 401 }
-      );
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
     // Проверяем есть ли уже списки
@@ -59,9 +56,6 @@ export async function POST() {
     return NextResponse.json(lists);
   } catch (error) {
     console.error('Error initializing lists:', error);
-    return NextResponse.json(
-      { error: 'Failed to initialize lists' },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: 'Failed to initialize lists' }, { status: 500 });
   }
 }

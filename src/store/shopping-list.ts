@@ -39,10 +39,7 @@ export const useShoppingList = create<ShoppingListStore>()(
       addItems: (products) =>
         set((state) => {
           const newItems = products
-            .filter(
-              (product) =>
-                !state.items.some((item) => item.productId === product.productId)
-            )
+            .filter((product) => !state.items.some((item) => item.productId === product.productId))
             .map((product) => ({
               ...product,
               id: `${product.productId}-${Date.now()}`,

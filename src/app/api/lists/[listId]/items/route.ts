@@ -3,18 +3,12 @@ import { prisma } from '@/lib/prisma';
 import { auth } from '@/lib/auth';
 
 // POST /api/lists/[listId]/items - добавить товары в список
-export async function POST(
-  request: Request,
-  { params }: { params: Promise<{ listId: string }> }
-) {
+export async function POST(request: Request, { params }: { params: Promise<{ listId: string }> }) {
   try {
     const session = await auth();
 
     if (!session?.user?.id) {
-      return NextResponse.json(
-        { error: 'Unauthorized' },
-        { status: 401 }
-      );
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
     const { listId } = await params;
@@ -28,19 +22,13 @@ export async function POST(
     });
 
     if (!list) {
-      return NextResponse.json(
-        { error: 'List not found' },
-        { status: 404 }
-      );
+      return NextResponse.json({ error: 'List not found' }, { status: 404 });
     }
 
     const { items } = await request.json();
 
     if (!items || !Array.isArray(items) || items.length === 0) {
-      return NextResponse.json(
-        { error: 'Items array is required' },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: 'Items array is required' }, { status: 400 });
     }
 
     // Добавляем товары в список
@@ -67,7 +55,12 @@ export async function POST(
         createdItems.push(createdItem);
       } catch (error: unknown) {
         // Игнорируем ошибки уникальности (товар уже в списке)
-        if (typeof error === 'object' && error !== null && 'code' in error && (error as { code: string }).code !== 'P2002') {
+        if (
+          typeof error === 'object' &&
+          error !== null &&
+          'code' in error &&
+          (error as { code: string }).code !== 'P2002'
+        ) {
           throw error;
         }
       }
@@ -76,9 +69,6 @@ export async function POST(
     return NextResponse.json(createdItems);
   } catch (error) {
     console.error('Error adding items to list:', error);
-    return NextResponse.json(
-      { error: 'Failed to add items' },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: 'Failed to add items' }, { status: 500 });
   }
 }

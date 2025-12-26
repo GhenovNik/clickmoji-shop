@@ -38,19 +38,16 @@ export async function GET() {
     });
 
     // Добавляем подсчет завершенных сессий
-    const usersWithStats = users.map(user => ({
+    const usersWithStats = users.map((user) => ({
       ...user,
-      completedSessions: user.lists.filter(list => !list.isActive).length,
+      completedSessions: user.lists.filter((list) => !list.isActive).length,
       lists: undefined, // Убираем из ответа
     }));
 
     return NextResponse.json(usersWithStats);
   } catch (error) {
     console.error('Error fetching users:', error);
-    return NextResponse.json(
-      { error: 'Failed to fetch users' },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: 'Failed to fetch users' }, { status: 500 });
   }
 }
 
@@ -65,10 +62,7 @@ export async function POST(request: Request) {
     const { email, name, password, role } = body;
 
     if (!email || !password) {
-      return NextResponse.json(
-        { error: 'Email and password are required' },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: 'Email and password are required' }, { status: 400 });
     }
 
     // Проверяем, существует ли уже пользователь с таким email
@@ -77,10 +71,7 @@ export async function POST(request: Request) {
     });
 
     if (existingUser) {
-      return NextResponse.json(
-        { error: 'User with this email already exists' },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: 'User with this email already exists' }, { status: 400 });
     }
 
     // Хешируем пароль
@@ -107,9 +98,6 @@ export async function POST(request: Request) {
     return NextResponse.json(user);
   } catch (error) {
     console.error('Error creating user:', error);
-    return NextResponse.json(
-      { error: 'Failed to create user' },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: 'Failed to create user' }, { status: 500 });
   }
 }

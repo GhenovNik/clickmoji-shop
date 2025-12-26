@@ -3,10 +3,7 @@ import { prisma } from '@/lib/prisma';
 import { auth } from '@/lib/auth';
 import bcrypt from 'bcryptjs';
 
-export async function PUT(
-  request: Request,
-  { params }: { params: Promise<{ userId: string }> }
-) {
+export async function PUT(request: Request, { params }: { params: Promise<{ userId: string }> }) {
   try {
     const session = await auth();
     if (!session || session.user.role !== 'ADMIN') {
@@ -71,10 +68,7 @@ export async function PUT(
     return NextResponse.json(user);
   } catch (error) {
     console.error('Error updating user:', error);
-    return NextResponse.json(
-      { error: 'Failed to update user' },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: 'Failed to update user' }, { status: 500 });
   }
 }
 
@@ -92,10 +86,7 @@ export async function DELETE(
 
     // Проверяем, не удаляет ли админ сам себя
     if (session.user.id === userId) {
-      return NextResponse.json(
-        { error: 'You cannot delete your own account' },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: 'You cannot delete your own account' }, { status: 400 });
     }
 
     await prisma.user.delete({
@@ -105,9 +96,6 @@ export async function DELETE(
     return NextResponse.json({ success: true });
   } catch (error) {
     console.error('Error deleting user:', error);
-    return NextResponse.json(
-      { error: 'Failed to delete user' },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: 'Failed to delete user' }, { status: 500 });
   }
 }

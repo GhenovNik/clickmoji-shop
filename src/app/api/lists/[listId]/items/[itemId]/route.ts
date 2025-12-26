@@ -11,10 +11,7 @@ export async function PUT(
     const session = await auth();
 
     if (!session?.user?.id) {
-      return NextResponse.json(
-        { error: 'Unauthorized' },
-        { status: 401 }
-      );
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
     const { listId, itemId } = await params;
@@ -28,10 +25,7 @@ export async function PUT(
     });
 
     if (!list) {
-      return NextResponse.json(
-        { error: 'List not found' },
-        { status: 404 }
-      );
+      return NextResponse.json({ error: 'List not found' }, { status: 404 });
     }
 
     const { isPurchased } = await request.json();
@@ -58,10 +52,7 @@ export async function PUT(
     return NextResponse.json(item);
   } catch (error) {
     console.error('Error updating item:', error);
-    return NextResponse.json(
-      { error: 'Failed to update item' },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: 'Failed to update item' }, { status: 500 });
   }
 }
 
@@ -74,10 +65,7 @@ export async function DELETE(
     const session = await auth();
 
     if (!session?.user?.id) {
-      return NextResponse.json(
-        { error: 'Unauthorized' },
-        { status: 401 }
-      );
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
     const { listId, itemId } = await params;
@@ -91,10 +79,7 @@ export async function DELETE(
     });
 
     if (!list) {
-      return NextResponse.json(
-        { error: 'List not found' },
-        { status: 404 }
-      );
+      return NextResponse.json({ error: 'List not found' }, { status: 404 });
     }
 
     await prisma.item.delete({
@@ -107,9 +92,6 @@ export async function DELETE(
     return NextResponse.json({ success: true });
   } catch (error) {
     console.error('Error deleting item:', error);
-    return NextResponse.json(
-      { error: 'Failed to delete item' },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: 'Failed to delete item' }, { status: 500 });
   }
 }

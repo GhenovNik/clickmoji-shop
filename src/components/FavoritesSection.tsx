@@ -101,9 +101,7 @@ export default function FavoritesSection() {
     return (
       <div className="text-center py-8">
         <div className="text-4xl mb-2">⭐</div>
-        <p className="text-gray-600">
-          Избранные товары появятся здесь
-        </p>
+        <p className="text-gray-600">Избранные товары появятся здесь</p>
         <p className="text-sm text-gray-500 mt-1">
           Добавляйте часто используемые товары в избранное
         </p>
@@ -114,9 +112,7 @@ export default function FavoritesSection() {
   return (
     <div className="mb-12">
       <div className="flex items-center justify-between mb-4">
-        <h2 className="text-2xl font-bold text-gray-900">
-          ⭐ Избранное
-        </h2>
+        <h2 className="text-2xl font-bold text-gray-900">⭐ Избранное</h2>
         <span className="text-sm text-gray-500">
           {favorites.length} {favorites.length === 1 ? 'товар' : 'товаров'}
         </span>
@@ -124,10 +120,7 @@ export default function FavoritesSection() {
 
       <div className="grid grid-cols-4 sm:grid-cols-6 md:grid-cols-8 lg:grid-cols-10 gap-3">
         {favorites.map((favorite) => (
-          <div
-            key={favorite.id}
-            className="relative group"
-          >
+          <div key={favorite.id} className="relative group">
             <button
               onClick={() => handleAddToList(favorite)}
               className="w-full bg-white rounded-xl p-3 shadow-md hover:shadow-lg hover:scale-105 transition-all"

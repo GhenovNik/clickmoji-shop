@@ -73,16 +73,18 @@ export default function CategoriesPage() {
           {displayCategories.map((category) => (
             <Link
               key={category.id}
-              href={category.id === 'favorites' ? '/categories/favorites' : `/categories/${category.id}/products`}
+              href={
+                category.id === 'favorites'
+                  ? '/categories/favorites'
+                  : `/categories/${category.id}/products`
+              }
               className="bg-white rounded-2xl p-6 shadow-lg hover:shadow-xl transition-all hover:scale-105 cursor-pointer"
             >
               <div className="text-center">
                 <div className="text-6xl mb-3">{category.emoji}</div>
                 <h3 className="font-semibold text-lg mb-1 text-gray-900">{category.name}</h3>
                 {category._count && (
-                  <p className="text-sm text-gray-600">
-                    {category._count.products} товаров
-                  </p>
+                  <p className="text-sm text-gray-600">{category._count.products} товаров</p>
                 )}
               </div>
             </Link>

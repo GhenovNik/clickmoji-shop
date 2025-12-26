@@ -1,7 +1,8 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
-import { useShoppingList } from '@/store/shopping-list';
+import { useLists } from '@/store/lists';
+import { useRouter } from 'next/navigation';
 
 type SearchProduct = {
   id: string;
@@ -20,8 +21,10 @@ export default function ProductSearch() {
   const [results, setResults] = useState<SearchProduct[]>([]);
   const [isOpen, setIsOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [adding, setAdding] = useState(false);
   const searchRef = useRef<HTMLDivElement>(null);
-  const addItems = useShoppingList((state) => state.addItems);
+  const { activeListId, setLists } = useLists();
+  const router = useRouter();
 
   // Debounce search
   useEffect(() => {
@@ -61,21 +64,42 @@ export default function ProductSearch() {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  const handleAddProduct = (product: SearchProduct) => {
-    addItems([
-      {
-        productId: product.id,
-        name: product.name,
-        emoji: product.emoji,
-        categoryName: product.category.name,
-      },
-    ]);
-    setQuery('');
-    setResults([]);
-    setIsOpen(false);
+  const handleAddProduct = async (product: SearchProduct) => {
+    if (!activeListId) {
+      alert('Сначала выберите список покупок');
+      return;
+    }
 
-    // Show a brief success message
-    alert(`${product.emoji} ${product.name} добавлен в список!`);
+    setAdding(true);
+
+    try {
+      await fetch(`/api/lists/${activeListId}/items`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          items: [{ productId: product.id }],
+        }),
+      });
+
+      // Refresh lists to update counts
+      const listsResponse = await fetch('/api/lists');
+      if (listsResponse.ok) {
+        const listsData = await listsResponse.json();
+        setLists(listsData);
+      }
+
+      setQuery('');
+      setResults([]);
+      setIsOpen(false);
+
+      // Show success message
+      alert(`${product.emoji} ${product.name} добавлен в список!`);
+    } catch (error) {
+      console.error('Error adding product:', error);
+      alert('Ошибка при добавлении товара');
+    } finally {
+      setAdding(false);
+    }
   };
 
   return (
@@ -89,9 +113,7 @@ export default function ProductSearch() {
           placeholder="Поиск товаров..."
           className="w-full px-4 py-3 pr-10 rounded-xl border-2 border-gray-300 focus:border-blue-500 focus:outline-none text-gray-900"
         />
-        <div className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400">
-          🔍
-        </div>
+        <div className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400">🔍</div>
       </div>
 
       {/* Results Dropdown */}
@@ -107,7 +129,8 @@ export default function ProductSearch() {
                 <button
                   key={product.id}
                   onClick={() => handleAddProduct(product)}
-                  className="w-full px-4 py-3 hover:bg-gray-100 flex items-center gap-3 transition-colors"
+                  disabled={adding}
+                  className="w-full px-4 py-3 hover:bg-gray-100 flex items-center gap-3 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   <span className="text-3xl">{product.emoji}</span>
                   <div className="flex-1 text-left">
@@ -116,7 +139,7 @@ export default function ProductSearch() {
                       {product.category.emoji} {product.category.name}
                     </p>
                   </div>
-                  <span className="text-green-600 font-semibold">+</span>
+                  <span className="text-green-600 font-semibold">{adding ? '⏳' : '+'}</span>
                 </button>
               ))}
             </div>

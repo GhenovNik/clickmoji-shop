@@ -131,14 +131,16 @@ export default function HistoryPage() {
                           {formatDate(list.completedAt)}
                         </h3>
                         <p className="text-sm text-gray-600">
-                          {list.items.length} {list.items.length === 1 ? 'товар' :
-                           list.items.length < 5 ? 'товара' : 'товаров'}
+                          {list.items.length}{' '}
+                          {list.items.length === 1
+                            ? 'товар'
+                            : list.items.length < 5
+                              ? 'товара'
+                              : 'товаров'}
                         </p>
                       </div>
                     </div>
-                    <div className="text-gray-400 text-2xl">
-                      {isExpanded ? '▼' : '▶'}
-                    </div>
+                    <div className="text-gray-400 text-2xl">{isExpanded ? '▼' : '▶'}</div>
                   </button>
 
                   {/* Expanded Content */}
@@ -186,7 +188,6 @@ export default function HistoryPage() {
             })}
           </div>
         )}
-
       </div>
     </div>
   );

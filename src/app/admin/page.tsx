@@ -13,10 +13,7 @@ export default async function AdminPage() {
     <div className="min-h-screen bg-gray-50">
       <div className="container mx-auto px-4 py-8">
         <div className="mb-8">
-          <Link
-            href="/"
-            className="text-blue-600 hover:text-blue-700 text-sm mb-4 inline-block"
-          >
+          <Link href="/" className="text-blue-600 hover:text-blue-700 text-sm mb-4 inline-block">
             ← На главную
           </Link>
           <h1 className="text-4xl font-bold text-gray-900">Админ-панель</h1>

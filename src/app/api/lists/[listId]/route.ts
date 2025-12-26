@@ -3,18 +3,12 @@ import { prisma } from '@/lib/prisma';
 import { auth } from '@/lib/auth';
 
 // GET /api/lists/[listId] - получить конкретный список
-export async function GET(
-  request: Request,
-  { params }: { params: Promise<{ listId: string }> }
-) {
+export async function GET(request: Request, { params }: { params: Promise<{ listId: string }> }) {
   try {
     const session = await auth();
 
     if (!session?.user?.id) {
-      return NextResponse.json(
-        { error: 'Unauthorized' },
-        { status: 401 }
-      );
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
     const { listId } = await params;
@@ -43,35 +37,23 @@ export async function GET(
     });
 
     if (!list) {
-      return NextResponse.json(
-        { error: 'List not found' },
-        { status: 404 }
-      );
+      return NextResponse.json({ error: 'List not found' }, { status: 404 });
     }
 
     return NextResponse.json(list);
   } catch (error) {
     console.error('Error fetching list:', error);
-    return NextResponse.json(
-      { error: 'Failed to fetch list' },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: 'Failed to fetch list' }, { status: 500 });
   }
 }
 
 // PUT /api/lists/[listId] - обновить список
-export async function PUT(
-  request: Request,
-  { params }: { params: Promise<{ listId: string }> }
-) {
+export async function PUT(request: Request, { params }: { params: Promise<{ listId: string }> }) {
   try {
     const session = await auth();
 
     if (!session?.user?.id) {
-      return NextResponse.json(
-        { error: 'Unauthorized' },
-        { status: 401 }
-      );
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
     const { listId } = await params;
@@ -86,10 +68,7 @@ export async function PUT(
     });
 
     if (!existingList) {
-      return NextResponse.json(
-        { error: 'List not found' },
-        { status: 404 }
-      );
+      return NextResponse.json({ error: 'List not found' }, { status: 404 });
     }
 
     // Если делаем список активным, деактивируем остальные
@@ -125,10 +104,7 @@ export async function PUT(
     return NextResponse.json(list);
   } catch (error) {
     console.error('Error updating list:', error);
-    return NextResponse.json(
-      { error: 'Failed to update list' },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: 'Failed to update list' }, { status: 500 });
   }
 }
 
@@ -141,10 +117,7 @@ export async function DELETE(
     const session = await auth();
 
     if (!session?.user?.id) {
-      return NextResponse.json(
-        { error: 'Unauthorized' },
-        { status: 401 }
-      );
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
     const { listId } = await params;
@@ -158,10 +131,7 @@ export async function DELETE(
     });
 
     if (!list) {
-      return NextResponse.json(
-        { error: 'List not found' },
-        { status: 404 }
-      );
+      return NextResponse.json({ error: 'List not found' }, { status: 404 });
     }
 
     // Удаляем список (items удалятся автоматически благодаря onDelete: Cascade)
@@ -197,9 +167,6 @@ export async function DELETE(
     return NextResponse.json({ success: true });
   } catch (error) {
     console.error('Error deleting list:', error);
-    return NextResponse.json(
-      { error: 'Failed to delete list' },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: 'Failed to delete list' }, { status: 500 });
   }
 }

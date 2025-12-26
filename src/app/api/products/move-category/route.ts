@@ -13,17 +13,11 @@ export async function POST(request: Request) {
     const { productIds, newCategoryId } = body;
 
     if (!productIds || !Array.isArray(productIds) || productIds.length === 0) {
-      return NextResponse.json(
-        { error: 'productIds must be a non-empty array' },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: 'productIds must be a non-empty array' }, { status: 400 });
     }
 
     if (!newCategoryId) {
-      return NextResponse.json(
-        { error: 'newCategoryId is required' },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: 'newCategoryId is required' }, { status: 400 });
     }
 
     // Проверяем, что целевая категория существует
@@ -32,10 +26,7 @@ export async function POST(request: Request) {
     });
 
     if (!targetCategory) {
-      return NextResponse.json(
-        { error: 'Target category not found' },
-        { status: 404 }
-      );
+      return NextResponse.json({ error: 'Target category not found' }, { status: 404 });
     }
 
     // Массово обновляем категорию для выбранных продуктов
@@ -57,9 +48,6 @@ export async function POST(request: Request) {
     });
   } catch (error) {
     console.error('Error moving products to new category:', error);
-    return NextResponse.json(
-      { error: 'Failed to move products' },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: 'Failed to move products' }, { status: 500 });
   }
 }

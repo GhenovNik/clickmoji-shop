@@ -7,10 +7,7 @@ export async function POST(request: Request) {
     const { email, password, name } = await request.json();
 
     if (!email || !password) {
-      return NextResponse.json(
-        { error: 'Email и пароль обязательны' },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: 'Email и пароль обязательны' }, { status: 400 });
     }
 
     // Проверка существующего пользователя
@@ -60,15 +57,12 @@ export async function POST(request: Request) {
           id: user.id,
           email: user.email,
           name: user.name,
-        }
+        },
       },
       { status: 201 }
     );
   } catch (error) {
     console.error('Registration error:', error);
-    return NextResponse.json(
-      { error: 'Ошибка при регистрации' },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: 'Ошибка при регистрации' }, { status: 500 });
   }
 }

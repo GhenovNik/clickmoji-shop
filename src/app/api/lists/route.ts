@@ -8,10 +8,7 @@ export async function GET() {
     const session = await auth();
 
     if (!session?.user?.id) {
-      return NextResponse.json(
-        { error: 'Unauthorized' },
-        { status: 401 }
-      );
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
     const lists = await prisma.list.findMany({
@@ -33,10 +30,7 @@ export async function GET() {
     return NextResponse.json(lists);
   } catch (error) {
     console.error('Error fetching lists:', error);
-    return NextResponse.json(
-      { error: 'Failed to fetch lists' },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: 'Failed to fetch lists' }, { status: 500 });
   }
 }
 
@@ -46,19 +40,13 @@ export async function POST(request: Request) {
     const session = await auth();
 
     if (!session?.user?.id) {
-      return NextResponse.json(
-        { error: 'Unauthorized' },
-        { status: 401 }
-      );
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
     const { name, isActive } = await request.json();
 
     if (!name || name.trim() === '') {
-      return NextResponse.json(
-        { error: 'List name is required' },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: 'List name is required' }, { status: 400 });
     }
 
     // Если создаем активный список, деактивируем остальные
@@ -92,9 +80,6 @@ export async function POST(request: Request) {
     return NextResponse.json(list);
   } catch (error) {
     console.error('Error creating list:', error);
-    return NextResponse.json(
-      { error: 'Failed to create list' },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: 'Failed to create list' }, { status: 500 });
   }
 }

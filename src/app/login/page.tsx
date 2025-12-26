@@ -88,9 +88,7 @@ function LoginForm() {
             </div>
 
             {error && (
-              <div className="bg-red-50 text-red-600 px-4 py-3 rounded-lg text-sm">
-                {error}
-              </div>
+              <div className="bg-red-50 text-red-600 px-4 py-3 rounded-lg text-sm">{error}</div>
             )}
 
             <button
@@ -116,11 +114,13 @@ function LoginForm() {
 
 export default function LoginPage() {
   return (
-    <Suspense fallback={
-      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 to-indigo-100">
-        <div className="text-xl text-gray-600">Загрузка...</div>
-      </div>
-    }>
+    <Suspense
+      fallback={
+        <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 to-indigo-100">
+          <div className="text-xl text-gray-600">Загрузка...</div>
+        </div>
+      }
+    >
       <LoginForm />
     </Suspense>
   );
