@@ -1,6 +1,6 @@
-import { useState, useEffect } from 'react';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 
-interface Category {
+export interface Category {
   id: string;
   name: string;
   nameEn: string;
@@ -13,108 +13,123 @@ interface Category {
   };
 }
 
+interface CategoryInput {
+  name: string;
+  nameEn: string;
+  emoji: string;
+  order: number;
+  isCustom: boolean;
+  imageUrl: string;
+}
+
+// API functions
+const fetchCategoriesAPI = async (): Promise<Category[]> => {
+  const res = await fetch('/api/categories');
+  if (!res.ok) throw new Error('Failed to fetch categories');
+  return res.json();
+};
+
+const createCategoryAPI = async (data: CategoryInput, imageUrl?: string) => {
+  const res = await fetch('/api/categories', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      ...data,
+      emoji: data.emoji || '📦',
+      imageUrl: imageUrl,
+      isCustom: !!imageUrl,
+    }),
+  });
+  if (!res.ok) throw new Error('Failed to create category');
+  return res.json();
+};
+
+const updateCategoryAPI = async (id: string, data: CategoryInput, imageUrl?: string) => {
+  const res = await fetch(`/api/categories/${id}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      ...data,
+      emoji: data.emoji || '📦',
+      imageUrl: imageUrl,
+      isCustom: !!imageUrl,
+    }),
+  });
+  if (!res.ok) throw new Error('Failed to update category');
+  return res.json();
+};
+
+const deleteCategoryAPI = async (id: string) => {
+  const res = await fetch(`/api/categories/${id}`, {
+    method: 'DELETE',
+  });
+  if (!res.ok) throw new Error('Failed to delete category');
+  return res.json();
+};
+
+// React Query Hook
 export function useCategories() {
-  const [categories, setCategories] = useState<Category[]>([]);
-  const [loading, setLoading] = useState(true);
+  const queryClient = useQueryClient();
 
-  const fetchCategories = async () => {
-    try {
-      const res = await fetch('/api/categories');
-      const data = await res.json();
-      setCategories(data);
-    } catch (error) {
-      console.error('Error fetching categories:', error);
-    } finally {
-      setLoading(false);
-    }
+  // Query for fetching categories
+  const {
+    data: categories = [],
+    isLoading: loading,
+    refetch: fetchCategories,
+  } = useQuery({
+    queryKey: ['categories'],
+    queryFn: fetchCategoriesAPI,
+  });
+
+  // Mutation for creating category
+  const createMutation = useMutation({
+    mutationFn: ({ data, imageUrl }: { data: CategoryInput; imageUrl?: string }) =>
+      createCategoryAPI(data, imageUrl),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['categories'] });
+      queryClient.invalidateQueries({ queryKey: ['products'] });
+    },
+  });
+
+  // Mutation for updating category
+  const updateMutation = useMutation({
+    mutationFn: ({ id, data, imageUrl }: { id: string; data: CategoryInput; imageUrl?: string }) =>
+      updateCategoryAPI(id, data, imageUrl),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['categories'] });
+      queryClient.invalidateQueries({ queryKey: ['products'] });
+    },
+  });
+
+  // Mutation for deleting category
+  const deleteMutation = useMutation({
+    mutationFn: deleteCategoryAPI,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['categories'] });
+      queryClient.invalidateQueries({ queryKey: ['products'] });
+    },
+  });
+
+  // Helper function to get next order
+  const getNextOrder = () => {
+    return categories.length > 0 ? Math.max(...categories.map((c) => c.order)) + 1 : 1;
   };
 
-  useEffect(() => {
-    fetchCategories();
-  }, []);
-
-  const createCategory = async (
-    categoryData: {
-      name: string;
-      nameEn: string;
-      emoji: string;
-      order: number;
-      isCustom: boolean;
-      imageUrl: string;
-    },
-    imageUrl?: string
-  ) => {
-    const res = await fetch('/api/categories', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        ...categoryData,
-        emoji: categoryData.emoji || '📦',
-        imageUrl: imageUrl,
-        isCustom: !!imageUrl,
-      }),
-    });
-
-    if (!res.ok) {
-      throw new Error('Failed to create category');
-    }
-
-    const savedCategory = await res.json();
-    await fetchCategories();
-    return savedCategory;
+  // Wrapper functions to maintain API compatibility
+  const createCategory = async (categoryData: CategoryInput, imageUrl?: string) => {
+    return createMutation.mutateAsync({ data: categoryData, imageUrl });
   };
 
-  const updateCategory = async (
-    id: string,
-    categoryData: {
-      name: string;
-      nameEn: string;
-      emoji: string;
-      order: number;
-      isCustom: boolean;
-      imageUrl: string;
-    },
-    imageUrl?: string
-  ) => {
-    const res = await fetch(`/api/categories/${id}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        ...categoryData,
-        emoji: categoryData.emoji || '📦',
-        imageUrl: imageUrl,
-        isCustom: !!imageUrl,
-      }),
-    });
-
-    if (!res.ok) {
-      throw new Error('Failed to update category');
-    }
-
-    const savedCategory = await res.json();
-    await fetchCategories();
-    return savedCategory;
+  const updateCategory = async (id: string, categoryData: CategoryInput, imageUrl?: string) => {
+    return updateMutation.mutateAsync({ id, data: categoryData, imageUrl });
   };
 
   const deleteCategory = async (id: string) => {
-    if (!confirm('Вы уверены? Это удалит все продукты в категории!')) {
+    if (!confirm('Удалить категорию? Все продукты в ней также будут удалены.')) {
       return false;
     }
-
-    const res = await fetch(`/api/categories/${id}`, {
-      method: 'DELETE',
-    });
-
-    if (!res.ok) {
-      throw new Error('Failed to delete category');
-    }
-
-    await fetchCategories();
+    await deleteMutation.mutateAsync(id);
     return true;
-  };
-
-  const getNextOrder = () => {
-    return categories.length > 0 ? Math.max(...categories.map((c) => c.order)) + 1 : 1;
   };
 
   return {
