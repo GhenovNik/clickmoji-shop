@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useSession } from 'next-auth/react';
 import { useShoppingList } from '@/store/shopping-list';
 
@@ -20,36 +20,72 @@ type FavoriteProduct = {
   };
 };
 
+const fetchFavoritesAPI = async (): Promise<FavoriteProduct[]> => {
+  const res = await fetch('/api/favorites');
+  if (!res.ok) throw new Error('Failed to fetch favorites');
+  return res.json();
+};
+
+const updateFavoriteUsageAPI = async (productId: string) => {
+  const res = await fetch('/api/favorites', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ productId }),
+  });
+  if (!res.ok) throw new Error('Failed to update favorite usage');
+  return res.json();
+};
+
+const removeFavoriteAPI = async (productId: string) => {
+  const res = await fetch(`/api/favorites?productId=${productId}`, {
+    method: 'DELETE',
+  });
+  if (!res.ok) throw new Error('Failed to remove favorite');
+  return res.json();
+};
+
 export default function FavoritesSection() {
   const { data: session } = useSession();
   const addItems = useShoppingList((state) => state.addItems);
-  const [favorites, setFavorites] = useState<FavoriteProduct[]>([]);
-  const [loading, setLoading] = useState(true);
+  const queryClient = useQueryClient();
 
-  useEffect(() => {
-    if (session?.user) {
-      fetchFavorites();
-    } else {
-      setLoading(false);
-    }
-  }, [session]);
+  const { data: favorites = [], isLoading: loading } = useQuery({
+    queryKey: ['favorites'],
+    queryFn: fetchFavoritesAPI,
+    enabled: !!session?.user,
+  });
 
-  const fetchFavorites = async () => {
-    try {
-      const response = await fetch('/api/favorites');
-      if (response.ok) {
-        const data = await response.json();
-        setFavorites(data);
+  const updateUsageMutation = useMutation({
+    mutationFn: updateFavoriteUsageAPI,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['favorites'] });
+    },
+  });
+
+  const removeMutation = useMutation({
+    mutationFn: removeFavoriteAPI,
+    onMutate: async (productId) => {
+      await queryClient.cancelQueries({ queryKey: ['favorites'] });
+      const previousFavorites = queryClient.getQueryData<FavoriteProduct[]>(['favorites']);
+
+      queryClient.setQueryData<FavoriteProduct[]>(['favorites'], (old) => {
+        if (!old) return old;
+        return old.filter((fav) => fav.product.id !== productId);
+      });
+
+      return { previousFavorites };
+    },
+    onError: (err, productId, context) => {
+      if (context?.previousFavorites) {
+        queryClient.setQueryData(['favorites'], context.previousFavorites);
       }
-    } catch (error) {
-      console.error('Error fetching favorites:', error);
-    } finally {
-      setLoading(false);
-    }
-  };
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ['favorites'] });
+    },
+  });
 
   const handleAddToList = async (favorite: FavoriteProduct) => {
-    // Добавляем в список покупок
     addItems([
       {
         productId: favorite.product.id,
@@ -59,15 +95,8 @@ export default function FavoritesSection() {
       },
     ]);
 
-    // Увеличиваем счетчик использований
     try {
-      await fetch('/api/favorites', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ productId: favorite.product.id }),
-      });
-      // Обновляем список избранного
-      fetchFavorites();
+      await updateUsageMutation.mutateAsync(favorite.product.id);
     } catch (error) {
       console.error('Error updating favorite usage count:', error);
     }
@@ -75,11 +104,7 @@ export default function FavoritesSection() {
 
   const handleRemoveFromFavorites = async (productId: string) => {
     try {
-      await fetch(`/api/favorites?productId=${productId}`, {
-        method: 'DELETE',
-      });
-      // Обновляем список
-      setFavorites((prev) => prev.filter((fav) => fav.product.id !== productId));
+      await removeMutation.mutateAsync(productId);
     } catch (error) {
       console.error('Error removing from favorites:', error);
     }

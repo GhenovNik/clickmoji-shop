@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useLists } from '@/store/lists';
 import { useRouter } from 'next/navigation';
 
@@ -16,41 +17,58 @@ type SearchProduct = {
   };
 };
 
+const searchProductsAPI = async (query: string): Promise<SearchProduct[]> => {
+  if (!query.trim()) return [];
+  const res = await fetch(`/api/search?q=${encodeURIComponent(query)}`);
+  if (!res.ok) throw new Error('Search failed');
+  return res.json();
+};
+
+const addProductToListAPI = async (listId: string, productId: string) => {
+  const res = await fetch(`/api/lists/${listId}/items`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      items: [{ productId }],
+    }),
+  });
+  if (!res.ok) throw new Error('Failed to add product');
+  return res.json();
+};
+
 export default function ProductSearch() {
   const [query, setQuery] = useState('');
-  const [results, setResults] = useState<SearchProduct[]>([]);
+  const [debouncedQuery, setDebouncedQuery] = useState('');
   const [isOpen, setIsOpen] = useState(false);
-  const [isLoading, setIsLoading] = useState(false);
-  const [adding, setAdding] = useState(false);
   const searchRef = useRef<HTMLDivElement>(null);
   const { activeListId, setLists } = useLists();
   const router = useRouter();
+  const queryClient = useQueryClient();
 
-  // Debounce search
+  // Debounce query
   useEffect(() => {
-    if (query.trim().length === 0) {
-      setResults([]);
-      setIsOpen(false);
-      return;
-    }
-
-    setIsLoading(true);
     const timer = setTimeout(() => {
-      fetch(`/api/search?q=${encodeURIComponent(query)}`)
-        .then((res) => res.json())
-        .then((data) => {
-          setResults(data);
-          setIsOpen(true);
-          setIsLoading(false);
-        })
-        .catch((error) => {
-          console.error('Search error:', error);
-          setIsLoading(false);
-        });
-    }, 300); // 300ms debounce
+      setDebouncedQuery(query);
+    }, 300);
 
     return () => clearTimeout(timer);
   }, [query]);
+
+  // Search query
+  const { data: results = [], isLoading } = useQuery({
+    queryKey: ['search', debouncedQuery],
+    queryFn: () => searchProductsAPI(debouncedQuery),
+    enabled: debouncedQuery.trim().length > 0,
+  });
+
+  // Show dropdown when there are results or loading
+  useEffect(() => {
+    if (debouncedQuery.trim().length > 0) {
+      setIsOpen(true);
+    } else {
+      setIsOpen(false);
+    }
+  }, [debouncedQuery, results]);
 
   // Close dropdown when clicking outside
   useEffect(() => {
@@ -64,41 +82,42 @@ export default function ProductSearch() {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  const handleAddProduct = async (product: SearchProduct) => {
-    if (!activeListId) {
-      alert('Сначала выберите список покупок');
-      return;
-    }
-
-    setAdding(true);
-
-    try {
-      await fetch(`/api/lists/${activeListId}/items`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          items: [{ productId: product.id }],
-        }),
-      });
-
-      // Refresh lists to update counts
+  const addProductMutation = useMutation({
+    mutationFn: ({ listId, productId }: { listId: string; productId: string }) =>
+      addProductToListAPI(listId, productId),
+    onSuccess: async (_, variables) => {
+      // Refresh lists
       const listsResponse = await fetch('/api/lists');
       if (listsResponse.ok) {
         const listsData = await listsResponse.json();
         setLists(listsData);
       }
 
+      // Invalidate list query to refresh item count
+      queryClient.invalidateQueries({ queryKey: ['list', variables.listId] });
+    },
+  });
+
+  const handleAddProduct = async (product: SearchProduct) => {
+    if (!activeListId) {
+      alert('Сначала выберите список покупок');
+      return;
+    }
+
+    try {
+      await addProductMutation.mutateAsync({
+        listId: activeListId,
+        productId: product.id,
+      });
+
       setQuery('');
-      setResults([]);
+      setDebouncedQuery('');
       setIsOpen(false);
 
-      // Show success message
       alert(`${product.emoji} ${product.name} добавлен в список!`);
     } catch (error) {
       console.error('Error adding product:', error);
       alert('Ошибка при добавлении товара');
-    } finally {
-      setAdding(false);
     }
   };
 
@@ -129,7 +148,7 @@ export default function ProductSearch() {
                 <button
                   key={product.id}
                   onClick={() => handleAddProduct(product)}
-                  disabled={adding}
+                  disabled={addProductMutation.isPending}
                   className="w-full px-4 py-3 hover:bg-gray-100 flex items-center gap-3 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   <span className="text-3xl">{product.emoji}</span>
@@ -139,7 +158,9 @@ export default function ProductSearch() {
                       {product.category.emoji} {product.category.name}
                     </p>
                   </div>
-                  <span className="text-green-600 font-semibold">{adding ? '⏳' : '+'}</span>
+                  <span className="text-green-600 font-semibold">
+                    {addProductMutation.isPending ? '⏳' : '+'}
+                  </span>
                 </button>
               ))}
             </div>

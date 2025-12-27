@@ -1,11 +1,13 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import Link from 'next/link';
 import { useCategories } from '@/hooks/admin/useCategories';
 import CategoryForm, { FormData } from '@/components/admin/categories/CategoryForm';
 import CategoriesTable from '@/components/admin/categories/CategoriesTable';
 import ProductMoveModal from '@/components/admin/categories/ProductMoveModal';
+import { TableRowSkeleton } from '@/components/ui/Skeleton';
 
 interface Category {
   id: string;
@@ -30,15 +32,21 @@ interface Product {
   categoryId: string;
 }
 
+const fetchProductsByCategoryAPI = async (categoryId: string): Promise<Product[]> => {
+  const res = await fetch(`/api/products?categoryId=${categoryId}`);
+  if (!res.ok) throw new Error('Failed to fetch products');
+  return res.json();
+};
+
 export default function AdminCategoriesPage() {
   const [showForm, setShowForm] = useState(false);
   const [editingCategory, setEditingCategory] = useState<Category | null>(null);
   const [scrollToCategoryId, setScrollToCategoryId] = useState<string | null>(null);
   const [showProductsModal, setShowProductsModal] = useState(false);
   const [selectedCategory, setSelectedCategory] = useState<Category | null>(null);
-  const [categoryProducts, setCategoryProducts] = useState<Product[]>([]);
 
   const formRef = useRef<HTMLDivElement>(null);
+  const queryClient = useQueryClient();
   const {
     categories,
     loading,
@@ -48,6 +56,12 @@ export default function AdminCategoriesPage() {
     getNextOrder,
     fetchCategories,
   } = useCategories();
+
+  const { data: categoryProducts = [] } = useQuery({
+    queryKey: ['products', selectedCategory?.id],
+    queryFn: () => fetchProductsByCategoryAPI(selectedCategory!.id),
+    enabled: !!selectedCategory?.id,
+  });
 
   // Auto-scroll to category after save
   useEffect(() => {
@@ -110,35 +124,17 @@ export default function AdminCategoriesPage() {
     setShowForm(false);
   };
 
-  const handleManageProducts = async (category: Category) => {
+  const handleManageProducts = (category: Category) => {
     setSelectedCategory(category);
-    try {
-      const res = await fetch(`/api/products?categoryId=${category.id}`);
-      const data = await res.json();
-      setCategoryProducts(data);
-      setShowProductsModal(true);
-    } catch (error) {
-      console.error('Error fetching products:', error);
-      alert('Ошибка при загрузке продуктов');
-    }
+    setShowProductsModal(true);
   };
 
-  const handleProductsMoved = async () => {
-    await fetchCategories();
+  const handleProductsMoved = () => {
+    queryClient.invalidateQueries({ queryKey: ['categories'] });
     if (selectedCategory) {
-      const res = await fetch(`/api/products?categoryId=${selectedCategory.id}`);
-      const data = await res.json();
-      setCategoryProducts(data);
+      queryClient.invalidateQueries({ queryKey: ['products', selectedCategory.id] });
     }
   };
-
-  if (loading) {
-    return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-        <div className="text-lg text-gray-600">Загрузка...</div>
-      </div>
-    );
-  }
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -180,12 +176,43 @@ export default function AdminCategoriesPage() {
           </div>
         )}
 
-        <CategoriesTable
-          categories={categories}
-          onEdit={handleEdit}
-          onDelete={handleDelete}
-          onManageProducts={handleManageProducts}
-        />
+        {loading ? (
+          <div className="bg-white rounded-xl shadow-md overflow-hidden">
+            <table className="w-full">
+              <thead className="bg-gray-50 border-b border-gray-200">
+                <tr>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
+                    Порядок
+                  </th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
+                    Иконка
+                  </th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
+                    Название
+                  </th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
+                    Продуктов
+                  </th>
+                  <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">
+                    Действия
+                  </th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-200">
+                {Array.from({ length: 5 }).map((_, i) => (
+                  <TableRowSkeleton key={i} columns={5} />
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <CategoriesTable
+            categories={categories}
+            onEdit={handleEdit}
+            onDelete={handleDelete}
+            onManageProducts={handleManageProducts}
+          />
+        )}
 
         {showProductsModal && selectedCategory && (
           <ProductMoveModal

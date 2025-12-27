@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useSession } from 'next-auth/react';
 import { useRouter } from 'next/navigation';
 import { useLists } from '@/store/lists';
@@ -17,17 +18,57 @@ export type Product = {
   };
 };
 
+// API functions
+const fetchProductsByCategoryAPI = async (categoryId: string): Promise<Product[]> => {
+  const res = await fetch(`/api/products?categoryId=${categoryId}`);
+  if (!res.ok) throw new Error('Failed to fetch products');
+  return res.json();
+};
+
+const fetchFavoritesAPI = async () => {
+  const res = await fetch('/api/favorites');
+  if (!res.ok) throw new Error('Failed to fetch favorites');
+  return res.json();
+};
+
+const addFavoriteAPI = async (productId: string) => {
+  const res = await fetch('/api/favorites', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ productId }),
+  });
+  if (!res.ok) throw new Error('Failed to add favorite');
+  return res.json();
+};
+
+const removeFavoriteAPI = async (productId: string) => {
+  const res = await fetch(`/api/favorites?productId=${productId}`, {
+    method: 'DELETE',
+  });
+  if (!res.ok) throw new Error('Failed to remove favorite');
+  return res.json();
+};
+
+const addToListAPI = async (listId: string, items: { productId: string }[]) => {
+  const res = await fetch(`/api/lists/${listId}/items`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ items }),
+  });
+  if (!res.ok) throw new Error('Failed to add items to list');
+  return res.json();
+};
+
 export function useProductSelection(categoryId: string) {
   const router = useRouter();
   const { data: session } = useSession();
   const { lists, activeListId, setLists } = useLists();
+  const queryClient = useQueryClient();
 
-  const [products, setProducts] = useState<Product[]>([]);
   const [selectedProducts, setSelectedProducts] = useState<Set<string>>(new Set());
-  const [favoriteProducts, setFavoriteProducts] = useState<Set<string>>(new Set());
-  const [loading, setLoading] = useState(true);
   const [adding, setAdding] = useState(false);
 
+  // Load lists if needed (maintain existing pattern with useLists store)
   useEffect(() => {
     if (session?.user && lists.length === 0) {
       fetch('/api/lists')
@@ -37,34 +78,39 @@ export function useProductSelection(categoryId: string) {
     }
   }, [session, lists.length, setLists]);
 
-  useEffect(() => {
-    fetch(`/api/products?categoryId=${categoryId}`)
-      .then((res) => res.json())
-      .then((data) => {
-        setProducts(data);
-        setLoading(false);
-      })
-      .catch((error) => {
-        console.error('Error loading products:', error);
-        setLoading(false);
-      });
-  }, [categoryId]);
+  // Query for products by category
+  const { data: products = [], isLoading: loading } = useQuery({
+    queryKey: ['products', categoryId],
+    queryFn: () => fetchProductsByCategoryAPI(categoryId),
+    enabled: !!categoryId,
+  });
 
-  useEffect(() => {
-    if (session?.user) {
-      fetch('/api/favorites')
-        .then((res) => res.json())
-        .then((favorites) => {
-          const favoriteIds = new Set<string>(
-            favorites.map((fav: { product: { id: string } }) => fav.product.id)
-          );
-          setFavoriteProducts(favoriteIds);
-        })
-        .catch((error) => {
-          console.error('Error loading favorites:', error);
-        });
-    }
-  }, [session]);
+  // Query for favorites
+  const { data: favoritesData = [] } = useQuery({
+    queryKey: ['favorites'],
+    queryFn: fetchFavoritesAPI,
+    enabled: !!session?.user,
+  });
+
+  const favoriteProducts = new Set<string>(
+    favoritesData.map((fav: { product: { id: string } }) => fav.product.id)
+  );
+
+  // Mutation for adding favorite
+  const addFavoriteMutation = useMutation({
+    mutationFn: addFavoriteAPI,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['favorites'] });
+    },
+  });
+
+  // Mutation for removing favorite
+  const removeFavoriteMutation = useMutation({
+    mutationFn: removeFavoriteAPI,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['favorites'] });
+    },
+  });
 
   const toggleProduct = (productId: string) => {
     setSelectedProducts((prev) => {
@@ -88,21 +134,9 @@ export function useProductSelection(categoryId: string) {
 
     try {
       if (isFavorite) {
-        await fetch(`/api/favorites?productId=${productId}`, {
-          method: 'DELETE',
-        });
-        setFavoriteProducts((prev) => {
-          const newSet = new Set(prev);
-          newSet.delete(productId);
-          return newSet;
-        });
+        await removeFavoriteMutation.mutateAsync(productId);
       } else {
-        await fetch('/api/favorites', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ productId }),
-        });
-        setFavoriteProducts((prev) => new Set([...prev, productId]));
+        await addFavoriteMutation.mutateAsync(productId);
       }
     } catch (error) {
       console.error('Error toggling favorite:', error);
@@ -124,11 +158,7 @@ export function useProductSelection(categoryId: string) {
       }));
 
     try {
-      await fetch(`/api/lists/${activeListId}/items`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ items: selectedItems }),
-      });
+      await addToListAPI(activeListId, selectedItems);
 
       const listsResponse = await fetch('/api/lists');
       if (listsResponse.ok) {

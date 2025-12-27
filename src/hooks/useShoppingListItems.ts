@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useRouter } from 'next/navigation';
 
 export type Item = {
@@ -22,69 +22,129 @@ export type ListData = {
   items: Item[];
 };
 
+// API functions
+const fetchListAPI = async (listId: string): Promise<ListData> => {
+  const response = await fetch(`/api/lists/${listId}`);
+  if (!response.ok) throw new Error('Failed to fetch list');
+  return response.json();
+};
+
+const togglePurchasedAPI = async ({
+  listId,
+  itemId,
+  isPurchased,
+}: {
+  listId: string;
+  itemId: string;
+  isPurchased: boolean;
+}) => {
+  const response = await fetch(`/api/lists/${listId}/items/${itemId}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ isPurchased }),
+  });
+  if (!response.ok) throw new Error('Failed to toggle item');
+  return response.json();
+};
+
+const removeItemAPI = async ({ listId, itemId }: { listId: string; itemId: string }) => {
+  const response = await fetch(`/api/lists/${listId}/items/${itemId}`, {
+    method: 'DELETE',
+  });
+  if (!response.ok) throw new Error('Failed to remove item');
+  return response.json();
+};
+
 export function useShoppingListItems(listId: string) {
   const router = useRouter();
-  const [list, setList] = useState<ListData | null>(null);
-  const [items, setItems] = useState<Item[]>([]);
-  const [loading, setLoading] = useState(true);
+  const queryClient = useQueryClient();
 
-  const fetchListItems = async () => {
-    setLoading(true);
-    try {
-      const response = await fetch(`/api/lists/${listId}`);
-      if (response.ok) {
-        const data = await response.json();
-        setList(data);
-        setItems(data.items || []);
+  // Query for fetching list
+  const {
+    data: list = null,
+    isLoading: loading,
+    refetch: fetchListItems,
+  } = useQuery({
+    queryKey: ['list', listId],
+    queryFn: () => fetchListAPI(listId),
+    enabled: !!listId,
+  });
+
+  const items = list?.items || [];
+
+  // Mutation for toggling purchased status with optimistic updates
+  const toggleMutation = useMutation({
+    mutationFn: togglePurchasedAPI,
+    onMutate: async ({ itemId, isPurchased }) => {
+      // Cancel outgoing refetches
+      await queryClient.cancelQueries({ queryKey: ['list', listId] });
+
+      // Snapshot previous value
+      const previousList = queryClient.getQueryData<ListData>(['list', listId]);
+
+      // Optimistically update
+      queryClient.setQueryData<ListData>(['list', listId], (old) => {
+        if (!old) return old;
+        return {
+          ...old,
+          items: old.items.map((i) => (i.id === itemId ? { ...i, isPurchased } : i)),
+        };
+      });
+
+      return { previousList };
+    },
+    onError: (err, variables, context) => {
+      // Rollback on error
+      if (context?.previousList) {
+        queryClient.setQueryData(['list', listId], context.previousList);
       }
-    } catch (error) {
-      console.error('Error fetching list items:', error);
-    } finally {
-      setLoading(false);
-    }
-  };
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ['list', listId] });
+    },
+  });
 
-  useEffect(() => {
-    if (listId) {
-      fetchListItems();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [listId]);
+  // Mutation for removing item with optimistic updates
+  const removeMutation = useMutation({
+    mutationFn: removeItemAPI,
+    onMutate: async ({ itemId }) => {
+      await queryClient.cancelQueries({ queryKey: ['list', listId] });
+      const previousList = queryClient.getQueryData<ListData>(['list', listId]);
 
+      queryClient.setQueryData<ListData>(['list', listId], (old) => {
+        if (!old) return old;
+        return {
+          ...old,
+          items: old.items.filter((i) => i.id !== itemId),
+        };
+      });
+
+      return { previousList };
+    },
+    onError: (err, variables, context) => {
+      if (context?.previousList) {
+        queryClient.setQueryData(['list', listId], context.previousList);
+      }
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ['list', listId] });
+    },
+  });
+
+  // Wrapper functions to maintain API compatibility
   const togglePurchased = async (itemId: string) => {
     const item = items.find((i) => i.id === itemId);
     if (!item) return;
 
-    setItems((prev) =>
-      prev.map((i) => (i.id === itemId ? { ...i, isPurchased: !i.isPurchased } : i))
-    );
-
-    try {
-      await fetch(`/api/lists/${listId}/items/${itemId}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ isPurchased: !item.isPurchased }),
-      });
-    } catch (error) {
-      console.error('Error toggling item:', error);
-      setItems((prev) =>
-        prev.map((i) => (i.id === itemId ? { ...i, isPurchased: item.isPurchased } : i))
-      );
-    }
+    await toggleMutation.mutateAsync({
+      listId,
+      itemId,
+      isPurchased: !item.isPurchased,
+    });
   };
 
   const removeItem = async (itemId: string) => {
-    setItems((prev) => prev.filter((i) => i.id !== itemId));
-
-    try {
-      await fetch(`/api/lists/${listId}/items/${itemId}`, {
-        method: 'DELETE',
-      });
-      fetchListItems();
-    } catch (error) {
-      console.error('Error removing item:', error);
-      fetchListItems();
-    }
+    await removeMutation.mutateAsync({ listId, itemId });
   };
 
   const clearAll = async () => {
@@ -113,7 +173,7 @@ export function useShoppingListItems(listId: string) {
       items: historyItems,
     };
 
-    // Удаляем все товары из текущего списка
+    // Remove all items from current list
     for (const item of items) {
       try {
         await fetch(`/api/lists/${listId}/items/${item.id}`, {
@@ -124,7 +184,7 @@ export function useShoppingListItems(listId: string) {
       }
     }
 
-    // Сохраняем в localStorage
+    // Save to localStorage
     const stored = localStorage.getItem('shopping-list-storage');
     if (stored) {
       const data = JSON.parse(stored);

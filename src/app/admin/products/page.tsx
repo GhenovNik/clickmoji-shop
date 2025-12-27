@@ -1,11 +1,13 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import Link from 'next/link';
 import { useProducts } from '@/hooks/admin/useProducts';
 import ProductForm, { FormData } from '@/components/admin/products/ProductForm';
 import ProductsTable from '@/components/admin/products/ProductsTable';
 import BulkImportModal from '@/components/admin/products/BulkImportModal';
+import { TableRowSkeleton } from '@/components/ui/Skeleton';
 
 interface Category {
   id: string;
@@ -28,8 +30,13 @@ interface Product {
   };
 }
 
+const fetchCategoriesAPI = async (): Promise<Category[]> => {
+  const res = await fetch('/api/categories');
+  if (!res.ok) throw new Error('Failed to fetch categories');
+  return res.json();
+};
+
 export default function AdminProductsPage() {
-  const [categories, setCategories] = useState<Category[]>([]);
   const [showForm, setShowForm] = useState(false);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   const [scrollToProductId, setScrollToProductId] = useState<string | null>(null);
@@ -39,9 +46,10 @@ export default function AdminProductsPage() {
   const { products, loading, createProduct, updateProduct, deleteProduct, fetchProducts } =
     useProducts();
 
-  useEffect(() => {
-    fetchCategories();
-  }, []);
+  const { data: categories = [] } = useQuery({
+    queryKey: ['categories'],
+    queryFn: fetchCategoriesAPI,
+  });
 
   // Auto-scroll to product after save
   useEffect(() => {
@@ -57,16 +65,6 @@ export default function AdminProductsPage() {
       setScrollToProductId(null);
     }
   }, [scrollToProductId, products]);
-
-  const fetchCategories = async () => {
-    try {
-      const res = await fetch('/api/categories');
-      const data = await res.json();
-      setCategories(data);
-    } catch (error) {
-      console.error('Error fetching categories:', error);
-    }
-  };
 
   const handleSubmit = async (formData: FormData, imageUrl?: string) => {
     const savedProductId = editingProduct?.id;
@@ -114,14 +112,6 @@ export default function AdminProductsPage() {
     setShowForm(false);
   };
 
-  if (loading) {
-    return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-        <div className="text-lg text-gray-600">Загрузка...</div>
-      </div>
-    );
-  }
-
   return (
     <div className="min-h-screen bg-gray-50">
       <div className="container mx-auto px-4 py-8">
@@ -165,7 +155,35 @@ export default function AdminProductsPage() {
           </div>
         )}
 
-        <ProductsTable products={products} onEdit={handleEdit} onDelete={handleDelete} />
+        {loading ? (
+          <div className="bg-white rounded-xl shadow-md overflow-hidden">
+            <table className="w-full">
+              <thead className="bg-gray-50 border-b border-gray-200">
+                <tr>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
+                    Иконка
+                  </th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
+                    Название
+                  </th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
+                    Категория
+                  </th>
+                  <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">
+                    Действия
+                  </th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-200">
+                {Array.from({ length: 8 }).map((_, i) => (
+                  <TableRowSkeleton key={i} columns={4} />
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <ProductsTable products={products} onEdit={handleEdit} onDelete={handleDelete} />
+        )}
 
         {showBulkImport && (
           <BulkImportModal

@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useSession } from 'next-auth/react';
 import { useRouter } from 'next/navigation';
 import { useLists } from '@/store/lists';
@@ -21,16 +22,41 @@ export type FavoriteProduct = {
   };
 };
 
+// API functions
+const fetchFavoritesAPI = async (): Promise<FavoriteProduct[]> => {
+  const res = await fetch('/api/favorites');
+  if (!res.ok) throw new Error('Failed to fetch favorites');
+  return res.json();
+};
+
+const removeFromFavoritesAPI = async (productId: string) => {
+  const res = await fetch(`/api/favorites?productId=${productId}`, {
+    method: 'DELETE',
+  });
+  if (!res.ok) throw new Error('Failed to remove from favorites');
+  return res.json();
+};
+
+const addToListAPI = async (listId: string, items: { productId: string }[]) => {
+  const res = await fetch(`/api/lists/${listId}/items`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ items }),
+  });
+  if (!res.ok) throw new Error('Failed to add items to list');
+  return res.json();
+};
+
 export function useFavorites() {
   const router = useRouter();
   const { data: session } = useSession();
   const { lists, activeListId, setLists } = useLists();
+  const queryClient = useQueryClient();
 
-  const [favorites, setFavorites] = useState<FavoriteProduct[]>([]);
   const [selectedProducts, setSelectedProducts] = useState<Set<string>>(new Set());
-  const [loading, setLoading] = useState(true);
   const [adding, setAdding] = useState(false);
 
+  // Load lists if needed (maintain existing pattern with useLists store)
   useEffect(() => {
     if (!session?.user) {
       router.push('/auth/signin');
@@ -43,18 +69,45 @@ export function useFavorites() {
         .then((data) => setLists(data))
         .catch((error) => console.error('Error loading lists:', error));
     }
-
-    fetch('/api/favorites')
-      .then((res) => res.json())
-      .then((data) => {
-        setFavorites(data);
-        setLoading(false);
-      })
-      .catch((error) => {
-        console.error('Error loading favorites:', error);
-        setLoading(false);
-      });
   }, [session, router, lists.length, setLists]);
+
+  // Query for favorites with React Query
+  const { data: favorites = [], isLoading: loading } = useQuery({
+    queryKey: ['favorites'],
+    queryFn: fetchFavoritesAPI,
+    enabled: !!session?.user,
+  });
+
+  // Mutation for removing from favorites with optimistic updates
+  const removeMutation = useMutation({
+    mutationFn: removeFromFavoritesAPI,
+    onMutate: async (productId) => {
+      await queryClient.cancelQueries({ queryKey: ['favorites'] });
+      const previousFavorites = queryClient.getQueryData<FavoriteProduct[]>(['favorites']);
+
+      queryClient.setQueryData<FavoriteProduct[]>(['favorites'], (old) => {
+        if (!old) return old;
+        return old.filter((fav) => fav.product.id !== productId);
+      });
+
+      // Also remove from selection
+      setSelectedProducts((prev) => {
+        const newSet = new Set(prev);
+        newSet.delete(productId);
+        return newSet;
+      });
+
+      return { previousFavorites };
+    },
+    onError: (err, productId, context) => {
+      if (context?.previousFavorites) {
+        queryClient.setQueryData(['favorites'], context.previousFavorites);
+      }
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ['favorites'] });
+    },
+  });
 
   const toggleProduct = (productId: string) => {
     setSelectedProducts((prev) => {
@@ -69,19 +122,7 @@ export function useFavorites() {
   };
 
   const removeFromFavorites = async (productId: string) => {
-    try {
-      await fetch(`/api/favorites?productId=${productId}`, {
-        method: 'DELETE',
-      });
-      setFavorites((prev) => prev.filter((fav) => fav.product.id !== productId));
-      setSelectedProducts((prev) => {
-        const newSet = new Set(prev);
-        newSet.delete(productId);
-        return newSet;
-      });
-    } catch (error) {
-      console.error('Error removing from favorites:', error);
-    }
+    await removeMutation.mutateAsync(productId);
   };
 
   const addToList = async () => {
@@ -99,11 +140,7 @@ export function useFavorites() {
       }));
 
     try {
-      await fetch(`/api/lists/${activeListId}/items`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ items: selectedItems }),
-      });
+      await addToListAPI(activeListId, selectedItems);
 
       const listsResponse = await fetch('/api/lists');
       if (listsResponse.ok) {

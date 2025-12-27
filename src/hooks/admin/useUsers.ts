@@ -1,6 +1,4 @@
-'use client';
-
-import { useState, useEffect } from 'react';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 
 export interface User {
   id: string;
@@ -24,98 +22,141 @@ export interface UserFormData {
   role: 'USER' | 'ADMIN';
 }
 
-export function useUsers() {
-  const [users, setUsers] = useState<User[]>([]);
-  const [loading, setLoading] = useState(true);
+// API functions
+const fetchUsersAPI = async (): Promise<User[]> => {
+  const res = await fetch('/api/users');
+  if (!res.ok) throw new Error('Failed to fetch users');
+  return res.json();
+};
 
-  const fetchUsers = async () => {
-    try {
-      const res = await fetch('/api/users');
-      if (!res.ok) {
-        throw new Error('Failed to fetch users');
-      }
-      const data = await res.json();
-      setUsers(data);
-    } catch (error) {
-      console.error('Error fetching users:', error);
-      alert('Ошибка при загрузке пользователей');
-    } finally {
-      setLoading(false);
-    }
+const createUserAPI = async (formData: UserFormData) => {
+  if (!formData.password) {
+    throw new Error('Пароль обязателен при создании нового пользователя');
+  }
+
+  const res = await fetch('/api/users', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      email: formData.email,
+      name: formData.name || null,
+      role: formData.role,
+      password: formData.password,
+    }),
+  });
+
+  if (!res.ok) {
+    const errorData = await res.json();
+    throw new Error(errorData.error || 'Ошибка при создании пользователя');
+  }
+
+  return res.json();
+};
+
+const updateUserAPI = async (userId: string, formData: UserFormData) => {
+  const body: {
+    email: string;
+    name: string | null;
+    role: 'USER' | 'ADMIN';
+    password?: string;
+  } = {
+    email: formData.email,
+    name: formData.name || null,
+    role: formData.role,
   };
 
-  useEffect(() => {
-    fetchUsers();
-  }, []);
+  if (formData.password) {
+    body.password = formData.password;
+  }
 
+  const res = await fetch(`/api/users/${userId}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+
+  if (!res.ok) {
+    const errorData = await res.json();
+    throw new Error(errorData.error || 'Ошибка при обновлении пользователя');
+  }
+
+  return res.json();
+};
+
+const deleteUserAPI = async (userId: string) => {
+  const res = await fetch(`/api/users/${userId}`, {
+    method: 'DELETE',
+  });
+
+  if (!res.ok) {
+    const errorData = await res.json();
+    throw new Error(errorData.error || 'Ошибка при удалении пользователя');
+  }
+
+  return res.json();
+};
+
+// React Query Hook
+export function useUsers() {
+  const queryClient = useQueryClient();
+
+  // Query for fetching users
+  const {
+    data: users = [],
+    isLoading: loading,
+    refetch: fetchUsers,
+  } = useQuery({
+    queryKey: ['users'],
+    queryFn: fetchUsersAPI,
+  });
+
+  // Mutation for creating user
+  const createMutation = useMutation({
+    mutationFn: createUserAPI,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['users'] });
+    },
+    onError: (error: Error) => {
+      alert(error.message);
+    },
+  });
+
+  // Mutation for updating user
+  const updateMutation = useMutation({
+    mutationFn: ({ userId, formData }: { userId: string; formData: UserFormData }) =>
+      updateUserAPI(userId, formData),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['users'] });
+    },
+    onError: (error: Error) => {
+      alert(error.message);
+    },
+  });
+
+  // Mutation for deleting user
+  const deleteMutation = useMutation({
+    mutationFn: deleteUserAPI,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['users'] });
+    },
+    onError: (error: Error) => {
+      alert(error.message);
+    },
+  });
+
+  // Wrapper functions to maintain API compatibility
   const createUser = async (formData: UserFormData) => {
-    if (!formData.password) {
-      alert('Пароль обязателен при создании нового пользователя');
-      return null;
-    }
-
     try {
-      const res = await fetch('/api/users', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          email: formData.email,
-          name: formData.name || null,
-          role: formData.role,
-          password: formData.password,
-        }),
-      });
-
-      if (res.ok) {
-        await fetchUsers();
-        return await res.json();
-      } else {
-        const errorData = await res.json();
-        alert(errorData.error || 'Ошибка при создании пользователя');
-        return null;
-      }
+      return await createMutation.mutateAsync(formData);
     } catch (error) {
-      console.error('Error creating user:', error);
-      alert('Ошибка при создании пользователя');
       return null;
     }
   };
 
   const updateUser = async (userId: string, formData: UserFormData) => {
     try {
-      const body: {
-        email: string;
-        name: string | null;
-        role: 'USER' | 'ADMIN';
-        password?: string;
-      } = {
-        email: formData.email,
-        name: formData.name || null,
-        role: formData.role,
-      };
-
-      // Включаем пароль только если он указан
-      if (formData.password) {
-        body.password = formData.password;
-      }
-
-      const res = await fetch(`/api/users/${userId}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      });
-
-      if (res.ok) {
-        await fetchUsers();
-        return await res.json();
-      } else {
-        const errorData = await res.json();
-        alert(errorData.error || 'Ошибка при обновлении пользователя');
-        return null;
-      }
+      return await updateMutation.mutateAsync({ userId, formData });
     } catch (error) {
-      console.error('Error updating user:', error);
-      alert('Ошибка при обновлении пользователя');
       return null;
     }
   };
@@ -128,21 +169,9 @@ export function useUsers() {
     }
 
     try {
-      const res = await fetch(`/api/users/${userId}`, {
-        method: 'DELETE',
-      });
-
-      if (res.ok) {
-        await fetchUsers();
-        return true;
-      } else {
-        const errorData = await res.json();
-        alert(errorData.error || 'Ошибка при удалении пользователя');
-        return false;
-      }
+      await deleteMutation.mutateAsync(userId);
+      return true;
     } catch (error) {
-      console.error('Error deleting user:', error);
-      alert('Ошибка при удалении пользователя');
       return false;
     }
   };
