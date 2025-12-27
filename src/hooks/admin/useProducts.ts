@@ -12,6 +12,8 @@ interface Product {
     id: string;
     name: string;
     emoji: string;
+    isCustom: boolean;
+    imageUrl: string | null;
   };
 }
 

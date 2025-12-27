@@ -14,6 +14,8 @@ interface Product {
     id: string;
     name: string;
     emoji: string;
+    isCustom: boolean;
+    imageUrl: string | null;
   };
 }
 
@@ -113,7 +115,18 @@ export default function ProductsTable({ products, onEdit, onDelete }: ProductsTa
                     <div className="text-sm text-gray-500">{product.nameEn}</div>
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                    {product.category.emoji} {product.category.name}
+                    <div className="flex items-center gap-2">
+                      {product.category.isCustom && product.category.imageUrl ? (
+                        <img
+                          src={product.category.imageUrl}
+                          alt={product.category.name}
+                          className="w-6 h-6 object-contain"
+                        />
+                      ) : (
+                        <span>{product.category.emoji}</span>
+                      )}
+                      <span>{product.category.name}</span>
+                    </div>
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap">
                     <span
@@ -183,9 +196,18 @@ export default function ProductsTable({ products, onEdit, onDelete }: ProductsTa
                     {product.isCustom ? 'Custom' : 'Emoji'}
                   </span>
                 </div>
-                <p className="text-sm text-gray-600 mt-1">
-                  {product.category.emoji} {product.category.name}
-                </p>
+                <div className="flex items-center gap-2 mt-1 text-sm text-gray-600">
+                  {product.category.isCustom && product.category.imageUrl ? (
+                    <img
+                      src={product.category.imageUrl}
+                      alt={product.category.name}
+                      className="w-5 h-5 object-contain"
+                    />
+                  ) : (
+                    <span>{product.category.emoji}</span>
+                  )}
+                  <span>{product.category.name}</span>
+                </div>
               </div>
             </div>
             <div className="flex gap-2 pt-3 border-t border-gray-100">
