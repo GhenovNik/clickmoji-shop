@@ -128,7 +128,7 @@ model Item {
   updatedAt   DateTime @updatedAt
   purchasedAt DateTime?
 
-  @@unique([listId, productId, variantId]) // нельзя добавить один товар дважды
+  @@unique([listId, productId]) // нельзя добавить один товар дважды
   @@index([listId])
   @@index([productId])
   @@map("items")

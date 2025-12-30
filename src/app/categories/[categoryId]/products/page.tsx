@@ -42,7 +42,15 @@ function ProductsPageContent() {
     <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 p-6 pb-32">
       <div className="max-w-4xl mx-auto">
         <div className="text-center mb-8">
-          <div className="text-6xl mb-2">{category?.emoji || '📦'}</div>
+          {category?.isCustom && category?.imageUrl ? (
+            <img
+              src={category.imageUrl}
+              alt={category.name}
+              className="w-24 h-24 object-contain mx-auto mb-2"
+            />
+          ) : (
+            <div className="text-6xl mb-2">{category?.emoji || '📦'}</div>
+          )}
           <h1 className="text-4xl font-bold mb-2 text-gray-900">
             {category?.name || 'Загрузка...'}
           </h1>

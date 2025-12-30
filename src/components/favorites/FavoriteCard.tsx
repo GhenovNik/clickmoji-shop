@@ -30,7 +30,15 @@ export default function FavoriteCard({
         `}
       >
         <div className="text-center">
-          <div className="text-4xl mb-2">{favorite.product.emoji}</div>
+          {favorite.product.isCustom && favorite.product.imageUrl ? (
+            <img
+              src={favorite.product.imageUrl}
+              alt={favorite.product.name}
+              className="w-16 h-16 object-contain mx-auto mb-2"
+            />
+          ) : (
+            <div className="text-4xl mb-2">{favorite.product.emoji}</div>
+          )}
           <p className="text-sm font-medium text-gray-900">{favorite.product.name}</p>
         </div>
       </button>

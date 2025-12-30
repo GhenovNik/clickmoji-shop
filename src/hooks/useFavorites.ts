@@ -14,10 +14,14 @@ export type FavoriteProduct = {
     name: string;
     nameEn: string;
     emoji: string;
+    isCustom: boolean;
+    imageUrl: string | null;
     category: {
       id: string;
       name: string;
       emoji: string;
+      isCustom: boolean;
+      imageUrl: string | null;
     };
   };
 };
@@ -59,7 +63,7 @@ export function useFavorites() {
   // Load lists if needed (maintain existing pattern with useLists store)
   useEffect(() => {
     if (!session?.user) {
-      router.push('/auth/signin');
+      router.push('/login');
       return;
     }
 
@@ -147,6 +151,9 @@ export function useFavorites() {
         const listsData = await listsResponse.json();
         setLists(listsData);
       }
+
+      // Invalidate list cache to refresh items
+      queryClient.invalidateQueries({ queryKey: ['list', activeListId] });
 
       // Show message about duplicates
       if (response.duplicates && response.duplicates.length > 0) {

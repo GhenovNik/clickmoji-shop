@@ -170,7 +170,15 @@ export default function HistoryPage() {
                             key={item.id}
                             className="flex items-center gap-3 p-3 rounded-lg bg-gray-50"
                           >
-                            <span className="text-2xl">{item.emoji}</span>
+                            {item.isCustom && item.imageUrl ? (
+                              <img
+                                src={item.imageUrl}
+                                alt={item.name}
+                                className="w-8 h-8 object-contain"
+                              />
+                            ) : (
+                              <span className="text-2xl">{item.emoji}</span>
+                            )}
                             <div className="flex-1">
                               <p className="font-medium text-gray-900">{item.name}</p>
                               <p className="text-sm text-gray-600">{item.categoryName}</p>

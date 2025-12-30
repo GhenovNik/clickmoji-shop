@@ -10,6 +10,8 @@ export type Item = {
     id: string;
     name: string;
     emoji: string;
+    isCustom: boolean;
+    imageUrl: string | null;
     category: {
       name: string;
     };
@@ -162,6 +164,8 @@ export function useShoppingListItems(listId: string) {
       productId: item.product.id,
       name: item.product.name,
       emoji: item.product.emoji,
+      isCustom: item.product.isCustom,
+      imageUrl: item.product.imageUrl,
       categoryName: item.product.category.name,
       isPurchased: item.isPurchased,
       addedAt: new Date(),

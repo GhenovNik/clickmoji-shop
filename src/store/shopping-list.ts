@@ -6,6 +6,8 @@ export type ShoppingItem = {
   productId: string;
   name: string;
   emoji: string;
+  isCustom?: boolean;
+  imageUrl?: string | null;
   categoryName: string;
   isPurchased: boolean;
   addedAt: Date;

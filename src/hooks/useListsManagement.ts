@@ -60,7 +60,7 @@ export function useListsManagement() {
   // Redirect if not authenticated (must be in useEffect for SSR)
   useEffect(() => {
     if (!session?.user) {
-      router.push('/auth/signin');
+      router.push('/login');
     }
   }, [session, router]);
 

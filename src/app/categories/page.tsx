@@ -14,6 +14,8 @@ type Category = {
   name: string;
   nameEn: string;
   emoji: string;
+  isCustom: boolean;
+  imageUrl: string | null;
   order: number;
   _count?: {
     products: number;
@@ -52,6 +54,8 @@ function CategoriesPageContent() {
           name: 'Избранное',
           nameEn: 'Favorites',
           emoji: '⭐',
+          isCustom: false,
+          imageUrl: null,
           order: -1,
         } as Category,
         ...categories,
@@ -88,7 +92,15 @@ function CategoriesPageContent() {
                     className="bg-white rounded-2xl p-6 shadow-lg hover:shadow-xl transition-all hover:scale-105 cursor-pointer"
                   >
                     <div className="text-center">
-                      <div className="text-6xl mb-3">{category.emoji}</div>
+                      {category.isCustom && category.imageUrl ? (
+                        <img
+                          src={category.imageUrl}
+                          alt={category.name}
+                          className="w-24 h-24 object-contain mx-auto mb-3"
+                        />
+                      ) : (
+                        <div className="text-6xl mb-3">{category.emoji}</div>
+                      )}
                       <h3 className="font-semibold text-lg mb-1 text-gray-900">{category.name}</h3>
                       {category._count && (
                         <p className="text-sm text-gray-600">{category._count.products} товаров</p>

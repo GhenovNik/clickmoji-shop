@@ -34,7 +34,15 @@ export default function ProductCard({
         `}
       >
         <div className="text-center">
-          <div className="text-4xl mb-2">{product.emoji}</div>
+          {product.isCustom && product.imageUrl ? (
+            <img
+              src={product.imageUrl}
+              alt={product.name}
+              className="w-16 h-16 object-contain mx-auto mb-2"
+            />
+          ) : (
+            <div className="text-4xl mb-2">{product.emoji}</div>
+          )}
           <p className="text-sm font-medium text-gray-900">{product.name}</p>
         </div>
       </button>

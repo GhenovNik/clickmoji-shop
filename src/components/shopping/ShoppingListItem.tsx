@@ -27,7 +27,15 @@ export default function ShoppingListItem({ item, onToggle, onRemove }: ShoppingL
       </button>
       <div className="flex-1">
         <div className="flex items-center gap-2">
-          <span className="text-3xl">{item.product.emoji}</span>
+          {item.product.isCustom && item.product.imageUrl ? (
+            <img
+              src={item.product.imageUrl}
+              alt={item.product.name}
+              className="w-12 h-12 object-contain"
+            />
+          ) : (
+            <span className="text-3xl">{item.product.emoji}</span>
+          )}
           <div>
             <p className={`font-medium text-gray-900 ${item.isPurchased ? 'line-through' : ''}`}>
               {item.product.name}

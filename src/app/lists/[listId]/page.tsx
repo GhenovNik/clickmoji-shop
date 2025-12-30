@@ -23,7 +23,7 @@ export default function ShoppingListPage({ params }: { params: Promise<{ listId:
 
   useEffect(() => {
     if (!session?.user) {
-      router.push('/auth/signin');
+      router.push('/login');
       return;
     }
 

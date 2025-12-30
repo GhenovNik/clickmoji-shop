@@ -12,10 +12,14 @@ type FavoriteProduct = {
     id: string;
     name: string;
     emoji: string;
+    isCustom: boolean;
+    imageUrl: string | null;
     category: {
       id: string;
       name: string;
       emoji: string;
+      isCustom: boolean;
+      imageUrl: string | null;
     };
   };
 };
@@ -151,7 +155,15 @@ export default function FavoritesSection() {
               className="w-full bg-white rounded-xl p-3 shadow-md hover:shadow-lg hover:scale-105 transition-all"
               title={favorite.product.name}
             >
-              <div className="text-3xl sm:text-4xl">{favorite.product.emoji}</div>
+              {favorite.product.isCustom && favorite.product.imageUrl ? (
+                <img
+                  src={favorite.product.imageUrl}
+                  alt={favorite.product.name}
+                  className="w-12 h-12 sm:w-16 sm:h-16 object-contain mx-auto"
+                />
+              ) : (
+                <div className="text-3xl sm:text-4xl">{favorite.product.emoji}</div>
+              )}
             </button>
 
             {/* Remove button - показывается при наведении */}

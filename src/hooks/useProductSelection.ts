@@ -11,10 +11,14 @@ export type Product = {
   name: string;
   nameEn: string;
   emoji: string;
+  isCustom: boolean;
+  imageUrl: string | null;
   category: {
     id: string;
     name: string;
     emoji: string;
+    isCustom: boolean;
+    imageUrl: string | null;
   };
 };
 
@@ -165,6 +169,9 @@ export function useProductSelection(categoryId: string) {
         const listsData = await listsResponse.json();
         setLists(listsData);
       }
+
+      // Invalidate list cache to refresh items
+      queryClient.invalidateQueries({ queryKey: ['list', activeListId] });
 
       // Show message about duplicates
       if (response.duplicates && response.duplicates.length > 0) {

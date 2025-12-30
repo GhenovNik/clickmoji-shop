@@ -10,10 +10,14 @@ type SearchProduct = {
   name: string;
   nameEn: string;
   emoji: string;
+  isCustom: boolean;
+  imageUrl: string | null;
   category: {
     id: string;
     name: string;
     emoji: string;
+    isCustom: boolean;
+    imageUrl: string | null;
   };
 };
 
@@ -99,14 +103,17 @@ export default function ProductSearch() {
   });
 
   const handleAddProduct = async (product: SearchProduct) => {
-    if (!activeListId) {
+    // Get fresh activeListId at click time
+    const currentActiveListId = useLists.getState().activeListId;
+
+    if (!currentActiveListId) {
       alert('Сначала выберите список покупок');
       return;
     }
 
     try {
       const result = await addProductMutation.mutateAsync({
-        listId: activeListId,
+        listId: currentActiveListId,
         productId: product.id,
       });
 
@@ -114,12 +121,9 @@ export default function ProductSearch() {
       setDebouncedQuery('');
       setIsOpen(false);
 
-      // Show message about duplicates
-      if (result.duplicates && result.duplicates.length > 0) {
-        alert(`${product.emoji} ${product.name} уже в списке!`);
-      } else {
-        alert(`${product.emoji} ${product.name} добавлен в список!`);
-      }
+      // Redirect to the list page immediately
+      // Alert messages are shown there if needed
+      router.push(`/lists/${currentActiveListId}`);
     } catch (error) {
       console.error('Error adding product:', error);
       alert('Ошибка при добавлении товара');
@@ -156,11 +160,28 @@ export default function ProductSearch() {
                   disabled={addProductMutation.isPending}
                   className="w-full px-4 py-3 hover:bg-gray-100 flex items-center gap-3 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  <span className="text-3xl">{product.emoji}</span>
+                  {product.isCustom && product.imageUrl ? (
+                    <img
+                      src={product.imageUrl}
+                      alt={product.name}
+                      className="w-12 h-12 object-contain"
+                    />
+                  ) : (
+                    <span className="text-3xl">{product.emoji}</span>
+                  )}
                   <div className="flex-1 text-left">
                     <p className="font-medium text-gray-900">{product.name}</p>
-                    <p className="text-sm text-gray-500">
-                      {product.category.emoji} {product.category.name}
+                    <p className="text-sm text-gray-500 flex items-center gap-1">
+                      {product.category.isCustom && product.category.imageUrl ? (
+                        <img
+                          src={product.category.imageUrl}
+                          alt=""
+                          className="w-5 h-5 object-contain inline-block"
+                        />
+                      ) : (
+                        <span>{product.category.emoji}</span>
+                      )}
+                      <span>{product.category.name}</span>
                     </p>
                   </div>
                   <span className="text-green-600 font-semibold">
