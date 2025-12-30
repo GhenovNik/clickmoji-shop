@@ -1,13 +1,26 @@
 'use client';
 
+import { Suspense, useEffect } from 'react';
 import Link from 'next/link';
 import { useSession } from 'next-auth/react';
+import { useSearchParams } from 'next/navigation';
+import { useLists } from '@/store/lists';
 import { useFavorites } from '@/hooks/useFavorites';
 import FavoriteCard from '@/components/favorites/FavoriteCard';
 import ProductSelectionBar from '@/components/products/ProductSelectionBar';
 
-export default function FavoritesPage() {
+function FavoritesPageContent() {
   const { data: session } = useSession();
+  const searchParams = useSearchParams();
+  const { setActiveList } = useLists();
+
+  // Set active list from URL parameter
+  useEffect(() => {
+    const listIdFromUrl = searchParams.get('listId');
+    if (listIdFromUrl) {
+      setActiveList(listIdFromUrl);
+    }
+  }, [searchParams, setActiveList]);
   const {
     favorites,
     selectedProducts,
@@ -70,5 +83,19 @@ export default function FavoritesPage() {
 
       <ProductSelectionBar count={selectedProducts.size} adding={adding} onAddToList={addToList} />
     </div>
+  );
+}
+
+export default function FavoritesPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 p-6 flex items-center justify-center">
+          <div className="text-2xl">Загрузка...</div>
+        </div>
+      }
+    >
+      <FavoritesPageContent />
+    </Suspense>
   );
 }

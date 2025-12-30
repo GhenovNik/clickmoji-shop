@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { useUploadThing } from '@/lib/uploadthing';
 import EmojiPicker from '../shared/EmojiPicker';
 
@@ -18,6 +18,8 @@ interface Category {
   id: string;
   name: string;
   emoji: string;
+  isCustom: boolean;
+  imageUrl: string | null;
 }
 
 interface ProductFormProps {
@@ -48,8 +50,21 @@ export default function ProductForm({ product, categories, onSubmit, onCancel }:
 
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [uploading, setUploading] = useState(false);
+  const [isDropdownOpen, setIsDropdownOpen] = useState(false);
+  const dropdownRef = useRef<HTMLDivElement>(null);
 
   const { startUpload } = useUploadThing('productImage');
+
+  // Close dropdown when clicking outside
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
+        setIsDropdownOpen(false);
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
@@ -106,21 +121,65 @@ export default function ProductForm({ product, categories, onSubmit, onCancel }:
           />
         </div>
 
-        <div>
+        <div ref={dropdownRef} className="relative">
           <label className="block text-sm font-medium text-gray-700 mb-1">Категория *</label>
-          <select
-            value={formData.categoryId}
-            onChange={(e) => setFormData({ ...formData, categoryId: e.target.value })}
-            className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-gray-900"
-            required
+          <button
+            type="button"
+            onClick={() => setIsDropdownOpen(!isDropdownOpen)}
+            className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-gray-900 text-left flex items-center justify-between bg-white"
           >
-            <option value="">Выберите категорию</option>
-            {categories.map((cat) => (
-              <option key={cat.id} value={cat.id}>
-                {cat.emoji} {cat.name}
-              </option>
-            ))}
-          </select>
+            <span className="flex items-center gap-2">
+              {formData.categoryId ? (
+                <>
+                  {(() => {
+                    const selectedCat = categories.find((c) => c.id === formData.categoryId);
+                    return selectedCat ? (
+                      <>
+                        {selectedCat.isCustom && selectedCat.imageUrl ? (
+                          <img
+                            src={selectedCat.imageUrl}
+                            alt=""
+                            className="w-6 h-6 object-contain"
+                          />
+                        ) : (
+                          <span className="text-xl">{selectedCat.emoji}</span>
+                        )}
+                        <span>{selectedCat.name}</span>
+                      </>
+                    ) : (
+                      'Выберите категорию'
+                    );
+                  })()}
+                </>
+              ) : (
+                'Выберите категорию'
+              )}
+            </span>
+            <span className="text-gray-400">{isDropdownOpen ? '▲' : '▼'}</span>
+          </button>
+
+          {isDropdownOpen && (
+            <div className="absolute z-10 w-full mt-1 bg-white border border-gray-300 rounded-lg shadow-lg max-h-60 overflow-y-auto">
+              {categories.map((cat) => (
+                <button
+                  key={cat.id}
+                  type="button"
+                  onClick={() => {
+                    setFormData({ ...formData, categoryId: cat.id });
+                    setIsDropdownOpen(false);
+                  }}
+                  className="w-full px-4 py-2 hover:bg-gray-100 flex items-center gap-2 text-left transition-colors"
+                >
+                  {cat.isCustom && cat.imageUrl ? (
+                    <img src={cat.imageUrl} alt={cat.name} className="w-6 h-6 object-contain" />
+                  ) : (
+                    <span className="text-xl">{cat.emoji}</span>
+                  )}
+                  <span className="text-gray-900">{cat.name}</span>
+                </button>
+              ))}
+            </div>
+          )}
         </div>
 
         <EmojiPicker

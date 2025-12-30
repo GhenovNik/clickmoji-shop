@@ -35,6 +35,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ lis
     // Используем createMany для добавления нескольких товаров сразу
     // Если товар уже есть в списке, пропускаем его (благодаря @@unique в схеме)
     const createdItems = [];
+    const duplicates = [];
 
     for (const item of items) {
       try {
@@ -54,19 +55,33 @@ export async function POST(request: Request, { params }: { params: Promise<{ lis
         });
         createdItems.push(createdItem);
       } catch (error: unknown) {
-        // Игнорируем ошибки уникальности (товар уже в списке)
+        // Обрабатываем ошибки уникальности (товар уже в списке)
         if (
           typeof error === 'object' &&
           error !== null &&
           'code' in error &&
-          (error as { code: string }).code !== 'P2002'
+          (error as { code: string }).code === 'P2002'
         ) {
+          // Получаем информацию о дубликате
+          const product = await prisma.product.findUnique({
+            where: { id: item.productId },
+            select: { name: true, emoji: true },
+          });
+          duplicates.push(product);
+        } else {
           throw error;
         }
       }
     }
 
-    return NextResponse.json(createdItems);
+    return NextResponse.json({
+      createdItems,
+      duplicates,
+      message:
+        duplicates.length > 0
+          ? `Добавлено ${createdItems.length} товаров. ${duplicates.length} уже в списке.`
+          : `Добавлено ${createdItems.length} товаров.`,
+    });
   } catch (error) {
     console.error('Error adding items to list:', error);
     return NextResponse.json({ error: 'Failed to add items' }, { status: 500 });

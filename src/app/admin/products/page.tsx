@@ -13,6 +13,8 @@ interface Category {
   id: string;
   name: string;
   emoji: string;
+  isCustom: boolean;
+  imageUrl: string | null;
 }
 
 interface Product {

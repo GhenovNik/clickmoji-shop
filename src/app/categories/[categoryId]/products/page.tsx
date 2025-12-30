@@ -1,17 +1,29 @@
 'use client';
 
-import { useParams } from 'next/navigation';
+import { Suspense, useEffect } from 'react';
+import { useParams, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { useSession } from 'next-auth/react';
+import { useLists } from '@/store/lists';
 import { useProductSelection } from '@/hooks/useProductSelection';
 import ProductCard from '@/components/products/ProductCard';
 import ProductSelectionBar from '@/components/products/ProductSelectionBar';
 import { ProductCardSkeleton } from '@/components/ui/Skeleton';
 
-export default function ProductsPage() {
+function ProductsPageContent() {
   const params = useParams();
+  const searchParams = useSearchParams();
   const categoryId = params.categoryId as string;
   const { data: session } = useSession();
+  const { setActiveList } = useLists();
+
+  // Set active list from URL parameter
+  useEffect(() => {
+    const listIdFromUrl = searchParams.get('listId');
+    if (listIdFromUrl) {
+      setActiveList(listIdFromUrl);
+    }
+  }, [searchParams, setActiveList]);
 
   const {
     products,
@@ -62,5 +74,19 @@ export default function ProductsPage() {
 
       <ProductSelectionBar count={selectedProducts.size} adding={adding} onAddToList={addToList} />
     </div>
+  );
+}
+
+export default function ProductsPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 p-6 flex items-center justify-center">
+          <div className="text-2xl">Загрузка...</div>
+        </div>
+      }
+    >
+      <ProductsPageContent />
+    </Suspense>
   );
 }

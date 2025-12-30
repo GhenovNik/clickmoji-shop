@@ -1,8 +1,11 @@
 'use client';
 
+import { Suspense, useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import Link from 'next/link';
 import { useSession } from 'next-auth/react';
+import { useSearchParams } from 'next/navigation';
+import { useLists } from '@/store/lists';
 import ProductSearch from '@/components/ProductSearch';
 import { CategoryCardSkeleton } from '@/components/ui/Skeleton';
 
@@ -23,8 +26,18 @@ const fetchCategoriesAPI = async (): Promise<Category[]> => {
   return res.json();
 };
 
-export default function CategoriesPage() {
+function CategoriesPageContent() {
   const { data: session } = useSession();
+  const searchParams = useSearchParams();
+  const { setActiveList } = useLists();
+
+  // Set active list from URL parameter
+  useEffect(() => {
+    const listIdFromUrl = searchParams.get('listId');
+    if (listIdFromUrl) {
+      setActiveList(listIdFromUrl);
+    }
+  }, [searchParams, setActiveList]);
 
   const { data: categories = [], isLoading: loading } = useQuery({
     queryKey: ['categories'],
@@ -61,25 +74,29 @@ export default function CategoriesPage() {
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
           {loading
             ? Array.from({ length: 8 }).map((_, i) => <CategoryCardSkeleton key={i} />)
-            : displayCategories.map((category) => (
-                <Link
-                  key={category.id}
-                  href={
-                    category.id === 'favorites'
-                      ? '/categories/favorites'
-                      : `/categories/${category.id}/products`
-                  }
-                  className="bg-white rounded-2xl p-6 shadow-lg hover:shadow-xl transition-all hover:scale-105 cursor-pointer"
-                >
-                  <div className="text-center">
-                    <div className="text-6xl mb-3">{category.emoji}</div>
-                    <h3 className="font-semibold text-lg mb-1 text-gray-900">{category.name}</h3>
-                    {category._count && (
-                      <p className="text-sm text-gray-600">{category._count.products} товаров</p>
-                    )}
-                  </div>
-                </Link>
-              ))}
+            : displayCategories.map((category) => {
+                const listIdParam = searchParams.get('listId');
+                const listQuery = listIdParam ? `?listId=${listIdParam}` : '';
+                return (
+                  <Link
+                    key={category.id}
+                    href={
+                      category.id === 'favorites'
+                        ? `/categories/favorites${listQuery}`
+                        : `/categories/${category.id}/products${listQuery}`
+                    }
+                    className="bg-white rounded-2xl p-6 shadow-lg hover:shadow-xl transition-all hover:scale-105 cursor-pointer"
+                  >
+                    <div className="text-center">
+                      <div className="text-6xl mb-3">{category.emoji}</div>
+                      <h3 className="font-semibold text-lg mb-1 text-gray-900">{category.name}</h3>
+                      {category._count && (
+                        <p className="text-sm text-gray-600">{category._count.products} товаров</p>
+                      )}
+                    </div>
+                  </Link>
+                );
+              })}
         </div>
 
         {/* Navigation */}
@@ -94,5 +111,19 @@ export default function CategoriesPage() {
         </div>
       </div>
     </div>
+  );
+}
+
+export default function CategoriesPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 p-6 flex items-center justify-center">
+          <div className="text-2xl">Загрузка...</div>
+        </div>
+      }
+    >
+      <CategoriesPageContent />
+    </Suspense>
   );
 }

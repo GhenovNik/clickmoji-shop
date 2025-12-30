@@ -1,6 +1,21 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { auth } from '@/lib/auth';
+import { UTApi } from 'uploadthing/server';
+
+const utapi = new UTApi();
+
+// Extract file key from UploadThing URL
+function getFileKeyFromUrl(url: string | null): string | null {
+  if (!url) return null;
+  try {
+    const urlObj = new URL(url);
+    const pathParts = urlObj.pathname.split('/');
+    return pathParts[pathParts.length - 1] || null;
+  } catch {
+    return null;
+  }
+}
 
 export async function PUT(
   request: Request,
@@ -15,6 +30,26 @@ export async function PUT(
     const { categoryId } = await params;
     const body = await request.json();
     const { name, nameEn, emoji, order, isCustom, imageUrl } = body;
+
+    // If imageUrl is being changed, delete old file from UploadThing
+    if (imageUrl !== undefined) {
+      const currentCategory = await prisma.category.findUnique({
+        where: { id: categoryId },
+        select: { imageUrl: true },
+      });
+
+      if (currentCategory?.imageUrl && currentCategory.imageUrl !== imageUrl) {
+        const oldFileKey = getFileKeyFromUrl(currentCategory.imageUrl);
+        if (oldFileKey) {
+          try {
+            await utapi.deleteFiles(oldFileKey);
+            console.log('🗑️ Deleted old category image:', oldFileKey);
+          } catch (error) {
+            console.error('Failed to delete old image from UploadThing:', error);
+          }
+        }
+      }
+    }
 
     // Если меняется order, нужно обработать конфликты с unique constraint
     if (order !== undefined) {
@@ -88,9 +123,29 @@ export async function DELETE(
 
     const { categoryId } = await params;
 
+    // Get category to check if it has an image to delete
+    const category = await prisma.category.findUnique({
+      where: { id: categoryId },
+      select: { imageUrl: true, name: true },
+    });
+
+    // Delete category from database (cascade will delete products)
     await prisma.category.delete({
       where: { id: categoryId },
     });
+
+    // Delete image from UploadThing if exists
+    if (category?.imageUrl) {
+      const fileKey = getFileKeyFromUrl(category.imageUrl);
+      if (fileKey) {
+        try {
+          await utapi.deleteFiles(fileKey);
+          console.log(`🗑️ Deleted image for category "${category.name}":`, fileKey);
+        } catch (error) {
+          console.error('Failed to delete image from UploadThing:', error);
+        }
+      }
+    }
 
     return NextResponse.json({ success: true });
   } catch (error) {

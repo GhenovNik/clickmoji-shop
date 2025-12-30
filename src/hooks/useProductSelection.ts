@@ -158,12 +158,20 @@ export function useProductSelection(categoryId: string) {
       }));
 
     try {
-      await addToListAPI(activeListId, selectedItems);
+      const response = await addToListAPI(activeListId, selectedItems);
 
       const listsResponse = await fetch('/api/lists');
       if (listsResponse.ok) {
         const listsData = await listsResponse.json();
         setLists(listsData);
+      }
+
+      // Show message about duplicates
+      if (response.duplicates && response.duplicates.length > 0) {
+        const duplicateNames = response.duplicates
+          .map((d: { emoji: string; name: string }) => `${d.emoji} ${d.name}`)
+          .join(', ');
+        alert(`${response.message}\n\nУже в списке: ${duplicateNames}`);
       }
 
       if (activeListId) {

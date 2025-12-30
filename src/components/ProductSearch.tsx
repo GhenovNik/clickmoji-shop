@@ -105,7 +105,7 @@ export default function ProductSearch() {
     }
 
     try {
-      await addProductMutation.mutateAsync({
+      const result = await addProductMutation.mutateAsync({
         listId: activeListId,
         productId: product.id,
       });
@@ -114,7 +114,12 @@ export default function ProductSearch() {
       setDebouncedQuery('');
       setIsOpen(false);
 
-      alert(`${product.emoji} ${product.name} добавлен в список!`);
+      // Show message about duplicates
+      if (result.duplicates && result.duplicates.length > 0) {
+        alert(`${product.emoji} ${product.name} уже в списке!`);
+      } else {
+        alert(`${product.emoji} ${product.name} добавлен в список!`);
+      }
     } catch (error) {
       console.error('Error adding product:', error);
       alert('Ошибка при добавлении товара');

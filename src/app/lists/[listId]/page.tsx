@@ -9,6 +9,7 @@ import { useShoppingList } from '@/store/shopping-list';
 import { useShoppingListItems } from '@/hooks/useShoppingListItems';
 import ShoppingListItem from '@/components/shopping/ShoppingListItem';
 import ShoppingListEmptyState from '@/components/shopping/ShoppingListEmptyState';
+import ProductSearch from '@/components/ProductSearch';
 
 export default function ShoppingListPage({ params }: { params: Promise<{ listId: string }> }) {
   const router = useRouter();
@@ -60,7 +61,10 @@ export default function ShoppingListPage({ params }: { params: Promise<{ listId:
 
         <div className="text-center mb-8">
           <h1 className="text-4xl font-bold mb-2 text-gray-900">🛒 {list?.name || 'Список'}</h1>
-          <p className="text-gray-700">{pendingItems.length} товаров осталось купить</p>
+          <p className="text-gray-700 mb-6">{pendingItems.length} товаров осталось купить</p>
+
+          {/* Search products */}
+          <ProductSearch />
         </div>
 
         {pendingItems.length > 0 && (
@@ -114,7 +118,7 @@ export default function ShoppingListPage({ params }: { params: Promise<{ listId:
         <div className="space-y-4">
           <div className="flex gap-4">
             <Link
-              href="/categories"
+              href={`/categories?listId=${listId}`}
               className="flex-1 bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-xl font-semibold text-center transition-colors"
             >
               + Добавить товары

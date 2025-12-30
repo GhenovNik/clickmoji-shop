@@ -7,15 +7,33 @@ import { GoogleGenAI } from '@google/genai';
 const utapi = new UTApi();
 
 async function generateWithGemini(productName: string, apiKey: string): Promise<Buffer> {
-  const prompt = `Vector illustration icon of ${productName}. Style: Semi-flat design, soft gradient vector. MUST BE: clean shapes, NO black outlines (outline-free), subtle gradients to show depth and volume. Soft lighting, cute and friendly aesthetic. Smooth rounded corners. Vibrant, saturated, appetizing colors. Isolated on white background. High quality UI icon, stock vector style. Minimalist but detailed enough to be appetizing.`;
+  const prompt = `
+Vector illustration icon of ${productName}.
+Style: 3D emoji style, semi-flat look with soft volume.
+MUST BE:
+smooth rounded shapes,
+soft plastic-like shading,
+subtle gradients for depth and volume,
+gentle specular highlights,
+soft even lighting,
+NO shadows or drop shadows,
+NO black outlines (outline-free),
+no text or symbols,
+centered composition,
+lots of white padding,
+isolated on pure white background (#FFFFFF).
+High quality emoji-style icon, consistent emoji pack look.
+Minimalist but detailed enough to look appetizing.
+`;
 
   const ai = new GoogleGenAI({ apiKey });
+  const imagenModel = process.env.IMAGEN_MODEL || 'imagen-4.0-generate-001';
 
-  console.log('🎨 Generating with Imagen via SDK...', { productName, prompt });
+  console.log('🎨 Generating with Imagen via SDK...', { productName, model: imagenModel, prompt });
 
   try {
     const response = await ai.models.generateImages({
-      model: 'imagen-4.0-generate-001',
+      model: imagenModel,
       prompt: prompt,
       config: {
         numberOfImages: 1,
@@ -48,9 +66,20 @@ async function generateWithGemini(productName: string, apiKey: string): Promise<
     console.error('❌ Imagen SDK Error:', {
       message: error instanceof Error ? error.message : 'Unknown error',
       productName,
+      model: imagenModel,
       prompt,
-      error,
+      errorDetails: JSON.stringify(error, null, 2),
     });
+
+    // Provide more helpful error message
+    if (error instanceof Error) {
+      if (error.message.includes('quota') || error.message.includes('limit')) {
+        throw new Error(
+          `Imagen API quota exceeded. Try switching models in .env: IMAGEN_MODEL="imagen-4.0-fast-generate-001"`
+        );
+      }
+    }
+
     throw error;
   }
 }
@@ -58,7 +87,24 @@ async function generateWithGemini(productName: string, apiKey: string): Promise<
 async function generateWithOpenAI(productName: string, apiKey: string): Promise<Buffer> {
   const openai = new OpenAI({ apiKey });
 
-  const prompt = `Flat vector emoji icon of ${productName}. Minimalist cartoon style, clean bold lines, solid vibrant colors, no gradients, no shadows. Friendly and simple design. Isolated on white background, centered, filling the frame. Similar to Twitter (Twemoji) or flat UI icons. NOT realistic, NOT 3D. High quality vector art. NO text.`;
+  const prompt = `
+Vector illustration icon of ${productName}.
+Style: 3D emoji style, semi-flat look with soft volume.
+MUST BE:
+smooth rounded shapes,
+soft plastic-like shading,
+subtle gradients for depth and volume,
+gentle specular highlights,
+soft even lighting,
+NO shadows or drop shadows,
+NO black outlines (outline-free),
+no text or symbols,
+centered composition,
+lots of white padding,
+isolated on pure white background (#FFFFFF).
+High quality emoji-style icon, consistent emoji pack look.
+Minimalist but detailed enough to look appetizing.
+`;
 
   const result = await openai.images.generate({
     model: 'gpt-image-1.5',
