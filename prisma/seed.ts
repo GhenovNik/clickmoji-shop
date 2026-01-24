@@ -5,7 +5,7 @@ const prisma = new PrismaClient();
 async function main() {
   console.log('🌱 Starting seed...');
 
-  // Проверяем, есть ли уже категории
+  // Проверяем наличие категорий
   const existingCount = await prisma.category.count();
 
   if (existingCount > 0) {
@@ -15,9 +15,8 @@ async function main() {
     return;
   }
 
-  console.log('📦 Creating default categories and products...');
+  console.log('📦 Creating unique categories and products...');
 
-  // Создание категорий и продуктов
   const categories = [
     {
       name: 'Овощи',
@@ -39,6 +38,8 @@ async function main() {
         { name: 'Кукуруза', nameEn: 'Corn', emoji: '🌽' },
         { name: 'Баклажан', nameEn: 'Eggplant', emoji: '🍆' },
         { name: 'Горох', nameEn: 'Peas', emoji: '🫛' },
+        { name: 'Тыква', nameEn: 'Pumpkin', emoji: '🎃' },
+        { name: 'Свекла', nameEn: 'Beetroot', emoji: '🥬' },
       ],
     },
     {
@@ -61,6 +62,8 @@ async function main() {
         { name: 'Манго', nameEn: 'Mango', emoji: '🥭' },
         { name: 'Груша', nameEn: 'Pear', emoji: '🍐' },
         { name: 'Черника', nameEn: 'Blueberry', emoji: '🫐' },
+        { name: 'Авокадо', nameEn: 'Avocado', emoji: '🥑' },
+        { name: 'Дыня', nameEn: 'Melon', emoji: '🍈' },
       ],
     },
     {
@@ -73,10 +76,11 @@ async function main() {
         { name: 'Масло сливочное', nameEn: 'Butter', emoji: '🧈' },
         { name: 'Сыр', nameEn: 'Cheese', emoji: '🧀' },
         { name: 'Яйца', nameEn: 'Eggs', emoji: '🥚' },
-        { name: 'Мороженое', nameEn: 'Ice Cream', emoji: '🍦' },
         { name: 'Йогурт', nameEn: 'Yogurt', emoji: '🧃' },
         { name: 'Сметана', nameEn: 'Sour Cream', emoji: '🥄' },
         { name: 'Творог', nameEn: 'Cottage Cheese', emoji: '🫕' },
+        { name: 'Сливки', nameEn: 'Cream', emoji: '🥛' },
+        { name: 'Кефир', nameEn: 'Kefir', emoji: '🥛' },
       ],
     },
     {
@@ -86,6 +90,7 @@ async function main() {
       order: 4,
       products: [
         { name: 'Хлеб белый', nameEn: 'White Bread', emoji: '🍞' },
+        { name: 'Хлеб черный', nameEn: 'Rye Bread', emoji: '🍞' },
         { name: 'Багет', nameEn: 'Baguette', emoji: '🥖' },
         { name: 'Бублик', nameEn: 'Bagel', emoji: '🥯' },
         { name: 'Круассан', nameEn: 'Croissant', emoji: '🥐' },
@@ -94,24 +99,24 @@ async function main() {
         { name: 'Торт', nameEn: 'Cake', emoji: '🍰' },
         { name: 'Блины', nameEn: 'Pancakes', emoji: '🥞' },
         { name: 'Вафли', nameEn: 'Waffles', emoji: '🧇' },
+        { name: 'Печенье', nameEn: 'Cookies', emoji: '🍪' },
       ],
     },
     {
-      name: 'Мясо и рыба',
-      nameEn: 'Meat & Fish',
+      name: 'Мясо и мясные продукты',
+      nameEn: 'Meat',
       emoji: '🥩',
       order: 5,
       products: [
-        { name: 'Стейк', nameEn: 'Steak', emoji: '🥩' },
+        { name: 'Говядина', nameEn: 'Beef', emoji: '🥩' },
+        { name: 'Свинина', nameEn: 'Pork', emoji: '🥩' },
         { name: 'Курица', nameEn: 'Chicken', emoji: '🍗' },
+        { name: 'Индейка', nameEn: 'Turkey', emoji: '🍗' },
         { name: 'Бекон', nameEn: 'Bacon', emoji: '🥓' },
         { name: 'Сосиски', nameEn: 'Hot Dog', emoji: '🌭' },
+        { name: 'Колбаса', nameEn: 'Sausage', emoji: '🌭' },
+        { name: 'Фарш', nameEn: 'Minced Meat', emoji: '🥩' },
         { name: 'Мясо на кости', nameEn: 'Meat on Bone', emoji: '🍖' },
-        { name: 'Рыба', nameEn: 'Fish', emoji: '🐟' },
-        { name: 'Креветки', nameEn: 'Shrimp', emoji: '🍤' },
-        { name: 'Лобстер', nameEn: 'Lobster', emoji: '🦞' },
-        { name: 'Краб', nameEn: 'Crab', emoji: '🦀' },
-        { name: 'Осьминог', nameEn: 'Octopus', emoji: '🐙' },
       ],
     },
     {
@@ -121,16 +126,15 @@ async function main() {
       order: 6,
       products: [
         { name: 'Консервы', nameEn: 'Canned Food', emoji: '🥫' },
-        { name: 'Паста', nameEn: 'Pasta', emoji: '🍝' },
         { name: 'Пицца', nameEn: 'Pizza', emoji: '🍕' },
         { name: 'Бургер', nameEn: 'Burger', emoji: '🍔' },
         { name: 'Тако', nameEn: 'Taco', emoji: '🌮' },
         { name: 'Буррито', nameEn: 'Burrito', emoji: '🌯' },
         { name: 'Шаурма', nameEn: 'Shawarma', emoji: '🥙' },
-        { name: 'Лапша', nameEn: 'Noodles', emoji: '🍜' },
         { name: 'Суп', nameEn: 'Soup', emoji: '🍲' },
         { name: 'Салат готовый', nameEn: 'Ready Salad', emoji: '🥗' },
         { name: 'Бенто', nameEn: 'Bento Box', emoji: '🍱' },
+        { name: 'Сэндвич', nameEn: 'Sandwich', emoji: '🥪' },
       ],
     },
     {
@@ -139,13 +143,11 @@ async function main() {
       emoji: '🍷',
       order: 7,
       products: [
-        // Алкогольные
         { name: 'Вино', nameEn: 'Wine', emoji: '🍷' },
         { name: 'Пиво', nameEn: 'Beer', emoji: '🍺' },
         { name: 'Шампанское', nameEn: 'Champagne', emoji: '🍾' },
         { name: 'Виски', nameEn: 'Whiskey', emoji: '🥃' },
         { name: 'Коктейль', nameEn: 'Cocktail', emoji: '🍸' },
-        // Безалкогольные
         { name: 'Вода', nameEn: 'Water', emoji: '💧' },
         { name: 'Кофе', nameEn: 'Coffee', emoji: '☕' },
         { name: 'Чай', nameEn: 'Tea', emoji: '🍵' },
@@ -174,7 +176,7 @@ async function main() {
     {
       name: 'Товары для дома',
       nameEn: 'Home Goods',
-      emoji: '🧻',
+      emoji: '🏠',
       order: 9,
       products: [
         { name: 'Свечи', nameEn: 'Candles', emoji: '🕯️' },
@@ -207,7 +209,7 @@ async function main() {
       name: 'Крупы и макароны',
       nameEn: 'Grains & Pasta',
       emoji: '🌾',
-      order: 13,
+      order: 11,
       products: [
         { name: 'Гречка', nameEn: 'Buckwheat', emoji: '🌾' },
         { name: 'Рис', nameEn: 'Rice', emoji: '🍚' },
@@ -217,13 +219,14 @@ async function main() {
         { name: 'Мука', nameEn: 'Flour', emoji: '🌾' },
         { name: 'Перловка', nameEn: 'Pearl Barley', emoji: '🌾' },
         { name: 'Пшено', nameEn: 'Millet', emoji: '🌾' },
+        { name: 'Чечевица', nameEn: 'Lentils', emoji: '🍲' },
       ],
     },
     {
       name: 'Орехи и сухофрукты',
       nameEn: 'Nuts & Dried Fruits',
       emoji: '🥜',
-      order: 14,
+      order: 12,
       products: [
         { name: 'Арахис', nameEn: 'Peanuts', emoji: '🥜' },
         { name: 'Миндаль', nameEn: 'Almonds', emoji: '🌰' },
@@ -239,7 +242,7 @@ async function main() {
       name: 'Масла и соусы',
       nameEn: 'Oils & Sauces',
       emoji: '🫗',
-      order: 15,
+      order: 13,
       products: [
         { name: 'Подсолнечное масло', nameEn: 'Sunflower Oil', emoji: '🫗' },
         { name: 'Оливковое масло', nameEn: 'Olive Oil', emoji: '🫒' },
@@ -249,13 +252,14 @@ async function main() {
         { name: 'Соевый соус', nameEn: 'Soy Sauce', emoji: '🍶' },
         { name: 'Уксус', nameEn: 'Vinegar', emoji: '🫗' },
         { name: 'Томатная паста', nameEn: 'Tomato Paste', emoji: '🍅' },
+        { name: 'Специи', nameEn: 'Spices', emoji: '🧂' },
       ],
     },
     {
       name: 'Замороженные продукты',
       nameEn: 'Frozen',
       emoji: '🧊',
-      order: 16,
+      order: 14,
       products: [
         { name: 'Пельмени', nameEn: 'Dumplings', emoji: '🥟' },
         { name: 'Вареники', nameEn: 'Vareniki', emoji: '🥟' },
@@ -269,7 +273,7 @@ async function main() {
       name: 'Рыба и морепродукты',
       nameEn: 'Fish & Seafood',
       emoji: '🐟',
-      order: 17,
+      order: 15,
       products: [
         { name: 'Лосось', nameEn: 'Salmon', emoji: '🐟' },
         { name: 'Тунец', nameEn: 'Tuna', emoji: '🐟' },
@@ -279,13 +283,14 @@ async function main() {
         { name: 'Мидии', nameEn: 'Mussels', emoji: '🦪' },
         { name: 'Краб', nameEn: 'Crab', emoji: '🦀' },
         { name: 'Икра', nameEn: 'Caviar', emoji: '🥚' },
+        { name: 'Осьминог', nameEn: 'Octopus', emoji: '🐙' },
       ],
     },
     {
       name: 'Детское питание',
       nameEn: 'Baby Food',
       emoji: '🍼',
-      order: 18,
+      order: 16,
       products: [
         { name: 'Детская смесь', nameEn: 'Baby Formula', emoji: '🍼' },
         { name: 'Детское пюре', nameEn: 'Baby Puree', emoji: '🥫' },
@@ -298,7 +303,7 @@ async function main() {
       name: 'Корм для животных',
       nameEn: 'Pet Food',
       emoji: '🐾',
-      order: 19,
+      order: 17,
       products: [
         { name: 'Корм для кошек', nameEn: 'Cat Food', emoji: '🐱' },
         { name: 'Корм для собак', nameEn: 'Dog Food', emoji: '🐶' },
@@ -325,7 +330,9 @@ async function main() {
       },
     });
 
-    console.log(`✅ Created category: ${category.emoji} ${category.name} with ${products.length} products`);
+    console.log(
+      `✅ Created category: ${category.emoji} ${category.name} with ${products.length} products`
+    );
   }
 
   // Подсчет итогов
