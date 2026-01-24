@@ -28,7 +28,7 @@ export async function PUT(
       return NextResponse.json({ error: 'List not found' }, { status: 404 });
     }
 
-    const { isPurchased } = await request.json();
+    const { isPurchased, note } = await request.json();
 
     const item = await prisma.item.update({
       where: {
@@ -36,9 +36,12 @@ export async function PUT(
         listId: listId,
       },
       data: {
-        isPurchased,
-        ...(isPurchased && { purchasedAt: new Date() }),
-        ...(!isPurchased && { purchasedAt: null }),
+        ...(isPurchased !== undefined && {
+          isPurchased,
+          ...(isPurchased && { purchasedAt: new Date() }),
+          ...(!isPurchased && { purchasedAt: null }),
+        }),
+        ...(note !== undefined && { note }),
       },
       include: {
         product: {

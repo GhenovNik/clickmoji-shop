@@ -1,6 +1,6 @@
 'use client';
 
-import { use, useEffect } from 'react';
+import { use, useEffect, useState } from 'react';
 import { useSession } from 'next-auth/react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
@@ -10,6 +10,7 @@ import { useShoppingListItems } from '@/hooks/useShoppingListItems';
 import ShoppingListItem from '@/components/shopping/ShoppingListItem';
 import ShoppingListEmptyState from '@/components/shopping/ShoppingListEmptyState';
 import ProductSearch from '@/components/ProductSearch';
+import ImportListModal from '@/components/shopping/ImportListModal';
 
 export default function ShoppingListPage({ params }: { params: Promise<{ listId: string }> }) {
   const router = useRouter();
@@ -17,8 +18,9 @@ export default function ShoppingListPage({ params }: { params: Promise<{ listId:
   const { setActiveList } = useLists();
   const { listId } = use(params);
   const { completeList: saveToHistory } = useShoppingList();
+  const [isImportModalOpen, setIsImportModalOpen] = useState(false);
 
-  const { list, items, loading, togglePurchased, removeItem, clearAll, completeList } =
+  const { list, items, loading, togglePurchased, removeItem, updateNote, clearAll, completeList } =
     useShoppingListItems(listId);
 
   useEffect(() => {
@@ -42,6 +44,36 @@ export default function ShoppingListPage({ params }: { params: Promise<{ listId:
   const pendingItems = items.filter((item) => !item.isPurchased);
   const purchasedItems = items.filter((item) => item.isPurchased);
 
+  // Группировка товаров по категориям
+  const groupItemsByCategory = (itemsToGroup: typeof items) => {
+    const grouped = itemsToGroup.reduce(
+      (acc, item) => {
+        const categoryId = item.product.category.name;
+        if (!acc[categoryId]) {
+          acc[categoryId] = {
+            category: item.product.category,
+            items: [],
+          };
+        }
+        acc[categoryId].items.push(item);
+        return acc;
+      },
+      {} as Record<
+        string,
+        {
+          category: { name: string; emoji: string; order: number };
+          items: typeof items;
+        }
+      >
+    );
+
+    // Сортировка категорий по полю order
+    return Object.values(grouped).sort((a, b) => a.category.order - b.category.order);
+  };
+
+  const groupedPendingItems = groupItemsByCategory(pendingItems);
+  const groupedPurchasedItems = groupItemsByCategory(purchasedItems);
+
   if (items.length === 0) {
     return <ShoppingListEmptyState listName={list?.name || 'Список'} />;
   }
@@ -61,25 +93,46 @@ export default function ShoppingListPage({ params }: { params: Promise<{ listId:
 
         <div className="text-center mb-8">
           <h1 className="text-4xl font-bold mb-2 text-gray-900">🛒 {list?.name || 'Список'}</h1>
-          <p className="text-gray-700 mb-6">{pendingItems.length} товаров осталось купить</p>
+          <p className="text-gray-700 mb-2">{pendingItems.length} товаров осталось купить</p>
+          <p className="text-xs text-gray-500 mb-6">
+            💡 Можно добавлять один товар несколько раз с разными заметками
+          </p>
 
           {/* Search products */}
           <ProductSearch />
+
+          {/* Import list button */}
+          <button
+            onClick={() => setIsImportModalOpen(true)}
+            className="mt-4 bg-gradient-to-r from-green-500 to-teal-600 hover:from-green-600 hover:to-teal-700 text-white px-6 py-2 rounded-lg font-semibold transition-all flex items-center gap-2 mx-auto"
+          >
+            <span>📋</span>
+            <span>Импорт из текста</span>
+          </button>
         </div>
 
         {pendingItems.length > 0 && (
           <div className="mb-8">
             <h2 className="text-xl font-semibold mb-4 text-gray-900">Нужно купить</h2>
-            <div className="space-y-3">
-              {pendingItems.map((item) => (
-                <ShoppingListItem
-                  key={item.id}
-                  item={item}
-                  onToggle={togglePurchased}
-                  onRemove={removeItem}
-                />
-              ))}
-            </div>
+            {groupedPendingItems.map((group) => (
+              <div key={group.category.name} className="mb-6">
+                <h3 className="text-lg font-medium mb-3 text-gray-800 flex items-center gap-2">
+                  <span className="text-2xl">{group.category.emoji}</span>
+                  <span>{group.category.name}</span>
+                </h3>
+                <div className="space-y-3">
+                  {group.items.map((item) => (
+                    <ShoppingListItem
+                      key={item.id}
+                      item={item}
+                      onToggle={togglePurchased}
+                      onRemove={removeItem}
+                      onUpdateNote={updateNote}
+                    />
+                  ))}
+                </div>
+              </div>
+            ))}
           </div>
         )}
 
@@ -88,16 +141,25 @@ export default function ShoppingListPage({ params }: { params: Promise<{ listId:
             <h2 className="text-xl font-semibold mb-4 text-gray-900">
               Куплено ({purchasedItems.length})
             </h2>
-            <div className="space-y-3">
-              {purchasedItems.map((item) => (
-                <ShoppingListItem
-                  key={item.id}
-                  item={item}
-                  onToggle={togglePurchased}
-                  onRemove={removeItem}
-                />
-              ))}
-            </div>
+            {groupedPurchasedItems.map((group) => (
+              <div key={group.category.name} className="mb-6">
+                <h3 className="text-lg font-medium mb-3 text-gray-800 flex items-center gap-2">
+                  <span className="text-2xl">{group.category.emoji}</span>
+                  <span>{group.category.name}</span>
+                </h3>
+                <div className="space-y-3">
+                  {group.items.map((item) => (
+                    <ShoppingListItem
+                      key={item.id}
+                      item={item}
+                      onToggle={togglePurchased}
+                      onRemove={removeItem}
+                      onUpdateNote={updateNote}
+                    />
+                  ))}
+                </div>
+              </div>
+            ))}
           </div>
         )}
 
@@ -143,6 +205,15 @@ export default function ShoppingListPage({ params }: { params: Promise<{ listId:
             На главную
           </Link>
         </div>
+
+        <ImportListModal
+          listId={listId}
+          isOpen={isImportModalOpen}
+          onClose={() => setIsImportModalOpen(false)}
+          onSuccess={() => {
+            // Refresh will happen automatically after modal closes
+          }}
+        />
       </div>
     </div>
   );

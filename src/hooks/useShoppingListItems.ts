@@ -6,6 +6,7 @@ import { useRouter } from 'next/navigation';
 export type Item = {
   id: string;
   isPurchased: boolean;
+  note?: string | null;
   product: {
     id: string;
     name: string;
@@ -14,6 +15,8 @@ export type Item = {
     imageUrl: string | null;
     category: {
       name: string;
+      emoji: string;
+      order: number;
     };
   };
 };
@@ -46,6 +49,24 @@ const togglePurchasedAPI = async ({
     body: JSON.stringify({ isPurchased }),
   });
   if (!response.ok) throw new Error('Failed to toggle item');
+  return response.json();
+};
+
+const updateNoteAPI = async ({
+  listId,
+  itemId,
+  note,
+}: {
+  listId: string;
+  itemId: string;
+  note: string;
+}) => {
+  const response = await fetch(`/api/lists/${listId}/items/${itemId}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ note }),
+  });
+  if (!response.ok) throw new Error('Failed to update note');
   return response.json();
 };
 
@@ -133,6 +154,33 @@ export function useShoppingListItems(listId: string) {
     },
   });
 
+  // Mutation for updating note with optimistic updates
+  const updateNoteMutation = useMutation({
+    mutationFn: updateNoteAPI,
+    onMutate: async ({ itemId, note }) => {
+      await queryClient.cancelQueries({ queryKey: ['list', listId] });
+      const previousList = queryClient.getQueryData<ListData>(['list', listId]);
+
+      queryClient.setQueryData<ListData>(['list', listId], (old) => {
+        if (!old) return old;
+        return {
+          ...old,
+          items: old.items.map((i) => (i.id === itemId ? { ...i, note } : i)),
+        };
+      });
+
+      return { previousList };
+    },
+    onError: (err, variables, context) => {
+      if (context?.previousList) {
+        queryClient.setQueryData(['list', listId], context.previousList);
+      }
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ['list', listId] });
+    },
+  });
+
   // Wrapper functions to maintain API compatibility
   const togglePurchased = async (itemId: string) => {
     const item = items.find((i) => i.id === itemId);
@@ -147,6 +195,10 @@ export function useShoppingListItems(listId: string) {
 
   const removeItem = async (itemId: string) => {
     await removeMutation.mutateAsync({ listId, itemId });
+  };
+
+  const updateNote = async (itemId: string, note: string) => {
+    await updateNoteMutation.mutateAsync({ listId, itemId, note });
   };
 
   const clearAll = async () => {
@@ -205,6 +257,7 @@ export function useShoppingListItems(listId: string) {
     loading,
     togglePurchased,
     removeItem,
+    updateNote,
     clearAll,
     completeList,
   };

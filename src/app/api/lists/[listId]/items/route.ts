@@ -27,60 +27,54 @@ export async function POST(request: Request, { params }: { params: Promise<{ lis
 
     const { items } = await request.json();
 
+    console.log('📥 Received items to add:', JSON.stringify(items, null, 2));
+
     if (!items || !Array.isArray(items) || items.length === 0) {
       return NextResponse.json({ error: 'Items array is required' }, { status: 400 });
     }
 
     // Добавляем товары в список
-    // Используем createMany для добавления нескольких товаров сразу
-    // Если товар уже есть в списке, пропускаем его (благодаря @@unique в схеме)
+    // Теперь разрешаем дубликаты - можно добавлять один товар несколько раз с разными заметками
     const createdItems = [];
-    const duplicates = [];
 
     for (const item of items) {
-      try {
-        const createdItem = await prisma.item.create({
-          data: {
-            listId: listId,
-            productId: item.productId,
-            variantId: item.variantId || null,
-          },
-          include: {
-            product: {
-              include: {
-                category: true,
-              },
+      console.log('🔍 Adding item:', item);
+
+      // Проверяем, что productId существует
+      const productExists = await prisma.product.findUnique({
+        where: { id: item.productId },
+      });
+
+      if (!productExists) {
+        console.error('❌ Product not found:', item.productId);
+        return NextResponse.json(
+          { error: `Product with ID ${item.productId} not found` },
+          { status: 404 }
+        );
+      }
+
+      const createdItem = await prisma.item.create({
+        data: {
+          listId: listId,
+          productId: item.productId,
+          variantId: item.variantId || null,
+          note: item.note || null,
+        },
+        include: {
+          product: {
+            include: {
+              category: true,
             },
           },
-        });
-        createdItems.push(createdItem);
-      } catch (error: unknown) {
-        // Обрабатываем ошибки уникальности (товар уже в списке)
-        if (
-          typeof error === 'object' &&
-          error !== null &&
-          'code' in error &&
-          (error as { code: string }).code === 'P2002'
-        ) {
-          // Получаем информацию о дубликате
-          const product = await prisma.product.findUnique({
-            where: { id: item.productId },
-            select: { name: true, emoji: true },
-          });
-          duplicates.push(product);
-        } else {
-          throw error;
-        }
-      }
+        },
+      });
+      console.log('✅ Item created:', createdItem.id);
+      createdItems.push(createdItem);
     }
 
     return NextResponse.json({
       createdItems,
-      duplicates,
-      message:
-        duplicates.length > 0
-          ? `Добавлено ${createdItems.length} товаров. ${duplicates.length} уже в списке.`
-          : `Добавлено ${createdItems.length} товаров.`,
+      message: `Добавлено ${createdItems.length} товаров.`,
     });
   } catch (error) {
     console.error('Error adding items to list:', error);

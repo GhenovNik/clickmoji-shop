@@ -173,14 +173,6 @@ export function useProductSelection(categoryId: string) {
       // Invalidate list cache to refresh items
       queryClient.invalidateQueries({ queryKey: ['list', activeListId] });
 
-      // Show message about duplicates
-      if (response.duplicates && response.duplicates.length > 0) {
-        const duplicateNames = response.duplicates
-          .map((d: { emoji: string; name: string }) => `${d.emoji} ${d.name}`)
-          .join(', ');
-        alert(`${response.message}\n\nУже в списке: ${duplicateNames}`);
-      }
-
       if (activeListId) {
         router.push(`/lists/${activeListId}`);
       } else {
