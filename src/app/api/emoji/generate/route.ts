@@ -3,28 +3,12 @@ import { auth } from '@/lib/auth';
 import { UTApi } from 'uploadthing/server';
 import OpenAI from 'openai';
 import { GoogleGenAI } from '@google/genai';
+import { getEmojiGenerationPrompt } from '@/lib/prompts/emoji-generation';
 
 const utapi = new UTApi();
 
 async function generateWithGemini(productName: string, apiKey: string): Promise<Buffer> {
-  const prompt = `
-Vector illustration icon of ${productName}.
-Style: 3D emoji style, semi-flat look with soft volume.
-MUST BE:
-smooth rounded shapes,
-soft plastic-like shading,
-subtle gradients for depth and volume,
-gentle specular highlights,
-soft even lighting,
-NO shadows or drop shadows,
-NO black outlines (outline-free),
-no text or symbols,
-centered composition,
-lots of white padding,
-isolated on pure white background (#FFFFFF).
-High quality emoji-style icon, consistent emoji pack look.
-Minimalist but detailed enough to look appetizing.
-`;
+  const prompt = getEmojiGenerationPrompt(productName);
 
   const ai = new GoogleGenAI({ apiKey });
   const imagenModel = process.env.IMAGEN_MODEL || 'imagen-4.0-generate-001';
@@ -86,25 +70,7 @@ Minimalist but detailed enough to look appetizing.
 
 async function generateWithOpenAI(productName: string, apiKey: string): Promise<Buffer> {
   const openai = new OpenAI({ apiKey });
-
-  const prompt = `
-Vector illustration icon of ${productName}.
-Style: 3D emoji style, semi-flat look with soft volume.
-MUST BE:
-smooth rounded shapes,
-soft plastic-like shading,
-subtle gradients for depth and volume,
-gentle specular highlights,
-soft even lighting,
-NO shadows or drop shadows,
-NO black outlines (outline-free),
-no text or symbols,
-centered composition,
-lots of white padding,
-isolated on pure white background (#FFFFFF).
-High quality emoji-style icon, consistent emoji pack look.
-Minimalist but detailed enough to look appetizing.
-`;
+  const prompt = getEmojiGenerationPrompt(productName);
 
   const result = await openai.images.generate({
     model: 'gpt-image-1.5',
@@ -162,32 +128,14 @@ export async function POST(request: Request) {
       imageBuffer = await generateWithGemini(productName, apiKey);
     }
 
-    // Генерируем имя файла
-    const fileName = `ai-emoji-${productName.toLowerCase().replace(/\s+/g, '-')}-${Date.now()}.png`;
+    // Конвертируем в base64 для превью (не загружаем сразу в UploadThing)
+    const base64Image = `data:image/png;base64,${imageBuffer.toString('base64')}`;
 
-    // Создаем File объект для загрузки (конвертируем Buffer в Uint8Array)
-    const file = new File([new Uint8Array(imageBuffer)], fileName, { type: 'image/png' });
-
-    // Загружаем в UploadThing
-    console.log('📤 Uploading to UploadThing:', fileName);
-    const uploadResult = await utapi.uploadFiles(file);
-
-    if (!uploadResult || uploadResult.error) {
-      console.error('Upload error:', uploadResult?.error);
-      return NextResponse.json({ error: 'Failed to upload image to storage' }, { status: 500 });
-    }
-
-    const imageUrl = uploadResult.data?.url;
-
-    if (!imageUrl) {
-      return NextResponse.json({ error: 'Upload succeeded but no URL returned' }, { status: 500 });
-    }
-
-    console.log('✅ AI emoji generated and uploaded:', imageUrl);
+    console.log('✅ AI emoji generated (preview only, not uploaded yet)');
 
     return NextResponse.json({
-      imageUrl,
-      fileName,
+      base64: base64Image,
+      message: 'Image generated successfully. Will be uploaded when product is saved.',
     });
   } catch (error) {
     console.error('Error generating AI emoji:', error);

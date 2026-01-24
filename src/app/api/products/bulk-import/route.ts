@@ -81,7 +81,7 @@ Respond ONLY with valid JSON array in this exact format:
     console.log('🤖 Processing products with Gemini AI...');
 
     const result = await genAI.models.generateContent({
-      model: 'gemini-2.0-flash-exp',
+      model: 'gemini-2.5-flash',
       contents: prompt,
     });
     const responseText = result.text;

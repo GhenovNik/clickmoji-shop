@@ -57,19 +57,37 @@ export default function EmojiPicker({
 
     setGenerating(true);
     try {
-      const res = await fetch('/api/emoji/generate', {
+      // Step 1: Generate emoji (получаем base64 preview)
+      const generateRes = await fetch('/api/emoji/generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ productName: nameToUse }),
       });
 
-      const data = await res.json();
+      const generateData = await generateRes.json();
 
-      if (res.ok && data.imageUrl) {
-        onGenerateImage?.(data.imageUrl);
-        alert('✅ AI иконка успешно сгенерирована!');
+      if (!generateRes.ok || !generateData.base64) {
+        alert(generateData.error || 'Ошибка при генерации иконки');
+        return;
+      }
+
+      // Step 2: Upload to UploadThing (сохраняем только если админ подтверждает)
+      const uploadRes = await fetch('/api/emoji/upload', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          base64: generateData.base64,
+          productName: nameToUse,
+        }),
+      });
+
+      const uploadData = await uploadRes.json();
+
+      if (uploadRes.ok && uploadData.imageUrl) {
+        onGenerateImage?.(uploadData.imageUrl);
+        alert('✅ AI иконка успешно сгенерирована и сохранена!');
       } else {
-        alert(data.error || 'Ошибка при генерации иконки');
+        alert(uploadData.error || 'Ошибка при сохранении иконки');
       }
     } catch (error) {
       console.error('Error generating AI emoji:', error);

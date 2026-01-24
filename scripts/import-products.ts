@@ -78,7 +78,7 @@ async function main() {
   const model = genAI.models.generateContent;
 
   // Create prompt for batch processing
-  const categoriesStr = categories.map(c => `${c.nameEn} (${c.name})`).join(', ');
+  const categoriesStr = categories.map((c) => `${c.nameEn} (${c.name})`).join(', ');
 
   const prompt = `You are a grocery categorization assistant. Given a list of product names, translate them to Russian and English, assign them to the most appropriate category, and suggest a Unicode emoji if one exists.
 
@@ -108,7 +108,7 @@ Respond ONLY with valid JSON array in this exact format:
 
   try {
     const result = await genAI.models.generateContent({
-      model: 'gemini-2.0-flash-exp',
+      model: 'gemini-2.5-flash',
       contents: prompt,
     });
     const responseText = result.text;
@@ -120,7 +120,10 @@ Respond ONLY with valid JSON array in this exact format:
     // Extract JSON from response (handle markdown code blocks)
     let jsonStr = responseText.trim();
     if (jsonStr.startsWith('```json')) {
-      jsonStr = jsonStr.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+      jsonStr = jsonStr
+        .replace(/```json\n?/g, '')
+        .replace(/```\n?/g, '')
+        .trim();
     } else if (jsonStr.startsWith('```')) {
       jsonStr = jsonStr.replace(/```\n?/g, '').trim();
     }
@@ -139,11 +142,13 @@ Respond ONLY with valid JSON array in this exact format:
 
     for (const product of processedProducts) {
       const category = categories.find(
-        c => c.nameEn === product.categoryName || c.name === product.categoryName
+        (c) => c.nameEn === product.categoryName || c.name === product.categoryName
       );
 
       if (!category) {
-        console.warn(`⚠️  Skipping "${product.nameRu}" - category "${product.categoryName}" not found`);
+        console.warn(
+          `⚠️  Skipping "${product.nameRu}" - category "${product.categoryName}" not found`
+        );
         skipCount++;
         continue;
       }
@@ -151,10 +156,7 @@ Respond ONLY with valid JSON array in this exact format:
       // Check if product already exists (by name or nameEn)
       const existingProduct = await prisma.product.findFirst({
         where: {
-          OR: [
-            { name: product.nameRu },
-            { nameEn: product.nameEn },
-          ],
+          OR: [{ name: product.nameRu }, { nameEn: product.nameEn }],
         },
       });
 
@@ -177,7 +179,9 @@ Respond ONLY with valid JSON array in this exact format:
         });
 
         const emojiDisplay = product.emoji || '❌';
-        console.log(`  ✅ ${emojiDisplay} ${product.nameRu} (${product.nameEn}) → ${category.name}`);
+        console.log(
+          `  ✅ ${emojiDisplay} ${product.nameRu} (${product.nameEn}) → ${category.name}`
+        );
         successCount++;
       } catch (error) {
         console.error(`  ❌ Failed to create "${product.nameRu}":`, error);
@@ -190,7 +194,6 @@ Respond ONLY with valid JSON array in this exact format:
     if (skipCount > 0) {
       console.log(`   ⚠️  Skipped: ${skipCount}`);
     }
-
   } catch (error) {
     console.error('❌ Failed to process products with AI:', error);
     process.exit(1);

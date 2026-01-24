@@ -40,10 +40,24 @@ const addProductToListAPI = async (listId: string, productId: string) => {
   return res.json();
 };
 
+const createSmartProductAPI = async (productName: string) => {
+  const res = await fetch('/api/products/smart-create', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ productName }),
+  });
+  if (!res.ok) {
+    const error = await res.json();
+    throw new Error(error.error || 'Failed to create product');
+  }
+  return res.json();
+};
+
 export default function ProductSearch() {
   const [query, setQuery] = useState('');
   const [debouncedQuery, setDebouncedQuery] = useState('');
   const [isOpen, setIsOpen] = useState(false);
+  const [isCreating, setIsCreating] = useState(false);
   const searchRef = useRef<HTMLDivElement>(null);
   const { activeListId, setLists } = useLists();
   const router = useRouter();
@@ -117,16 +131,75 @@ export default function ProductSearch() {
         productId: product.id,
       });
 
+      // Successfully added (duplicates are now allowed)
+      if (result.createdItems && result.createdItems.length > 0) {
+        alert(`${product.emoji} ${product.name} добавлен в список!`);
+      }
+
       setQuery('');
       setDebouncedQuery('');
       setIsOpen(false);
 
-      // Redirect to the list page immediately
-      // Alert messages are shown there if needed
+      // Redirect to the list page
       router.push(`/lists/${currentActiveListId}`);
     } catch (error) {
       console.error('Error adding product:', error);
       alert('Ошибка при добавлении товара');
+    }
+  };
+
+  const handleCreateWithAI = async () => {
+    const currentActiveListId = useLists.getState().activeListId;
+
+    if (!currentActiveListId) {
+      alert('Сначала выберите список покупок');
+      return;
+    }
+
+    if (!query.trim()) {
+      return;
+    }
+
+    setIsCreating(true);
+
+    try {
+      // Create product with AI
+      const createResult = await createSmartProductAPI(query.trim());
+
+      // Add product to list
+      const addResult = await addProductMutation.mutateAsync({
+        listId: currentActiveListId,
+        productId: createResult.product.id,
+      });
+
+      // Product successfully added (duplicates are now allowed)
+      if (createResult.exists) {
+        // Product existed, was successfully added
+        alert(
+          `${createResult.product.emoji} ${createResult.product.name} найден и добавлен в список!`
+        );
+      } else {
+        // Product was created and added
+        let message = `${createResult.product.emoji} ${createResult.product.name} создан с помощью AI и добавлен в список!`;
+        if (createResult.customEmojiGenerated) {
+          message += '\n🎨 С уникальным AI-изображением!';
+        }
+        alert(message);
+      }
+
+      setQuery('');
+      setDebouncedQuery('');
+      setIsOpen(false);
+      router.push(`/lists/${currentActiveListId}`);
+    } catch (error) {
+      console.error('Error creating product with AI:', error);
+      alert(
+        error instanceof Error
+          ? error.message
+          : 'Ошибка при создании товара. Попробуйте позже или обратитесь к администратору.'
+      );
+    } finally {
+      setIsCreating(false);
     }
   };
 
@@ -150,7 +223,31 @@ export default function ProductSearch() {
           {isLoading ? (
             <div className="p-4 text-center text-gray-500">Поиск...</div>
           ) : results.length === 0 ? (
-            <div className="p-4 text-center text-gray-500">Ничего не найдено</div>
+            <div className="p-4">
+              <p className="text-center text-gray-500 mb-3">Ничего не найдено</p>
+              <button
+                onClick={handleCreateWithAI}
+                disabled={isCreating || !query.trim()}
+                className="w-full bg-gradient-to-r from-purple-500 to-indigo-600 hover:from-purple-600 hover:to-indigo-700 text-white px-4 py-3 rounded-lg font-semibold transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+              >
+                {isCreating ? (
+                  <>
+                    <span className="animate-spin">⏳</span>
+                    <span>Создание (5-10 сек)...</span>
+                  </>
+                ) : (
+                  <>
+                    <span>✨</span>
+                    <span>Создать через AI</span>
+                  </>
+                )}
+              </button>
+              <p className="text-xs text-gray-400 mt-2 text-center">
+                AI определит категорию и подберёт значок
+                <br />
+                Для специфичных товаров сгенерирует уникальное изображение
+              </p>
+            </div>
           ) : (
             <div className="py-2">
               {results.map((product) => (

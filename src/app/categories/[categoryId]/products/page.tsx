@@ -1,6 +1,6 @@
-'use client';
+﻿'use client';
 
-import { Suspense, useEffect } from 'react';
+import { Suspense, useEffect, useState } from 'react';
 import { useParams, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { useSession } from 'next-auth/react';
@@ -8,6 +8,7 @@ import { useLists } from '@/store/lists';
 import { useProductSelection } from '@/hooks/useProductSelection';
 import ProductCard from '@/components/products/ProductCard';
 import ProductSelectionBar from '@/components/products/ProductSelectionBar';
+import AddProductModal from '@/components/products/AddProductModal';
 import { ProductCardSkeleton } from '@/components/ui/Skeleton';
 
 function ProductsPageContent() {
@@ -16,6 +17,7 @@ function ProductsPageContent() {
   const categoryId = params.categoryId as string;
   const { data: session } = useSession();
   const { setActiveList } = useLists();
+  const [isModalOpen, setIsModalOpen] = useState(false);
 
   // Set active list from URL parameter
   useEffect(() => {
@@ -55,9 +57,22 @@ function ProductsPageContent() {
             {category?.name || 'Загрузка...'}
           </h1>
           <p className="text-gray-700">Выберите товары одним нажатием</p>
+
+          {session?.user && (
+            <button
+              onClick={() => setIsModalOpen(true)}
+              className="mt-4 bg-gradient-to-r from-purple-500 to-indigo-600 hover:from-purple-600 hover:to-indigo-700 text-white px-6 py-2 rounded-lg font-semibold transition-all flex items-center gap-2 mx-auto"
+            >
+              <span className="text-xl">+</span>
+              <span>Добавить свой товар</span>
+            </button>
+          )}
         </div>
 
-        <div className="grid grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
+        <div
+          data-testid="products-grid"
+          className="grid grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4"
+        >
           {loading
             ? Array.from({ length: 12 }).map((_, i) => <ProductCardSkeleton key={i} />)
             : products.map((product) => (
@@ -81,6 +96,19 @@ function ProductsPageContent() {
       </div>
 
       <ProductSelectionBar count={selectedProducts.size} adding={adding} onAddToList={addToList} />
+
+      {category && (
+        <AddProductModal
+          categoryId={categoryId}
+          categoryName={category.name}
+          isOpen={isModalOpen}
+          onClose={() => setIsModalOpen(false)}
+          onSuccess={() => {
+            // Refresh products list
+            window.location.reload();
+          }}
+        />
+      )}
     </div>
   );
 }
