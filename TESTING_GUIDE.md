@@ -1,5 +1,18 @@
 # Руководство по тестированию и автоматизации проверки качества кода
 
+## Быстрый старт
+
+- Локально (до коммита): `npm run check`
+- E2E: `npm run test:e2e` (Playwright поднимает Next.js через `webServer` в `playwright.config.ts`)
+- Полный прогон как в CI: `npm run ci`
+
+> Примечание: в Next.js App Router `async` Server Components плохо подходят для unit-тестов — критичные сценарии лучше закрывать E2E.
+
+### Важные замечания по текущей конфигурации
+
+- В Next.js `16.0.10` нет команды `next lint`, поэтому `npm run lint` использует `eslint .` напрямую.
+- UI E2E сценарии в `tests/e2e/public-categories.spec.ts` и `tests/e2e/shopping-list.spec.ts` временно отключены — нужен стабильный seed и auth flow для тестов.
+
 ## Исправленные проблемы (2025-12-25)
 
 ### ✅ Критические исправления:
@@ -95,11 +108,38 @@ npm install --save-dev prettier eslint-config-prettier
 }
 ```
 
-#### B. Playwright - E2E тестирование (найдет проблемы как с поиском)
+#### B. Playwright - E2E тестирование (UI + интеграция)
 
 ```bash
 npm install --save-dev @playwright/test
 npx playwright install
+```
+
+**Рекомендуемо: настроить `baseURL` и автозапуск Next.js через `webServer`**
+
+**Создать `playwright.config.ts`:**
+
+```typescript
+import { defineConfig } from '@playwright/test';
+
+const PORT = process.env.PORT ? Number(process.env.PORT) : 3000;
+const BASE_URL = process.env.PLAYWRIGHT_BASE_URL ?? `http://localhost:${PORT}`;
+
+export default defineConfig({
+  testDir: './tests',
+  use: {
+    baseURL: BASE_URL,
+    trace: 'on-first-retry',
+  },
+  webServer: {
+    // Используем production server для консистентности
+    command: 'npm run build && npm run start',
+    url: BASE_URL,
+    reuseExistingServer: !process.env.CI,
+    stdout: 'ignore',
+    stderr: 'pipe',
+  },
+});
 ```
 
 **Создать `tests/shopping-list.spec.ts`:**
@@ -109,36 +149,35 @@ import { test, expect } from '@playwright/test';
 
 test.describe('Shopping List', () => {
   test('добавление товара через поиск', async ({ page }) => {
-    await page.goto('http://localhost:3000');
+    await page.goto('/');
 
-    // Поиск товара
-    await page.fill('input[placeholder*="Поиск"]', 'молоко');
-    await page.waitForSelector('text=Молоко');
+    // Лучше опираться на роли/aria или data-testid, а не на `text=`
+    await page.getByTestId('product-search-input').fill('молоко');
+    await page.getByTestId('product-search-result').filter({ hasText: 'Молоко' }).first().click();
 
-    // Добавление в список
-    await page.click('text=Молоко');
-
-    // Проверка что добавлено
-    await page.waitForSelector('text=добавлен в список');
+    await expect(page.getByTestId('toast')).toContainText(/добавлен/i);
   });
 
   test('добавление товара через категории', async ({ page }) => {
-    await page.goto('http://localhost:3000/categories');
+    await page.goto('/categories');
 
-    // Выбор категории
-    await page.click('text=Молочные продукты');
+    await page
+      .getByTestId('category-card')
+      .filter({ hasText: 'Молочные продукты' })
+      .first()
+      .click();
+    await page.getByTestId('product-card').filter({ hasText: 'Молоко' }).first().click();
+    await page.getByRole('button', { name: /добавить в список/i }).click();
 
-    // Выбор товара
-    await page.click('text=Молоко');
-    await page.click('text=Добавить в список');
-
-    // Проверка редиректа
     await expect(page).toHaveURL(/\/lists/);
+    await expect(page.getByTestId('shopping-list')).toContainText(/молоко/i);
   });
 });
 ```
 
-**Добавить в package.json:**
+> Если `data-testid` сейчас нет — стоит добавить их на ключевые элементы. Это делает E2E тесты стабильными при изменении текста/верстки.
+
+**Добавить в `package.json`:**
 
 ```json
 {
@@ -149,10 +188,19 @@ test.describe('Shopping List', () => {
 }
 ```
 
-#### C. Vitest - Unit тестирование
+#### C. Vitest + React Testing Library - Unit/Component тестирование
 
 ```bash
-npm install --save-dev vitest @vitejs/plugin-react @testing-library/react @testing-library/jest-dom
+npm install --save-dev \
+  vitest @vitejs/plugin-react jsdom \
+  @testing-library/react @testing-library/dom @testing-library/jest-dom \
+  vite-tsconfig-paths @vitest/coverage-v8
+```
+
+**Создать `vitest.setup.ts`:**
+
+```typescript
+import '@testing-library/jest-dom/vitest';
 ```
 
 **Создать `vitest.config.ts`:**
@@ -160,17 +208,19 @@ npm install --save-dev vitest @vitejs/plugin-react @testing-library/react @testi
 ```typescript
 import { defineConfig } from 'vitest/config';
 import react from '@vitejs/plugin-react';
-import path from 'path';
+import tsconfigPaths from 'vite-tsconfig-paths';
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [tsconfigPaths(), react()],
   test: {
     environment: 'jsdom',
     globals: true,
-  },
-  resolve: {
-    alias: {
-      '@': path.resolve(__dirname, './src'),
+    setupFiles: ['./vitest.setup.ts'],
+    // Включено здесь, потому что в гайде ниже есть метрики coverage
+    coverage: {
+      provider: 'v8',
+      reporter: ['text', 'json', 'html'],
+      exclude: ['node_modules/', 'src/types/'],
     },
   },
 });
@@ -184,7 +234,6 @@ import { useLists } from '../lists';
 
 describe('Lists Store', () => {
   beforeEach(() => {
-    // Очистка store перед каждым тестом
     useLists.setState({ lists: [], activeListId: null });
   });
 
@@ -195,22 +244,27 @@ describe('Lists Store', () => {
     ];
 
     useLists.getState().setLists(mockLists);
-
     expect(useLists.getState().activeListId).toBe('1');
   });
 });
 ```
 
-**Добавить в package.json:**
+**Добавить в `package.json`:**
 
 ```json
 {
   "scripts": {
     "test": "vitest",
-    "test:ui": "vitest --ui"
+    "test:run": "vitest run",
+    "test:ui": "vitest --ui",
+    "typecheck": "tsc --noEmit",
+    "check": "npm run lint && npm run typecheck && npm run test:run",
+    "ci": "npm run check && npm run build && npm run test:e2e"
   }
 }
 ```
+
+> Практика для Next.js App Router: unit-тестами закрываем store/утилиты/Client Components; `async` Server Components — через E2E.
 
 #### D. Lighthouse CI - Проверка производительности и доступности
 
@@ -224,6 +278,7 @@ npm install --save-dev @lhci/cli
 {
   "ci": {
     "collect": {
+      "startServerCommand": "npm run start",
       "url": ["http://localhost:3000", "http://localhost:3000/categories"],
       "numberOfRuns": 3
     },
@@ -235,6 +290,16 @@ npm install --save-dev @lhci/cli
         "categories:seo": ["warn", { "minScore": 0.8 }]
       }
     }
+  }
+}
+```
+
+**Добавить в `package.json`:**
+
+```json
+{
+  "scripts": {
+    "lighthouse": "lhci autorun --config=./lighthouserc.json"
   }
 }
 ```
@@ -323,6 +388,29 @@ jobs:
   test:
     runs-on: ubuntu-latest
 
+    # Если тесты ходят в БД (Prisma/Postgres), поднимай сервис здесь
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: app_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U postgres"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/app_test
+      NEXTAUTH_URL: http://localhost:3000
+      NEXTAUTH_SECRET: test-secret
+      # Чтобы Playwright request() мог использовать относительные URL
+      PLAYWRIGHT_BASE_URL: http://localhost:3000
+
     steps:
       - uses: actions/checkout@v4
 
@@ -330,30 +418,32 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '20'
+          cache: 'npm'
 
       - name: Install dependencies
         run: npm ci
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps
 
       - name: Lint
         run: npm run lint
 
       - name: Type check
-        run: npx tsc --noEmit
+        run: npm run typecheck
 
       - name: Unit tests
-        run: npm test
+        run: npm run test:run
 
       - name: Build
         run: npm run build
 
-      - name: E2E tests
-        run: |
-          npm run build
-          npm start & npx wait-on http://localhost:3000
-          npm run test:e2e
-```
+      - name: DB migrations (if Prisma)
+        run: npx prisma migrate deploy
 
----
+      - name: E2E tests
+        run: npm run test:e2e
+```
 
 ### 5. Recommended VS Code Extensions
 
@@ -417,18 +507,22 @@ npm run lighthouse
 
 ## Метрики качества кода
 
-### Code Coverage (с Vitest)
+### Code Coverage (Vitest)
 
 ```bash
-npm test -- --coverage
+npm run test:run -- --coverage
 ```
 
-**Добавить в `vitest.config.ts`:**
+> Coverage требует `@vitest/coverage-v8` (добавлено в раздел установки Vitest).
+
+**Пример настройки (уже включено в `vitest.config.ts` выше):**
 
 ```typescript
+// vitest.config.ts
 export default defineConfig({
   test: {
     coverage: {
+      provider: 'v8',
       reporter: ['text', 'json', 'html'],
       exclude: ['node_modules/', 'src/types/'],
     },
@@ -512,22 +606,30 @@ test('должен добавить товар без дубликатов', () 
 
 ```bash
 # Установка основных инструментов
-npm install --save-dev prettier eslint-config-prettier @playwright/test husky lint-staged
+npm install --save-dev \
+  prettier eslint-config-prettier \
+  @playwright/test \
+  husky lint-staged \
+  vitest @vitejs/plugin-react jsdom \
+  @testing-library/react @testing-library/dom @testing-library/jest-dom \
+  vite-tsconfig-paths @vitest/coverage-v8
 
 # Настройка
 npx husky init
 npx playwright install
 
-# Добавить скрипты в package.json
-npm pkg set scripts.format="prettier --write \"src/**/*.{ts,tsx}\""
-npm pkg set scripts.test:e2e="playwright test"
+# Скрипты (пример)
 npm pkg set scripts.typecheck="tsc --noEmit"
+npm pkg set scripts.test:run="vitest run"
+npm pkg set scripts.check="npm run lint && npm run typecheck && npm run test:run"
+npm pkg set scripts.test:e2e="playwright test"
+npm pkg set scripts.ci="npm run check && npm run build && npm run test:e2e"
 
 # Создать .prettierrc.json
 echo '{"semi":true,"singleQuote":true,"tabWidth":2}' > .prettierrc.json
 ```
 
----
+> Для E2E добавь `playwright.config.ts` (см. раздел Playwright) и, по возможности, `data-testid` в критических местах UI.
 
 ## Дополнительные ресурсы
 
