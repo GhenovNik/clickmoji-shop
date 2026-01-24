@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, Suspense } from 'react';
+import { useEffect, useState, Suspense } from 'react';
 import { signIn } from 'next-auth/react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
@@ -10,12 +10,24 @@ function LoginForm() {
   const searchParams = useSearchParams();
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [email, setEmail] = useState('');
+  const [needsVerification, setNeedsVerification] = useState(false);
+  const [resendStatus, setResendStatus] = useState<'idle' | 'sending' | 'sent' | 'error'>('idle');
 
   const registered = searchParams.get('registered');
+  const verified = searchParams.get('verified');
+
+  useEffect(() => {
+    if (verified === 'expired') {
+      setNeedsVerification(true);
+    }
+  }, [verified]);
 
   async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     setError('');
+    setNeedsVerification(false);
+    setResendStatus('idle');
     setLoading(true);
 
     const formData = new FormData(e.currentTarget);
@@ -30,7 +42,12 @@ function LoginForm() {
       });
 
       if (result?.error) {
-        setError('Неверный email или пароль');
+        if (result.error === 'EmailNotVerified') {
+          setError('Email не подтвержден. Проверьте почту для активации аккаунта.');
+          setNeedsVerification(true);
+        } else {
+          setError('Неверный email или пароль');
+        }
         setLoading(false);
         return;
       }
@@ -40,6 +57,34 @@ function LoginForm() {
     } catch {
       setError('Ошибка входа');
       setLoading(false);
+    }
+  }
+
+  async function handleResend() {
+    if (!email) {
+      setError('Введите email, чтобы отправить письмо');
+      return;
+    }
+
+    setResendStatus('sending');
+
+    try {
+      const res = await fetch('/api/auth/resend', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email }),
+      });
+
+      if (!res.ok) {
+        setResendStatus('error');
+        setError('Не удалось отправить письмо');
+        return;
+      }
+
+      setResendStatus('sent');
+    } catch {
+      setResendStatus('error');
+      setError('Не удалось отправить письмо');
     }
   }
 
@@ -54,7 +99,43 @@ function LoginForm() {
 
           {registered && (
             <div className="bg-green-50 text-green-600 px-4 py-3 rounded-lg text-sm mb-4">
-              Регистрация успешна! Теперь войдите в аккаунт.
+              Регистрация успешна! Проверьте почту и подтвердите email.
+            </div>
+          )}
+
+          {verified === 'true' && (
+            <div className="bg-green-50 text-green-600 px-4 py-3 rounded-lg text-sm mb-4">
+              Email подтвержден! Теперь можно войти.
+            </div>
+          )}
+
+          {verified === 'expired' && (
+            <div className="bg-yellow-50 text-yellow-700 px-4 py-3 rounded-lg text-sm mb-4">
+              <div>Ссылка подтверждения истекла. Отправьте письмо еще раз.</div>
+              <button
+                type="button"
+                onClick={handleResend}
+                disabled={resendStatus === 'sending'}
+                className="mt-2 text-blue-600 hover:text-blue-700 font-medium disabled:text-blue-300"
+              >
+                {resendStatus === 'sent'
+                  ? 'Письмо отправлено'
+                  : resendStatus === 'sending'
+                    ? 'Отправляем...'
+                    : 'Отправить письмо еще раз'}
+              </button>
+            </div>
+          )}
+
+          {verified === 'invalid' && (
+            <div className="bg-red-50 text-red-600 px-4 py-3 rounded-lg text-sm mb-4">
+              Ссылка подтверждения недействительна.
+            </div>
+          )}
+
+          {verified === 'error' && (
+            <div className="bg-red-50 text-red-600 px-4 py-3 rounded-lg text-sm mb-4">
+              Не удалось подтвердить email. Попробуйте еще раз.
             </div>
           )}
 
@@ -68,6 +149,13 @@ function LoginForm() {
                 id="email"
                 name="email"
                 required
+                value={email}
+                onChange={(event) => {
+                  setEmail(event.target.value);
+                  if (resendStatus !== 'idle') {
+                    setResendStatus('idle');
+                  }
+                }}
                 className="w-full px-4 py-3 rounded-lg border border-gray-300 focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all text-gray-900"
                 placeholder="your@email.com"
               />
@@ -88,7 +176,23 @@ function LoginForm() {
             </div>
 
             {error && (
-              <div className="bg-red-50 text-red-600 px-4 py-3 rounded-lg text-sm">{error}</div>
+              <div className="bg-red-50 text-red-600 px-4 py-3 rounded-lg text-sm">
+                <div>{error}</div>
+                {needsVerification && (
+                  <button
+                    type="button"
+                    onClick={handleResend}
+                    disabled={resendStatus === 'sending'}
+                    className="mt-2 text-blue-600 hover:text-blue-700 font-medium disabled:text-blue-300"
+                  >
+                    {resendStatus === 'sent'
+                      ? 'Письмо отправлено'
+                      : resendStatus === 'sending'
+                        ? 'Отправляем...'
+                        : 'Отправить письмо еще раз'}
+                  </button>
+                )}
+              </div>
             )}
 
             <button

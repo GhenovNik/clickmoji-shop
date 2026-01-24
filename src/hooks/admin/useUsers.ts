@@ -1,4 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { getPasswordValidationError } from '@/lib/validation/password';
 
 export interface User {
   id: string;
@@ -30,8 +31,9 @@ const fetchUsersAPI = async (): Promise<User[]> => {
 };
 
 const createUserAPI = async (formData: UserFormData) => {
-  if (!formData.password) {
-    throw new Error('Пароль обязателен при создании нового пользователя');
+  const passwordError = getPasswordValidationError(formData.password);
+  if (passwordError) {
+    throw new Error(passwordError);
   }
 
   const res = await fetch('/api/users', {
@@ -66,6 +68,10 @@ const updateUserAPI = async (userId: string, formData: UserFormData) => {
   };
 
   if (formData.password) {
+    const passwordError = getPasswordValidationError(formData.password);
+    if (passwordError) {
+      throw new Error(passwordError);
+    }
     body.password = formData.password;
   }
 

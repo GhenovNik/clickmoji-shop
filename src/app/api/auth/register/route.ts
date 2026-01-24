@@ -1,6 +1,9 @@
 import { NextResponse } from 'next/server';
 import bcrypt from 'bcryptjs';
 import { prisma } from '@/lib/prisma';
+import { createEmailVerificationToken } from '@/lib/auth-tokens';
+import { sendVerificationEmail } from '@/lib/email';
+import { getPasswordValidationError } from '@/lib/validation/password';
 
 export async function POST(request: Request) {
   try {
@@ -8,6 +11,11 @@ export async function POST(request: Request) {
 
     if (!email || !password) {
       return NextResponse.json({ error: 'Email и пароль обязательны' }, { status: 400 });
+    }
+
+    const passwordError = getPasswordValidationError(password);
+    if (passwordError) {
+      return NextResponse.json({ error: passwordError }, { status: 400 });
     }
 
     // Проверка существующего пользователя
@@ -34,6 +42,15 @@ export async function POST(request: Request) {
       },
     });
 
+    let emailSent = false;
+    try {
+      const token = await createEmailVerificationToken(email);
+      await sendVerificationEmail({ email, token });
+      emailSent = true;
+    } catch (emailError) {
+      console.error('Verification email error:', emailError);
+    }
+
     // Создание базовых списков покупок для пользователя
     const defaultLists = [
       { name: 'Основной', isActive: true },
@@ -53,6 +70,7 @@ export async function POST(request: Request) {
     return NextResponse.json(
       {
         message: 'Пользователь успешно создан',
+        emailSent,
         user: {
           id: user.id,
           email: user.email,

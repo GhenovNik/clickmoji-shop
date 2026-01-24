@@ -22,7 +22,7 @@ async function main() {
 
     await prisma.user.update({
       where: { email },
-      data: { role: 'ADMIN' },
+      data: { role: 'ADMIN', emailVerified: new Date() },
     });
 
     console.log('✅ User role updated to ADMIN');
@@ -39,6 +39,7 @@ async function main() {
       name,
       password: hashedPassword,
       role: 'ADMIN',
+      emailVerified: new Date(),
     },
   });
 

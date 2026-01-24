@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { getPasswordValidationError } from '@/lib/validation/password';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 
@@ -26,8 +27,9 @@ export default function RegisterPage() {
       return;
     }
 
-    if (password.length < 6) {
-      setError('Пароль должен быть не менее 6 символов');
+    const passwordError = getPasswordValidationError(password);
+    if (passwordError) {
+      setError(passwordError);
       setLoading(false);
       return;
     }
@@ -101,7 +103,7 @@ export default function RegisterPage() {
                 name="password"
                 required
                 className="w-full px-4 py-3 rounded-lg border border-gray-300 focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all text-gray-900"
-                placeholder="Минимум 6 символов"
+                placeholder="Минимум 8 символов"
               />
             </div>
 

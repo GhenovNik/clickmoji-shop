@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { auth } from '@/lib/auth';
 import bcrypt from 'bcryptjs';
+import { getPasswordValidationError } from '@/lib/validation/password';
 
 export async function PUT(request: Request, { params }: { params: Promise<{ userId: string }> }) {
   try {
@@ -48,6 +49,11 @@ export async function PUT(request: Request, { params }: { params: Promise<{ user
 
     // Если передан новый пароль, хешируем его
     if (password) {
+      const passwordError = getPasswordValidationError(password);
+      if (passwordError) {
+        return NextResponse.json({ error: passwordError }, { status: 400 });
+      }
+
       updateData.password = await bcrypt.hash(password, 10);
     }
 
