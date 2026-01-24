@@ -1,4 +1,4 @@
-'use client';
+﻿'use client';
 
 import { Suspense, useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
@@ -67,15 +67,18 @@ function CategoriesPageContent() {
       <div className="max-w-4xl mx-auto">
         {/* Header */}
         <div className="text-center mb-8">
-          <h1 className="text-4xl font-bold mb-2 text-gray-900">🛒 Выберите категорию</h1>
-          <p className="text-gray-700 mb-6">Выберите категорию товаров для списка покупок</p>
+          <h1 className="text-4xl font-bold mb-2 text-gray-900">📁 Выберите категорию</h1>
+          <p className="text-gray-700 mb-6">Выберите категорию товаров для вашего списка</p>
 
           {/* Search */}
           <ProductSearch />
         </div>
 
         {/* Categories Grid */}
-        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+        <div
+          data-testid="categories-grid"
+          className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4"
+        >
           {loading
             ? Array.from({ length: 8 }).map((_, i) => <CategoryCardSkeleton key={i} />)
             : displayCategories.map((category) => {
@@ -89,6 +92,7 @@ function CategoriesPageContent() {
                         ? `/categories/favorites${listQuery}`
                         : `/categories/${category.id}/products${listQuery}`
                     }
+                    data-testid="category-link"
                     className="bg-white rounded-2xl p-6 shadow-lg hover:shadow-xl transition-all hover:scale-105 cursor-pointer"
                   >
                     <div className="text-center">
@@ -116,7 +120,7 @@ function CategoriesPageContent() {
           <Link href="/history" className="text-blue-600 hover:text-blue-800 underline">
             История покупок
           </Link>
-          <span className="text-gray-400">•</span>
+          <span className="text-gray-400">|</span>
           <Link href="/" className="text-blue-600 hover:text-blue-800 underline">
             На главную
           </Link>
