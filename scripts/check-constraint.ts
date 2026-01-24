@@ -2,6 +2,14 @@ import { PrismaClient } from '@prisma/client';
 
 const prisma = new PrismaClient();
 
+type PrismaErrorLike = {
+  code?: string;
+  message?: string;
+};
+
+const isPrismaError = (value: unknown): value is PrismaErrorLike =>
+  typeof value === 'object' && value !== null;
+
 async function checkConstraint() {
   console.log('Checking unique constraint on items table...\n');
 
@@ -38,19 +46,21 @@ async function checkConstraint() {
         },
       });
       console.log('✗ ERROR: Second item was created! Unique constraint is NOT working!', item2.id);
-    } catch (error: any) {
-      if (error.code === 'P2002') {
+    } catch (error: unknown) {
+      if (isPrismaError(error) && error.code === 'P2002') {
         console.log('✓ Unique constraint is working! Duplicate was rejected.');
       } else {
-        console.log('✗ Unexpected error:', error.message);
+        const message = isPrismaError(error) ? error.message : 'Unknown error';
+        console.log('✗ Unexpected error:', message);
       }
     }
 
     // Clean up
     await prisma.item.delete({ where: { id: item1.id } });
     console.log('✓ Test item cleaned up');
-  } catch (error: any) {
-    console.error('Error during test:', error.message);
+  } catch (error: unknown) {
+    const message = isPrismaError(error) ? error.message : 'Unknown error';
+    console.error('Error during test:', message);
   }
 }
 

@@ -15,6 +15,7 @@ model User {
   password  String
   image     String?
   role      UserRole @default(USER)
+  emailVerified DateTime?
 
   lists     List[]
   favorites Favorite[]
@@ -23,6 +24,17 @@ model User {
   updatedAt DateTime @updatedAt
 
   @@map("users")
+}
+
+model EmailVerificationToken {
+  id        String   @id @default(cuid())
+  email     String
+  token     String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([email])
+  @@map("email_verification_tokens")
 }
 
 enum UserRole {
@@ -114,6 +126,7 @@ model List {
 model Item {
   id          String   @id @default(cuid())
   isPurchased Boolean  @default(false)
+  note        String?  // заметка к товару (например, количество или комментарий)
 
   listId      String
   list        List     @relation(fields: [listId], references: [id], onDelete: Cascade)
@@ -128,7 +141,8 @@ model Item {
   updatedAt   DateTime @updatedAt
   purchasedAt DateTime?
 
-  @@unique([listId, productId]) // нельзя добавить один товар дважды
+  // Разрешаем дубликаты одного товара с разными заметками
+  // Например: Брюква (2кг), Брюква (маленькая), Брюква (для супа)
   @@index([listId])
   @@index([productId])
   @@map("items")
