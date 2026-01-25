@@ -81,13 +81,20 @@ export default function ShoppingListPage({ params }: { params: Promise<{ listId:
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 p-6 pb-32">
       <div className="max-w-2xl mx-auto">
-        <div className="mb-6">
+        <div className="mb-6 flex items-center justify-between gap-4">
           <Link
             href="/lists"
             className="inline-flex items-center gap-2 text-blue-600 hover:text-blue-800 font-medium"
           >
             <span>←</span>
             <span>К спискам</span>
+          </Link>
+          <Link
+            href="/"
+            className="inline-flex items-center gap-2 text-blue-600 hover:text-blue-800 font-medium"
+          >
+            <span>🏠</span>
+            <span>На главную</span>
           </Link>
         </div>
 
@@ -199,10 +206,6 @@ export default function ShoppingListPage({ params }: { params: Promise<{ listId:
         <div className="flex items-center justify-center gap-6 mt-8">
           <Link href="/history" className="text-blue-600 hover:text-blue-800 underline">
             История покупок
-          </Link>
-          <span className="text-gray-400">•</span>
-          <Link href="/" className="text-blue-600 hover:text-blue-800 underline">
-            На главную
           </Link>
         </div>
 
