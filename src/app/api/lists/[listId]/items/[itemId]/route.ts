@@ -85,7 +85,7 @@ export async function DELETE(
       return NextResponse.json({ error: 'List not found' }, { status: 404 });
     }
 
-    await prisma.item.delete({
+    await prisma.item.deleteMany({
       where: {
         id: itemId,
         listId: listId,

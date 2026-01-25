@@ -2,6 +2,7 @@
 
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useRouter } from 'next/navigation';
+import { useShoppingList } from '@/store/shopping-list';
 
 export type Item = {
   id: string;
@@ -74,6 +75,9 @@ const removeItemAPI = async ({ listId, itemId }: { listId: string; itemId: strin
   const response = await fetch(`/api/lists/${listId}/items/${itemId}`, {
     method: 'DELETE',
   });
+  if (response.status === 404) {
+    return { success: true };
+  }
   if (!response.ok) throw new Error('Failed to remove item');
   return response.json();
 };
@@ -240,13 +244,10 @@ export function useShoppingListItems(listId: string) {
       }
     }
 
-    // Save to localStorage
-    const stored = localStorage.getItem('shopping-list-storage');
-    if (stored) {
-      const data = JSON.parse(stored);
-      data.state.history = [completedList, ...(data.state.history || [])].slice(0, 20);
-      localStorage.setItem('shopping-list-storage', JSON.stringify(data));
-    }
+    const historyState = useShoppingList.getState().history;
+    useShoppingList.setState({
+      history: [completedList, ...historyState].slice(0, 20),
+    });
 
     router.push('/history');
   };
