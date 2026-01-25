@@ -12,7 +12,7 @@ export const authConfig: NextAuthConfig = {
       const userRole = auth?.user?.role;
 
       // Публичные маршруты
-      const publicRoutes = ['/', '/login', '/register'];
+      const publicRoutes = ['/', '/login', '/register', '/forgot-password', '/reset-password'];
       const isPublicRoute = publicRoutes.includes(pathname);
 
       // API маршруты - пропускаем (проверка роли будет в самих API)

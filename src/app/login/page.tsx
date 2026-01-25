@@ -16,6 +16,7 @@ function LoginForm() {
 
   const registered = searchParams.get('registered');
   const verified = searchParams.get('verified');
+  const resetStatus = searchParams.get('reset');
 
   useEffect(() => {
     if (verified === 'expired') {
@@ -139,6 +140,30 @@ function LoginForm() {
             </div>
           )}
 
+          {resetStatus === 'success' && (
+            <div className="bg-green-50 text-green-600 px-4 py-3 rounded-lg text-sm mb-4">
+              Пароль обновлен. Войдите с новым паролем.
+            </div>
+          )}
+
+          {resetStatus === 'expired' && (
+            <div className="bg-yellow-50 text-yellow-700 px-4 py-3 rounded-lg text-sm mb-4">
+              Ссылка для сброса истекла. Запросите новую.
+            </div>
+          )}
+
+          {resetStatus === 'invalid' && (
+            <div className="bg-red-50 text-red-600 px-4 py-3 rounded-lg text-sm mb-4">
+              Ссылка для сброса недействительна.
+            </div>
+          )}
+
+          {resetStatus === 'error' && (
+            <div className="bg-red-50 text-red-600 px-4 py-3 rounded-lg text-sm mb-4">
+              Не удалось сбросить пароль. Попробуйте еще раз.
+            </div>
+          )}
+
           <form onSubmit={handleSubmit} className="space-y-4">
             <div>
               <label htmlFor="email" className="block text-sm font-medium text-gray-700 mb-1">
@@ -208,6 +233,11 @@ function LoginForm() {
             Нет аккаунта?{' '}
             <Link href="/register" className="text-blue-600 hover:text-blue-700 font-medium">
               Зарегистрироваться
+            </Link>
+          </p>
+          <p className="text-center text-gray-600 mt-2">
+            <Link href="/forgot-password" className="text-blue-600 hover:text-blue-700 font-medium">
+              Забыли пароль?
             </Link>
           </p>
         </div>
