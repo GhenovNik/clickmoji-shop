@@ -28,6 +28,12 @@ AI_PROVIDER="gemini"
 - `npm run test` (Vitest)
 - `npm run test:e2e` (Playwright)
 
+## PWA
+
+- Service worker: `public/sw.js`
+- Manifest: `public/manifest.json`
+- Offline fallback: `public/offline.html`
+
 ### DB Scripts (domain)
 
 - Users: `npx tsx scripts/db-users.ts --help`
