@@ -1,15 +1,13 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
-import { auth } from '@/lib/auth';
+import { requireUser } from '@/lib/auth-guards';
 
 // GET /api/lists/[listId] - получить конкретный список
 export async function GET(request: Request, { params }: { params: Promise<{ listId: string }> }) {
   try {
-    const session = await auth();
-
-    if (!session?.user?.id) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
+    const guard = await requireUser();
+    if (guard instanceof Response) return guard;
+    const { session } = guard;
 
     const { listId } = await params;
 
@@ -50,11 +48,9 @@ export async function GET(request: Request, { params }: { params: Promise<{ list
 // PUT /api/lists/[listId] - обновить список
 export async function PUT(request: Request, { params }: { params: Promise<{ listId: string }> }) {
   try {
-    const session = await auth();
-
-    if (!session?.user?.id) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
+    const guard = await requireUser();
+    if (guard instanceof Response) return guard;
+    const { session } = guard;
 
     const { listId } = await params;
     const { name, isActive } = await request.json();
@@ -114,11 +110,9 @@ export async function DELETE(
   { params }: { params: Promise<{ listId: string }> }
 ) {
   try {
-    const session = await auth();
-
-    if (!session?.user?.id) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
+    const guard = await requireUser();
+    if (guard instanceof Response) return guard;
+    const { session } = guard;
 
     const { listId } = await params;
 

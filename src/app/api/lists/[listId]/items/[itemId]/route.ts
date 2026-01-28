@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
-import { auth } from '@/lib/auth';
+import { requireUser } from '@/lib/auth-guards';
 
 // PUT /api/lists/[listId]/items/[itemId] - обновить товар
 export async function PUT(
@@ -8,11 +8,9 @@ export async function PUT(
   { params }: { params: Promise<{ listId: string; itemId: string }> }
 ) {
   try {
-    const session = await auth();
-
-    if (!session?.user?.id) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
+    const guard = await requireUser();
+    if (guard instanceof Response) return guard;
+    const { session } = guard;
 
     const { listId, itemId } = await params;
 
@@ -65,11 +63,9 @@ export async function DELETE(
   { params }: { params: Promise<{ listId: string; itemId: string }> }
 ) {
   try {
-    const session = await auth();
-
-    if (!session?.user?.id) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
+    const guard = await requireUser();
+    if (guard instanceof Response) return guard;
+    const { session } = guard;
 
     const { listId, itemId } = await params;
 

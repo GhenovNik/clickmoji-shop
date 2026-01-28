@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
-import { auth } from '@/lib/auth';
+import { requireAdmin } from '@/lib/auth-guards';
 import { UTApi } from 'uploadthing/server';
 
 const utapi = new UTApi();
@@ -24,10 +24,8 @@ export async function PUT(
   { params }: { params: Promise<{ productId: string }> }
 ) {
   try {
-    const session = await auth();
-    if (!session || session.user.role !== 'ADMIN') {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
+    const guard = await requireAdmin();
+    if (guard instanceof Response) return guard;
 
     const { productId } = await params;
     const body = await request.json();
@@ -82,10 +80,8 @@ export async function DELETE(
   { params }: { params: Promise<{ productId: string }> }
 ) {
   try {
-    const session = await auth();
-    if (!session || session.user.role !== 'ADMIN') {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
+    const guard = await requireAdmin();
+    if (guard instanceof Response) return guard;
 
     const { productId } = await params;
 

@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { auth } from '@/lib/auth';
+import { requireAdmin } from '@/lib/auth-guards';
 import { UTApi } from 'uploadthing/server';
 import OpenAI from 'openai';
 import { GoogleGenAI } from '@google/genai';
@@ -93,10 +93,8 @@ async function generateWithOpenAI(productName: string, apiKey: string): Promise<
 export async function POST(request: Request) {
   try {
     // Проверка прав доступа
-    const session = await auth();
-    if (!session || session.user.role !== 'ADMIN') {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
+    const guard = await requireAdmin();
+    if (guard instanceof Response) return guard;
 
     const { productName } = await request.json();
 

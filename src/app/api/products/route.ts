@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
-import { auth } from '@/lib/auth';
+import { requireAdmin } from '@/lib/auth-guards';
 
 export async function GET(request: Request) {
   try {
@@ -59,10 +59,8 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   try {
-    const session = await auth();
-    if (!session || session.user.role !== 'ADMIN') {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
+    const guard = await requireAdmin();
+    if (guard instanceof Response) return guard;
 
     const body = await request.json();
     const { name, nameEn, emoji, categoryId, isCustom, imageUrl } = body;

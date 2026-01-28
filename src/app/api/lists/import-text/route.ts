@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
-import { auth } from '@/lib/auth';
+import { requireUser } from '@/lib/auth-guards';
 import { GoogleGenAI } from '@google/genai';
 
 interface ParsedProduct {
@@ -13,10 +13,9 @@ interface ParsedProduct {
 
 export async function POST(request: Request) {
   try {
-    const session = await auth();
-    if (!session?.user?.id) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
+    const guard = await requireUser();
+    if (guard instanceof Response) return guard;
+    const { session } = guard;
 
     const body = await request.json();
     const { text, listId } = body;

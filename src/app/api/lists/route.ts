@@ -1,15 +1,13 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
-import { auth } from '@/lib/auth';
+import { requireUser } from '@/lib/auth-guards';
 
 // GET /api/lists - получить все списки пользователя
 export async function GET() {
   try {
-    const session = await auth();
-
-    if (!session?.user?.id) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
+    const guard = await requireUser();
+    if (guard instanceof Response) return guard;
+    const { session } = guard;
 
     const lists = await prisma.list.findMany({
       where: {
@@ -37,11 +35,9 @@ export async function GET() {
 // POST /api/lists - создать новый список
 export async function POST(request: Request) {
   try {
-    const session = await auth();
-
-    if (!session?.user?.id) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
+    const guard = await requireUser();
+    if (guard instanceof Response) return guard;
+    const { session } = guard;
 
     const { name, isActive } = await request.json();
 

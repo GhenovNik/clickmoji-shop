@@ -1,15 +1,13 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
-import { auth } from '@/lib/auth';
+import { requireUser } from '@/lib/auth-guards';
 
 // POST /api/lists/init - создать базовые списки если их нет
 export async function POST() {
   try {
-    const session = await auth();
-
-    if (!session?.user?.id) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
+    const guard = await requireUser();
+    if (guard instanceof Response) return guard;
+    const { session } = guard;
 
     // Проверяем есть ли уже списки
     const existingLists = await prisma.list.findMany({

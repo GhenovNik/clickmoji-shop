@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
-import { auth } from '@/lib/auth';
+import { requireAdmin } from '@/lib/auth-guards';
 import { GoogleGenAI } from '@google/genai';
 
 interface SmartProductResult {
@@ -14,10 +14,8 @@ interface SmartProductResult {
 
 export async function POST(request: Request) {
   try {
-    const session = await auth();
-    if (!session?.user?.id) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
+    const guard = await requireAdmin();
+    if (guard instanceof Response) return guard;
 
     const body = await request.json();
     const { productName, categoryId } = body;

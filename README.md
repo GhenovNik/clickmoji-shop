@@ -81,3 +81,12 @@ npm run typecheck
 npm run test
 npm run test:e2e
 ```
+
+## DB Scripts
+
+- Users: `npx tsx scripts/db-users.ts --help`
+- Products: `npx tsx scripts/db-products.ts --help`
+- Categories: `npx tsx scripts/db-categories.ts --help`
+- Lists: `npx tsx scripts/db-lists.ts --help`
+- Files: `npx tsx scripts/db-files.ts --help`
+- Transfer: `npx tsx scripts/db-transfer.ts --help`

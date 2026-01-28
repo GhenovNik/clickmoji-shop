@@ -1,15 +1,13 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
-import { auth } from '@/lib/auth';
+import { requireUser } from '@/lib/auth-guards';
 
 // GET /api/favorites - получить список избранных товаров пользователя
 export async function GET() {
   try {
-    const session = await auth();
-
-    if (!session?.user?.id) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
+    const guard = await requireUser();
+    if (guard instanceof Response) return guard;
+    const { session } = guard;
 
     const favorites = await prisma.favorite.findMany({
       where: {
@@ -43,11 +41,9 @@ export async function GET() {
 // POST /api/favorites - добавить товар в избранное
 export async function POST(request: Request) {
   try {
-    const session = await auth();
-
-    if (!session?.user?.id) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
+    const guard = await requireUser();
+    if (guard instanceof Response) return guard;
+    const { session } = guard;
 
     const { productId } = await request.json();
 
@@ -107,11 +103,9 @@ export async function POST(request: Request) {
 // DELETE /api/favorites - удалить товар из избранного
 export async function DELETE(request: Request) {
   try {
-    const session = await auth();
-
-    if (!session?.user?.id) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
+    const guard = await requireUser();
+    if (guard instanceof Response) return guard;
+    const { session } = guard;
 
     const { searchParams } = new URL(request.url);
     const productId = searchParams.get('productId');
