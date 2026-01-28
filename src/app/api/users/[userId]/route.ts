@@ -8,6 +8,7 @@ export async function PUT(request: Request, { params }: { params: Promise<{ user
   try {
     const guard = await requireAdmin();
     if (guard instanceof Response) return guard;
+    const { session } = guard;
 
     const { userId } = await params;
     const body = await request.json();
@@ -83,6 +84,7 @@ export async function DELETE(
   try {
     const guard = await requireAdmin();
     if (guard instanceof Response) return guard;
+    const { session } = guard;
 
     const { userId } = await params;
 

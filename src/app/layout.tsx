@@ -18,10 +18,13 @@ export const metadata: Metadata = {
   title: 'Clickmoji Shop - Emoji Shopping List',
   description: 'Visual shopping list app using emoji instead of text',
   manifest: '/manifest.json',
-  themeColor: '#4f46e5',
   icons: {
     icon: '/icon.svg',
   },
+};
+
+export const viewport = {
+  themeColor: '#4f46e5',
 };
 
 export default function RootLayout({
