@@ -51,6 +51,8 @@ npm run dev
 DATABASE_URL="postgresql://user:password@localhost:5432/clickmoji_shop"
 NEXTAUTH_SECRET="your-secret-key"
 NEXTAUTH_URL="http://localhost:3000"
+GOOGLE_CLIENT_ID="your-google-client-id"
+GOOGLE_CLIENT_SECRET="your-google-client-secret"
 RESEND_API_KEY="your-resend-api-key"
 RESEND_FROM_EMAIL="no-reply@clickmoji.shop"
 UPLOADTHING_TOKEN="your-uploadthing-token"

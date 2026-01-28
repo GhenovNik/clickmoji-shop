@@ -61,6 +61,11 @@ function LoginForm() {
     }
   }
 
+  async function handleGoogleSignIn() {
+    setError('');
+    await signIn('google', { callbackUrl: '/' });
+  }
+
   async function handleResend() {
     if (!email) {
       setError('Введите email, чтобы отправить письмо');
@@ -228,6 +233,21 @@ function LoginForm() {
               {loading ? 'Вход...' : 'Войти'}
             </button>
           </form>
+
+          <div className="mt-6">
+            <div className="flex items-center gap-3 text-gray-400 text-sm">
+              <span className="h-px flex-1 bg-gray-200" />
+              <span>или</span>
+              <span className="h-px flex-1 bg-gray-200" />
+            </div>
+            <button
+              type="button"
+              onClick={handleGoogleSignIn}
+              className="mt-4 w-full border border-gray-300 text-gray-900 py-3 rounded-lg font-semibold transition-colors hover:bg-gray-50"
+            >
+              Войти через Google
+            </button>
+          </div>
 
           <p className="text-center text-gray-600 mt-6">
             Нет аккаунта?{' '}
