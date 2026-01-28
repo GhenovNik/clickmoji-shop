@@ -29,7 +29,7 @@ export async function PUT(
 
     const { productId } = await params;
     const body = await request.json();
-    const { name, nameEn, emoji, categoryId, isCustom, imageUrl } = body;
+    const { name, nameEn, emoji, categoryId, isCustom, imageUrl, variants } = body;
 
     // If imageUrl is being changed, delete old file from UploadThing
     if (imageUrl !== undefined) {
@@ -52,20 +52,73 @@ export async function PUT(
       }
     }
 
-    const product = await prisma.product.update({
-      where: { id: productId },
-      data: {
-        ...(name && { name }),
-        ...(nameEn && { nameEn }),
-        ...(emoji && { emoji }),
-        ...(categoryId && { categoryId }),
-        ...(isCustom !== undefined && { isCustom }),
-        ...(imageUrl !== undefined && { imageUrl }),
-      },
-      include: {
-        variants: true,
-        category: true,
-      },
+    const product = await prisma.$transaction(async (tx) => {
+      const updatedProduct = await tx.product.update({
+        where: { id: productId },
+        data: {
+          ...(name && { name }),
+          ...(nameEn && { nameEn }),
+          ...(emoji && { emoji }),
+          ...(categoryId && { categoryId }),
+          ...(isCustom !== undefined && { isCustom }),
+          ...(imageUrl !== undefined && { imageUrl }),
+        },
+      });
+
+      if (Array.isArray(variants)) {
+        const existingVariants = await tx.productVariant.findMany({
+          where: { productId },
+          select: { id: true },
+        });
+
+        const incoming = variants
+          .filter((variant) => variant?.name && variant?.nameEn)
+          .map((variant) => ({
+            id: variant.id as string | undefined,
+            name: variant.name as string,
+            nameEn: variant.nameEn as string,
+            emoji: variant.emoji as string | undefined,
+          }));
+
+        const incomingIds = new Set(incoming.map((variant) => variant.id).filter(Boolean));
+        const toDelete = existingVariants.filter((variant) => !incomingIds.has(variant.id));
+
+        for (const variant of toDelete) {
+          const usedCount = await tx.item.count({ where: { variantId: variant.id } });
+          if (usedCount === 0) {
+            await tx.productVariant.delete({ where: { id: variant.id } });
+          }
+        }
+
+        for (const variant of incoming) {
+          if (variant.id) {
+            await tx.productVariant.update({
+              where: { id: variant.id },
+              data: {
+                name: variant.name,
+                nameEn: variant.nameEn,
+                emoji: variant.emoji || '📦',
+              },
+            });
+          } else {
+            await tx.productVariant.create({
+              data: {
+                name: variant.name,
+                nameEn: variant.nameEn,
+                emoji: variant.emoji || '📦',
+                productId,
+              },
+            });
+          }
+        }
+      }
+
+      const updatedWithRelations = await tx.product.findUnique({
+        where: { id: productId },
+        include: { variants: true, category: true },
+      });
+
+      return updatedWithRelations ?? updatedProduct;
     });
 
     return NextResponse.json(product);

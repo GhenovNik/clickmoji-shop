@@ -7,7 +7,9 @@ interface ProductCardProps {
   isSelected: boolean;
   isFavorite: boolean;
   showFavorite: boolean;
-  onToggle: (productId: string) => void;
+  selectedVariantId?: string | null;
+  onToggle: (product: Product) => void;
+  onVariantChange?: (productId: string, variantId: string | null) => void;
   onToggleFavorite: (productId: string) => void;
 }
 
@@ -16,7 +18,9 @@ export default function ProductCard({
   isSelected,
   isFavorite,
   showFavorite,
+  selectedVariantId,
   onToggle,
+  onVariantChange,
   onToggleFavorite,
 }: ProductCardProps) {
   const handleFavoriteClick = (e: React.MouseEvent) => {
@@ -27,7 +31,7 @@ export default function ProductCard({
   return (
     <div className="relative">
       <button
-        onClick={() => onToggle(product.id)}
+        onClick={() => onToggle(product)}
         className={`
           w-full bg-white rounded-2xl p-4 shadow-md transition-all
           ${isSelected ? 'ring-4 ring-green-500 scale-95' : 'hover:shadow-lg hover:scale-105'}
@@ -44,6 +48,24 @@ export default function ProductCard({
           <p className="text-sm font-medium text-gray-900">{product.name}</p>
         </div>
       </button>
+
+      {product.variants && product.variants.length > 0 && isSelected && (
+        <div className="mt-2">
+          <select
+            value={selectedVariantId || ''}
+            onChange={(event) => onVariantChange?.(product.id, event.target.value || null)}
+            className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-900"
+          >
+            <option value="">Без варианта</option>
+            {product.variants.map((variant) => (
+              <option key={variant.id} value={variant.id}>
+                {variant.emoji ? `${variant.emoji} ` : ''}
+                {variant.name}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
 
       {showFavorite && (
         <button

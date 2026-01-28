@@ -48,6 +48,9 @@ export default function ShoppingListItem({
           <div className="flex-1">
             <p className={`font-medium text-gray-900 ${item.isPurchased ? 'line-through' : ''}`}>
               {item.product.name}
+              {item.variant?.name && (
+                <span className="text-sm text-gray-600"> — {item.variant.name}</span>
+              )}
             </p>
             <p className="text-sm text-gray-500">{item.product.category.name}</p>
             {!isEditingNote && item.note && (

@@ -63,7 +63,7 @@ export async function POST(request: Request) {
     if (guard instanceof Response) return guard;
 
     const body = await request.json();
-    const { name, nameEn, emoji, categoryId, isCustom, imageUrl } = body;
+    const { name, nameEn, emoji, categoryId, isCustom, imageUrl, variants } = body;
 
     // Валидация: emoji обязателен только если не используется кастомное изображение
     if (!name || !nameEn || !categoryId) {
@@ -88,6 +88,17 @@ export async function POST(request: Request) {
         categoryId,
         isCustom: isCustom || false,
         imageUrl: imageUrl || null,
+        variants: Array.isArray(variants)
+          ? {
+              create: variants
+                .filter((variant) => variant?.name && variant?.nameEn)
+                .map((variant) => ({
+                  name: variant.name,
+                  nameEn: variant.nameEn,
+                  emoji: variant.emoji || '📦',
+                })),
+            }
+          : undefined,
       },
       include: {
         variants: true,

@@ -10,6 +10,7 @@ interface Product {
   isCustom: boolean;
   imageUrl: string | null;
   categoryId: string;
+  variants?: { id: string; name: string; nameEn: string; emoji: string }[];
   category: {
     id: string;
     name: string;
@@ -85,7 +86,7 @@ export default function ProductsTable({ products, onEdit, onDelete }: ProductsTa
                   </div>
                 </th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Тип
+                  Варианты
                 </th>
                 <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
                   Действия
@@ -128,16 +129,8 @@ export default function ProductsTable({ products, onEdit, onDelete }: ProductsTa
                       <span>{product.category.name}</span>
                     </div>
                   </td>
-                  <td className="px-6 py-4 whitespace-nowrap">
-                    <span
-                      className={`px-2 py-1 text-xs font-semibold rounded-full ${
-                        product.isCustom
-                          ? 'bg-purple-100 text-purple-800'
-                          : 'bg-green-100 text-green-800'
-                      }`}
-                    >
-                      {product.isCustom ? 'Custom' : 'Emoji'}
-                    </span>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">
+                    {product.variants?.length ? `${product.variants.length} шт.` : '—'}
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
                     <button
@@ -186,14 +179,10 @@ export default function ProductsTable({ products, onEdit, onDelete }: ProductsTa
                     <h3 className="font-semibold text-gray-900">{product.name}</h3>
                     <p className="text-sm text-gray-500">{product.nameEn}</p>
                   </div>
-                  <span
-                    className={`px-2 py-1 text-xs font-semibold rounded-full flex-shrink-0 ${
-                      product.isCustom
-                        ? 'bg-purple-100 text-purple-800'
-                        : 'bg-green-100 text-green-800'
-                    }`}
-                  >
-                    {product.isCustom ? 'Custom' : 'Emoji'}
+                  <span className="px-2 py-1 text-xs font-semibold rounded-full flex-shrink-0 bg-slate-100 text-slate-700">
+                    {product.variants?.length
+                      ? `${product.variants.length} варианта`
+                      : 'Без вариантов'}
                   </span>
                 </div>
                 <div className="flex items-center gap-2 mt-1 text-sm text-gray-600">
@@ -207,6 +196,11 @@ export default function ProductsTable({ products, onEdit, onDelete }: ProductsTa
                     <span>{product.category.emoji}</span>
                   )}
                   <span>{product.category.name}</span>
+                </div>
+                <div className="mt-2 text-xs text-gray-500">
+                  {product.variants?.length
+                    ? `${product.variants.length} варианта`
+                    : 'Без вариантов'}
                 </div>
               </div>
             </div>

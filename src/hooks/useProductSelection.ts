@@ -13,6 +13,7 @@ export type Product = {
   emoji: string;
   isCustom: boolean;
   imageUrl: string | null;
+  variants?: { id: string; name: string; nameEn: string; emoji: string }[];
   category: {
     id: string;
     name: string;
@@ -53,7 +54,10 @@ const removeFavoriteAPI = async (productId: string) => {
   return res.json();
 };
 
-const addToListAPI = async (listId: string, items: { productId: string }[]) => {
+const addToListAPI = async (
+  listId: string,
+  items: { productId: string; variantId?: string | null }[]
+) => {
   const res = await fetch(`/api/lists/${listId}/items`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -70,6 +74,7 @@ export function useProductSelection(categoryId: string) {
   const queryClient = useQueryClient();
 
   const [selectedProducts, setSelectedProducts] = useState<Set<string>>(new Set());
+  const [selectedVariants, setSelectedVariants] = useState<Record<string, string | null>>({});
   const [adding, setAdding] = useState(false);
 
   // Load lists if needed (maintain existing pattern with useLists store)
@@ -116,16 +121,34 @@ export function useProductSelection(categoryId: string) {
     },
   });
 
-  const toggleProduct = (productId: string) => {
+  const toggleProduct = (product: Product) => {
     setSelectedProducts((prev) => {
       const newSet = new Set(prev);
-      if (newSet.has(productId)) {
-        newSet.delete(productId);
+      if (newSet.has(product.id)) {
+        newSet.delete(product.id);
+        setSelectedVariants((current) => {
+          const updated = { ...current };
+          delete updated[product.id];
+          return updated;
+        });
       } else {
-        newSet.add(productId);
+        newSet.add(product.id);
+        if (product.variants && product.variants.length > 0) {
+          setSelectedVariants((current) => ({
+            ...current,
+            [product.id]: product.variants?.[0]?.id || null,
+          }));
+        }
       }
       return newSet;
     });
+  };
+
+  const setVariant = (productId: string, variantId: string | null) => {
+    setSelectedVariants((current) => ({
+      ...current,
+      [productId]: variantId,
+    }));
   };
 
   const toggleFavorite = async (productId: string) => {
@@ -159,6 +182,7 @@ export function useProductSelection(categoryId: string) {
       .filter((product) => selectedProducts.has(product.id))
       .map((product) => ({
         productId: product.id,
+        variantId: selectedVariants[product.id] || null,
       }));
 
     try {
@@ -189,10 +213,12 @@ export function useProductSelection(categoryId: string) {
   return {
     products,
     selectedProducts,
+    selectedVariants,
     favoriteProducts,
     loading,
     adding,
     toggleProduct,
+    setVariant,
     toggleFavorite,
     addToList,
   };

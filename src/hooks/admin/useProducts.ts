@@ -8,6 +8,7 @@ export interface Product {
   isCustom: boolean;
   imageUrl: string | null;
   categoryId: string;
+  variants?: ProductVariant[];
   category: {
     id: string;
     name: string;
@@ -17,6 +18,13 @@ export interface Product {
   };
 }
 
+export interface ProductVariant {
+  id: string;
+  name: string;
+  nameEn: string;
+  emoji: string;
+}
+
 interface ProductInput {
   name: string;
   nameEn: string;
@@ -24,6 +32,7 @@ interface ProductInput {
   categoryId: string;
   isCustom: boolean;
   imageUrl: string;
+  variants?: Array<Partial<ProductVariant>>;
 }
 
 // API functions
@@ -41,6 +50,7 @@ const createProductAPI = async (data: ProductInput, imageUrl?: string) => {
       ...data,
       isCustom: data.isCustom || !!imageUrl,
       imageUrl: imageUrl || null,
+      variants: data.variants || [],
     }),
   });
   if (!res.ok) throw new Error('Failed to create product');
@@ -55,6 +65,7 @@ const updateProductAPI = async (id: string, data: ProductInput, imageUrl?: strin
       ...data,
       isCustom: data.isCustom || !!imageUrl,
       imageUrl: imageUrl || null,
+      variants: data.variants || [],
     }),
   });
   if (!res.ok) throw new Error('Failed to update product');

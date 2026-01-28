@@ -12,6 +12,14 @@ interface Product {
   isCustom: boolean;
   imageUrl: string | null;
   categoryId: string;
+  variants?: ProductVariant[];
+}
+
+interface ProductVariant {
+  id?: string;
+  name: string;
+  nameEn: string;
+  emoji: string;
 }
 
 interface Category {
@@ -36,6 +44,7 @@ export type FormData = {
   categoryId: string;
   isCustom: boolean;
   imageUrl: string;
+  variants?: ProductVariant[];
 };
 
 export default function ProductForm({ product, categories, onSubmit, onCancel }: ProductFormProps) {
@@ -46,6 +55,7 @@ export default function ProductForm({ product, categories, onSubmit, onCancel }:
     categoryId: product?.categoryId || '',
     isCustom: product?.isCustom || false,
     imageUrl: product?.imageUrl || '',
+    variants: product?.variants || [],
   });
 
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
@@ -94,6 +104,26 @@ export default function ProductForm({ product, categories, onSubmit, onCancel }:
     }
 
     await onSubmit(formData, imageUrl);
+  };
+
+  const updateVariant = (index: number, key: keyof ProductVariant, value: string) => {
+    const updated = [...(formData.variants || [])];
+    const variant = updated[index];
+    if (!variant) return;
+    updated[index] = { ...variant, [key]: value };
+    setFormData({ ...formData, variants: updated });
+  };
+
+  const addVariant = () => {
+    const updated = [...(formData.variants || [])];
+    updated.push({ name: '', nameEn: '', emoji: '' });
+    setFormData({ ...formData, variants: updated });
+  };
+
+  const removeVariant = (index: number) => {
+    const updated = [...(formData.variants || [])];
+    updated.splice(index, 1);
+    setFormData({ ...formData, variants: updated });
   };
 
   return (
@@ -227,6 +257,58 @@ export default function ProductForm({ product, categories, onSubmit, onCancel }:
                 />
               </div>
             )}
+          </div>
+        )}
+      </div>
+
+      <div className="border-t pt-4">
+        <div className="flex items-center justify-between mb-2">
+          <h3 className="text-sm font-medium text-gray-700">Варианты</h3>
+          <button
+            type="button"
+            onClick={addVariant}
+            className="text-sm text-blue-600 hover:text-blue-800 font-medium"
+          >
+            + Добавить вариант
+          </button>
+        </div>
+
+        {(formData.variants || []).length === 0 ? (
+          <p className="text-sm text-gray-500">Нет вариантов. Добавьте, если нужны опции.</p>
+        ) : (
+          <div className="space-y-3">
+            {(formData.variants || []).map((variant, index) => (
+              <div key={variant.id || index} className="grid grid-cols-1 md:grid-cols-4 gap-3">
+                <input
+                  type="text"
+                  placeholder="Название (RU)"
+                  value={variant.name}
+                  onChange={(e) => updateVariant(index, 'name', e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900"
+                />
+                <input
+                  type="text"
+                  placeholder="Название (EN)"
+                  value={variant.nameEn}
+                  onChange={(e) => updateVariant(index, 'nameEn', e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900"
+                />
+                <input
+                  type="text"
+                  placeholder="Emoji"
+                  value={variant.emoji}
+                  onChange={(e) => updateVariant(index, 'emoji', e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900"
+                />
+                <button
+                  type="button"
+                  onClick={() => removeVariant(index)}
+                  className="text-red-600 hover:text-red-800 text-sm font-medium"
+                >
+                  Удалить
+                </button>
+              </div>
+            ))}
           </div>
         )}
       </div>

@@ -20,6 +20,12 @@ export type Item = {
       order: number;
     };
   };
+  variant?: {
+    id: string;
+    name: string;
+    nameEn: string;
+    emoji: string;
+  } | null;
 };
 
 export type ListData = {

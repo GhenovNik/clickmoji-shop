@@ -13,6 +13,12 @@ interface ProductSearchResult {
     name: string;
     emoji: string;
   };
+  variants?: {
+    id: string;
+    name: string;
+    nameEn: string;
+    emoji: string;
+  }[];
   sim_score: number;
   match_priority: number;
 }
@@ -64,7 +70,31 @@ export async function GET(request: Request) {
       LIMIT 10
     `;
 
-    return NextResponse.json(products);
+    const productIds = products.map((product) => product.id);
+
+    const variants = await prisma.productVariant.findMany({
+      where: { productId: { in: productIds } },
+      select: { id: true, name: true, nameEn: true, emoji: true, productId: true },
+    });
+
+    const variantsByProduct = new Map<string, ProductSearchResult['variants']>();
+    variants.forEach((variant) => {
+      const current = variantsByProduct.get(variant.productId) || [];
+      current.push({
+        id: variant.id,
+        name: variant.name,
+        nameEn: variant.nameEn,
+        emoji: variant.emoji,
+      });
+      variantsByProduct.set(variant.productId, current);
+    });
+
+    const enrichedProducts = products.map((product) => ({
+      ...product,
+      variants: variantsByProduct.get(product.id) || [],
+    }));
+
+    return NextResponse.json(enrichedProducts);
   } catch (error) {
     console.error('Error searching products:', error);
     return NextResponse.json({ error: 'Failed to search products' }, { status: 500 });

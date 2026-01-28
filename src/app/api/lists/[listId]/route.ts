@@ -24,6 +24,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ list
                 category: true,
               },
             },
+            variant: true,
           },
         },
         _count: {

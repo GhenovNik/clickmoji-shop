@@ -12,6 +12,7 @@ type SearchProduct = {
   emoji: string;
   isCustom: boolean;
   imageUrl: string | null;
+  variants?: { id: string; name: string; nameEn: string; emoji: string }[];
   category: {
     id: string;
     name: string;
@@ -28,12 +29,16 @@ const searchProductsAPI = async (query: string): Promise<SearchProduct[]> => {
   return res.json();
 };
 
-const addProductToListAPI = async (listId: string, productId: string) => {
+const addProductToListAPI = async (
+  listId: string,
+  productId: string,
+  variantId?: string | null
+) => {
   const res = await fetch(`/api/lists/${listId}/items`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      items: [{ productId }],
+      items: [{ productId, variantId: variantId || null }],
     }),
   });
   if (!res.ok) throw new Error('Failed to add product');
@@ -58,6 +63,7 @@ export default function ProductSearch() {
   const [debouncedQuery, setDebouncedQuery] = useState('');
   const [isOpen, setIsOpen] = useState(false);
   const [isCreating, setIsCreating] = useState(false);
+  const [selectedVariants, setSelectedVariants] = useState<Record<string, string | null>>({});
   const searchRef = useRef<HTMLDivElement>(null);
   const { activeListId, setLists } = useLists();
   const router = useRouter();
@@ -101,8 +107,15 @@ export default function ProductSearch() {
   }, []);
 
   const addProductMutation = useMutation({
-    mutationFn: ({ listId, productId }: { listId: string; productId: string }) =>
-      addProductToListAPI(listId, productId),
+    mutationFn: ({
+      listId,
+      productId,
+      variantId,
+    }: {
+      listId: string;
+      productId: string;
+      variantId?: string | null;
+    }) => addProductToListAPI(listId, productId, variantId),
     onSuccess: async (_, variables) => {
       // Refresh lists
       const listsResponse = await fetch('/api/lists');
@@ -126,9 +139,12 @@ export default function ProductSearch() {
     }
 
     try {
+      const variantId = selectedVariants[product.id] || product.variants?.[0]?.id || null;
+
       const result = await addProductMutation.mutateAsync({
         listId: currentActiveListId,
         productId: product.id,
+        variantId,
       });
 
       // Successfully added (duplicates are now allowed)
@@ -139,6 +155,7 @@ export default function ProductSearch() {
       setQuery('');
       setDebouncedQuery('');
       setIsOpen(false);
+      setSelectedVariants({});
 
       // Redirect to the list page
       router.push(`/lists/${currentActiveListId}`);
@@ -190,6 +207,7 @@ export default function ProductSearch() {
       setQuery('');
       setDebouncedQuery('');
       setIsOpen(false);
+      setSelectedVariants({});
       router.push(`/lists/${currentActiveListId}`);
     } catch (error) {
       console.error('Error creating product with AI:', error);
@@ -280,6 +298,30 @@ export default function ProductSearch() {
                       )}
                       <span>{product.category.name}</span>
                     </p>
+                    {product.variants && product.variants.length > 0 && (
+                      <div className="mt-2">
+                        <select
+                          value={selectedVariants[product.id] || ''}
+                          onChange={(event) => {
+                            event.stopPropagation();
+                            setSelectedVariants((current) => ({
+                              ...current,
+                              [product.id]: event.target.value || null,
+                            }));
+                          }}
+                          onClick={(event) => event.stopPropagation()}
+                          className="mt-1 w-full rounded-md border border-gray-300 px-2 py-1 text-xs text-gray-900"
+                        >
+                          <option value="">Без варианта</option>
+                          {product.variants.map((variant) => (
+                            <option key={variant.id} value={variant.id}>
+                              {variant.emoji ? `${variant.emoji} ` : ''}
+                              {variant.name}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    )}
                   </div>
                   <span className="text-green-600 font-semibold">
                     {addProductMutation.isPending ? '⏳' : '+'}

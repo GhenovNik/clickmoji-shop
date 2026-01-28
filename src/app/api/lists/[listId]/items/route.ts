@@ -51,6 +51,20 @@ export async function POST(request: Request, { params }: { params: Promise<{ lis
         );
       }
 
+      if (item.variantId) {
+        const variant = await prisma.productVariant.findUnique({
+          where: { id: item.variantId },
+          select: { productId: true },
+        });
+
+        if (!variant || variant.productId !== item.productId) {
+          return NextResponse.json(
+            { error: 'Variant does not belong to product' },
+            { status: 400 }
+          );
+        }
+      }
+
       const createdItem = await prisma.item.create({
         data: {
           listId: listId,
