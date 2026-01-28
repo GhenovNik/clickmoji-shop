@@ -1,18 +1,58 @@
 'use client';
 
-import { useShoppingList } from '@/store/shopping-list';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useSession } from 'next-auth/react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+
+type HistoryItem = {
+  id: string;
+  productId: string | null;
+  variantId: string | null;
+  productName: string;
+  productEmoji: string;
+  productImageUrl: string | null;
+  categoryName: string;
+  isCustom: boolean;
+  variantName: string | null;
+  variantEmoji: string | null;
+  note: string | null;
+  isPurchased: boolean;
+  addedAt: string;
+};
+
+type HistoryList = {
+  id: string;
+  listName: string;
+  completedAt: string;
+  items: HistoryItem[];
+};
+
+const fetchHistory = async (): Promise<HistoryList[]> => {
+  const res = await fetch('/api/history');
+  if (!res.ok) throw new Error('Failed to fetch history');
+  return res.json();
+};
 
 export default function HistoryPage() {
-  const history = useShoppingList((state) => state.history);
-  const deleteFromHistory = useShoppingList((state) => state.deleteFromHistory);
   const router = useRouter();
   const { data: session } = useSession();
+  const queryClient = useQueryClient();
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [restoring, setRestoring] = useState(false);
+
+  useEffect(() => {
+    if (!session?.user) {
+      router.push('/login');
+    }
+  }, [session, router]);
+
+  const { data: history = [], isLoading } = useQuery({
+    queryKey: ['history'],
+    queryFn: fetchHistory,
+    enabled: !!session?.user,
+  });
 
   const handleRestore = async (historyId: string) => {
     if (!session?.user) {
@@ -26,34 +66,20 @@ export default function HistoryPage() {
     setRestoring(true);
 
     try {
-      // Создаем новый список с названием по дате
       const listName = `Список от ${formatDate(historyList.completedAt)}`;
 
-      const createResponse = await fetch('/api/lists', {
+      const restoreResponse = await fetch(`/api/history/${historyId}/restore`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: listName, isActive: false }),
+        body: JSON.stringify({ name: listName }),
       });
 
-      if (!createResponse.ok) {
-        throw new Error('Failed to create list');
+      if (!restoreResponse.ok) {
+        throw new Error('Failed to restore history');
       }
 
-      const newList = await createResponse.json();
-
-      // Добавляем товары в новый список
-      const items = historyList.items.map((item) => ({
-        productId: item.productId,
-      }));
-
-      await fetch(`/api/lists/${newList.id}/items`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ items }),
-      });
-
-      // Переходим к новому списку
-      router.push(`/lists/${newList.id}`);
+      const { listId } = await restoreResponse.json();
+      router.push(`/lists/${listId}`);
     } catch (error) {
       console.error('Error restoring list:', error);
       alert('Ошибка при восстановлении списка');
@@ -62,13 +88,20 @@ export default function HistoryPage() {
     }
   };
 
-  const handleDelete = (historyId: string) => {
-    if (confirm('Удалить этот список из истории?')) {
-      deleteFromHistory(historyId);
+  const handleDelete = async (historyId: string) => {
+    if (!confirm('Удалить этот список из истории?')) return;
+
+    try {
+      const res = await fetch(`/api/history/${historyId}`, { method: 'DELETE' });
+      if (!res.ok) throw new Error('Failed to delete history');
+      queryClient.invalidateQueries({ queryKey: ['history'] });
+    } catch (error) {
+      console.error('Error deleting history:', error);
+      alert('Не удалось удалить историю');
     }
   };
 
-  const formatDate = (date: Date) => {
+  const formatDate = (date: string) => {
     return new Date(date).toLocaleDateString('ru-RU', {
       day: 'numeric',
       month: 'long',
@@ -99,7 +132,9 @@ export default function HistoryPage() {
         </div>
 
         {/* Empty State */}
-        {history.length === 0 ? (
+        {isLoading ? (
+          <div className="text-center text-gray-500">Загрузка...</div>
+        ) : history.length === 0 ? (
           <div className="bg-white rounded-2xl p-8 shadow-lg text-center">
             <div className="text-6xl mb-4">🛒</div>
             <p className="text-gray-700 text-lg mb-4">История покупок пуста</p>
@@ -170,18 +205,27 @@ export default function HistoryPage() {
                             key={item.id}
                             className="flex items-center gap-3 p-3 rounded-lg bg-gray-50"
                           >
-                            {item.isCustom && item.imageUrl ? (
+                            {item.isCustom && item.productImageUrl ? (
                               <img
-                                src={item.imageUrl}
-                                alt={item.name}
+                                src={item.productImageUrl}
+                                alt={item.productName}
                                 className="w-8 h-8 object-contain"
                               />
                             ) : (
-                              <span className="text-2xl">{item.emoji}</span>
+                              <span className="text-2xl">{item.productEmoji}</span>
                             )}
                             <div className="flex-1">
-                              <p className="font-medium text-gray-900">{item.name}</p>
+                              <p className="font-medium text-gray-900">
+                                {item.productName}
+                                {item.variantName && (
+                                  <span className="text-sm text-gray-600">
+                                    {' '}
+                                    - {item.variantName}
+                                  </span>
+                                )}
+                              </p>
                               <p className="text-sm text-gray-600">{item.categoryName}</p>
+                              {item.note && <p className="text-xs text-gray-500">{item.note}</p>}
                             </div>
                             {item.isPurchased && (
                               <span className="text-green-600 font-semibold">✓</span>

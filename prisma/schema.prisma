@@ -19,6 +19,7 @@ model User {
 
   lists     List[]
   favorites Favorite[]
+  histories ListHistory[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -124,6 +125,7 @@ model List {
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   items     Item[]
+  histories ListHistory[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -131,6 +133,52 @@ model List {
   @@index([userId])
   @@index([userId, isActive])
   @@map("lists")
+}
+
+model ListHistory {
+  id          String   @id @default(cuid())
+  listName    String
+  completedAt DateTime @default(now())
+
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  listId      String?
+  list        List?    @relation(fields: [listId], references: [id], onDelete: SetNull)
+
+  items       ListHistoryItem[]
+
+  createdAt   DateTime @default(now())
+
+  @@index([userId])
+  @@index([listId])
+  @@map("list_histories")
+}
+
+model ListHistoryItem {
+  id             String   @id @default(cuid())
+  historyId      String
+  history        ListHistory @relation(fields: [historyId], references: [id], onDelete: Cascade)
+
+  productId      String?
+  variantId      String?
+
+  productName    String
+  productEmoji   String
+  productImageUrl String?
+  categoryName   String
+  isCustom       Boolean @default(false)
+
+  variantName    String?
+  variantEmoji   String?
+
+  note           String?
+  isPurchased    Boolean @default(false)
+  addedAt        DateTime
+  createdAt      DateTime @default(now())
+
+  @@index([historyId])
+  @@map("list_history_items")
 }
 
 // Элемент списка (товар в списке)

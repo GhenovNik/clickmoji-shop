@@ -5,7 +5,6 @@ import { useSession } from 'next-auth/react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { useLists } from '@/store/lists';
-import { useShoppingList } from '@/store/shopping-list';
 import { useShoppingListItems } from '@/hooks/useShoppingListItems';
 import ShoppingListItem from '@/components/shopping/ShoppingListItem';
 import ShoppingListEmptyState from '@/components/shopping/ShoppingListEmptyState';
@@ -17,7 +16,6 @@ export default function ShoppingListPage({ params }: { params: Promise<{ listId:
   const { data: session } = useSession();
   const { setActiveList } = useLists();
   const { listId } = use(params);
-  const { completeList: saveToHistory } = useShoppingList();
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
 
   const { list, items, loading, togglePurchased, removeItem, updateNote, clearAll, completeList } =

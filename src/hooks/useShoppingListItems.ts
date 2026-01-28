@@ -2,7 +2,6 @@
 
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useRouter } from 'next/navigation';
-import { useShoppingList } from '@/store/shopping-list';
 
 export type Item = {
   id: string;
@@ -221,41 +220,22 @@ export function useShoppingListItems(listId: string) {
   const completeList = async () => {
     if (items.length === 0) return;
 
-    const historyItems = items.map((item) => ({
-      id: item.id,
-      productId: item.product.id,
-      name: item.product.name,
-      emoji: item.product.emoji,
-      isCustom: item.product.isCustom,
-      imageUrl: item.product.imageUrl,
-      categoryName: item.product.category.name,
-      isPurchased: item.isPurchased,
-      addedAt: new Date(),
-    }));
+    try {
+      const response = await fetch('/api/history', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ listId }),
+      });
 
-    const completedList = {
-      id: `list-${Date.now()}`,
-      completedAt: new Date(),
-      items: historyItems,
-    };
-
-    // Remove all items from current list
-    for (const item of items) {
-      try {
-        await fetch(`/api/lists/${listId}/items/${item.id}`, {
-          method: 'DELETE',
-        });
-      } catch (error) {
-        console.error('Error removing item:', error);
+      if (!response.ok) {
+        throw new Error('Failed to complete list');
       }
+
+      router.push('/history');
+    } catch (error) {
+      console.error('Error completing list:', error);
+      alert('Не удалось завершить список');
     }
-
-    const historyState = useShoppingList.getState().history;
-    useShoppingList.setState({
-      history: [completedList, ...historyState].slice(0, 20),
-    });
-
-    router.push('/history');
   };
 
   return {
