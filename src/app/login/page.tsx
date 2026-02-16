@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState, Suspense } from 'react';
-import { signIn } from 'next-auth/react';
+import { getProviders, signIn } from 'next-auth/react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 
@@ -13,6 +13,7 @@ function LoginForm() {
   const [email, setEmail] = useState('');
   const [needsVerification, setNeedsVerification] = useState(false);
   const [resendStatus, setResendStatus] = useState<'idle' | 'sending' | 'sent' | 'error'>('idle');
+  const [googleEnabled, setGoogleEnabled] = useState(false);
 
   const registered = searchParams.get('registered');
   const verified = searchParams.get('verified');
@@ -23,6 +24,27 @@ function LoginForm() {
       setNeedsVerification(true);
     }
   }, [verified]);
+
+  useEffect(() => {
+    let active = true;
+
+    async function loadProviders() {
+      try {
+        const providers = await getProviders();
+        if (!active) return;
+        setGoogleEnabled(Boolean(providers?.google));
+      } catch {
+        if (!active) return;
+        setGoogleEnabled(false);
+      }
+    }
+
+    loadProviders();
+
+    return () => {
+      active = false;
+    };
+  }, []);
 
   async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -62,6 +84,11 @@ function LoginForm() {
   }
 
   async function handleGoogleSignIn() {
+    if (!googleEnabled) {
+      setError('Google-вход временно недоступен');
+      return;
+    }
+
     setError('');
     await signIn('google', { callbackUrl: '/' });
   }
@@ -103,9 +130,15 @@ function LoginForm() {
             <p className="text-gray-600 mt-2">Войдите в Clickmoji Shop</p>
           </div>
 
-          {registered && (
+          {registered === 'verify' && (
             <div className="bg-green-50 text-green-600 px-4 py-3 rounded-lg text-sm mb-4">
               Регистрация успешна! Проверьте почту и подтвердите email.
+            </div>
+          )}
+
+          {registered === 'auto' && (
+            <div className="bg-green-50 text-green-600 px-4 py-3 rounded-lg text-sm mb-4">
+              Регистрация успешна! Можно войти с email и паролем.
             </div>
           )}
 
@@ -234,20 +267,22 @@ function LoginForm() {
             </button>
           </form>
 
-          <div className="mt-6">
-            <div className="flex items-center gap-3 text-gray-400 text-sm">
-              <span className="h-px flex-1 bg-gray-200" />
-              <span>или</span>
-              <span className="h-px flex-1 bg-gray-200" />
+          {googleEnabled && (
+            <div className="mt-6">
+              <div className="flex items-center gap-3 text-gray-400 text-sm">
+                <span className="h-px flex-1 bg-gray-200" />
+                <span>или</span>
+                <span className="h-px flex-1 bg-gray-200" />
+              </div>
+              <button
+                type="button"
+                onClick={handleGoogleSignIn}
+                className="mt-4 w-full border border-gray-300 text-gray-900 py-3 rounded-lg font-semibold transition-colors hover:bg-gray-50"
+              >
+                Войти через Google
+              </button>
             </div>
-            <button
-              type="button"
-              onClick={handleGoogleSignIn}
-              className="mt-4 w-full border border-gray-300 text-gray-900 py-3 rounded-lg font-semibold transition-colors hover:bg-gray-50"
-            >
-              Войти через Google
-            </button>
-          </div>
+          )}
 
           <p className="text-center text-gray-600 mt-6">
             Нет аккаунта?{' '}

@@ -1,10 +1,22 @@
 import { Resend } from 'resend';
+import { getAppBaseUrl } from './app-url';
 
 const resendApiKey = process.env.RESEND_API_KEY;
 const resendFromEmail = process.env.RESEND_FROM_EMAIL;
-const appUrl = process.env.NEXTAUTH_URL || 'http://localhost:3000';
+const appUrl = getAppBaseUrl();
 
 const resend = resendApiKey ? new Resend(resendApiKey) : null;
+
+export function isEmailServiceConfigured(): boolean {
+  return Boolean(resendApiKey && resendFromEmail);
+}
+
+export function isEmailVerificationRequired(): boolean {
+  const override = process.env.AUTH_REQUIRE_EMAIL_VERIFICATION;
+  if (override === 'true') return true;
+  if (override === 'false') return false;
+  return isEmailServiceConfigured();
+}
 
 export async function sendVerificationEmail({ email, token }: { email: string; token: string }) {
   if (!resend || !resendFromEmail) {

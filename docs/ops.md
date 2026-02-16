@@ -4,6 +4,10 @@
 
 ```env
 DATABASE_URL="postgresql://user:password@localhost:5432/clickmoji_shop"
+AUTH_SECRET="your-secret-key"
+AUTH_URL="http://localhost:3000"
+AUTH_REQUIRE_EMAIL_VERIFICATION=""
+# optional aliases for compatibility
 NEXTAUTH_SECRET="your-secret-key"
 NEXTAUTH_URL="http://localhost:3000"
 GOOGLE_CLIENT_ID="your-google-client-id"

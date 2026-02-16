@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { requireAdmin } from '@/lib/auth-guards';
+import { getAppBaseUrl } from '@/lib/app-url';
 import { GoogleGenAI } from '@google/genai';
 
 interface SmartProductResult {
@@ -183,7 +184,7 @@ Respond ONLY with valid JSON in this exact format:
     if (aiResult.needsCustomEmoji) {
       console.log('🎨 AI suggests custom emoji, generating...');
       try {
-        const baseUrl = process.env.NEXTAUTH_URL || 'http://localhost:3000';
+        const baseUrl = getAppBaseUrl();
 
         // Step 1: Generate emoji (получаем base64)
         const generateResponse = await fetch(`${baseUrl}/api/emoji/generate`, {

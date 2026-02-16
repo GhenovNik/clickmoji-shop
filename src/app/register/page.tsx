@@ -49,7 +49,9 @@ export default function RegisterPage() {
         return;
       }
 
-      router.push('/login?registered=true');
+      router.push(
+        data.requiresEmailVerification ? '/login?registered=verify' : '/login?registered=auto'
+      );
     } catch {
       setError('Ошибка сети');
       setLoading(false);

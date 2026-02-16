@@ -14,5 +14,13 @@ export function getPasswordValidationError(password: string) {
     return `Пароль должен быть не более ${PASSWORD_MAX_LENGTH} символов`;
   }
 
+  if (!/[A-Za-zА-Яа-я]/.test(password)) {
+    return 'Пароль должен содержать хотя бы одну букву';
+  }
+
+  if (!/\d/.test(password)) {
+    return 'Пароль должен содержать хотя бы одну цифру';
+  }
+
   return null;
 }

@@ -5,6 +5,8 @@ import type { Provider } from 'next-auth/providers';
 import bcrypt from 'bcryptjs';
 import { prisma } from './prisma';
 import { authConfig } from './auth.config';
+import { isEmailVerificationRequired } from './email';
+import { normalizeEmail } from './auth-security';
 
 const providers: Provider[] = [
   Credentials({
@@ -18,7 +20,7 @@ const providers: Provider[] = [
         return null;
       }
 
-      const email = credentials.email as string;
+      const email = normalizeEmail(credentials.email as string);
       const password = credentials.password as string;
 
       const user = await prisma.user.findUnique({
@@ -35,7 +37,7 @@ const providers: Provider[] = [
         return null;
       }
 
-      if (!user.emailVerified) {
+      if (isEmailVerificationRequired() && !user.emailVerified) {
         throw new Error('EmailNotVerified');
       }
 
@@ -68,7 +70,7 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
         return true;
       }
 
-      const email = user.email || profile?.email;
+      const email = normalizeEmail((user.email || profile?.email || '') as string);
       if (!email) {
         return false;
       }

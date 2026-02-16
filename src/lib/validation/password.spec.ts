@@ -17,7 +17,19 @@ describe('getPasswordValidationError', () => {
   });
 
   it('accepts valid password length', () => {
-    const validPassword = 'a'.repeat(PASSWORD_MIN_LENGTH);
+    const validPassword = 'a'.repeat(PASSWORD_MIN_LENGTH - 1) + '1';
     expect(getPasswordValidationError(validPassword)).toBeNull();
+  });
+
+  it('returns error when password has no letters', () => {
+    expect(getPasswordValidationError('12345678')).toBe(
+      'Пароль должен содержать хотя бы одну букву'
+    );
+  });
+
+  it('returns error when password has no digits', () => {
+    expect(getPasswordValidationError('abcdefgh')).toBe(
+      'Пароль должен содержать хотя бы одну цифру'
+    );
   });
 });

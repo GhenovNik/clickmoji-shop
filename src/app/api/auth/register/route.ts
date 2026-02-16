@@ -2,15 +2,46 @@ import { NextResponse } from 'next/server';
 import bcrypt from 'bcryptjs';
 import { prisma } from '@/lib/prisma';
 import { createEmailVerificationToken } from '@/lib/auth-tokens';
-import { sendVerificationEmail } from '@/lib/email';
+import { isEmailVerificationRequired, sendVerificationEmail } from '@/lib/email';
 import { getPasswordValidationError } from '@/lib/validation/password';
+import {
+  checkRateLimit,
+  getClientIp,
+  isValidEmail,
+  normalizeEmail,
+  rateLimitResponse,
+} from '@/lib/auth-security';
 
 export async function POST(request: Request) {
   try {
     const { email, password, name } = await request.json();
+    const normalizedEmail = normalizeEmail(email || '');
+    const ip = getClientIp(request);
 
-    if (!email || !password) {
+    const ipLimit = checkRateLimit({
+      key: `auth:register:ip:${ip}`,
+      limit: 10,
+      windowMs: 60 * 60 * 1000,
+    });
+    if (!ipLimit.allowed) {
+      return rateLimitResponse(ipLimit.resetAt);
+    }
+
+    const emailLimit = checkRateLimit({
+      key: `auth:register:email:${normalizedEmail || 'missing'}`,
+      limit: 5,
+      windowMs: 60 * 60 * 1000,
+    });
+    if (!emailLimit.allowed) {
+      return rateLimitResponse(emailLimit.resetAt);
+    }
+
+    if (!normalizedEmail || !password) {
       return NextResponse.json({ error: 'Email и пароль обязательны' }, { status: 400 });
+    }
+
+    if (!isValidEmail(normalizedEmail)) {
+      return NextResponse.json({ error: 'Некорректный email' }, { status: 400 });
     }
 
     const passwordError = getPasswordValidationError(password);
@@ -20,7 +51,7 @@ export async function POST(request: Request) {
 
     // Проверка существующего пользователя
     const existingUser = await prisma.user.findUnique({
-      where: { email },
+      where: { email: normalizedEmail },
     });
 
     if (existingUser) {
@@ -33,22 +64,40 @@ export async function POST(request: Request) {
     // Хеширование пароля
     const hashedPassword = await bcrypt.hash(password, 12);
 
+    const requiresEmailVerification = isEmailVerificationRequired();
+
     // Создание пользователя
     const user = await prisma.user.create({
       data: {
-        email,
+        email: normalizedEmail,
         password: hashedPassword,
-        name: name || null,
+        name: typeof name === 'string' ? name.trim() || null : null,
+        emailVerified: requiresEmailVerification ? null : new Date(),
       },
     });
 
     let emailSent = false;
-    try {
-      const token = await createEmailVerificationToken(email);
-      await sendVerificationEmail({ email, token });
-      emailSent = true;
-    } catch (emailError) {
-      console.error('Verification email error:', emailError);
+    if (requiresEmailVerification) {
+      try {
+        const token = await createEmailVerificationToken(normalizedEmail);
+        await sendVerificationEmail({ email: normalizedEmail, token });
+        emailSent = true;
+      } catch (emailError) {
+        console.error('Verification email error:', emailError);
+
+        // Strict mode: do not keep half-registered accounts if confirmation email was not sent.
+        await prisma.emailVerificationToken.deleteMany({
+          where: { email: normalizedEmail },
+        });
+        await prisma.user.delete({
+          where: { id: user.id },
+        });
+
+        return NextResponse.json(
+          { error: 'Не удалось отправить письмо подтверждения. Попробуйте позже.' },
+          { status: 503 }
+        );
+      }
     }
 
     // Создание базовых списков покупок для пользователя
@@ -71,6 +120,7 @@ export async function POST(request: Request) {
       {
         message: 'Пользователь успешно создан',
         emailSent,
+        requiresEmailVerification,
         user: {
           id: user.id,
           email: user.email,
