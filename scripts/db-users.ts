@@ -19,7 +19,6 @@ async function verifyUsers() {
   const result = await prisma.user.updateMany({
     where: {
       emailVerified: null,
-      NOT: { password: null },
     },
     data: {
       emailVerified: new Date(),
