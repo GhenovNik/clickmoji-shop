@@ -1,6 +1,9 @@
 import { PrismaClient } from '@prisma/client';
+import { createPrismaPgAdapter } from '../src/lib/prisma-adapter';
 
-const prisma = new PrismaClient();
+const prisma = new PrismaClient({
+  adapter: createPrismaPgAdapter(),
+});
 
 type Command = 'fix-categories' | 'add-new-categories';
 

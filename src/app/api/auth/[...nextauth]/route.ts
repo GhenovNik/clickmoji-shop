@@ -1,23 +1,7 @@
-import { handlers } from '@/lib/auth';
-import { NextRequest } from 'next/server';
-import { checkRateLimit, getClientIp, rateLimitResponse } from '@/lib/auth-security';
+import NextAuth from 'next-auth';
+import { authOptions } from '@/lib/auth';
 
-export const GET = handlers.GET;
+const handler = NextAuth(authOptions);
 
-export async function POST(request: NextRequest) {
-  const pathname = new URL(request.url).pathname;
-
-  if (pathname.endsWith('/callback/credentials')) {
-    const limit = checkRateLimit({
-      key: `auth:login:ip:${getClientIp(request)}`,
-      limit: 20,
-      windowMs: 10 * 60 * 1000,
-    });
-
-    if (!limit.allowed) {
-      return rateLimitResponse(limit.resetAt);
-    }
-  }
-
-  return handlers.POST(request);
-}
+export const GET = handler;
+export const POST = handler;

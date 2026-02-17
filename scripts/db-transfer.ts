@@ -1,8 +1,11 @@
 import { PrismaClient } from '@prisma/client';
 import { readFileSync, existsSync, writeFileSync } from 'fs';
 import { join } from 'path';
+import { createPrismaPgAdapter } from '../src/lib/prisma-adapter';
 
-const prisma = new PrismaClient();
+const prisma = new PrismaClient({
+  adapter: createPrismaPgAdapter(),
+});
 
 type Command = 'export-neon' | 'import-to-local' | 'migrate-data';
 
@@ -98,19 +101,15 @@ async function importToLocal() {
 
 async function migrateData() {
   const localDb = new PrismaClient({
-    datasources: {
-      db: {
-        url: 'postgresql://postgres:postgres@localhost:5432/clickmoji_shop?schema=public',
-      },
-    },
+    adapter: createPrismaPgAdapter(
+      'postgresql://postgres:postgres@localhost:5432/clickmoji_shop?schema=public'
+    ),
   });
 
   const productionDb = new PrismaClient({
-    datasources: {
-      db: {
-        url: 'postgresql://neondb_owner:npg_YxyufN96DJmS@ep-muddy-paper-af7zs84y-pooler.c-2.us-west-2.aws.neon.tech/neondb?sslmode=require',
-      },
-    },
+    adapter: createPrismaPgAdapter(
+      'postgresql://neondb_owner:npg_YxyufN96DJmS@ep-muddy-paper-af7zs84y-pooler.c-2.us-west-2.aws.neon.tech/neondb?sslmode=require'
+    ),
   });
 
   try {

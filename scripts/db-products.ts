@@ -2,8 +2,11 @@ import { PrismaClient } from '@prisma/client';
 import { GoogleGenAI } from '@google/genai';
 import { readFileSync } from 'fs';
 import { join } from 'path';
+import { createPrismaPgAdapter } from '../src/lib/prisma-adapter';
 
-const prisma = new PrismaClient();
+const prisma = new PrismaClient({
+  adapter: createPrismaPgAdapter(),
+});
 
 type Command = 'reassign' | 'remove-duplicate-products' | 'import';
 

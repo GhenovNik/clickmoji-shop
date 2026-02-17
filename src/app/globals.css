@@ -1,36 +1,133 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@config "../../tailwind.config.ts";
+@import 'tailwindcss';
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
-
-@media (prefers-color-scheme: dark) {
+@layer base {
   :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+    --background: 48 100% 98%;
+    --foreground: 220 40% 12%;
+
+    --card: 0 0% 100%;
+    --card-foreground: 220 40% 12%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 220 40% 12%;
+
+    --primary: 243 75% 59%;
+    --primary-foreground: 210 40% 98%;
+
+    --secondary: 38 92% 50%;
+    --secondary-foreground: 210 40% 98%;
+
+    --accent: 142 71% 45%;
+    --accent-foreground: 210 40% 98%;
+
+    --muted: 48 100% 92%;
+    --muted-foreground: 215 25% 40%;
+
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 210 40% 98%;
+
+    --border: 48 20% 90%;
+    --input: 48 20% 90%;
+    --ring: 243 75% 59%;
+
+    --radius: 24px;
+  }
+
+  .dark {
+    --background: 220 40% 10%;
+    --foreground: 210 40% 98%;
+
+    --card: 220 40% 15%;
+    --card-foreground: 210 40% 98%;
+
+    --popover: 220 40% 15%;
+    --popover-foreground: 210 40% 98%;
+
+    --primary: 243 75% 70%;
+    --primary-foreground: 240 30% 12%;
+
+    --secondary: 38 92% 50%;
+    --secondary-foreground: 210 40% 98%;
+
+    --accent: 142 71% 45%;
+    --accent-foreground: 210 40% 98%;
+
+    --muted: 220 40% 20%;
+    --muted-foreground: 215 20% 70%;
+
+    --destructive: 0 62% 40%;
+    --destructive-foreground: 210 40% 98%;
+
+    --border: 220 40% 20%;
+    --input: 220 40% 20%;
+    --ring: 243 75% 70%;
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  html {
+    @apply bg-background text-foreground;
+  }
+
+  body {
+    @apply bg-background text-foreground font-body antialiased select-none;
+    line-height: 1.5;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  .safe-bottom {
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+
+  .safe-top {
+    padding-top: env(safe-area-inset-top);
+  }
+
+  /* Bento Grid Utility */
+  .bento-card {
+    @apply bg-card border-border border-2 rounded-3xl shadow-soft hover:shadow-clay transition-all duration-300;
+  }
+
+  /* Custom Scrollbar for list density */
+  ::-webkit-scrollbar {
+    width: 4px;
+  }
+  ::-webkit-scrollbar-track {
+    @apply bg-transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    @apply bg-muted-foreground/20 rounded-full;
   }
 }
 
-body {
-  color: var(--foreground);
-  background: var(--background);
-  font-family: var(--font-geist-sans), Arial, Helvetica, sans-serif;
-}
+@layer components {
+  .btn-primary {
+    @apply bg-primary text-primary-foreground px-6 py-3 rounded-2xl font-semibold shadow-soft hover:shadow-clay active:scale-95 transition-all;
+  }
 
-@layer utilities {
-  .text-balance {
-    text-wrap: balance;
+  .btn-secondary {
+    @apply bg-secondary text-secondary-foreground px-6 py-3 rounded-2xl font-semibold shadow-soft hover:shadow-clay active:scale-95 transition-all;
+  }
+
+  .nav-item {
+    @apply flex flex-col items-center justify-center gap-1 text-muted-foreground transition-colors hover:text-primary;
+  }
+
+  .nav-item.active {
+    @apply text-primary font-bold;
   }
 }
 
-@keyframes shimmer {
-  0% {
-    background-position: 200% 0;
-  }
-  100% {
-    background-position: -200% 0;
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
   }
 }

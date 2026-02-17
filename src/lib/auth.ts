@@ -1,14 +1,13 @@
-import NextAuth from 'next-auth';
+import { getServerSession, type NextAuthOptions } from 'next-auth';
 import Credentials from 'next-auth/providers/credentials';
 import Google from 'next-auth/providers/google';
-import type { Provider } from 'next-auth/providers';
 import bcrypt from 'bcryptjs';
 import { prisma } from './prisma';
 import { authConfig } from './auth.config';
 import { isEmailVerificationRequired } from './email';
 import { normalizeEmail } from './auth-security';
 
-const providers: Provider[] = [
+const providers: NextAuthOptions['providers'] = [
   Credentials({
     name: 'credentials',
     credentials: {
@@ -61,10 +60,9 @@ if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET) {
   );
 }
 
-export const { handlers, signIn, signOut, auth } = NextAuth({
+export const authOptions: NextAuthOptions = {
   ...authConfig,
   callbacks: {
-    ...authConfig.callbacks,
     async signIn({ user, account, profile }) {
       if (account?.provider !== 'google') {
         return true;
@@ -128,4 +126,8 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
     },
   },
   providers,
-});
+};
+
+export function auth() {
+  return getServerSession(authOptions);
+}

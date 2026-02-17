@@ -1,7 +1,10 @@
 import { PrismaClient } from '@prisma/client';
 import { UTApi } from 'uploadthing/server';
+import { createPrismaPgAdapter } from '../src/lib/prisma-adapter';
 
-const prisma = new PrismaClient();
+const prisma = new PrismaClient({
+  adapter: createPrismaPgAdapter(),
+});
 
 type Command = 'cleanup-orphaned-files' | 'cleanup-unused-images';
 

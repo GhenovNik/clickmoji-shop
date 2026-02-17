@@ -2,6 +2,8 @@
 
 import { useState } from 'react';
 import type { Item } from '@/hooks/useShoppingListItems';
+import { cn } from '@/lib/utils';
+import { MoreHorizontal, X, MessageSquarePlus } from 'lucide-react';
 
 interface ShoppingListItemProps {
   item: Item;
@@ -18,88 +20,124 @@ export default function ShoppingListItem({
 }: ShoppingListItemProps) {
   const [isEditingNote, setIsEditingNote] = useState(false);
   const [noteValue, setNoteValue] = useState(item.note || '');
+  const [showActions, setShowActions] = useState(false);
+
   return (
     <div
-      className={`bg-white rounded-xl p-4 shadow-md flex items-center gap-4 ${
-        item.isPurchased ? 'opacity-60' : ''
-      }`}
+      className={cn(
+        'relative group bento-card p-3 flex flex-col items-center justify-center gap-1 min-h-[120px] cursor-pointer touch-manipulation transition-all',
+        item.isPurchased && 'bg-muted border-transparent opacity-50 grayscale'
+      )}
+      onClick={() => onToggle(item.id)}
     >
-      <button
-        onClick={() => onToggle(item.id)}
-        className={`w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 transition-colors ${
-          item.isPurchased
-            ? 'bg-green-500 hover:bg-green-600'
-            : 'border-2 border-gray-300 hover:border-green-500'
-        }`}
-      >
-        {item.isPurchased && <span className="text-white text-xl">✓</span>}
-      </button>
-      <div className="flex-1">
-        <div className="flex items-center gap-2">
-          {item.product.isCustom && item.product.imageUrl ? (
-            <img
-              src={item.product.imageUrl}
-              alt={item.product.name}
-              className="w-12 h-12 object-contain"
-            />
-          ) : (
-            <span className="text-3xl">{item.product.emoji}</span>
+      {/* Top right actions */}
+      <div className="absolute top-2 right-2 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            onRemove(item.id);
+          }}
+          className="p-1.5 bg-destructive/10 text-destructive rounded-full hover:bg-destructive hover:text-white transition-colors"
+        >
+          <X size={14} />
+        </button>
+      </div>
+
+      {/* Main Content */}
+      <div className="flex flex-col items-center text-center">
+        {item.product.isCustom && item.product.imageUrl ? (
+          <img
+            src={item.product.imageUrl}
+            alt={item.product.name}
+            className="w-16 h-16 object-contain mb-1"
+          />
+        ) : (
+          <span className="text-5xl mb-1 drop-shadow-sm">{item.product.emoji}</span>
+        )}
+
+        <p
+          className={cn(
+            'font-bold text-sm leading-tight max-w-[100px] line-clamp-2',
+            item.isPurchased && 'line-through text-muted-foreground'
           )}
-          <div className="flex-1">
-            <p className={`font-medium text-gray-900 ${item.isPurchased ? 'line-through' : ''}`}>
-              {item.product.name}
-              {item.variant?.name && (
-                <span className="text-sm text-gray-600"> — {item.variant.name}</span>
-              )}
-            </p>
-            <p className="text-sm text-gray-500">{item.product.category.name}</p>
-            {!isEditingNote && item.note && (
-              <p className="text-sm text-gray-600 mt-1 italic">{item.note}</p>
-            )}
-            {isEditingNote && onUpdateNote && (
-              <div className="mt-2">
-                <input
-                  type="text"
-                  value={noteValue}
-                  onChange={(e) => setNoteValue(e.target.value)}
-                  onBlur={() => {
-                    onUpdateNote(item.id, noteValue);
-                    setIsEditingNote(false);
-                  }}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') {
-                      onUpdateNote(item.id, noteValue);
-                      setIsEditingNote(false);
-                    }
-                    if (e.key === 'Escape') {
-                      setNoteValue(item.note || '');
-                      setIsEditingNote(false);
-                    }
-                  }}
-                  placeholder="Добавить заметку (например, 2 кг, красные)"
-                  className="w-full px-2 py-1 text-sm border border-gray-300 rounded focus:outline-none focus:border-blue-500"
-                  autoFocus
-                />
-              </div>
-            )}
-            {!isEditingNote && onUpdateNote && (
-              <button
-                onClick={() => setIsEditingNote(true)}
-                className="text-xs text-blue-600 hover:text-blue-800 mt-1"
-                title="Используйте заметки для количества и деталей"
-              >
-                {item.note ? 'Изменить заметку' : '+ Заметка (количество, детали)'}
-              </button>
-            )}
+        >
+          {item.product.name}
+        </p>
+
+        {item.variant?.name && (
+          <span className="text-[10px] bg-secondary/10 text-secondary-foreground px-1.5 py-0.5 rounded-full font-bold mt-1">
+            {item.variant.name}
+          </span>
+        )}
+
+        {item.note && !isEditingNote && (
+          <span className="text-[10px] text-muted-foreground mt-1 px-2 line-clamp-1 italic">
+            "{item.note}"
+          </span>
+        )}
+      </div>
+
+      {/* Note Edit Trigger */}
+      {onUpdateNote && !isEditingNote && !item.isPurchased && (
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            setIsEditingNote(true);
+          }}
+          className="mt-2 p-1 text-primary hover:bg-primary/5 rounded-full"
+        >
+          <MessageSquarePlus size={16} />
+        </button>
+      )}
+
+      {/* Note Editor Overlay */}
+      {isEditingNote && (
+        <div
+          className="absolute inset-0 bg-white/95 z-10 rounded-3xl p-3 flex flex-col items-center justify-center"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <input
+            type="text"
+            value={noteValue}
+            onChange={(e) => setNoteValue(e.target.value)}
+            onBlur={() => {
+              onUpdateNote?.(item.id, noteValue);
+              setIsEditingNote(false);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                onUpdateNote?.(item.id, noteValue);
+                setIsEditingNote(false);
+              }
+              if (e.key === 'Escape') {
+                setNoteValue(item.note || '');
+                setIsEditingNote(false);
+              }
+            }}
+            placeholder="Заметка..."
+            className="w-full px-3 py-2 text-sm bg-muted border-none rounded-xl focus:ring-2 focus:ring-primary outline-none"
+            autoFocus
+          />
+          <button
+            className="mt-2 text-xs font-bold text-primary"
+            onClick={() => {
+              onUpdateNote?.(item.id, noteValue);
+              setIsEditingNote(false);
+            }}
+          >
+            Готово
+          </button>
+        </div>
+      )}
+
+      {/* Purchase Indicator */}
+      {item.isPurchased && (
+        <div className="absolute inset-0 flex items-center justify-center bg-accent/10 rounded-3xl">
+          <div className="bg-accent text-white rounded-full p-2 shadow-lg scale-125">
+            <span className="text-xl">✓</span>
           </div>
         </div>
-      </div>
-      <button
-        onClick={() => onRemove(item.id)}
-        className="text-red-500 hover:text-red-700 px-3 py-1 rounded transition-colors"
-      >
-        ✕
-      </button>
+      )}
     </div>
   );
 }

@@ -1,7 +1,10 @@
 import { PrismaClient } from '@prisma/client';
 import bcrypt from 'bcryptjs';
+import { createPrismaPgAdapter } from '../src/lib/prisma-adapter';
 
-const prisma = new PrismaClient();
+const prisma = new PrismaClient({
+  adapter: createPrismaPgAdapter(),
+});
 
 type Command = 'verify-users' | 'create-admin' | 'create-test-user' | 'check-db';
 
