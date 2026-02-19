@@ -18,7 +18,7 @@ export async function POST(request: Request) {
     const normalizedEmail = normalizeEmail(email || '');
     const ip = getClientIp(request);
 
-    const ipLimit = checkRateLimit({
+    const ipLimit = await checkRateLimit({
       key: `auth:register:ip:${ip}`,
       limit: 10,
       windowMs: 60 * 60 * 1000,
@@ -27,7 +27,7 @@ export async function POST(request: Request) {
       return rateLimitResponse(ipLimit.resetAt);
     }
 
-    const emailLimit = checkRateLimit({
+    const emailLimit = await checkRateLimit({
       key: `auth:register:email:${normalizedEmail || 'missing'}`,
       limit: 5,
       windowMs: 60 * 60 * 1000,

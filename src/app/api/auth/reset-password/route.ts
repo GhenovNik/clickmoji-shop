@@ -17,7 +17,7 @@ export async function POST(request: Request) {
     const normalizedEmail = normalizeEmail(email || '');
     const ip = getClientIp(request);
 
-    const ipLimit = checkRateLimit({
+    const ipLimit = await checkRateLimit({
       key: `auth:reset:ip:${ip}`,
       limit: 20,
       windowMs: 60 * 60 * 1000,

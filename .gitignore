@@ -62,5 +62,6 @@ CLAUDE.MD
 
 # OS
 Thumbs.db
+nul
 
 /src/generated/prisma

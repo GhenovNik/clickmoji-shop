@@ -14,11 +14,31 @@ GOOGLE_CLIENT_ID="your-google-client-id"
 GOOGLE_CLIENT_SECRET="your-google-client-secret"
 RESEND_API_KEY="your-resend-api-key"
 RESEND_FROM_EMAIL="no-reply@clickmoji.shop"
+UPSTASH_REDIS_REST_URL="https://<name>.upstash.io"
+UPSTASH_REDIS_REST_TOKEN="your-upstash-rest-token"
 UPLOADTHING_TOKEN="your-uploadthing-token"
 GOOGLE_GENAI_API_KEY="your-google-api-key"
 OPENAI_API_KEY="your-openai-api-key"
 AI_PROVIDER="gemini"
 ```
+
+### Env strategy (Vercel)
+
+- Production (`master`):
+  - Real `DATABASE_URL` (production DB)
+  - `NEXTAUTH_URL=https://clickmoji-shop.vercel.app`
+  - `NEXTAUTH_SECRET` (strong secret)
+  - OAuth/email keys (`GOOGLE_*`, `RESEND_*`) as needed
+  - `UPSTASH_REDIS_*` (recommended)
+- Preview (`develop` and feature branches):
+  - Separate preview DB (`DATABASE_URL`)
+  - `NEXTAUTH_URL` should be set to deployed preview URL when testing OAuth callbacks
+  - Separate OAuth app is recommended for preview
+  - `UPSTASH_REDIS_*` can be shared or separate
+- Development (local `.env`):
+  - Local DB URL
+  - Local auth secrets
+  - Optional external providers
 
 ## Database
 
@@ -52,6 +72,13 @@ AI_PROVIDER="gemini"
 - Default target: Vercel
 - Ensure all environment variables are set per environment
 - Run `prisma migrate deploy` and `prisma db seed` on first deploy
+
+## Branching and release flow
+
+- `master`: production-only branch (stable)
+- `develop`: integration branch (auto-preview)
+- `feature/*`: short-lived task branches from `develop`
+- Open PRs into `develop`, test in Vercel Preview, then merge `develop` -> `master` for production release
 
 ## Security notes
 

@@ -14,6 +14,8 @@ type RateLimitOptions = {
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const rateLimitStore = new Map<string, RateLimitEntry>();
 let lastCleanup = Date.now();
+const upstashUrl = process.env.UPSTASH_REDIS_REST_URL;
+const upstashToken = process.env.UPSTASH_REDIS_REST_TOKEN;
 
 function cleanupRateLimitStore(now: number) {
   if (now - lastCleanup < 60_000) {
@@ -53,7 +55,47 @@ export function getClientIp(request: Request): string {
   return 'unknown';
 }
 
-export function checkRateLimit({ key, limit, windowMs }: RateLimitOptions) {
+async function checkRateLimitUpstash({ key, limit, windowMs }: RateLimitOptions) {
+  if (!upstashUrl || !upstashToken) {
+    return null;
+  }
+
+  const response = await fetch(`${upstashUrl}/pipeline`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${upstashToken}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify([
+      ['INCR', key],
+      ['PTTL', key],
+      ['PEXPIRE', key, windowMs, 'NX'],
+    ]),
+    cache: 'no-store',
+  });
+
+  if (!response.ok) {
+    throw new Error(`Upstash rate limit request failed with status ${response.status}`);
+  }
+
+  const data = (await response.json()) as Array<{ result?: number; error?: string }>;
+  const count = Number(data[0]?.result ?? 0);
+  const ttl = Number(data[1]?.result ?? -1);
+  const now = Date.now();
+  const resetAt = now + (ttl > 0 ? ttl : windowMs);
+
+  if (count > limit) {
+    return { allowed: false as const, remaining: 0, resetAt };
+  }
+
+  return {
+    allowed: true as const,
+    remaining: Math.max(limit - count, 0),
+    resetAt,
+  };
+}
+
+function checkRateLimitMemory({ key, limit, windowMs }: RateLimitOptions) {
   const now = Date.now();
   cleanupRateLimitStore(now);
 
@@ -76,6 +118,19 @@ export function checkRateLimit({ key, limit, windowMs }: RateLimitOptions) {
     remaining: Math.max(limit - current.count, 0),
     resetAt: current.resetAt,
   };
+}
+
+export async function checkRateLimit(options: RateLimitOptions) {
+  try {
+    const distributed = await checkRateLimitUpstash(options);
+    if (distributed) {
+      return distributed;
+    }
+  } catch (error) {
+    console.error('Distributed rate limit failed, using memory fallback:', error);
+  }
+
+  return checkRateLimitMemory(options);
 }
 
 export function rateLimitResponse(resetAt: number) {

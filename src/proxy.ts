@@ -10,7 +10,7 @@ export default async function proxy(request: NextRequest) {
   const pathname = nextUrl.pathname;
 
   if (pathname.endsWith('/api/auth/callback/credentials')) {
-    const limit = checkRateLimit({
+    const limit = await checkRateLimit({
       key: `auth:login:ip:${getClientIp(request)}`,
       limit: 20,
       windowMs: 10 * 60 * 1000,
