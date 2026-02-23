@@ -1,138 +1,86 @@
 import Link from 'next/link';
-import { LayoutGrid, ShieldCheck, Sparkles } from 'lucide-react';
+import { ShoppingCart, Star, History, ArrowRight } from 'lucide-react';
+import InteractiveCart from '@/components/ui/InteractiveCart';
 
 export default function Home() {
   return (
-    <div className="relative min-h-screen overflow-hidden bg-gradient-to-br from-background via-white to-secondary/10">
-      <div
-        className="pointer-events-none absolute -top-24 right-0 h-80 w-80 rounded-full bg-primary/20 blur-3xl"
-        aria-hidden="true"
-      />
-      <div
-        className="pointer-events-none absolute bottom-0 left-0 h-72 w-72 rounded-full bg-accent/20 blur-3xl"
-        aria-hidden="true"
-      />
+    <div className="min-h-[85vh] flex flex-col items-center justify-center py-12 px-6 bg-gradient-to-b from-blue-50/50 to-white">
+      <div className="max-w-3xl w-full text-center space-y-10">
+        {/* Hero Section */}
+        <div className="space-y-6">
+          <InteractiveCart />
 
-      <section className="mx-auto flex min-h-[70vh] max-w-6xl flex-col items-start justify-center gap-10 px-4 py-16 sm:py-24">
-        <div className="flex w-full flex-col gap-8 lg:grid lg:grid-cols-[1.1fr_0.9fr] lg:items-center">
-          <div className="space-y-6">
-            <p className="inline-flex items-center gap-2 rounded-full border border-primary/20 bg-white/70 px-4 py-2 text-sm font-semibold uppercase tracking-[0.2em] text-primary shadow-soft">
-              Smart shopping lists
-            </p>
-            <h1 className="font-heading text-5xl font-black leading-tight text-foreground sm:text-6xl">
-              Clickmoji Shop makes grocery planning visual, fast, and fun.
-            </h1>
-            <p className="max-w-xl text-lg text-muted-foreground sm:text-xl">
-              Replace typed lists with expressive emoji collections that keep families in sync, make
-              planning easier, and keep every trip on track.
-            </p>
-            <div className="flex flex-col gap-4 sm:flex-row">
-              <Link
-                href="/lists"
-                data-testid="home-lists-link"
-                className="btn-primary inline-flex items-center justify-center gap-2 text-base focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 cursor-pointer"
-              >
-                Start my lists
-              </Link>
-              <Link
-                href="/history"
-                data-testid="home-history-link"
-                className="btn-secondary inline-flex items-center justify-center gap-2 text-base focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-secondary focus-visible:ring-offset-2 cursor-pointer"
-              >
-                View recent history
-              </Link>
-            </div>
-          </div>
+          <h1 className="text-5xl sm:text-6xl font-black text-gray-900 tracking-tight leading-tight font-heading">
+            Покупки с <span className="text-primary">ClickMoji</span>
+          </h1>
 
-          <div className="relative">
-            <div className="bento-card grid gap-6 p-6 sm:p-8">
-              <div className="flex items-center justify-between rounded-2xl border border-border/60 bg-white/80 p-4 shadow-soft">
-                <div>
-                  <p className="text-sm font-semibold text-muted-foreground">Next list</p>
-                  <p className="font-heading text-2xl font-bold text-foreground">Weekend staples</p>
-                </div>
-                <div className="rounded-2xl bg-primary/10 px-3 py-2 text-sm font-semibold text-primary">
-                  6 items
-                </div>
-              </div>
-              <div className="grid gap-4 sm:grid-cols-2">
-                <div className="rounded-2xl border border-border/60 bg-white/80 p-4">
-                  <p className="text-sm font-semibold text-muted-foreground">Shared with</p>
-                  <p className="mt-2 font-heading text-xl font-bold text-foreground">Family</p>
-                </div>
-                <div className="rounded-2xl border border-border/60 bg-white/80 p-4">
-                  <p className="text-sm font-semibold text-muted-foreground">Saved time</p>
-                  <p className="mt-2 font-heading text-xl font-bold text-foreground">12 min</p>
-                </div>
-              </div>
-              <div className="rounded-2xl bg-gradient-to-r from-primary/10 via-secondary/20 to-accent/20 p-4">
-                <p className="text-sm font-semibold text-muted-foreground">Quick actions</p>
-                <div className="mt-3 grid grid-cols-2 gap-2 text-sm font-semibold text-foreground">
-                  <span className="rounded-xl bg-white/80 px-3 py-2 text-center">Add emoji</span>
-                  <span className="rounded-xl bg-white/80 px-3 py-2 text-center">Share list</span>
-                  <span className="rounded-xl bg-white/80 px-3 py-2 text-center">Mark done</span>
-                  <span className="rounded-xl bg-white/80 px-3 py-2 text-center">Duplicate</span>
-                </div>
-              </div>
-            </div>
-          </div>
+          <p className="text-xl text-muted-foreground max-w-2xl mx-auto leading-relaxed">
+            Визуальные списки покупок вместо скучного текста. Собирайте корзину легко, быстро и
+            наглядно с помощью эмодзи!
+          </p>
         </div>
-      </section>
 
-      <section className="mx-auto max-w-6xl px-4 pb-20">
-        <div className="grid gap-6 lg:grid-cols-3">
-          <div className="bento-card p-6">
-            <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-primary/10 text-primary">
-              <Sparkles className="h-6 w-6" aria-hidden="true" />
-            </div>
-            <h2 className="mt-4 font-heading text-2xl font-bold text-foreground">
-              Expressive lists
-            </h2>
-            <p className="mt-2 text-muted-foreground">
-              Build lists that are easy to scan with visual emoji previews and quick actions.
-            </p>
-          </div>
-          <div className="bento-card p-6">
-            <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-secondary/20 text-secondary">
-              <LayoutGrid className="h-6 w-6" aria-hidden="true" />
-            </div>
-            <h2 className="mt-4 font-heading text-2xl font-bold text-foreground">
-              Organized flows
-            </h2>
-            <p className="mt-2 text-muted-foreground">
-              Keep categories, favorites, and history tightly connected so nothing gets missed.
-            </p>
-          </div>
-          <div className="bento-card p-6">
-            <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-accent/20 text-accent">
-              <ShieldCheck className="h-6 w-6" aria-hidden="true" />
-            </div>
-            <h2 className="mt-4 font-heading text-2xl font-bold text-foreground">
-              Reliable everywhere
-            </h2>
-            <p className="mt-2 text-muted-foreground">
-              Use Clickmoji online or offline with fast sync and secure account access.
-            </p>
-          </div>
-        </div>
-      </section>
-
-      <section className="mx-auto max-w-6xl px-4 pb-24">
-        <div className="bento-card flex flex-col gap-6 bg-accent text-accent-foreground sm:flex-row sm:items-center sm:justify-between sm:p-10">
-          <div>
-            <h2 className="font-heading text-3xl font-bold">Ready for your next shop?</h2>
-            <p className="mt-2 max-w-lg text-accent-foreground/90">
-              Create a list in seconds and share it instantly with the people you shop with.
-            </p>
-          </div>
+        {/* Action Buttons */}
+        <div className="flex flex-col sm:flex-row flex-wrap items-center justify-center gap-4 pt-4">
           <Link
             href="/lists"
-            className="inline-flex items-center justify-center rounded-2xl bg-white px-6 py-3 text-base font-semibold text-accent shadow-soft transition-colors duration-200 hover:bg-white/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-2 focus-visible:ring-offset-accent cursor-pointer"
+            className="w-full sm:w-auto bg-primary hover:bg-primary/90 text-primary-foreground px-8 py-4 rounded-2xl font-bold text-lg shadow-lg hover:shadow-xl hover:-translate-y-1 transition-all flex items-center justify-center gap-2 group"
           >
-            Build my list
+            <span>Мои списки</span>
+            <ArrowRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
+          </Link>
+          <Link
+            href="/categories"
+            className="w-full sm:w-auto bg-white hover:bg-gray-50 text-foreground border-2 border-border px-8 py-4 rounded-2xl font-bold text-lg transition-all flex items-center justify-center gap-2 hover:-translate-y-1 hover:shadow-md"
+          >
+            <ShoppingCart className="w-5 h-5 text-muted-foreground" />
+            <span>Каталог товаров</span>
+          </Link>
+          <Link
+            href="/history"
+            className="w-full sm:w-auto bg-white hover:bg-gray-50 text-foreground border-2 border-border px-8 py-4 rounded-2xl font-bold text-lg transition-all flex items-center justify-center gap-2 hover:-translate-y-1 hover:shadow-md"
+          >
+            <History className="w-5 h-5 text-muted-foreground" />
+            <span>История покупок</span>
           </Link>
         </div>
-      </section>
+
+        {/* Quick Features */}
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-6 pt-16">
+          <div className="bento-card p-6 flex flex-col items-center text-center gap-3 hover:-translate-y-1 transition-transform">
+            <div className="w-14 h-14 bg-primary/10 text-primary rounded-2xl flex items-center justify-center">
+              <ShoppingCart className="w-7 h-7" />
+            </div>
+            <h3 className="font-bold text-foreground text-lg">Умные списки</h3>
+            <p className="text-muted-foreground text-sm">
+              Создавайте списки в пару кликов и собирайте покупки быстрее
+            </p>
+          </div>
+
+          <div className="bento-card p-6 flex flex-col items-center text-center gap-3 hover:-translate-y-1 transition-transform">
+            <div className="w-14 h-14 bg-secondary/20 text-secondary-foreground rounded-2xl flex items-center justify-center">
+              <Star className="w-7 h-7" />
+            </div>
+            <h3 className="font-bold text-foreground text-lg">Избранное</h3>
+            <p className="text-muted-foreground text-sm">
+              Частые товары всегда под рукой в специальном разделе
+            </p>
+          </div>
+
+          <Link
+            href="/history"
+            className="bento-card p-6 flex flex-col items-center text-center gap-3 hover:shadow-md hover:-translate-y-1 transition-all cursor-pointer group"
+          >
+            <div className="w-14 h-14 bg-accent/20 text-accent-foreground rounded-2xl flex items-center justify-center group-hover:scale-110 transition-transform">
+              <History className="w-7 h-7" />
+            </div>
+            <h3 className="font-bold text-foreground text-lg">История</h3>
+            <p className="text-muted-foreground text-sm">
+              Сохраняйте прошлые покупки, чтобы легко их повторять
+            </p>
+          </Link>
+        </div>
+      </div>
     </div>
   );
 }
