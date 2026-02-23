@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { requireUser } from '@/lib/auth-guards';
 import { GoogleGenAI } from '@google/genai';
+import { checkRateLimit, rateLimitResponse } from '@/lib/auth-security';
 
 interface ParsedProduct {
   nameRu: string;
@@ -24,8 +25,24 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Text is required' }, { status: 400 });
     }
 
+    if (text.length > 2000) {
+      return NextResponse.json(
+        { error: 'Text is too long (maximum 2000 characters)' },
+        { status: 400 }
+      );
+    }
+
     if (!listId) {
       return NextResponse.json({ error: 'List ID is required' }, { status: 400 });
+    }
+
+    const userLimit = await checkRateLimit({
+      key: `ai:import:${session.user.id}`,
+      limit: 10,
+      windowMs: 60 * 60 * 1000, // 10 requests per hour
+    });
+    if (!userLimit.allowed) {
+      return rateLimitResponse(userLimit.resetAt);
     }
 
     // Verify list belongs to user

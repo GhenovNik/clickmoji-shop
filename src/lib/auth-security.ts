@@ -39,17 +39,22 @@ export function isValidEmail(email: string): boolean {
 }
 
 export function getClientIp(request: Request): string {
-  const forwarded = request.headers.get('x-forwarded-for');
-  if (forwarded) {
-    const [first] = forwarded.split(',');
-    if (first?.trim()) {
-      return first.trim();
-    }
+  const vercelIp = request.headers.get('x-vercel-forwarded-for');
+  if (vercelIp?.trim()) {
+    return vercelIp.split(',')[0].trim();
   }
 
   const realIp = request.headers.get('x-real-ip');
   if (realIp?.trim()) {
     return realIp.trim();
+  }
+
+  const forwarded = request.headers.get('x-forwarded-for');
+  if (forwarded) {
+    const ips = forwarded.split(',');
+    if (ips[0]?.trim()) {
+      return ips[0].trim();
+    }
   }
 
   return 'unknown';
