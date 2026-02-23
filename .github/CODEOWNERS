@@ -1,0 +1,5 @@
+# Default owner
+* @GhenovNik
+
+# CI and deployment config
+.github/workflows/* @GhenovNik
