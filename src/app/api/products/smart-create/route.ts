@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
-import { requireAdmin } from '@/lib/auth-guards';
+import { requireUser } from '@/lib/auth-guards';
 import { getAppBaseUrl } from '@/lib/app-url';
 import { GoogleGenAI } from '@google/genai';
 
@@ -15,8 +15,28 @@ interface SmartProductResult {
 
 export async function POST(request: Request) {
   try {
-    const guard = await requireAdmin();
+    const guard = await requireUser();
     if (guard instanceof Response) return guard;
+    const { session } = guard;
+
+    const dbUser = await prisma.user.findUnique({
+      where: { id: session.user.id },
+      select: { id: true, role: true, createdProductsCount: true },
+    });
+
+    if (!dbUser) {
+      return NextResponse.json({ error: 'Пользователь не найден' }, { status: 404 });
+    }
+
+    const GENERATION_LIMIT = 10;
+    if (dbUser.role !== 'ADMIN' && dbUser.createdProductsCount >= GENERATION_LIMIT) {
+      return NextResponse.json(
+        {
+          error: `Вы исчерпали лимит создания своих товаров (${GENERATION_LIMIT}/${GENERATION_LIMIT}).`,
+        },
+        { status: 403 }
+      );
+    }
 
     const body = await request.json();
     const { productName, categoryId } = body;
@@ -230,6 +250,8 @@ Respond ONLY with valid JSON in this exact format:
       }
     }
 
+    const isGlobal = dbUser.role === 'ADMIN';
+
     // Create the product
     const newProduct = await prisma.product.create({
       data: {
@@ -239,11 +261,20 @@ Respond ONLY with valid JSON in this exact format:
         categoryId: category.id,
         isCustom: isCustom,
         imageUrl: customEmojiUrl,
+        isGlobal: isGlobal,
+        createdById: dbUser.id,
       },
       include: {
         category: true,
       },
     });
+
+    if (dbUser.role !== 'ADMIN') {
+      await prisma.user.update({
+        where: { id: dbUser.id },
+        data: { createdProductsCount: { increment: 1 } },
+      });
+    }
 
     console.log(
       `✅ Smart product created: ${newProduct.name} ${isCustom ? '(with custom emoji)' : ''}`
