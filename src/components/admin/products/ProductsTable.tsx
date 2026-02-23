@@ -57,14 +57,14 @@ export default function ProductsTable({ products, onEdit, onDelete }: ProductsTa
       {/* Desktop Table View */}
       <div className="hidden md:block bg-white rounded-xl shadow-md overflow-hidden">
         <div className="overflow-x-auto">
-          <table className="w-full">
+          <table className="w-full table-auto">
             <thead className="bg-gray-50 border-b border-gray-200">
               <tr>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider whitespace-nowrap">
                   Изображение
                 </th>
                 <th
-                  className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100 select-none"
+                  className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100 select-none"
                   onClick={() => handleSort('name')}
                 >
                   <div className="flex items-center gap-1">
@@ -75,7 +75,7 @@ export default function ProductsTable({ products, onEdit, onDelete }: ProductsTa
                   </div>
                 </th>
                 <th
-                  className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100 select-none"
+                  className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100 select-none"
                   onClick={() => handleSort('category')}
                 >
                   <div className="flex items-center gap-1">
@@ -85,10 +85,7 @@ export default function ProductsTable({ products, onEdit, onDelete }: ProductsTa
                     )}
                   </div>
                 </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Варианты
-                </th>
-                <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
+                <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider whitespace-nowrap">
                   Действия
                 </th>
               </tr>
@@ -100,7 +97,7 @@ export default function ProductsTable({ products, onEdit, onDelete }: ProductsTa
                   id={`product-${product.id}`}
                   className="hover:bg-gray-50 transition-all"
                 >
-                  <td className="px-6 py-4 whitespace-nowrap">
+                  <td className="px-4 py-4 align-top whitespace-nowrap">
                     {product.isCustom && product.imageUrl ? (
                       <img
                         src={product.imageUrl}
@@ -111,11 +108,13 @@ export default function ProductsTable({ products, onEdit, onDelete }: ProductsTa
                       <span className="text-3xl">{product.emoji}</span>
                     )}
                   </td>
-                  <td className="px-6 py-4 whitespace-nowrap">
-                    <div className="text-sm font-medium text-gray-900">{product.name}</div>
-                    <div className="text-sm text-gray-500">{product.nameEn}</div>
+                  <td className="px-4 py-4 align-top min-w-45">
+                    <div className="text-sm font-medium text-gray-900 wrap-break-word">
+                      {product.name}
+                    </div>
+                    <div className="text-sm text-gray-500 wrap-break-word">{product.nameEn}</div>
                   </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                  <td className="px-4 py-4 align-top text-sm text-gray-500 min-w-45">
                     <div className="flex items-center gap-2">
                       {product.category.isCustom && product.category.imageUrl ? (
                         <img
@@ -126,25 +125,24 @@ export default function ProductsTable({ products, onEdit, onDelete }: ProductsTa
                       ) : (
                         <span>{product.category.emoji}</span>
                       )}
-                      <span>{product.category.name}</span>
+                      <span className="wrap-break-word">{product.category.name}</span>
                     </div>
                   </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">
-                    {product.variants?.length ? `${product.variants.length} шт.` : '—'}
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-                    <button
-                      onClick={() => onEdit(product)}
-                      className="text-blue-600 hover:text-blue-900 mr-4"
-                    >
-                      Редактировать
-                    </button>
-                    <button
-                      onClick={() => onDelete(product.id)}
-                      className="text-red-600 hover:text-red-900"
-                    >
-                      Удалить
-                    </button>
+                  <td className="px-4 py-4 text-right text-sm font-medium align-top whitespace-nowrap">
+                    <div className="flex items-center justify-end gap-4">
+                      <button
+                        onClick={() => onEdit(product)}
+                        className="text-blue-600 hover:text-blue-900"
+                      >
+                        Редактировать
+                      </button>
+                      <button
+                        onClick={() => onDelete(product.id)}
+                        className="text-red-600 hover:text-red-900"
+                      >
+                        Удалить
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -162,7 +160,7 @@ export default function ProductsTable({ products, onEdit, onDelete }: ProductsTa
             className="bg-white rounded-xl shadow-md p-4 transition-all"
           >
             <div className="flex items-start gap-4 mb-3">
-              <div className="flex-shrink-0">
+              <div className="shrink-0">
                 {product.isCustom && product.imageUrl ? (
                   <img
                     src={product.imageUrl}
@@ -174,16 +172,9 @@ export default function ProductsTable({ products, onEdit, onDelete }: ProductsTa
                 )}
               </div>
               <div className="flex-1 min-w-0">
-                <div className="flex items-start justify-between gap-2 mb-1">
-                  <div className="flex-1">
-                    <h3 className="font-semibold text-gray-900">{product.name}</h3>
-                    <p className="text-sm text-gray-500">{product.nameEn}</p>
-                  </div>
-                  <span className="px-2 py-1 text-xs font-semibold rounded-full flex-shrink-0 bg-slate-100 text-slate-700">
-                    {product.variants?.length
-                      ? `${product.variants.length} варианта`
-                      : 'Без вариантов'}
-                  </span>
+                <div className="mb-1">
+                  <h3 className="font-semibold text-gray-900 wrap-break-word">{product.name}</h3>
+                  <p className="text-sm text-gray-500 wrap-break-word">{product.nameEn}</p>
                 </div>
                 <div className="flex items-center gap-2 mt-1 text-sm text-gray-600">
                   {product.category.isCustom && product.category.imageUrl ? (
@@ -196,11 +187,6 @@ export default function ProductsTable({ products, onEdit, onDelete }: ProductsTa
                     <span>{product.category.emoji}</span>
                   )}
                   <span>{product.category.name}</span>
-                </div>
-                <div className="mt-2 text-xs text-gray-500">
-                  {product.variants?.length
-                    ? `${product.variants.length} варианта`
-                    : 'Без вариантов'}
                 </div>
               </div>
             </div>

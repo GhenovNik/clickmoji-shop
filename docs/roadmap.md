@@ -13,33 +13,40 @@ This roadmap reflects the current codebase and highlights what is planned next.
 ## Done
 
 - Credentials auth (NextAuth + JWT) and registration flow
+- Password validation and auth rate limiting (IP/email)
+- Password reset flow (request + confirm token)
+- Email verification flow (verify + resend)
+- OAuth (Google) support
+- RBAC guards for admin and signed-in APIs
 - Categories, products, emoji grid browsing
 - Search and autocomplete
 - Favorites with usage tracking
 - Multiple lists, notes, purchase toggles, import from text
+- History persistence in DB with restore/delete flows
 - Admin UI for categories/products/users
 - AI emoji generation, bulk import, smart create
+- Product variants in API and UI (admin + selection)
 - UploadThing integration
+- PWA baseline (manifest, service worker registration, offline fallback page)
 
 ## Next
 
-### Auth improvements (priority order)
+### AI hardening (priority order)
 
-1. Stronger validation and password rules
-2. Password reset flow
-3. Email verification
-4. OAuth (Google)
-5. RBAC checks for admin APIs
+1. Rate limiting for AI endpoints (`/api/emoji/*`, `/api/products/*`, `/api/lists/import-text`)
+2. Caching by normalized product name + prompt version
+3. Prompt versioning for reproducibility and safer rollbacks
 
 ### Product model evolution
 
-- Product variants UI and API
-- Optional uniqueness rules for base items
+- Optional uniqueness rules for base items when variants are absent
+- Database-level guarantee for one active list per user (partial unique index)
 
 ### Experience
 
-- PWA offline support
-- Stabilize history persistence
+- Expand offline capabilities beyond static shell (API/data strategy, retry queue)
+- Add installability and update UX for PWA
+- Tighten loading/error/empty states on edge flows
 
 ## Post-MVP
 
@@ -52,5 +59,5 @@ This roadmap reflects the current codebase and highlights what is planned next.
 
 ## Open questions
 
-- Where should history be persisted: DB or client-side cache?
 - Do we need a separate table for shared lists or per-user access rules?
+- Which AI provider should be default in production and what fallback policy is acceptable?

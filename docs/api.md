@@ -14,13 +14,40 @@ All endpoints are implemented as Next.js Route Handlers under `src/app/api`.
 
 - Auth: public
 - Body: `email`, `password`, `name?`
-- Response: `{ message, user: { id, email, name } }`
-- Notes: hashes password, creates default lists
+- Response: `{ message, emailSent, requiresEmailVerification, user }`
+- Notes: validates password, applies rate limits, hashes password, creates default lists
 
 ### `GET|POST /api/auth/[...nextauth]`
 
 - Auth: public
 - Notes: NextAuth handlers
+
+### `POST /api/auth/forgot-password`
+
+- Auth: public
+- Body: `email`
+- Response: generic success message to avoid account enumeration
+- Notes: uses IP/email rate limits
+
+### `POST /api/auth/reset-password`
+
+- Auth: public
+- Body: `email`, `token`, `password`
+- Response: `{ message }`
+- Notes: validates password and consumes one-time reset token
+
+### `GET /api/auth/verify`
+
+- Auth: public
+- Query: `email`, `token`
+- Notes: consumes email verification token and redirects to `/login?verified=...`
+
+### `POST /api/auth/resend`
+
+- Auth: public
+- Body: `email`
+- Response: generic or success message
+- Notes: only active when email verification is required; uses IP/email rate limits
 
 ## Users (admin)
 
@@ -81,14 +108,14 @@ All endpoints are implemented as Next.js Route Handlers under `src/app/api`.
 ### `POST /api/products`
 
 - Auth: admin
-- Body: `name`, `nameEn`, `categoryId`, `emoji?`, `isCustom?`, `imageUrl?`
-- Notes: `emoji` required when `isCustom` is false
+- Body: `name`, `nameEn`, `categoryId`, `emoji?`, `isCustom?`, `imageUrl?`, `variants?`
+- Notes: `emoji` required when `isCustom` is false; can create variants in same request
 
 ### `PUT /api/products/:productId`
 
 - Auth: admin
-- Body: `name?`, `nameEn?`, `emoji?`, `categoryId?`, `isCustom?`, `imageUrl?`
-- Notes: deletes old UploadThing image when replaced
+- Body: `name?`, `nameEn?`, `emoji?`, `categoryId?`, `isCustom?`, `imageUrl?`, `variants?`
+- Notes: upserts/deletes variants; keeps variants that are already used in items; deletes old UploadThing image when replaced
 
 ### `DELETE /api/products/:productId`
 
@@ -102,7 +129,7 @@ All endpoints are implemented as Next.js Route Handlers under `src/app/api`.
 
 ### `POST /api/products/smart-create`
 
-- Auth: signed in
+- Auth: admin
 - Body: `productName`, `categoryId?`
 - Notes: Gemini analysis; can call `/api/emoji/generate` + `/api/emoji/upload` internally
 
@@ -166,6 +193,31 @@ All endpoints are implemented as Next.js Route Handlers under `src/app/api`.
 - Auth: signed in
 - Body: `text`, `listId`
 - Notes: Gemini parses, creates missing products, adds items
+
+## History
+
+### `GET /api/history`
+
+- Auth: signed in
+- Response: recent list completion snapshots with items
+
+### `POST /api/history`
+
+- Auth: signed in
+- Body: `listId`
+- Notes: snapshots list items into history and clears items from the source list
+
+### `DELETE /api/history/:historyId`
+
+- Auth: signed in
+- Notes: deletes a history entry owned by current user
+
+### `POST /api/history/:historyId/restore`
+
+- Auth: signed in
+- Body: `name?`
+- Response: `{ listId, createdCount, skippedCount }`
+- Notes: restores history snapshot into a new list and skips missing/invalid product references
 
 ## Favorites
 

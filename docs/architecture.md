@@ -20,12 +20,13 @@ Clickmoji Shop is a Next.js App Router application with API routes hosted in the
 - Prisma models optimized for list-centric workflows; items allow duplicates when notes differ.
 - AI is optional and can be toggled per provider via `AI_PROVIDER`.
 - Admin tooling is built into `/admin` and enforced by role checks.
+- Auth hardening includes email normalization, password policy, and rate limiting helpers in `src/lib/auth-security.ts`.
 
 ## Known gaps
 
-- OAuth providers are not integrated yet.
-- PWA/offline support is planned but not implemented.
-- Product variants exist in the schema but are not exposed in UI.
+- AI routes do not yet have dedicated rate limits, response caching, or prompt versioning.
+- PWA offline support is baseline-only: static shell/offline page exists, but no offline API write queue.
+- There is no DB-level partial unique constraint for one active list per user.
 
 ## Related docs
 
