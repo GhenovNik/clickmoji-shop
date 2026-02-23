@@ -8,7 +8,18 @@ Source of truth: `prisma/schema.prisma`.
 
 - `id`, `email`, `name`, `image`, `role`
 - `password` is stored as a bcrypt hash (created in registration handler)
-- Relations: `lists`, `favorites`
+- `emailVerified` is nullable and used by verification-gated sign-in
+- Relations: `lists`, `favorites`, `histories`
+
+### EmailVerificationToken
+
+- `email`, `token`, `expiresAt`
+- Used by `/api/auth/register`, `/api/auth/verify`, `/api/auth/resend`
+
+### PasswordResetToken
+
+- `email`, `token`, `expiresAt`
+- Used by `/api/auth/forgot-password` and `/api/auth/reset-password`
 
 ### Category
 
@@ -24,13 +35,25 @@ Source of truth: `prisma/schema.prisma`.
 
 - `name`, `nameEn`, `emoji`
 - Relation: `product`
-- Present in schema but not in UI yet
+- Used in admin product forms and product selection flows
 
 ### List
 
 - `name`, `isActive`
-- Relation: `user`, `items`
+- Relation: `user`, `items`, `histories`
 - No database-level guarantee for “one active list” yet
+
+### ListHistory
+
+- `listName`, `completedAt`
+- Relations: `user`, optional `list`, `items`
+- Stores snapshots of completed shopping lists
+
+### ListHistoryItem
+
+- Snapshot fields for product/category/variant/name/emoji/image
+- Keeps historical data even when source products change later
+- Relation: `history`
 
 ### Item
 
@@ -56,4 +79,4 @@ Seed lives in `prisma/seed.ts`. Current seed creates 17 categories and a large s
 ## Planned changes
 
 - Add partial unique index for one active list per user
-- Optional: additional uniqueness for base items (when variants are introduced)
+- Optional: additional uniqueness for base items (when variants are absent)

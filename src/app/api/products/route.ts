@@ -1,15 +1,22 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { requireAdmin } from '@/lib/auth-guards';
+import { auth } from '@/lib/auth';
 
 export async function GET(request: Request) {
   try {
+    const session = await auth();
     const { searchParams } = new URL(request.url);
     const categoryId = searchParams.get('categoryId');
+
+    const accessFilter = {
+      OR: [{ isGlobal: true }, ...(session?.user?.id ? [{ createdById: session.user.id }] : [])],
+    };
 
     if (!categoryId) {
       // Если categoryId не указан, возвращаем все продукты
       const products = await prisma.product.findMany({
+        where: accessFilter,
         include: {
           variants: true,
           category: {
@@ -32,6 +39,7 @@ export async function GET(request: Request) {
     const products = await prisma.product.findMany({
       where: {
         categoryId,
+        ...accessFilter,
       },
       include: {
         variants: true,

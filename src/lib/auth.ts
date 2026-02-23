@@ -92,6 +92,7 @@ export const authOptions: NextAuthOptions = {
             name: existingUser.name || user.name || null,
             image: user.image || existingUser.image,
             emailVerified: existingUser.emailVerified || new Date(),
+            password: existingUser.emailVerified ? undefined : null,
           },
         });
       }

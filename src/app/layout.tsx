@@ -1,5 +1,5 @@
 import type { Metadata } from 'next';
-import { Fredoka, Nunito } from 'next/font/google';
+import { Rubik, Nunito } from 'next/font/google';
 import './globals.css';
 import Providers from '@/components/Providers';
 import PwaRegister from '@/components/PwaRegister';
@@ -10,14 +10,14 @@ import { ShoppingCart } from 'lucide-react';
 
 const bodyFont = Nunito({
   variable: '--font-body',
-  subsets: ['latin'],
+  subsets: ['latin', 'cyrillic'],
   weight: ['300', '400', '500', '600', '700'],
 });
 
-const headingFont = Fredoka({
+const headingFont = Rubik({
   variable: '--font-heading',
-  subsets: ['latin'],
-  weight: ['400', '500', '600', '700'],
+  subsets: ['latin', 'cyrillic'],
+  weight: ['400', '500', '600', '700', '800', '900'],
 });
 
 export const metadata: Metadata = {

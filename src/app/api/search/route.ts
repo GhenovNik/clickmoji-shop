@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
+import { auth } from '@/lib/auth';
 
 interface ProductSearchResult {
   id: string;
@@ -25,6 +26,9 @@ interface ProductSearchResult {
 
 export async function GET(request: Request) {
   try {
+    const session = await auth();
+    const userId = session?.user?.id || null;
+
     const { searchParams } = new URL(request.url);
     const query = searchParams.get('q');
 
@@ -62,10 +66,13 @@ export async function GET(request: Request) {
       FROM products p
       INNER JOIN categories c ON p."categoryId" = c.id
       WHERE
-        p.name ILIKE ${'%' + searchTerm + '%'}
-        OR p."nameEn" ILIKE ${'%' + searchTerm + '%'}
-        OR similarity(p.name, ${searchTerm}) > 0.3
-        OR similarity(p."nameEn", ${searchTerm}) > 0.3
+        (p."isGlobal" = true OR p."createdById" = ${userId})
+        AND (
+          p.name ILIKE ${'%' + searchTerm + '%'}
+          OR p."nameEn" ILIKE ${'%' + searchTerm + '%'}
+          OR similarity(p.name, ${searchTerm}) > 0.3
+          OR similarity(p."nameEn", ${searchTerm}) > 0.3
+        )
       ORDER BY match_priority DESC, sim_score DESC, p.name ASC
       LIMIT 10
     `;

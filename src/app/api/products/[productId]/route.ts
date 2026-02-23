@@ -92,8 +92,8 @@ export async function PUT(
 
         for (const variant of incoming) {
           if (variant.id) {
-            await tx.productVariant.update({
-              where: { id: variant.id },
+            await tx.productVariant.updateMany({
+              where: { id: variant.id, productId },
               data: {
                 name: variant.name,
                 nameEn: variant.nameEn,

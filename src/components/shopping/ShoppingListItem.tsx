@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import type { Item } from '@/hooks/useShoppingListItems';
 import { cn } from '@/lib/utils';
-import { MoreHorizontal, X, MessageSquarePlus } from 'lucide-react';
+import { MoreHorizontal, X, MessageSquarePlus, Check } from 'lucide-react';
 
 interface ShoppingListItemProps {
   item: Item;
@@ -20,80 +20,100 @@ export default function ShoppingListItem({
 }: ShoppingListItemProps) {
   const [isEditingNote, setIsEditingNote] = useState(false);
   const [noteValue, setNoteValue] = useState(item.note || '');
-  const [showActions, setShowActions] = useState(false);
 
   return (
     <div
       className={cn(
-        'relative group bento-card p-3 flex flex-col items-center justify-center gap-1 min-h-[120px] cursor-pointer touch-manipulation transition-all',
-        item.isPurchased && 'bg-muted border-transparent opacity-50 grayscale'
+        'relative group flex items-center justify-between p-4 rounded-2xl bg-white border-2 border-border/50 shadow-sm transition-all cursor-pointer touch-manipulation',
+        item.isPurchased && 'bg-muted/40 border-transparent opacity-80'
       )}
       onClick={() => onToggle(item.id)}
     >
-      {/* Top right actions */}
-      <div className="absolute top-2 right-2 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+      {/* Main Content (Left) */}
+      <div className="flex items-center gap-4 flex-1 min-w-0">
+        <div
+          className={cn(
+            'flex-shrink-0 transition-transform duration-300',
+            item.isPurchased && 'scale-90'
+          )}
+        >
+          {item.product.isCustom && item.product.imageUrl ? (
+            <img
+              src={item.product.imageUrl}
+              alt={item.product.name}
+              className="w-12 h-12 object-contain"
+            />
+          ) : (
+            <span className="text-4xl drop-shadow-sm">{item.product.emoji}</span>
+          )}
+        </div>
+
+        <div className="flex flex-col flex-1 min-w-0 justify-center">
+          <div className="flex items-center gap-2 flex-wrap">
+            <p
+              className={cn(
+                'font-bold text-lg leading-tight truncate transition-all duration-300',
+                item.isPurchased ? 'line-through text-muted-foreground' : 'text-foreground'
+              )}
+            >
+              {item.product.name}
+            </p>
+            {item.variant?.name && (
+              <span className="text-[10px] bg-secondary/10 text-secondary-foreground px-1.5 py-0.5 rounded-full font-bold">
+                {item.variant.name}
+              </span>
+            )}
+          </div>
+
+          {item.note && !isEditingNote && (
+            <span className="text-sm text-muted-foreground line-clamp-1 italic mt-0.5">
+              {item.note}
+            </span>
+          )}
+        </div>
+      </div>
+
+      {/* Right side actions */}
+      <div className="flex items-center gap-1 sm:gap-2 flex-shrink-0 ml-2">
+        {onUpdateNote && !isEditingNote && !item.isPurchased && (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              setIsEditingNote(true);
+            }}
+            className="p-2 text-muted-foreground hover:text-primary hover:bg-primary/5 rounded-full transition-colors"
+          >
+            <MessageSquarePlus size={20} />
+          </button>
+        )}
+
         <button
           onClick={(e) => {
             e.stopPropagation();
             onRemove(item.id);
           }}
-          className="p-1.5 bg-destructive/10 text-destructive rounded-full hover:bg-destructive hover:text-white transition-colors"
+          className="p-2 text-muted-foreground hover:text-destructive hover:bg-destructive/10 rounded-full transition-colors opacity-0 group-hover:opacity-100 sm:opacity-100"
         >
-          <X size={14} />
+          <X size={20} />
         </button>
-      </div>
 
-      {/* Main Content */}
-      <div className="flex flex-col items-center text-center">
-        {item.product.isCustom && item.product.imageUrl ? (
-          <img
-            src={item.product.imageUrl}
-            alt={item.product.name}
-            className="w-16 h-16 object-contain mb-1"
-          />
-        ) : (
-          <span className="text-5xl mb-1 drop-shadow-sm">{item.product.emoji}</span>
-        )}
-
-        <p
+        {/* Checkbox indicator */}
+        <div
           className={cn(
-            'font-bold text-sm leading-tight max-w-[100px] line-clamp-2',
-            item.isPurchased && 'line-through text-muted-foreground'
+            'flex items-center justify-center w-8 h-8 rounded-full border-2 transition-all duration-300 ml-1',
+            item.isPurchased
+              ? 'bg-accent border-accent text-white scale-110'
+              : 'border-muted-foreground/30 text-transparent hover:border-accent/50'
           )}
         >
-          {item.product.name}
-        </p>
-
-        {item.variant?.name && (
-          <span className="text-[10px] bg-secondary/10 text-secondary-foreground px-1.5 py-0.5 rounded-full font-bold mt-1">
-            {item.variant.name}
-          </span>
-        )}
-
-        {item.note && !isEditingNote && (
-          <span className="text-[10px] text-muted-foreground mt-1 px-2 line-clamp-1 italic">
-            "{item.note}"
-          </span>
-        )}
+          <Check size={16} strokeWidth={item.isPurchased ? 3 : 2} />
+        </div>
       </div>
-
-      {/* Note Edit Trigger */}
-      {onUpdateNote && !isEditingNote && !item.isPurchased && (
-        <button
-          onClick={(e) => {
-            e.stopPropagation();
-            setIsEditingNote(true);
-          }}
-          className="mt-2 p-1 text-primary hover:bg-primary/5 rounded-full"
-        >
-          <MessageSquarePlus size={16} />
-        </button>
-      )}
 
       {/* Note Editor Overlay */}
       {isEditingNote && (
         <div
-          className="absolute inset-0 bg-white/95 z-10 rounded-3xl p-3 flex flex-col items-center justify-center"
+          className="absolute inset-0 bg-white/95 z-10 rounded-2xl p-2 flex items-center gap-2 shadow-md"
           onClick={(e) => e.stopPropagation()}
         >
           <input
@@ -114,28 +134,19 @@ export default function ShoppingListItem({
                 setIsEditingNote(false);
               }
             }}
-            placeholder="Заметка..."
-            className="w-full px-3 py-2 text-sm bg-muted border-none rounded-xl focus:ring-2 focus:ring-primary outline-none"
+            placeholder="Заметка к товару..."
+            className="flex-1 px-4 py-2 text-sm bg-muted border-none rounded-xl focus:ring-2 focus:ring-primary outline-none"
             autoFocus
           />
           <button
-            className="mt-2 text-xs font-bold text-primary"
+            className="px-4 py-2 text-sm font-bold bg-primary text-primary-foreground rounded-xl"
             onClick={() => {
               onUpdateNote?.(item.id, noteValue);
               setIsEditingNote(false);
             }}
           >
-            Готово
+            Ок
           </button>
-        </div>
-      )}
-
-      {/* Purchase Indicator */}
-      {item.isPurchased && (
-        <div className="absolute inset-0 flex items-center justify-center bg-accent/10 rounded-3xl">
-          <div className="bg-accent text-white rounded-full p-2 shadow-lg scale-125">
-            <span className="text-xl">✓</span>
-          </div>
         </div>
       )}
     </div>
