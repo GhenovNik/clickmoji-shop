@@ -4,8 +4,7 @@ This roadmap reflects the current codebase and highlights what is planned next.
 
 ## Definition of Done
 
-- `npm run typecheck` passes
-- `npm run lint` passes
+- `npm run check` passes (includes typecheck, lint, and unit tests)
 - Critical user flows covered by tests or manual checklist
 - Loading/error/empty states for core screens
 - Security checks for auth and admin APIs
