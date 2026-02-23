@@ -4,15 +4,15 @@ Clickmoji Shop is a Next.js App Router application with API routes hosted in the
 
 ## Stack (current)
 
-- Frontend: Next.js 16, React 19, TypeScript, Tailwind CSS
+- Frontend: Next.js 16, React 19, TypeScript, Tailwind CSS 4
 - State/data: Zustand, TanStack Query
 - Backend: Next.js Route Handlers (`src/app/api`), Prisma ORM, PostgreSQL
-- Auth: NextAuth (credentials provider, JWT sessions)
+- Auth: NextAuth v4 (Credentials + Google OAuth, JWT sessions)
 - AI: `@google/genai` (Gemini/Imagen), OpenAI SDK (GPT Image)
 - Uploads: UploadThing
 - Search: PostgreSQL full-text + `pg_trgm` similarity in `/api/search`
 - Testing: Vitest, Playwright
-- Tooling: ESLint, Prettier, Husky + lint-staged
+- Tooling: ESLint 9, Prettier, Husky + lint-staged
 
 ## Key decisions
 

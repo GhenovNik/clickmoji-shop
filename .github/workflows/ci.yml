@@ -43,3 +43,11 @@ jobs:
 
       - name: Build
         run: npm run build
+
+  ci:
+    name: CI
+    runs-on: ubuntu-latest
+    needs: validate
+    steps:
+      - name: Gate
+        run: echo "CI gate passed"
