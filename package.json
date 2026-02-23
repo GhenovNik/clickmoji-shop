@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "prisma generate && prisma migrate deploy && next build",
+    "build": "prisma generate && next build",
     "start": "next start",
     "postinstall": "prisma generate",
     "lint": "eslint .",
@@ -98,7 +98,7 @@
     "prisma": "^7.4.0",
     "tailwindcss": "^4.1.18",
     "tsx": "^4.21.0",
-    "typescript": "^5",
+    "typescript": "5.9.3",
     "vitest": "^4.0.18"
   }
 }
