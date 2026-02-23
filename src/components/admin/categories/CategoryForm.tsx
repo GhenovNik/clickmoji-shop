@@ -78,6 +78,40 @@ export default function CategoryForm({
       }
     }
 
+    if (
+      !selectedFile &&
+      formData.isCustom &&
+      uploadedImageUrl &&
+      uploadedImageUrl.startsWith('data:image/')
+    ) {
+      setUploading(true);
+      try {
+        const uploadRes = await fetch('/api/emoji/upload', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            base64: uploadedImageUrl,
+            productName: formData.nameEn || formData.name,
+          }),
+        });
+
+        const uploadData = await uploadRes.json();
+
+        if (!uploadRes.ok || !uploadData.imageUrl) {
+          throw new Error(uploadData.error || 'Ошибка при сохранении сгенерированной иконки');
+        }
+
+        uploadedImageUrl = uploadData.imageUrl;
+      } catch (error) {
+        console.error('Error uploading generated image:', error);
+        alert('Ошибка при сохранении сгенерированной иконки');
+        setUploading(false);
+        return;
+      } finally {
+        setUploading(false);
+      }
+    }
+
     await onSubmit(formData, uploadedImageUrl);
   };
 

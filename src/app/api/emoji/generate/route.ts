@@ -1,11 +1,8 @@
 import { NextResponse } from 'next/server';
 import { requireAdmin } from '@/lib/auth-guards';
-import { UTApi } from 'uploadthing/server';
 import OpenAI from 'openai';
 import { GoogleGenAI } from '@google/genai';
 import { getEmojiGenerationPrompt } from '@/lib/prompts/emoji-generation';
-
-const utapi = new UTApi();
 
 async function generateWithGemini(productName: string, apiKey: string): Promise<Buffer> {
   const prompt = getEmojiGenerationPrompt(productName);

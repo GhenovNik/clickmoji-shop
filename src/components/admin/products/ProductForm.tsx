@@ -103,6 +103,34 @@ export default function ProductForm({ product, categories, onSubmit, onCancel }:
       setUploading(false);
     }
 
+    if (!selectedFile && formData.isCustom && imageUrl && imageUrl.startsWith('data:image/')) {
+      setUploading(true);
+      try {
+        const uploadRes = await fetch('/api/emoji/upload', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            base64: imageUrl,
+            productName: formData.nameEn || formData.name,
+          }),
+        });
+
+        const uploadData = await uploadRes.json();
+
+        if (!uploadRes.ok || !uploadData.imageUrl) {
+          throw new Error(uploadData.error || 'Ошибка при сохранении сгенерированной иконки');
+        }
+
+        imageUrl = uploadData.imageUrl;
+      } catch (error) {
+        console.error('Error uploading generated image:', error);
+        alert('Ошибка при сохранении сгенерированной иконки');
+        setUploading(false);
+        return;
+      }
+      setUploading(false);
+    }
+
     await onSubmit(formData, imageUrl);
   };
 

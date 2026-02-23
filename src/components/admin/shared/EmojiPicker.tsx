@@ -71,24 +71,8 @@ export default function EmojiPicker({
         return;
       }
 
-      // Step 2: Upload to UploadThing (сохраняем только если админ подтверждает)
-      const uploadRes = await fetch('/api/emoji/upload', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          base64: generateData.base64,
-          productName: nameToUse,
-        }),
-      });
-
-      const uploadData = await uploadRes.json();
-
-      if (uploadRes.ok && uploadData.imageUrl) {
-        onGenerateImage?.(uploadData.imageUrl);
-        alert('✅ AI иконка успешно сгенерирована и сохранена!');
-      } else {
-        alert(uploadData.error || 'Ошибка при сохранении иконки');
-      }
+      onGenerateImage?.(generateData.base64);
+      alert('✅ AI иконка сгенерирована (предпросмотр). Сохранится после нажатия "Сохранить".');
     } catch (error) {
       console.error('Error generating AI emoji:', error);
       alert('Ошибка при генерации иконки');
