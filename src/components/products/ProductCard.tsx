@@ -40,9 +40,9 @@ export default function ProductCard({
         <div className="text-center">
           <div className="mx-auto mb-1 h-14 w-14 flex items-center justify-center">
             {product.isCustom && product.imageUrl ? (
-              <img src={product.imageUrl} alt={product.name} className="h-12 w-12 object-contain" />
+              <img src={product.imageUrl} alt={product.name} className="h-14 w-14 object-contain" />
             ) : (
-              <span className="text-3xl leading-none">{product.emoji}</span>
+              <span className="text-4xl leading-none">{product.emoji}</span>
             )}
           </div>
           <p className="h-8 overflow-hidden text-sm leading-[1.1] font-medium text-gray-900 flex items-center justify-center">
