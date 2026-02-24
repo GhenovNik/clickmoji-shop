@@ -5,10 +5,18 @@
  * to ensure consistent emoji style and quality.
  *
  * @param productName - The name of the product to generate an emoji for
+ * @param description - Optional extra context to improve generation quality
  * @returns The formatted prompt string for image generation
  */
-export function getEmojiGenerationPrompt(productName: string): string {
+export function getEmojiGenerationPrompt(productName: string, description?: string): string {
+  const normalizedDescription = description?.trim();
+  const descriptionLine = normalizedDescription
+    ? `Product description/context: ${normalizedDescription}.
+Use this only as visual context for the icon shape/details.`
+    : '';
+
   return `Vector illustration icon of ${productName}.
+${descriptionLine}
 Style: 3D emoji style, semi-flat look with soft volume.
 MUST BE:
 smooth rounded shapes,

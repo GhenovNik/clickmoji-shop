@@ -19,6 +19,8 @@
     "test:e2e:ui": "playwright test --ui",
     "test:e2e:debug": "playwright test --debug",
     "migrate:deploy": "prisma migrate deploy",
+    "db:backup": "tsx scripts/db-backup.ts",
+    "db:restore": "tsx scripts/db-restore.ts",
     "check": "npm run typecheck && npm run lint && npm run test",
     "prepare": "husky"
   },

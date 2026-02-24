@@ -1,14 +1,15 @@
 import { NextResponse } from 'next/server';
 import { requireAdmin } from '@/lib/auth-guards';
-import { UTApi } from 'uploadthing/server';
 import OpenAI from 'openai';
 import { GoogleGenAI } from '@google/genai';
 import { getEmojiGenerationPrompt } from '@/lib/prompts/emoji-generation';
 
-const utapi = new UTApi();
-
-async function generateWithGemini(productName: string, apiKey: string): Promise<Buffer> {
-  const prompt = getEmojiGenerationPrompt(productName);
+async function generateWithGemini(
+  productName: string,
+  description: string | undefined,
+  apiKey: string
+): Promise<Buffer> {
+  const prompt = getEmojiGenerationPrompt(productName, description);
 
   const ai = new GoogleGenAI({ apiKey });
   const imagenModel = process.env.IMAGEN_MODEL || 'imagen-4.0-generate-001';
@@ -68,9 +69,13 @@ async function generateWithGemini(productName: string, apiKey: string): Promise<
   }
 }
 
-async function generateWithOpenAI(productName: string, apiKey: string): Promise<Buffer> {
+async function generateWithOpenAI(
+  productName: string,
+  description: string | undefined,
+  apiKey: string
+): Promise<Buffer> {
   const openai = new OpenAI({ apiKey });
-  const prompt = getEmojiGenerationPrompt(productName);
+  const prompt = getEmojiGenerationPrompt(productName, description);
 
   const result = await openai.images.generate({
     model: 'gpt-image-1.5',
@@ -96,7 +101,7 @@ export async function POST(request: Request) {
     const guard = await requireAdmin();
     if (guard instanceof Response) return guard;
 
-    const { productName } = await request.json();
+    const { productName, description } = await request.json();
 
     if (!productName) {
       return NextResponse.json({ error: 'Product name is required' }, { status: 400 });
@@ -114,7 +119,7 @@ export async function POST(request: Request) {
       if (!apiKey) {
         return NextResponse.json({ error: 'OpenAI API key not configured' }, { status: 500 });
       }
-      imageBuffer = await generateWithOpenAI(productName, apiKey);
+      imageBuffer = await generateWithOpenAI(productName, description, apiKey);
     } else {
       const apiKey = process.env.GOOGLE_GENAI_API_KEY;
       if (!apiKey) {
@@ -123,7 +128,7 @@ export async function POST(request: Request) {
           { status: 500 }
         );
       }
-      imageBuffer = await generateWithGemini(productName, apiKey);
+      imageBuffer = await generateWithGemini(productName, description, apiKey);
     }
 
     // Конвертируем в base64 для превью (не загружаем сразу в UploadThing)

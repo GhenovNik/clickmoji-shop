@@ -22,11 +22,11 @@ export default function ListsPage() {
 
   return (
     <div className="pb-8">
-      <div className="mb-8">
-        <h1 className="text-4xl font-heading font-black mb-2 text-foreground tracking-tight">
+      <div className="mb-7">
+        <h1 className="text-3xl sm:text-4xl font-semibold mb-2 text-slate-900 tracking-tight">
           Мои списки
         </h1>
-        <p className="text-muted-foreground font-medium">Управляйте своими покупками просто</p>
+        <p className="text-slate-600 font-normal">Управляйте своими покупками просто</p>
       </div>
 
       <div className="grid grid-cols-2 xs:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
@@ -36,12 +36,12 @@ export default function ListsPage() {
 
         <button
           onClick={() => setShowCreateModal(true)}
-          className="bento-card p-6 flex flex-col items-center justify-center gap-3 min-h-[160px] bg-white border-dashed hover:border-primary group transition-all"
+          className="rounded-2xl border border-dashed border-slate-300 p-6 flex flex-col items-center justify-center gap-3 min-h-[160px] bg-white/90 hover:border-primary hover:bg-white shadow-sm hover:shadow-md group transition-all"
         >
           <div className="w-12 h-12 rounded-full bg-primary/10 flex items-center justify-center group-hover:bg-primary group-hover:text-white transition-colors">
             <span className="text-2xl font-bold">+</span>
           </div>
-          <span className="font-bold text-sm text-center">Новый список</span>
+          <span className="font-medium text-sm text-slate-800 text-center">Новый список</span>
         </button>
       </div>
 

@@ -51,6 +51,11 @@ OPENAI_API_KEY="your-openai-api-key"
 - Push changes (local dev): `npx prisma db push` (or `npx prisma migrate dev` if using migrations)
 - Deploy migrations (prod): `npx prisma migrate deploy`
 - Seed data: `npx prisma db seed`
+- Backup DB (to `backups/*.dump`): `npm run db:backup`
+- Restore DB (latest backup): `npm run db:restore`
+- Restore DB (specific file): `npm run db:restore -- clickmoji-YYYYMMDD-HHMMSS.dump`
+- Auto-backup (GitHub Actions): `.github/workflows/db-backup.yml` (daily + manual)
+- Required GitHub secret for auto-backup: `PROD_DATABASE_URL`
 
 ## Scripts
 
