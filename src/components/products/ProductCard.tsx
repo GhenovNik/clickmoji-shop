@@ -29,23 +29,25 @@ export default function ProductCard({
   };
 
   return (
-    <div className="relative">
+    <div className="relative h-full">
       <button
         onClick={() => onToggle(product)}
         className={`
-          w-full bg-white rounded-2xl p-4 shadow-md transition-all
+          w-full h-[126px] bg-white rounded-2xl p-3 shadow-md transition-all
           ${isSelected ? 'ring-4 ring-green-500 scale-95' : 'hover:shadow-lg hover:scale-105'}
         `}
       >
         <div className="text-center">
-          <div className="mx-auto mb-2 h-16 w-16 flex items-center justify-center">
+          <div className="mx-auto mb-1 h-14 w-14 flex items-center justify-center">
             {product.isCustom && product.imageUrl ? (
-              <img src={product.imageUrl} alt={product.name} className="h-14 w-14 object-contain" />
+              <img src={product.imageUrl} alt={product.name} className="h-12 w-12 object-contain" />
             ) : (
-              <span className="text-4xl leading-none">{product.emoji}</span>
+              <span className="text-3xl leading-none">{product.emoji}</span>
             )}
           </div>
-          <p className="text-sm font-medium text-gray-900">{product.name}</p>
+          <p className="h-8 overflow-hidden text-sm leading-[1.1] font-medium text-gray-900 flex items-center justify-center">
+            {product.name}
+          </p>
         </div>
       </button>
 
