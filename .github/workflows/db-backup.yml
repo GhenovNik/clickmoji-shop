@@ -1,0 +1,73 @@
+name: Database backup
+
+on:
+  schedule:
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  backup-production-db:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Prepare backup file name
+        id: meta
+        shell: bash
+        run: |
+          ts="$(date -u +%Y%m%d-%H%M%S)"
+          echo "file_name=neon-prod-${ts}.dump" >> "$GITHUB_OUTPUT"
+
+      - name: Dump production database
+        env:
+          PROD_DATABASE_URL: ${{ secrets.PROD_DATABASE_URL }}
+        shell: bash
+        run: |
+          if [[ -z "${PROD_DATABASE_URL}" ]]; then
+            echo "PROD_DATABASE_URL secret is required"
+            exit 1
+          fi
+
+          mkdir -p backups
+          docker run --rm \
+            -e DATABASE_URL="${PROD_DATABASE_URL}" \
+            -v "${GITHUB_WORKSPACE}/backups:/backups" \
+            postgres:17-alpine \
+            sh -lc "pg_dump \"\$DATABASE_URL\" -Fc -f \"/backups/${{ steps.meta.outputs.file_name }}\""
+
+      - name: Upload backup artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: db-backup-${{ steps.meta.outputs.file_name }}
+          path: backups/${{ steps.meta.outputs.file_name }}
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Prune old backup artifacts
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const keep = 14;
+            const { owner, repo } = context.repo;
+            const allArtifacts = await github.paginate(
+              github.rest.actions.listArtifactsForRepo,
+              { owner, repo, per_page: 100 }
+            );
+
+            const backups = allArtifacts
+              .filter((a) => a.name.startsWith('db-backup-neon-prod-'))
+              .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+
+            for (const artifact of backups.slice(keep)) {
+              await github.rest.actions.deleteArtifact({
+                owner,
+                repo,
+                artifact_id: artifact.id,
+              });
+            }
