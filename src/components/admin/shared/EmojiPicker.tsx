@@ -7,6 +7,7 @@ interface EmojiPickerProps {
   onChange: (emoji: string) => void;
   productName: string;
   productNameEn?: string;
+  productDescription?: string;
   isRequired?: boolean;
   onGenerateImage?: (imageUrl: string) => void;
 }
@@ -22,6 +23,7 @@ export default function EmojiPicker({
   onChange,
   productName,
   productNameEn,
+  productDescription,
   isRequired = false,
   onGenerateImage,
 }: EmojiPickerProps) {
@@ -61,7 +63,10 @@ export default function EmojiPicker({
       const generateRes = await fetch('/api/emoji/generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ productName: nameToUse }),
+        body: JSON.stringify({
+          productName: nameToUse,
+          description: productDescription?.trim() || undefined,
+        }),
       });
 
       const generateData = await generateRes.json();
