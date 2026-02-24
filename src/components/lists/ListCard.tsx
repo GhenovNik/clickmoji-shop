@@ -11,22 +11,22 @@ interface ListCardProps {
 
 export default function ListCard({ list, onDelete }: ListCardProps) {
   return (
-    <div className="bento-card group relative h-full flex flex-col">
+    <div className="group relative h-full flex flex-col rounded-2xl border border-slate-200/80 bg-white/90 backdrop-blur-sm shadow-sm hover:shadow-md transition-all">
       <Link
         href={`/lists/${list.id}`}
-        className="flex-1 p-6 flex flex-col items-center justify-center"
+        className="flex-1 p-5 sm:p-6 flex flex-col items-center justify-center"
       >
-        <div className="text-6xl mb-4 group-hover:scale-110 transition-transform duration-300 drop-shadow-md">
+        <div className="text-5xl sm:text-6xl mb-3 group-hover:scale-105 transition-transform duration-300">
           📋
         </div>
-        <h3 className="font-heading font-black text-xl text-center leading-tight mb-2 tracking-tight group-hover:text-primary transition-colors">
+        <h3 className="font-semibold text-lg sm:text-xl text-center leading-tight mb-2 text-slate-900 group-hover:text-primary transition-colors">
           {list.name}
         </h3>
-        <div className="flex items-center gap-1.5 bg-muted px-3 py-1 rounded-full">
-          <span className="text-xs font-bold uppercase tracking-wider text-muted-foreground">
+        <div className="flex items-center gap-1.5 bg-slate-100 text-slate-600 px-3 py-1.5 rounded-full border border-slate-200">
+          <span className="text-[11px] font-medium uppercase tracking-wide">
             {list._count.items} товаров
           </span>
-          <ChevronRight size={12} className="text-muted-foreground" />
+          <ChevronRight size={12} className="text-slate-500" />
         </div>
       </Link>
 
@@ -35,7 +35,7 @@ export default function ListCard({ list, onDelete }: ListCardProps) {
           e.preventDefault();
           onDelete(list.id, list.name);
         }}
-        className="absolute top-3 right-3 p-2 bg-destructive/10 text-destructive rounded-full opacity-0 group-hover:opacity-100 transition-all hover:bg-destructive hover:text-white"
+        className="absolute top-3 right-3 p-2 bg-rose-50 text-rose-500 rounded-full opacity-0 group-hover:opacity-100 transition-all hover:bg-rose-500 hover:text-white"
         title="Удалить список"
       >
         <Trash2 size={16} />

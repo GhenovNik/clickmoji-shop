@@ -40,14 +40,14 @@ const INITIAL_EMOJIS: CartItem[] = [
 export default function InteractiveCart() {
   const [items, setItems] = useState<CartItem[]>(INITIAL_EMOJIS);
   const cartRef = useRef<HTMLDivElement>(null);
-  const [centerPos, setCenterPos] = useState({ top: '30px', left: '30px' });
+  const [centerPos, setCenterPos] = useState({ top: '34px', left: '30px' });
 
   // Update target center position on mount
   useEffect(() => {
     if (cartRef.current) {
       setCenterPos({
-        top: '25px', // Fly towards the center opening of the cart
-        left: '30px',
+        top: '31px', // Fly towards the center opening of the cart
+        left: '26px',
       });
     }
   }, []);
@@ -87,13 +87,13 @@ export default function InteractiveCart() {
             It needs to be placed absolutely to visually overlap the top part of the cart emoji 
             but sit behind the front bars. Since emoji is a single font glyph, we use a clipping/layer trick 
             by positioning it carefully in the top-right area of the cart */}
-        <div className="absolute right-3 top-4 flex -space-x-4 z-20">
+        <div className="absolute right-7 top-9 flex -space-x-3 sm:-space-x-2 z-20">
           {items.map(
             (item) =>
               item.state === 'in-cart' && (
                 <span
                   key={`incart-${item.id}`}
-                  className="text-3xl transition-all duration-300 animate-in"
+                  className="text-xl sm:text-2xl transition-all duration-300 animate-in"
                   style={{ animation: 'bounce 0.5s' }}
                 >
                   {item.emoji}
@@ -103,7 +103,7 @@ export default function InteractiveCart() {
         </div>
 
         {/* Big Cart Emoji - Z-index must be higher so the base of the cart covers the bottom of the items */}
-        <span className="text-7xl sm:text-8xl relative z-40 transition-transform drop-shadow-[0_4px_8px_rgba(0,0,0,0.15)] select-none">
+        <span className="text-7xl sm:text-9xl relative z-40 transition-transform drop-shadow-[0_4px_8px_rgba(0,0,0,0.15)] select-none">
           🛒
         </span>
       </div>
@@ -121,7 +121,7 @@ export default function InteractiveCart() {
               key={item.id}
               onClick={() => !isFlying && handleDrop(item.id)}
               className={cn(
-                'absolute text-4xl cursor-pointer select-none transition-transform pointer-events-auto',
+                'absolute text-3xl sm:text-4xl cursor-pointer select-none transition-transform pointer-events-auto',
                 !isFlying && 'animate-bounce hover:scale-125 hover:-rotate-12 z-40', // In front when floating
                 isFlying && 'z-10' // Drop BEHIND the cart when flying
               )}

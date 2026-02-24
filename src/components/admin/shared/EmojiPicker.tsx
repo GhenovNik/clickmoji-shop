@@ -7,6 +7,7 @@ interface EmojiPickerProps {
   onChange: (emoji: string) => void;
   productName: string;
   productNameEn?: string;
+  productDescription?: string;
   isRequired?: boolean;
   onGenerateImage?: (imageUrl: string) => void;
 }
@@ -22,6 +23,7 @@ export default function EmojiPicker({
   onChange,
   productName,
   productNameEn,
+  productDescription,
   isRequired = false,
   onGenerateImage,
 }: EmojiPickerProps) {
@@ -61,7 +63,10 @@ export default function EmojiPicker({
       const generateRes = await fetch('/api/emoji/generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ productName: nameToUse }),
+        body: JSON.stringify({
+          productName: nameToUse,
+          description: productDescription?.trim() || undefined,
+        }),
       });
 
       const generateData = await generateRes.json();
@@ -71,24 +76,8 @@ export default function EmojiPicker({
         return;
       }
 
-      // Step 2: Upload to UploadThing (сохраняем только если админ подтверждает)
-      const uploadRes = await fetch('/api/emoji/upload', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          base64: generateData.base64,
-          productName: nameToUse,
-        }),
-      });
-
-      const uploadData = await uploadRes.json();
-
-      if (uploadRes.ok && uploadData.imageUrl) {
-        onGenerateImage?.(uploadData.imageUrl);
-        alert('✅ AI иконка успешно сгенерирована и сохранена!');
-      } else {
-        alert(uploadData.error || 'Ошибка при сохранении иконки');
-      }
+      onGenerateImage?.(generateData.base64);
+      alert('✅ AI иконка сгенерирована (предпросмотр). Сохранится после нажатия "Сохранить".');
     } catch (error) {
       console.error('Error generating AI emoji:', error);
       alert('Ошибка при генерации иконки');

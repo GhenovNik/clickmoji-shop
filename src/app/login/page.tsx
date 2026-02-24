@@ -4,6 +4,7 @@ import { useEffect, useState, Suspense } from 'react';
 import { getProviders, signIn } from 'next-auth/react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
+import { Eye, EyeOff } from 'lucide-react';
 
 function LoginForm() {
   const router = useRouter();
@@ -14,6 +15,7 @@ function LoginForm() {
   const [needsVerification, setNeedsVerification] = useState(false);
   const [resendStatus, setResendStatus] = useState<'idle' | 'sending' | 'sent' | 'error'>('idle');
   const [googleEnabled, setGoogleEnabled] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
 
   const registered = searchParams.get('registered');
   const verified = searchParams.get('verified');
@@ -228,14 +230,24 @@ function LoginForm() {
               <label htmlFor="password" className="block text-sm font-medium text-gray-700 mb-1">
                 Пароль
               </label>
-              <input
-                type="password"
-                id="password"
-                name="password"
-                required
-                className="w-full px-4 py-3 rounded-lg border border-gray-300 focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all text-gray-900"
-                placeholder="Ваш пароль"
-              />
+              <div className="relative">
+                <input
+                  type={showPassword ? 'text' : 'password'}
+                  id="password"
+                  name="password"
+                  required
+                  className="w-full px-4 py-3 pr-12 rounded-lg border border-gray-300 focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all text-gray-900"
+                  placeholder="Ваш пароль"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword((prev) => !prev)}
+                  className="absolute inset-y-0 right-0 px-3 text-gray-500 hover:text-gray-700 transition-colors"
+                  aria-label={showPassword ? 'Скрыть пароль' : 'Показать пароль'}
+                >
+                  {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                </button>
+              </div>
             </div>
 
             {error && (

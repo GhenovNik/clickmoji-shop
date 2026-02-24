@@ -2,15 +2,14 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { ShoppingCart, History, Star, Grid, Settings } from 'lucide-react';
+import { ShoppingCart, History, Star, Grid } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 const navItems = [
   { href: '/lists', label: 'Списки', icon: ShoppingCart, emoji: '🛒' },
-  { href: '/categories', label: 'Каталог', icon: Grid, emoji: '📁' },
-  { href: '/categories/favorites', label: 'Частые', icon: Star, emoji: '⭐' },
+  { href: '/categories', label: 'Категории', icon: Grid, emoji: '📁' },
+  { href: '/categories/favorites', label: 'Избранное', icon: Star, emoji: '⭐' },
   { href: '/history', label: 'История', icon: History, emoji: '📜' },
-  // { href: '/admin', label: 'Админ', icon: Settings, emoji: '⚙️' },
 ];
 
 export default function MobileNav() {
@@ -25,7 +24,14 @@ export default function MobileNav() {
     <nav className="fixed bottom-0 left-0 right-0 bg-white/80 backdrop-blur-lg border-t border-border px-4 pb-safe-bottom z-50 sm:hidden">
       <div className="flex justify-between items-center h-16 max-w-md mx-auto">
         {navItems.map((item) => {
-          const isActive = pathname.startsWith(item.href);
+          const isFavoritesRoute = pathname.startsWith('/categories/favorites');
+          const isCategoryRoute = pathname.startsWith('/categories');
+          const isActive =
+            item.href === '/categories'
+              ? isCategoryRoute && !isFavoritesRoute
+              : item.href === '/categories/favorites'
+                ? isFavoritesRoute
+                : pathname.startsWith(item.href);
           const Icon = item.icon;
 
           return (

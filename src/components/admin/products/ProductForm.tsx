@@ -61,6 +61,7 @@ export default function ProductForm({ product, categories, onSubmit, onCancel }:
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [uploading, setUploading] = useState(false);
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
+  const [generationDescription, setGenerationDescription] = useState('');
   const dropdownRef = useRef<HTMLDivElement>(null);
 
   const { startUpload } = useUploadThing('productImage');
@@ -97,6 +98,34 @@ export default function ProductForm({ product, categories, onSubmit, onCancel }:
       } catch (error) {
         console.error('Error uploading image:', error);
         alert('Ошибка при загрузке изображения');
+        setUploading(false);
+        return;
+      }
+      setUploading(false);
+    }
+
+    if (!selectedFile && formData.isCustom && imageUrl && imageUrl.startsWith('data:image/')) {
+      setUploading(true);
+      try {
+        const uploadRes = await fetch('/api/emoji/upload', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            base64: imageUrl,
+            productName: formData.nameEn || formData.name,
+          }),
+        });
+
+        const uploadData = await uploadRes.json();
+
+        if (!uploadRes.ok || !uploadData.imageUrl) {
+          throw new Error(uploadData.error || 'Ошибка при сохранении сгенерированной иконки');
+        }
+
+        imageUrl = uploadData.imageUrl;
+      } catch (error) {
+        console.error('Error uploading generated image:', error);
+        alert('Ошибка при сохранении сгенерированной иконки');
         setUploading(false);
         return;
       }
@@ -217,9 +246,26 @@ export default function ProductForm({ product, categories, onSubmit, onCancel }:
           onChange={(emoji) => setFormData({ ...formData, emoji })}
           productName={formData.name}
           productNameEn={formData.nameEn}
+          productDescription={generationDescription}
           isRequired={!formData.isCustom}
           onGenerateImage={(url) => setFormData({ ...formData, imageUrl: url, isCustom: true })}
         />
+      </div>
+
+      <div>
+        <label className="block text-sm font-medium text-gray-700 mb-1">
+          Описание для AI генерации
+        </label>
+        <textarea
+          value={generationDescription}
+          onChange={(e) => setGenerationDescription(e.target.value)}
+          rows={3}
+          placeholder="Например: безалкогольный энергетик в металлической банке, серебристо-синяя гамма"
+          className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-gray-900"
+        />
+        <p className="mt-1 text-xs text-gray-500">
+          Используется только в prompt для кнопки AI и не сохраняется в базе.
+        </p>
       </div>
 
       <div className="border-t pt-4">

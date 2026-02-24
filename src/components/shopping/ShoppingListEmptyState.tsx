@@ -10,20 +10,13 @@ export default function ShoppingListEmptyState({ listName }: ShoppingListEmptySt
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 p-6">
       <div className="max-w-2xl mx-auto">
-        <div className="mb-6 flex items-center justify-between gap-4">
+        <div className="mb-6 hidden sm:flex items-center justify-between gap-4">
           <Link
             href="/lists"
             className="inline-flex items-center gap-2 text-blue-600 hover:text-blue-800 font-medium"
           >
             <span>←</span>
             <span>К спискам</span>
-          </Link>
-          <Link
-            href="/"
-            className="inline-flex items-center gap-2 text-blue-600 hover:text-blue-800 font-medium"
-          >
-            <span>🏠</span>
-            <span>На главную</span>
           </Link>
         </div>
 
