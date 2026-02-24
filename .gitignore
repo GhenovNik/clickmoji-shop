@@ -65,3 +65,4 @@ Thumbs.db
 nul
 
 /src/generated/prisma
+/backups/

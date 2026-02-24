@@ -93,22 +93,31 @@ function CategoriesPageContent() {
                         : `/categories/${category.id}/products${listQuery}`
                     }
                     data-testid="category-link"
-                    className="bg-white rounded-2xl p-6 shadow-lg hover:shadow-xl transition-all hover:scale-105 cursor-pointer"
+                    className="bg-white rounded-2xl p-2.5 shadow-lg hover:shadow-xl transition-all hover:scale-105 cursor-pointer h-[198px]"
                   >
-                    <div className="text-center">
-                      {category.isCustom && category.imageUrl ? (
-                        <img
-                          src={category.imageUrl}
-                          alt={category.name}
-                          className="w-24 h-24 object-contain mx-auto mb-3"
-                        />
-                      ) : (
-                        <div className="text-6xl mb-3">{category.emoji}</div>
-                      )}
-                      <h3 className="font-semibold text-lg mb-1 text-gray-900">{category.name}</h3>
-                      {category._count && (
-                        <p className="text-sm text-gray-600">{category._count.products} товаров</p>
-                      )}
+                    <div className="text-center h-full flex flex-col">
+                      <div className="h-28 flex items-center justify-center">
+                        {category.isCustom && category.imageUrl ? (
+                          <img
+                            src={category.imageUrl}
+                            alt={category.name}
+                            className="max-h-24 max-w-24 object-contain"
+                          />
+                        ) : (
+                          <div className="text-7xl leading-none">{category.emoji}</div>
+                        )}
+                      </div>
+
+                      <div className="mt-auto -translate-y-1">
+                        <h3 className="h-10 mb-0 text-base font-semibold leading-[1.1] text-gray-900 flex items-center justify-center">
+                          {category.name}
+                        </h3>
+                        {category._count && (
+                          <p className="text-sm text-gray-600 h-5 flex items-center justify-center">
+                            {category._count.products} товаров
+                          </p>
+                        )}
+                      </div>
                     </div>
                   </Link>
                 );
@@ -116,13 +125,9 @@ function CategoriesPageContent() {
         </div>
 
         {/* Navigation */}
-        <div className="flex items-center justify-center gap-6 mt-8">
+        <div className="hidden sm:flex items-center justify-center gap-6 mt-8">
           <Link href="/history" className="text-blue-600 hover:text-blue-800 underline">
             История покупок
-          </Link>
-          <span className="text-gray-400">|</span>
-          <Link href="/" className="text-blue-600 hover:text-blue-800 underline">
-            На главную
           </Link>
         </div>
       </div>

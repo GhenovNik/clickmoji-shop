@@ -6,7 +6,7 @@ import PwaRegister from '@/components/PwaRegister';
 import MobileNav from '@/components/layout/MobileNav';
 import UserMenu from '@/components/UserMenu';
 import Link from 'next/link';
-import { ShoppingCart } from 'lucide-react';
+import { Home } from 'lucide-react';
 
 const bodyFont = Nunito({
   variable: '--font-body',
@@ -48,7 +48,7 @@ export default function RootLayout({
           <header className="fixed top-0 left-0 right-0 h-16 bg-white/50 backdrop-blur-md z-40 px-4 flex items-center justify-between border-b border-border/50 sm:sticky">
             <Link href="/" className="flex items-center gap-2 cursor-pointer">
               <span className="flex h-10 w-10 items-center justify-center rounded-2xl bg-primary/10 text-primary">
-                <ShoppingCart className="h-5 w-5" aria-hidden="true" />
+                <Home className="h-5 w-5" aria-hidden="true" />
               </span>
               <span className="font-heading font-bold text-xl tracking-tight hidden xs:block">
                 ClickMoji
