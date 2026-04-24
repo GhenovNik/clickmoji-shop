@@ -24,19 +24,44 @@ jobs:
           ts="$(date -u +%Y%m%d-%H%M%S)"
           echo "file_name=neon-prod-${ts}.dump" >> "$GITHUB_OUTPUT"
 
-      - name: Dump production database
+      - name: Resolve backup database URL
+        id: db_url
         env:
           PROD_DATABASE_URL: ${{ secrets.PROD_DATABASE_URL }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
         shell: bash
         run: |
-          if [[ -z "${PROD_DATABASE_URL}" ]]; then
-            echo "PROD_DATABASE_URL secret is required"
+          set -euo pipefail
+
+          db_url="${PROD_DATABASE_URL:-}"
+          db_source="PROD_DATABASE_URL"
+
+          if [[ -z "${db_url}" ]]; then
+            db_url="${DATABASE_URL:-}"
+            db_source="DATABASE_URL"
+          fi
+
+          if [[ -z "${db_url}" ]]; then
+            echo "::error::Missing database secret. Configure PROD_DATABASE_URL (recommended) or DATABASE_URL in repository secrets."
+            echo "### Database backup setup error" >> "$GITHUB_STEP_SUMMARY"
+            echo "- Required secret not found." >> "$GITHUB_STEP_SUMMARY"
+            echo "- Add \`PROD_DATABASE_URL\` (recommended) or \`DATABASE_URL\` in GitHub repo secrets." >> "$GITHUB_STEP_SUMMARY"
             exit 1
           fi
 
+          echo "::add-mask::${db_url}"
+          echo "database_url=${db_url}" >> "$GITHUB_OUTPUT"
+          echo "using_secret=${db_source}" >> "$GITHUB_OUTPUT"
+          echo "Using database URL from secret: ${db_source}"
+
+      - name: Dump production database
+        shell: bash
+        run: |
+          set -euo pipefail
+
           mkdir -p backups
           docker run --rm \
-            -e DATABASE_URL="${PROD_DATABASE_URL}" \
+            -e DATABASE_URL="${{ steps.db_url.outputs.database_url }}" \
             -v "${GITHUB_WORKSPACE}/backups:/backups" \
             postgres:17-alpine \
             sh -lc "pg_dump \"\$DATABASE_URL\" -Fc -f \"/backups/${{ steps.meta.outputs.file_name }}\""
