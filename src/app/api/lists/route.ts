@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { requireUser } from '@/lib/auth-guards';
 
-// GET /api/lists - получить все списки пользователя
+// GET /api/lists - list the current user's shopping lists.
 export async function GET() {
   try {
     const guard = await requireUser();
@@ -32,7 +32,7 @@ export async function GET() {
   }
 }
 
-// POST /api/lists - создать новый список
+// POST /api/lists - create a shopping list.
 export async function POST(request: Request) {
   try {
     const guard = await requireUser();
@@ -45,32 +45,33 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'List name is required' }, { status: 400 });
     }
 
-    // Если создаем активный список, деактивируем остальные
-    if (isActive) {
-      await prisma.list.updateMany({
-        where: {
-          userId: session.user.id,
-          isActive: true,
-        },
-        data: {
-          isActive: false,
-        },
-      });
-    }
+    const list = await prisma.$transaction(async (tx) => {
+      if (isActive) {
+        await tx.list.updateMany({
+          where: {
+            userId: session.user.id,
+            isActive: true,
+          },
+          data: {
+            isActive: false,
+          },
+        });
+      }
 
-    const list = await prisma.list.create({
-      data: {
-        name: name.trim(),
-        isActive: isActive || false,
-        userId: session.user.id,
-      },
-      include: {
-        _count: {
-          select: {
-            items: true,
+      return tx.list.create({
+        data: {
+          name: name.trim(),
+          isActive: Boolean(isActive),
+          userId: session.user.id,
+        },
+        include: {
+          _count: {
+            select: {
+              items: true,
+            },
           },
         },
-      },
+      });
     });
 
     return NextResponse.json(list);

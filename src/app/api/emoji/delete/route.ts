@@ -24,11 +24,7 @@ export async function DELETE(request: Request) {
       return NextResponse.json({ error: 'Invalid image URL format' }, { status: 400 });
     }
 
-    console.log('🗑️ Deleting old emoji from UploadThing:', fileKey);
-
     await utapi.deleteFiles(fileKey);
-
-    console.log('✅ Old emoji deleted successfully');
 
     return NextResponse.json({ message: 'Image deleted successfully' });
   } catch (error) {

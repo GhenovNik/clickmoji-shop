@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { requireUser } from '@/lib/auth-guards';
 
-// GET /api/favorites - получить список избранных товаров пользователя
+// GET /api/favorites - list the current user's favorite products.
 export async function GET() {
   try {
     const guard = await requireUser();
@@ -27,7 +27,7 @@ export async function GET() {
         },
       },
       orderBy: {
-        usageCount: 'desc', // Сортировка по популярности
+        usageCount: 'desc',
       },
     });
 
@@ -38,7 +38,7 @@ export async function GET() {
   }
 }
 
-// POST /api/favorites - добавить товар в избранное
+// POST /api/favorites - add a product to favorites.
 export async function POST(request: Request) {
   try {
     const guard = await requireUser();
@@ -51,7 +51,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Product ID is required' }, { status: 400 });
     }
 
-    // Проверяем существует ли продукт
+    // Reject references to products that no longer exist.
     const product = await prisma.product.findUnique({
       where: { id: productId },
     });
@@ -60,7 +60,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Product not found' }, { status: 404 });
     }
 
-    // Добавляем в избранное или увеличиваем счетчик если уже есть
+    // Add the favorite or increment its usage counter.
     const favorite = await prisma.favorite.upsert({
       where: {
         userId_productId: {
@@ -100,7 +100,7 @@ export async function POST(request: Request) {
   }
 }
 
-// DELETE /api/favorites - удалить товар из избранного
+// DELETE /api/favorites - remove a product from favorites.
 export async function DELETE(request: Request) {
   try {
     const guard = await requireUser();

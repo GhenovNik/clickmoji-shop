@@ -1,110 +1,45 @@
-# Скрипт очистки неиспользуемых изображений
+# UploadThing Image Cleanup
 
-## Назначение
+`scripts/db-files.ts` compares UploadThing storage with category and product image references in
+PostgreSQL.
 
-Скрипт находит и удаляет неиспользуемые изображения emoji из UploadThing хранилища.
+## Safe preview
 
-## Как работает
-
-1. **Сканирует БД** - получает все используемые `imageUrl` из:
-   - `Category.imageUrl` (кастомные emoji категорий)
-   - `Product.imageUrl` (кастомные emoji продуктов)
-
-2. **Получает список файлов** из UploadThing
-
-3. **Находит неиспользуемые** - сравнивает файлы в хранилище с файлами в БД
-
-4. **Удаляет лишнее** - удаляет неиспользуемые файлы пакетами по 10 штук
-
-## Использование
-
-### Безопасный просмотр (рекомендуется сначала)
+Always inspect a dry run first:
 
 ```bash
-npm run cleanup-images:dry
+npm run db:files:dry
 ```
 
-Показывает:
+The command lists unused files and the estimated storage that would be reclaimed. It does not
+delete data.
 
-- Список файлов которые будут удалены
-- Размер каждого файла
-- Общий размер освобождаемого места
-- **НЕ удаляет файлы**
+## Delete unused images
 
-### Реальная очистка
+After reviewing the dry-run output:
 
 ```bash
-npm run cleanup-images
+npm run db:files
 ```
 
-⚠️ **Внимание**: Удаляет файлы без возможности восстановления!
+Deletion is permanent. Confirm that `DATABASE_URL` and `UPLOADTHING_TOKEN` point to the intended
+environment before running the command.
 
-## Пример вывода
+## Orphan cleanup command
 
-```
-🔍 Running in DRY-RUN mode (no files will be deleted)
+The lower-level command checks all stored files, waits five seconds, and permanently removes files
+that are not referenced by a category or product:
 
-📊 Fetching used images from database...
-✅ Found 15 images in use
-   - Categories: 3
-   - Products: 12
-
-🔑 Extracted 15 file keys from URLs
-
-☁️  Fetching files from UploadThing...
-✅ Found 25 files in UploadThing
-
-🗑️  Found 10 unused files:
-
-   1. custom-emoji-apple.png
-      Key: abc123def456
-      Size: 45.67 KB
-      Uploaded: 08.01.2026
-
-   2. custom-emoji-banana.png
-      Key: xyz789uvw012
-      Size: 52.34 KB
-      Uploaded: 07.01.2026
-
-   ...
-
-📦 Total size to free: 0.48 MB
-
-ℹ️  DRY-RUN: Files that WOULD be deleted:
-
-   - Would delete: 10 files
-   - Would free: 0.48 MB
-   - Remaining in use: 15 files
-
-💡 Run without --dry-run to actually delete these files
-   Command: npm run cleanup-images
+```bash
+npx tsx scripts/db-files.ts cleanup-orphaned-files
 ```
 
-## Когда использовать
+Prefer `cleanup-unused-images --dry-run` for routine maintenance. The orphan command currently has no
+dry-run mode and should be treated as an operator-only recovery tool.
 
-- После тестирования AI генерации emoji (до реализации новой логики)
-- Периодическая очистка хранилища
-- Перед миграцией на другое хранилище
-- Для экономии места в UploadThing
+## Scope
 
-## Безопасность
-
-✅ **Безопасно**:
-
-- Проверяет все используемые файлы в БД
-- Удаляет только неиспользуемые
-- Удаление пакетами с обработкой ошибок
-- Режим dry-run для предпросмотра
-
-❌ **НЕ трогает**:
-
-- Файлы используемые в категориях
-- Файлы используемые в продуктах
-- Unicode emoji (они не хранятся в UploadThing)
-
-## Технические детали
-
-- **Пакетное удаление**: по 10 файлов за раз
-- **Обработка ошибок**: продолжает работу если один пакет упал
-- **Формат URL**: `https://utfs.io/f/{fileKey}`
-- **API**: использует `UTApi` из `uploadthing/server`
+- Referenced `Category.imageUrl` files are preserved.
+- Referenced `Product.imageUrl` files are preserved.
+- Unicode emoji are not stored in UploadThing and are unaffected.
+- User avatars are not part of the current application upload surface.

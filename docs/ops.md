@@ -4,6 +4,7 @@
 
 ```env
 DATABASE_URL="postgresql://user:password@localhost:5432/clickmoji_shop"
+NEXT_PUBLIC_APP_URL="http://localhost:3000"
 
 # NextAuth v4
 NEXTAUTH_URL="http://localhost:3000"
@@ -25,7 +26,7 @@ UPSTASH_REDIS_REST_TOKEN="your-upstash-rest-token"
 UPLOADTHING_TOKEN="your-uploadthing-token"
 
 # AI Integration
-AI_PROVIDER="gemini" # or "openai"
+AI_PROVIDER="gemini" # or "gpt-image"
 GOOGLE_GENAI_API_KEY="your-google-api-key"
 OPENAI_API_KEY="your-openai-api-key"
 ```
@@ -48,14 +49,14 @@ OPENAI_API_KEY="your-openai-api-key"
 
 ## Database
 
-- Push changes (local dev): `npx prisma db push` (or `npx prisma migrate dev` if using migrations)
+- Create and apply local migrations: `npx prisma migrate dev`
 - Deploy migrations (prod): `npx prisma migrate deploy`
 - Seed data: `npx prisma db seed`
 - Backup DB (to `backups/*.dump`): `npm run db:backup`
 - Restore DB (latest backup): `npm run db:restore`
 - Restore DB (specific file): `npm run db:restore -- clickmoji-YYYYMMDD-HHMMSS.dump`
-- Auto-backup (GitHub Actions): `.github/workflows/db-backup.yml` (daily + manual)
-- Required GitHub secret for auto-backup: `PROD_DATABASE_URL`
+- Production backups must be encrypted, access-controlled, monitored, and restore-tested.
+- Do not use ordinary GitHub Actions artifacts as the long-term production backup store.
 
 ## Scripts
 
@@ -87,7 +88,8 @@ Execute using `tsx`:
 
 - Default target: Vercel
 - Ensure all environment variables are set per environment
-- Run `prisma migrate deploy` and `prisma db seed` on first deploy
+- Run `prisma migrate deploy` before deploying application code that depends on a migration.
+- Seed only new, empty environments; do not seed production automatically.
 
 ## Branching and release flow
 
@@ -102,3 +104,5 @@ Execute using `tsx`:
 - Admin access enforced by role checks
 - API role checks centralized in `src/lib/auth-guards.ts` (use `requireAdmin`/`requireUser`)
 - Keep secrets out of `NEXT_PUBLIC_*`
+- `NEXT_PUBLIC_APP_URL` is intentionally public and must contain only the canonical site URL.
+- Production rate limiting should use Upstash rather than the per-process memory fallback.

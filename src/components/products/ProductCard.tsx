@@ -1,5 +1,6 @@
 ﻿'use client';
 
+import Image from 'next/image';
 import type { Product } from '@/hooks/useProductSelection';
 
 interface ProductCardProps {
@@ -31,6 +32,7 @@ export default function ProductCard({
   return (
     <div className="relative h-full">
       <button
+        data-testid="product-card"
         onClick={() => onToggle(product)}
         className={`
           w-full h-[126px] bg-white rounded-2xl p-3 shadow-md transition-all
@@ -40,7 +42,13 @@ export default function ProductCard({
         <div className="text-center">
           <div className="mx-auto mb-1 h-14 w-14 flex items-center justify-center">
             {product.isCustom && product.imageUrl ? (
-              <img src={product.imageUrl} alt={product.name} className="h-14 w-14 object-contain" />
+              <Image
+                src={product.imageUrl}
+                alt={product.name}
+                width={56}
+                height={56}
+                className="h-14 w-14 object-contain"
+              />
             ) : (
               <span className="text-4xl leading-none">{product.emoji}</span>
             )}

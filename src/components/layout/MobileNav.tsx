@@ -2,18 +2,26 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { ShoppingCart, History, Star, Grid } from 'lucide-react';
+import { useSession } from 'next-auth/react';
+import { ShoppingCart, History, Star, Grid, LogIn } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
-const navItems = [
+const authenticatedNavItems = [
   { href: '/lists', label: 'Списки', icon: ShoppingCart, emoji: '🛒' },
   { href: '/categories', label: 'Категории', icon: Grid, emoji: '📁' },
   { href: '/categories/favorites', label: 'Избранное', icon: Star, emoji: '⭐' },
   { href: '/history', label: 'История', icon: History, emoji: '📜' },
 ];
 
+const anonymousNavItems = [
+  { href: '/categories', label: 'Каталог', icon: Grid, emoji: '📁' },
+  { href: '/login', label: 'Войти', icon: LogIn, emoji: '🔐' },
+];
+
 export default function MobileNav() {
   const pathname = usePathname();
+  const { data: session } = useSession();
+  const navItems = session?.user ? authenticatedNavItems : anonymousNavItems;
 
   // Don't show nav on login/register pages
   if (['/login', '/register', '/forgot-password', '/reset-password'].includes(pathname)) {

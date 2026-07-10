@@ -1,5 +1,6 @@
 'use client';
 
+import Image from 'next/image';
 import type { FavoriteProduct } from '@/hooks/useFavorites';
 
 interface FavoriteCardProps {
@@ -31,9 +32,11 @@ export default function FavoriteCard({
       >
         <div className="text-center">
           {favorite.product.isCustom && favorite.product.imageUrl ? (
-            <img
+            <Image
               src={favorite.product.imageUrl}
               alt={favorite.product.name}
+              width={64}
+              height={64}
               className="w-16 h-16 object-contain mx-auto mb-2"
             />
           ) : (

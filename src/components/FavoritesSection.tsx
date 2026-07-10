@@ -1,8 +1,9 @@
 'use client';
 
+import Image from 'next/image';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useSession } from 'next-auth/react';
-import { useShoppingList } from '@/store/shopping-list';
+import { listsQueryKey, useActiveList } from '@/hooks/useListsQuery';
 
 type FavoriteProduct = {
   id: string;
@@ -48,9 +49,25 @@ const removeFavoriteAPI = async (productId: string) => {
   return res.json();
 };
 
+const addFavoriteToListAPI = async ({
+  listId,
+  productId,
+}: {
+  listId: string;
+  productId: string;
+}) => {
+  const res = await fetch(`/api/lists/${listId}/items`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ items: [{ productId }] }),
+  });
+  if (!res.ok) throw new Error('Failed to add favorite to list');
+  return res.json();
+};
+
 export default function FavoritesSection() {
   const { data: session } = useSession();
-  const addItems = useShoppingList((state) => state.addItems);
+  const { activeListId } = useActiveList();
   const queryClient = useQueryClient();
 
   const { data: favorites = [], isLoading: loading } = useQuery({
@@ -89,20 +106,29 @@ export default function FavoritesSection() {
     },
   });
 
+  const addToListMutation = useMutation({
+    mutationFn: addFavoriteToListAPI,
+    onSuccess: (_, variables) => {
+      queryClient.invalidateQueries({ queryKey: listsQueryKey });
+      queryClient.invalidateQueries({ queryKey: ['list', variables.listId] });
+    },
+  });
+
   const handleAddToList = async (favorite: FavoriteProduct) => {
-    addItems([
-      {
-        productId: favorite.product.id,
-        name: favorite.product.name,
-        emoji: favorite.product.emoji,
-        categoryName: favorite.product.category.name,
-      },
-    ]);
+    if (!activeListId) {
+      alert('Сначала выберите список покупок');
+      return;
+    }
 
     try {
+      await addToListMutation.mutateAsync({
+        listId: activeListId,
+        productId: favorite.product.id,
+      });
       await updateUsageMutation.mutateAsync(favorite.product.id);
     } catch (error) {
-      console.error('Error updating favorite usage count:', error);
+      console.error('Error adding favorite to list:', error);
+      alert('Ошибка при добавлении товара');
     }
   };
 
@@ -156,9 +182,11 @@ export default function FavoritesSection() {
               title={favorite.product.name}
             >
               {favorite.product.isCustom && favorite.product.imageUrl ? (
-                <img
+                <Image
                   src={favorite.product.imageUrl}
                   alt={favorite.product.name}
+                  width={64}
+                  height={64}
                   className="w-12 h-12 sm:w-16 sm:h-16 object-contain mx-auto"
                 />
               ) : (
@@ -166,7 +194,7 @@ export default function FavoritesSection() {
               )}
             </button>
 
-            {/* Remove button - показывается при наведении */}
+            {/* Reveal the remove action on hover. */}
             <button
               onClick={() => handleRemoveFromFavorites(favorite.product.id)}
               className="absolute -top-2 -right-2 bg-red-500 hover:bg-red-600 text-white rounded-full w-6 h-6 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"

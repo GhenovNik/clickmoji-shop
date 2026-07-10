@@ -18,7 +18,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'newCategoryId is required' }, { status: 400 });
     }
 
-    // Проверяем, что целевая категория существует
+    // Reject moves to categories that no longer exist.
     const targetCategory = await prisma.category.findUnique({
       where: { id: newCategoryId },
     });
@@ -27,7 +27,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Target category not found' }, { status: 404 });
     }
 
-    // Массово обновляем категорию для выбранных продуктов
+    // Move all selected products in one database operation.
     const result = await prisma.product.updateMany({
       where: {
         id: {

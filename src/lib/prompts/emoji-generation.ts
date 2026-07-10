@@ -8,6 +8,20 @@
  * @param description - Optional extra context to improve generation quality
  * @returns The formatted prompt string for image generation
  */
+export const EMOJI_GENERATION_PROMPT_VERSION = 'emoji-image-v1';
+
+function normalizeCachePart(value: string): string {
+  return value.trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
+export function getEmojiGenerationCacheKey(productName: string, description?: string): string {
+  return [
+    EMOJI_GENERATION_PROMPT_VERSION,
+    normalizeCachePart(productName),
+    normalizeCachePart(description || ''),
+  ].join(':');
+}
+
 export function getEmojiGenerationPrompt(productName: string, description?: string): string {
   const normalizedDescription = description?.trim();
   const descriptionLine = normalizedDescription

@@ -41,7 +41,6 @@ export async function PUT(
         if (oldFileKey) {
           try {
             await utapi.deleteFiles(oldFileKey);
-            console.log('🗑️ Deleted old category image:', oldFileKey);
           } catch (error) {
             console.error('Failed to delete old image from UploadThing:', error);
           }
@@ -49,16 +48,16 @@ export async function PUT(
       }
     }
 
-    // Если меняется order, нужно обработать конфликты с unique constraint
+    // Resolve position conflicts before updating the unique order field.
     if (order !== undefined) {
       const currentCategory = await prisma.category.findUnique({
         where: { id: categoryId },
       });
 
       if (currentCategory && currentCategory.order !== order) {
-        // Используем транзакцию для атомарного обмена порядков
+        // Swap category positions atomically.
         await prisma.$transaction(async (tx) => {
-          // Проверяем, занят ли новый order другой категорией
+          // Find the category currently occupying the requested position.
           const conflictingCategory = await tx.category.findFirst({
             where: {
               order,
@@ -67,20 +66,19 @@ export async function PUT(
           });
 
           if (conflictingCategory) {
-            // Swap порядков: меняем местами
-            // 1. Временно устанавливаем отрицательное значение для текущей категории
+            // Use a temporary negative value to avoid the unique constraint during the swap.
             await tx.category.update({
               where: { id: categoryId },
               data: { order: -1 },
             });
 
-            // 2. Устанавливаем старый order текущей категории для конфликтующей
+            // Move the conflicting category to the previous position.
             await tx.category.update({
               where: { id: conflictingCategory.id },
               data: { order: currentCategory.order },
             });
 
-            // 3. Устанавливаем новый order для текущей категории
+            // Move the current category into the requested position.
             await tx.category.update({
               where: { id: categoryId },
               data: { order },
@@ -136,7 +134,6 @@ export async function DELETE(
       if (fileKey) {
         try {
           await utapi.deleteFiles(fileKey);
-          console.log(`🗑️ Deleted image for category "${category.name}":`, fileKey);
         } catch (error) {
           console.error('Failed to delete image from UploadThing:', error);
         }

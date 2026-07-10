@@ -24,28 +24,39 @@ This roadmap reflects the current codebase and highlights what is planned next.
 - History persistence in DB with restore/delete flows
 - Admin UI for categories/products/users
 - AI emoji generation, bulk import, smart create
+- AI service hardening: dedicated service modules, rate limits, prompt versions, and cache-key metadata
 - Product variants in API and UI (admin + selection)
 - UploadThing integration
 - PWA baseline (manifest, service worker registration, offline fallback page)
+- Security, public-catalog, active-list, client-state, AI-service, image-performance,
+  documentation, and deterministic E2E remediation program
+- UploadThing v7 retained with a compatible transitive security override
 
 ## Next
 
-### AI hardening (priority order)
+### Audit remediation follow-through
 
-1. Rate limiting for AI endpoints (`/api/emoji/*`, `/api/products/*`, `/api/lists/import-text`)
-2. Caching by normalized product name + prompt version
-3. Prompt versioning for reproducibility and safer rollbacks
+- Convert remaining admin-only raw image previews to `next/image` or explicitly suppress the lint
+  warning with rationale.
+
+### Security and operations
+
+- Move production database backups from GitHub Actions artifacts to encrypted, access-controlled
+  storage and add restore verification
+- Add a tested Content Security Policy after the locale and third-party asset boundaries stabilize
+- Enable private vulnerability reporting and choose the repository license
 
 ### Product model evolution
 
 - Optional uniqueness rules for base items when variants are absent
-- Database-level guarantee for one active list per user (partial unique index)
 
 ### Experience
 
+- Add English-first localization with complete English and Russian catalogs
 - Expand offline capabilities beyond static shell (API/data strategy, retry queue)
 - Add installability and update UX for PWA
 - Tighten loading/error/empty states on edge flows
+- Replace remaining `alert`/`confirm` flows with app-level toasts/dialogs
 
 ## Post-MVP
 

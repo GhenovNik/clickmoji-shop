@@ -1,5 +1,6 @@
 'use client';
 
+import Image from 'next/image';
 import { useState } from 'react';
 
 interface Product {
@@ -110,10 +111,13 @@ export default function ProductMoveModal({
                 >
                   <div className="text-center">
                     {product.isCustom && product.imageUrl ? (
-                      <img
+                      <Image
                         src={product.imageUrl}
                         alt={product.name}
+                        width={48}
+                        height={48}
                         className="w-12 h-12 object-contain mx-auto mb-2"
+                        unoptimized
                       />
                     ) : (
                       <div className="text-3xl mb-2">{product.emoji}</div>

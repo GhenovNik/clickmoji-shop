@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { requireUser } from '@/lib/auth-guards';
 
-// PUT /api/lists/[listId]/items/[itemId] - обновить товар
+// PUT /api/lists/[listId]/items/[itemId] - update a list item.
 export async function PUT(
   request: Request,
   { params }: { params: Promise<{ listId: string; itemId: string }> }
@@ -14,7 +14,7 @@ export async function PUT(
 
     const { listId, itemId } = await params;
 
-    // Проверяем что список принадлежит пользователю
+    // Scope the mutation to a list owned by the current user.
     const list = await prisma.list.findUnique({
       where: {
         id: listId,
@@ -57,7 +57,7 @@ export async function PUT(
   }
 }
 
-// DELETE /api/lists/[listId]/items/[itemId] - удалить товар
+// DELETE /api/lists/[listId]/items/[itemId] - delete a list item.
 export async function DELETE(
   request: Request,
   { params }: { params: Promise<{ listId: string; itemId: string }> }
@@ -69,7 +69,7 @@ export async function DELETE(
 
     const { listId, itemId } = await params;
 
-    // Проверяем что список принадлежит пользователю
+    // Scope the mutation to a list owned by the current user.
     const list = await prisma.list.findUnique({
       where: {
         id: listId,

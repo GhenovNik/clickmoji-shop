@@ -1,9 +1,11 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
+import Image from 'next/image';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { useLists } from '@/store/lists';
 import { useRouter } from 'next/navigation';
+import { useSession } from 'next-auth/react';
+import { listsQueryKey, useActiveList } from '@/hooks/useListsQuery';
 
 type SearchProduct = {
   id: string;
@@ -65,9 +67,10 @@ export default function ProductSearch() {
   const [isCreating, setIsCreating] = useState(false);
   const [selectedVariants, setSelectedVariants] = useState<Record<string, string | null>>({});
   const searchRef = useRef<HTMLDivElement>(null);
-  const { activeListId, setLists } = useLists();
+  const { activeListId } = useActiveList();
   const router = useRouter();
   const queryClient = useQueryClient();
+  const { data: session } = useSession();
 
   // Debounce query
   useEffect(() => {
@@ -116,24 +119,19 @@ export default function ProductSearch() {
       productId: string;
       variantId?: string | null;
     }) => addProductToListAPI(listId, productId, variantId),
-    onSuccess: async (_, variables) => {
-      // Refresh lists
-      const listsResponse = await fetch('/api/lists');
-      if (listsResponse.ok) {
-        const listsData = await listsResponse.json();
-        setLists(listsData);
-      }
-
-      // Invalidate list query to refresh item count
+    onSuccess: (_, variables) => {
+      queryClient.invalidateQueries({ queryKey: listsQueryKey });
       queryClient.invalidateQueries({ queryKey: ['list', variables.listId] });
     },
   });
 
   const handleAddProduct = async (product: SearchProduct) => {
-    // Get fresh activeListId at click time
-    const currentActiveListId = useLists.getState().activeListId;
+    if (!session?.user) {
+      router.push('/login');
+      return;
+    }
 
-    if (!currentActiveListId) {
+    if (!activeListId) {
       alert('Сначала выберите список покупок');
       return;
     }
@@ -142,7 +140,7 @@ export default function ProductSearch() {
       const variantId = selectedVariants[product.id] || product.variants?.[0]?.id || null;
 
       const result = await addProductMutation.mutateAsync({
-        listId: currentActiveListId,
+        listId: activeListId,
         productId: product.id,
         variantId,
       });
@@ -158,7 +156,7 @@ export default function ProductSearch() {
       setSelectedVariants({});
 
       // Redirect to the list page
-      router.push(`/lists/${currentActiveListId}`);
+      router.push(`/lists/${activeListId}`);
     } catch (error) {
       console.error('Error adding product:', error);
       alert('Ошибка при добавлении товара');
@@ -166,9 +164,12 @@ export default function ProductSearch() {
   };
 
   const handleCreateWithAI = async () => {
-    const currentActiveListId = useLists.getState().activeListId;
+    if (!session?.user) {
+      router.push('/login');
+      return;
+    }
 
-    if (!currentActiveListId) {
+    if (!activeListId) {
       alert('Сначала выберите список покупок');
       return;
     }
@@ -184,8 +185,8 @@ export default function ProductSearch() {
       const createResult = await createSmartProductAPI(query.trim());
 
       // Add product to list
-      const addResult = await addProductMutation.mutateAsync({
-        listId: currentActiveListId,
+      await addProductMutation.mutateAsync({
+        listId: activeListId,
         productId: createResult.product.id,
       });
 
@@ -208,7 +209,7 @@ export default function ProductSearch() {
       setDebouncedQuery('');
       setIsOpen(false);
       setSelectedVariants({});
-      router.push(`/lists/${currentActiveListId}`);
+      router.push(`/lists/${activeListId}`);
     } catch (error) {
       console.error('Error creating product with AI:', error);
       alert(
@@ -276,9 +277,11 @@ export default function ProductSearch() {
                   className="w-full px-4 py-3 hover:bg-gray-100 flex items-center gap-3 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   {product.isCustom && product.imageUrl ? (
-                    <img
+                    <Image
                       src={product.imageUrl}
                       alt={product.name}
+                      width={48}
+                      height={48}
                       className="w-12 h-12 object-contain"
                     />
                   ) : (
@@ -288,9 +291,11 @@ export default function ProductSearch() {
                     <p className="font-medium text-gray-900">{product.name}</p>
                     <p className="text-sm text-gray-500 flex items-center gap-1">
                       {product.category.isCustom && product.category.imageUrl ? (
-                        <img
+                        <Image
                           src={product.category.imageUrl}
                           alt=""
+                          width={20}
+                          height={20}
                           className="w-5 h-5 object-contain inline-block"
                         />
                       ) : (

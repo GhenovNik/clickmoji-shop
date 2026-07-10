@@ -9,10 +9,19 @@ on:
     branches:
       - master
       - develop
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   validate:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     env:
       DATABASE_URL: postgresql://postgres:postgres@localhost:5432/clickmoji_ci
       AUTH_SECRET: ci-auth-secret
@@ -32,6 +41,12 @@ jobs:
       - name: Install
         run: npm ci
 
+      - name: Formatting
+        run: npm run format:check
+
+      - name: Dependency audit
+        run: npm run audit:all
+
       - name: Typecheck
         run: npm run typecheck
 
@@ -43,6 +58,12 @@ jobs:
 
       - name: Build
         run: npm run build
+
+      - name: Install Playwright browser
+        run: npx playwright install --with-deps chromium
+
+      - name: E2E smoke
+        run: npm run test:e2e:smoke
 
   ci:
     name: CI

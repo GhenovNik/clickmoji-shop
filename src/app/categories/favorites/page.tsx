@@ -81,7 +81,12 @@ function FavoritesPageContent() {
         </div>
       </div>
 
-      <ProductSelectionBar count={selectedProducts.size} adding={adding} onAddToList={addToList} />
+      <ProductSelectionBar
+        count={selectedProducts.size}
+        adding={adding}
+        isAuthenticated={true}
+        onAddToList={addToList}
+      />
     </div>
   );
 }

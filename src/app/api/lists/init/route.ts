@@ -2,14 +2,14 @@ import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { requireUser } from '@/lib/auth-guards';
 
-// POST /api/lists/init - создать базовые списки если их нет
+// POST /api/lists/init - create starter lists when the account has none.
 export async function POST() {
   try {
     const guard = await requireUser();
     if (guard instanceof Response) return guard;
     const { session } = guard;
 
-    // Проверяем есть ли уже списки
+    // Do not duplicate lists for initialized accounts.
     const existingLists = await prisma.list.findMany({
       where: {
         userId: session.user.id,
@@ -20,7 +20,7 @@ export async function POST() {
       return NextResponse.json({ message: 'Lists already exist' });
     }
 
-    // Создаем базовые списки
+    // Create the starter lists.
     const defaultLists = [
       { name: 'На неделю', isActive: true },
       { name: 'Для вечеринки', isActive: false },

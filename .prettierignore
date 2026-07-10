@@ -3,6 +3,10 @@ out
 build
 dist
 node_modules
+coverage
+playwright-report
+test-results
+backups
 *.config.js
 *.config.ts
 *.config.mjs

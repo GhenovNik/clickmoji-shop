@@ -3,6 +3,7 @@
 import { Suspense, useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import Link from 'next/link';
+import Image from 'next/image';
 import { useSession } from 'next-auth/react';
 import { useSearchParams } from 'next/navigation';
 import { useLists } from '@/store/lists';
@@ -98,9 +99,11 @@ function CategoriesPageContent() {
                     <div className="text-center h-full flex flex-col">
                       <div className="h-28 flex items-center justify-center">
                         {category.isCustom && category.imageUrl ? (
-                          <img
+                          <Image
                             src={category.imageUrl}
                             alt={category.name}
+                            width={96}
+                            height={96}
                             className="max-h-24 max-w-24 object-contain"
                           />
                         ) : (

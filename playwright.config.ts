@@ -1,5 +1,7 @@
 import { defineConfig, devices } from '@playwright/test';
 
+const chromiumChannel = process.env.PLAYWRIGHT_CHROMIUM_CHANNEL;
+
 export default defineConfig({
   testDir: './tests/e2e',
   fullyParallel: true,
@@ -15,7 +17,10 @@ export default defineConfig({
   projects: [
     {
       name: 'chromium',
-      use: { ...devices['Desktop Chrome'] },
+      use: {
+        ...devices['Desktop Chrome'],
+        ...(chromiumChannel ? { channel: chromiumChannel } : {}),
+      },
     },
     {
       name: 'Mobile Chrome',
@@ -24,7 +29,8 @@ export default defineConfig({
   ],
 
   webServer: {
-    command: 'npm run build && npm run start',
+    command:
+      'npm run build && PLAYWRIGHT_AUTH_BYPASS=1 PLAYWRIGHT_AUTH_BYPASS_TOKEN=e2e-auth-bypass npm run start',
     url: 'http://localhost:3000',
     reuseExistingServer: !process.env.CI,
   },

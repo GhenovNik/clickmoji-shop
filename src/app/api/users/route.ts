@@ -36,11 +36,11 @@ export async function GET() {
       },
     });
 
-    // Добавляем подсчет завершенных сессий
+    // Include the number of completed shopping sessions.
     const usersWithStats = users.map((user) => ({
       ...user,
       completedSessions: user.lists.filter((list) => !list.isActive).length,
-      lists: undefined, // Убираем из ответа
+      lists: undefined,
     }));
 
     return NextResponse.json(usersWithStats);
@@ -67,7 +67,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: passwordError }, { status: 400 });
     }
 
-    // Проверяем, существует ли уже пользователь с таким email
+    // Reject duplicate email addresses.
     const existingUser = await prisma.user.findUnique({
       where: { email },
     });
@@ -76,7 +76,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'User with this email already exists' }, { status: 400 });
     }
 
-    // Хешируем пароль
+    // Hash the password before persistence.
     const hashedPassword = await bcrypt.hash(password, 10);
 
     const user = await prisma.user.create({

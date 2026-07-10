@@ -1,16 +1,8 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { requireUser } from '@/lib/auth-guards';
-import { GoogleGenAI } from '@google/genai';
 import { checkRateLimit, rateLimitResponse } from '@/lib/auth-security';
-
-interface ParsedProduct {
-  nameRu: string;
-  nameEn: string;
-  categoryName: string;
-  emoji: string;
-  note?: string;
-}
+import { parseShoppingListText, type ParsedShoppingListProduct } from '@/lib/services/ai-products';
 
 export async function POST(request: Request) {
   try {
@@ -79,78 +71,15 @@ export async function POST(request: Request) {
       );
     }
 
-    // Initialize Gemini
-    const genAI = new GoogleGenAI({ apiKey });
-
-    // Create prompt for parsing shopping list
-    const categoriesStr = categories.map((c) => `${c.nameEn} (${c.name})`).join(', ');
-
-    const prompt = `You are a shopping list parser. Parse the following shopping list text into structured product data.
-
-Available categories: ${categoriesStr}
-
-Shopping list text:
-"""
-${text}
-"""
-
-Tasks:
-1. Extract each product from the text (handle various formats: bullet points, numbers, commas, newlines)
-2. For each product:
-   - Translate to Russian (nameRu) and English (nameEn)
-   - Assign to the most appropriate category
-   - Suggest a Unicode emoji
-   - Extract any notes/quantities (e.g., "2 kg", "red", "large") into a separate "note" field
-3. Handle common shopping list patterns:
-   - "Milk 2L" → nameRu: "Молоко", note: "2L"
-   - "Red apples" → nameRu: "Яблоки", note: "красные"
-   - "Bread (whole grain)" → nameRu: "Хлеб", note: "цельнозерновой"
-
-Rules:
-- Use exact category names from the list
-- Be precise with translations
-- Extract quantities and attributes into notes
-- Skip empty lines or non-product text
-- Combine duplicate products
-
-Respond ONLY with valid JSON array:
-[
-  {
-    "nameRu": "Молоко",
-    "nameEn": "Milk",
-    "categoryName": "Dairy",
-    "emoji": "🥛",
-    "note": "2L"
-  }
-]`;
-
-    console.log('🤖 Parsing shopping list with Gemini AI...');
-
-    const result = await genAI.models.generateContent({
-      model: 'gemini-2.5-flash',
-      contents: prompt,
+    const {
+      products: parsedProducts,
+      promptVersion,
+      model,
+    } = await parseShoppingListText({
+      apiKey,
+      text,
+      categories,
     });
-    const responseText = result.text;
-
-    if (!responseText) {
-      return NextResponse.json({ error: 'No response from AI' }, { status: 500 });
-    }
-
-    // Extract JSON from response
-    let jsonStr = responseText.trim();
-    if (jsonStr.startsWith('```json')) {
-      jsonStr = jsonStr
-        .replace(/```json\n?/g, '')
-        .replace(/```\n?/g, '')
-        .trim();
-    } else if (jsonStr.startsWith('```')) {
-      jsonStr = jsonStr.replace(/```\n?/g, '').trim();
-    }
-
-    // Clean control characters
-    jsonStr = jsonStr.replace(/[\x00-\x08\x0B-\x0C\x0E-\x1F\x7F]/g, ' ');
-
-    const parsedProducts: ParsedProduct[] = JSON.parse(jsonStr);
 
     if (!Array.isArray(parsedProducts) || parsedProducts.length === 0) {
       return NextResponse.json(
@@ -164,7 +93,7 @@ Respond ONLY with valid JSON array:
       added: [] as Array<{ name: string; category: string; note?: string }>,
       created: [] as Array<{ name: string; category: string; note?: string }>,
       skipped: [] as Array<{ name: string; reason: string }>,
-      failed: [] as Array<{ product: ParsedProduct; reason: string }>,
+      failed: [] as Array<{ product: ParsedShoppingListProduct; reason: string }>,
     };
 
     for (const product of parsedProducts) {
@@ -232,25 +161,14 @@ Respond ONLY with valid JSON array:
       }
     }
 
-    console.log('✅ List import completed:', {
-      added: results.added.length,
-      created: results.created.length,
-      skipped: results.skipped.length,
-      failed: results.failed.length,
-    });
-
     return NextResponse.json({
       message: `Import completed: ${results.added.length} items added, ${results.created.length} products created, ${results.skipped.length} skipped, ${results.failed.length} failed`,
+      promptVersion,
+      model,
       results,
     });
   } catch (error) {
     console.error('Error importing list:', error);
-    return NextResponse.json(
-      {
-        error: 'Failed to import list',
-        details: error instanceof Error ? error.message : 'Unknown error',
-      },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: 'Failed to import list' }, { status: 500 });
   }
 }

@@ -14,7 +14,7 @@ export async function GET(request: Request) {
     };
 
     if (!categoryId) {
-      // Если categoryId не указан, возвращаем все продукты
+      // Return the full visible catalog when no category is selected.
       const products = await prisma.product.findMany({
         where: accessFilter,
         include: {
@@ -73,7 +73,7 @@ export async function POST(request: Request) {
     const body = await request.json();
     const { name, nameEn, emoji, categoryId, isCustom, imageUrl, variants } = body;
 
-    // Валидация: emoji обязателен только если не используется кастомное изображение
+    // An emoji is required unless a custom image is supplied.
     if (!name || !nameEn || !categoryId) {
       return NextResponse.json(
         { error: 'Missing required fields: name, nameEn, categoryId' },

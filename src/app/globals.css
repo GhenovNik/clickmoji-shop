@@ -73,8 +73,10 @@
   }
 
   body {
-    @apply bg-background text-foreground font-body antialiased select-none;
+    @apply bg-background text-foreground font-body antialiased;
     line-height: 1.5;
+    user-select: text;
+    -webkit-user-select: text;
     -webkit-tap-highlight-color: transparent;
   }
 

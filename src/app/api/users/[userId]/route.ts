@@ -14,7 +14,7 @@ export async function PUT(request: Request, { params }: { params: Promise<{ user
     const body = await request.json();
     const { email, name, password, role, image } = body;
 
-    // Подготавливаем данные для обновления
+    // Build an explicit update payload from accepted fields.
     const updateData: {
       email?: string;
       name?: string | null;
@@ -24,7 +24,7 @@ export async function PUT(request: Request, { params }: { params: Promise<{ user
     } = {};
 
     if (email) {
-      // Проверяем, не занят ли email другим пользователем
+      // Ensure the email address is not used by another account.
       const existingUser = await prisma.user.findFirst({
         where: {
           email,
@@ -46,7 +46,7 @@ export async function PUT(request: Request, { params }: { params: Promise<{ user
     if (role !== undefined) updateData.role = role;
     if (image !== undefined) updateData.image = image;
 
-    // Если передан новый пароль, хешируем его
+    // Hash a replacement password when one is provided.
     if (password) {
       const passwordError = getPasswordValidationError(password);
       if (passwordError) {
@@ -88,7 +88,7 @@ export async function DELETE(
 
     const { userId } = await params;
 
-    // Проверяем, не удаляет ли админ сам себя
+    // Prevent administrators from deleting their own account.
     if (session.user.id === userId) {
       return NextResponse.json({ error: 'You cannot delete your own account' }, { status: 400 });
     }

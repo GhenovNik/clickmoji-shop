@@ -10,10 +10,10 @@ export function QueryProvider({ children }: { children: React.ReactNode }) {
       new QueryClient({
         defaultOptions: {
           queries: {
-            staleTime: 5 * 60 * 1000, // 5 минут - данные считаются свежими
-            gcTime: 10 * 60 * 1000, // 10 минут - кеш хранится в памяти
-            refetchOnWindowFocus: false, // Не перезапрашивать при фокусе окна
-            retry: 1, // Повторить 1 раз при ошибке
+            staleTime: 5 * 60 * 1000, // Keep fetched data fresh for five minutes.
+            gcTime: 10 * 60 * 1000, // Retain inactive queries for ten minutes.
+            refetchOnWindowFocus: false,
+            retry: 1,
           },
         },
       })

@@ -43,7 +43,6 @@ export async function PUT(
         if (oldFileKey) {
           try {
             await utapi.deleteFiles(oldFileKey);
-            console.log('🗑️ Deleted old product image:', oldFileKey);
           } catch (error) {
             console.error('Failed to delete old image from UploadThing:', error);
             // Continue anyway - DB update is more important
@@ -155,7 +154,6 @@ export async function DELETE(
       if (fileKey) {
         try {
           await utapi.deleteFiles(fileKey);
-          console.log(`🗑️ Deleted image for product "${product.name}":`, fileKey);
         } catch (error) {
           console.error('Failed to delete image from UploadThing:', error);
           // Don't fail the request - product is already deleted
