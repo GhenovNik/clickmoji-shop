@@ -1,5 +1,6 @@
 'use client';
 
+import Image from 'next/image';
 import { useState } from 'react';
 
 interface Product {
@@ -99,10 +100,13 @@ export default function ProductsTable({ products, onEdit, onDelete }: ProductsTa
                 >
                   <td className="px-4 py-4 align-top whitespace-nowrap">
                     {product.isCustom && product.imageUrl ? (
-                      <img
+                      <Image
                         src={product.imageUrl}
                         alt={product.name}
+                        width={48}
+                        height={48}
                         className="w-12 h-12 object-contain"
+                        unoptimized
                       />
                     ) : (
                       <span className="text-3xl">{product.emoji}</span>
@@ -117,10 +121,13 @@ export default function ProductsTable({ products, onEdit, onDelete }: ProductsTa
                   <td className="px-4 py-4 align-top text-sm text-gray-500 min-w-45">
                     <div className="flex items-center gap-2">
                       {product.category.isCustom && product.category.imageUrl ? (
-                        <img
+                        <Image
                           src={product.category.imageUrl}
                           alt={product.category.name}
+                          width={24}
+                          height={24}
                           className="w-6 h-6 object-contain"
+                          unoptimized
                         />
                       ) : (
                         <span>{product.category.emoji}</span>
@@ -162,10 +169,13 @@ export default function ProductsTable({ products, onEdit, onDelete }: ProductsTa
             <div className="flex items-start gap-4 mb-3">
               <div className="shrink-0">
                 {product.isCustom && product.imageUrl ? (
-                  <img
+                  <Image
                     src={product.imageUrl}
                     alt={product.name}
+                    width={64}
+                    height={64}
                     className="w-16 h-16 object-contain"
+                    unoptimized
                   />
                 ) : (
                   <span className="text-5xl">{product.emoji}</span>
@@ -178,10 +188,13 @@ export default function ProductsTable({ products, onEdit, onDelete }: ProductsTa
                 </div>
                 <div className="flex items-center gap-2 mt-1 text-sm text-gray-600">
                   {product.category.isCustom && product.category.imageUrl ? (
-                    <img
+                    <Image
                       src={product.category.imageUrl}
                       alt={product.category.name}
+                      width={20}
+                      height={20}
                       className="w-5 h-5 object-contain"
+                      unoptimized
                     />
                   ) : (
                     <span>{product.category.emoji}</span>

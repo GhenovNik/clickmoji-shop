@@ -1,19 +1,14 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { requireAdmin } from '@/lib/auth-guards';
-import { GoogleGenAI } from '@google/genai';
-
-interface ProcessedProduct {
-  nameRu: string;
-  nameEn: string;
-  categoryName: string;
-  emoji: string;
-}
+import { checkRateLimit, rateLimitResponse } from '@/lib/auth-security';
+import { processProductBatch, type ProcessedProduct } from '@/lib/services/ai-products';
 
 export async function POST(request: Request) {
   try {
     const guard = await requireAdmin();
     if (guard instanceof Response) return guard;
+    const { session } = guard;
 
     const body = await request.json();
     const { productNames } = body;
@@ -23,6 +18,15 @@ export async function POST(request: Request) {
         { error: 'productNames must be a non-empty array' },
         { status: 400 }
       );
+    }
+
+    const userLimit = await checkRateLimit({
+      key: `ai:bulk-import:${session.user.id}`,
+      limit: 10,
+      windowMs: 60 * 60 * 1000,
+    });
+    if (!userLimit.allowed) {
+      return rateLimitResponse(userLimit.resetAt);
     }
 
     // Check for API key
@@ -46,64 +50,15 @@ export async function POST(request: Request) {
       );
     }
 
-    // Initialize Gemini
-    const genAI = new GoogleGenAI({ apiKey });
-
-    // Create prompt for batch processing
-    const categoriesStr = categories.map((c) => `${c.nameEn} (${c.name})`).join(', ');
-
-    const prompt = `You are a grocery categorization assistant. Given a list of product names, translate them to Russian and English, assign them to the most appropriate category, and suggest a Unicode emoji if one exists.
-
-Available categories: ${categoriesStr}
-
-Rules:
-1. Translate each product name to both Russian (nameRu) and English (nameEn)
-2. Assign each product to the MOST appropriate category from the list above
-3. Suggest a single Unicode emoji that represents the product (e.g., 🍎 for apple)
-4. If NO suitable emoji exists, use an empty string ""
-5. Be precise with categories - use exact names from the list
-
-Input products:
-${productNames.map((name: string, i: number) => `${i + 1}. ${name}`).join('\n')}
-
-Respond ONLY with valid JSON array in this exact format:
-[
-  {
-    "nameRu": "Яблоко",
-    "nameEn": "Apple",
-    "categoryName": "Fruits",
-    "emoji": "🍎"
-  }
-]`;
-
-    console.log('🤖 Processing products with Gemini AI...');
-
-    const result = await genAI.models.generateContent({
-      model: 'gemini-2.5-flash',
-      contents: prompt,
+    const {
+      products: processedProducts,
+      promptVersion,
+      model,
+    } = await processProductBatch({
+      apiKey,
+      productNames,
+      categories,
     });
-    const responseText = result.text;
-
-    if (!responseText) {
-      return NextResponse.json({ error: 'No response from AI' }, { status: 500 });
-    }
-
-    // Extract JSON from response (handle markdown code blocks)
-    let jsonStr = responseText.trim();
-    if (jsonStr.startsWith('```json')) {
-      jsonStr = jsonStr
-        .replace(/```json\n?/g, '')
-        .replace(/```\n?/g, '')
-        .trim();
-    } else if (jsonStr.startsWith('```')) {
-      jsonStr = jsonStr.replace(/```\n?/g, '').trim();
-    }
-
-    // Clean control characters that might break JSON parsing
-    // Replace control characters (except \n, \r, \t) with space
-    jsonStr = jsonStr.replace(/[\x00-\x08\x0B-\x0C\x0E-\x1F\x7F]/g, ' ');
-
-    const processedProducts: ProcessedProduct[] = JSON.parse(jsonStr);
 
     // Match categories and insert products
     const results = {
@@ -176,16 +131,12 @@ Respond ONLY with valid JSON array in this exact format:
 
     return NextResponse.json({
       message: `Imported ${results.success.length} products, ${results.skipped.length} skipped (duplicates), ${results.failed.length} failed`,
+      promptVersion,
+      model,
       results,
     });
   } catch (error) {
     console.error('Error in bulk import:', error);
-    return NextResponse.json(
-      {
-        error: 'Failed to import products',
-        details: error instanceof Error ? error.message : 'Unknown error',
-      },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: 'Failed to import products' }, { status: 500 });
   }
 }

@@ -22,7 +22,7 @@ export default function UserForm({ user, onSubmit, onCancel }: UserFormProps) {
       setFormData({
         email: user.email,
         name: user.name || '',
-        password: '', // Не показываем текущий пароль
+        password: '', // Never expose the current password hash in the form.
         role: user.role,
       });
     } else {

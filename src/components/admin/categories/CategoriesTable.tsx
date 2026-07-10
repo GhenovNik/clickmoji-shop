@@ -1,5 +1,7 @@
 'use client';
 
+import Image from 'next/image';
+
 interface Category {
   id: string;
   name: string;
@@ -63,10 +65,13 @@ export default function CategoriesTable({
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap text-2xl">
                     {category.isCustom && category.imageUrl ? (
-                      <img
+                      <Image
                         src={category.imageUrl}
                         alt={category.name}
+                        width={48}
+                        height={48}
                         className="w-12 h-12 object-contain"
+                        unoptimized
                       />
                     ) : (
                       category.emoji
@@ -117,10 +122,13 @@ export default function CategoriesTable({
             <div className="flex items-start gap-4 mb-4">
               <div className="text-4xl flex-shrink-0">
                 {category.isCustom && category.imageUrl ? (
-                  <img
+                  <Image
                     src={category.imageUrl}
                     alt={category.name}
+                    width={48}
+                    height={48}
                     className="w-12 h-12 object-contain"
+                    unoptimized
                   />
                 ) : (
                   category.emoji

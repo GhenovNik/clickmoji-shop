@@ -4,7 +4,7 @@ import { auth } from '@/lib/auth';
 const f = createUploadthing();
 
 export const ourFileRouter = {
-  // Загрузка кастомных emoji для продуктов
+  // Custom product and category images are restricted to administrators.
   productImage: f({ image: { maxFileSize: '2MB', maxFileCount: 1 } })
     .middleware(async () => {
       const session = await auth();
@@ -15,27 +15,7 @@ export const ourFileRouter = {
 
       return { userId: session.user.id };
     })
-    .onUploadComplete(async ({ metadata, file }) => {
-      console.log('✅ Upload complete for userId:', metadata.userId);
-      console.log('file url', file.ufsUrl);
-      return { url: file.ufsUrl };
-    }),
-
-  // Загрузка аватаров пользователей
-  userAvatar: f({ image: { maxFileSize: '1MB', maxFileCount: 1 } })
-    .middleware(async () => {
-      const session = await auth();
-
-      if (!session) {
-        throw new Error('Unauthorized');
-      }
-
-      return { userId: session.user.id };
-    })
-    .onUploadComplete(async ({ metadata, file }) => {
-      console.log('Avatar upload complete for userId:', metadata.userId);
-      console.log('file url', file.ufsUrl);
-
+    .onUploadComplete(async ({ file }) => {
       return { url: file.ufsUrl };
     }),
 } satisfies FileRouter;

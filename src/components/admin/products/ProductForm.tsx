@@ -1,5 +1,6 @@
 'use client';
 
+import Image from 'next/image';
 import { useState, useRef, useEffect } from 'react';
 import { useUploadThing } from '@/lib/uploadthing';
 import EmojiPicker from '../shared/EmojiPicker';
@@ -195,10 +196,13 @@ export default function ProductForm({ product, categories, onSubmit, onCancel }:
                     return selectedCat ? (
                       <>
                         {selectedCat.isCustom && selectedCat.imageUrl ? (
-                          <img
+                          <Image
                             src={selectedCat.imageUrl}
                             alt=""
+                            width={24}
+                            height={24}
                             className="w-6 h-6 object-contain"
+                            unoptimized
                           />
                         ) : (
                           <span className="text-xl">{selectedCat.emoji}</span>
@@ -230,7 +234,14 @@ export default function ProductForm({ product, categories, onSubmit, onCancel }:
                   className="w-full px-4 py-2 hover:bg-gray-100 flex items-center gap-2 text-left transition-colors"
                 >
                   {cat.isCustom && cat.imageUrl ? (
-                    <img src={cat.imageUrl} alt={cat.name} className="w-6 h-6 object-contain" />
+                    <Image
+                      src={cat.imageUrl}
+                      alt={cat.name}
+                      width={24}
+                      height={24}
+                      className="w-6 h-6 object-contain"
+                      unoptimized
+                    />
                   ) : (
                     <span className="text-xl">{cat.emoji}</span>
                   )}
@@ -296,10 +307,13 @@ export default function ProductForm({ product, categories, onSubmit, onCancel }:
             {formData.imageUrl && !selectedFile && (
               <div className="mt-2">
                 <p className="text-sm text-gray-600">Текущее изображение:</p>
-                <img
+                <Image
                   src={formData.imageUrl}
                   alt="Current"
+                  width={64}
+                  height={64}
                   className="w-16 h-16 object-contain mt-1"
+                  unoptimized
                 />
               </div>
             )}

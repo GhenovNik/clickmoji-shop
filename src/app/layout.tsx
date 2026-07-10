@@ -21,9 +21,33 @@ const headingFont = Rubik({
 });
 
 export const metadata: Metadata = {
-  title: 'Clickmoji Shop - Emoji Shopping List',
-  description: 'Visual shopping list app using emoji instead of text',
+  metadataBase: new URL(process.env.NEXT_PUBLIC_APP_URL || 'https://clickmoji-shop.vercel.app'),
+  applicationName: 'Clickmoji Shop',
+  title: {
+    default: 'Clickmoji Shop - Visual Shopping Lists',
+    template: '%s | Clickmoji Shop',
+  },
+  description:
+    'A mobile-first shopping list app with emoji-based product selection and AI-assisted catalog tools.',
   manifest: '/manifest.json',
+  alternates: {
+    canonical: '/',
+  },
+  openGraph: {
+    type: 'website',
+    url: '/',
+    siteName: 'Clickmoji Shop',
+    title: 'Clickmoji Shop - Visual Shopping Lists',
+    description:
+      'Build and manage shopping lists with visual product selection, favorites, history, and AI-assisted catalog tools.',
+    locale: 'ru_RU',
+    alternateLocale: ['en_US'],
+  },
+  twitter: {
+    card: 'summary',
+    title: 'Clickmoji Shop - Visual Shopping Lists',
+    description: 'A mobile-first, emoji-first shopping list application.',
+  },
   icons: {
     icon: '/icon.svg',
   },
@@ -39,7 +63,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en">
+    <html lang="ru">
       <body
         className={`${bodyFont.variable} ${headingFont.variable} antialiased bg-background pb-20 sm:pb-0`}
       >

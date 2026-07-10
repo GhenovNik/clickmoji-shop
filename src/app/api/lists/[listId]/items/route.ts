@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { requireUser } from '@/lib/auth-guards';
 
-// POST /api/lists/[listId]/items - добавить товары в список
+// POST /api/lists/[listId]/items - add products to a shopping list.
 export async function POST(request: Request, { params }: { params: Promise<{ listId: string }> }) {
   try {
     const guard = await requireUser();
@@ -11,7 +11,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ lis
 
     const { listId } = await params;
 
-    // Проверяем что список принадлежит пользователю
+    // Scope every mutation to a list owned by the current user.
     const list = await prisma.list.findUnique({
       where: {
         id: listId,
@@ -25,20 +25,15 @@ export async function POST(request: Request, { params }: { params: Promise<{ lis
 
     const { items } = await request.json();
 
-    console.log('📥 Received items to add:', JSON.stringify(items, null, 2));
-
     if (!items || !Array.isArray(items) || items.length === 0) {
       return NextResponse.json({ error: 'Items array is required' }, { status: 400 });
     }
 
-    // Добавляем товары в список
-    // Теперь разрешаем дубликаты - можно добавлять один товар несколько раз с разными заметками
+    // Duplicate products are allowed when users need separate notes.
     const createdItems = [];
 
     for (const item of items) {
-      console.log('🔍 Adding item:', item);
-
-      // Проверяем, что productId существует
+      // Reject references to products that no longer exist.
       const productExists = await prisma.product.findUnique({
         where: { id: item.productId },
       });
@@ -80,7 +75,6 @@ export async function POST(request: Request, { params }: { params: Promise<{ lis
           },
         },
       });
-      console.log('✅ Item created:', createdItem.id);
       createdItems.push(createdItem);
     }
 

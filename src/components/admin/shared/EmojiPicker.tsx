@@ -59,7 +59,7 @@ export default function EmojiPicker({
 
     setGenerating(true);
     try {
-      // Step 1: Generate emoji (получаем base64 preview)
+      // Step 1: Generate a base64 preview without persisting it.
       const generateRes = await fetch('/api/emoji/generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

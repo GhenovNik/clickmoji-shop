@@ -13,7 +13,7 @@ import ImportListModal from '@/components/shopping/ImportListModal';
 
 export default function ShoppingListPage({ params }: { params: Promise<{ listId: string }> }) {
   const router = useRouter();
-  const { data: session } = useSession();
+  const { data: session, status } = useSession();
   const { setActiveList } = useLists();
   const { listId } = use(params);
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
@@ -22,6 +22,10 @@ export default function ShoppingListPage({ params }: { params: Promise<{ listId:
     useShoppingListItems(listId);
 
   useEffect(() => {
+    if (status === 'loading') {
+      return;
+    }
+
     if (!session?.user) {
       router.push('/login');
       return;
@@ -29,9 +33,9 @@ export default function ShoppingListPage({ params }: { params: Promise<{ listId:
 
     if (!listId) return;
     setActiveList(listId);
-  }, [session, router, listId, setActiveList]);
+  }, [session, status, router, listId, setActiveList]);
 
-  if (loading || !session?.user) {
+  if (status === 'loading' || loading || !session?.user) {
     return (
       <div className="min-h-screen flex items-center justify-center">
         <div className="text-2xl">Loading...</div>
@@ -42,7 +46,7 @@ export default function ShoppingListPage({ params }: { params: Promise<{ listId:
   const pendingItems = items.filter((item) => !item.isPurchased);
   const purchasedItems = items.filter((item) => item.isPurchased);
 
-  // Группировка товаров по категориям
+  // Group products by category for the shopping view.
   const groupItemsByCategory = (itemsToGroup: typeof items) => {
     const grouped = itemsToGroup.reduce(
       (acc, item) => {
@@ -65,7 +69,7 @@ export default function ShoppingListPage({ params }: { params: Promise<{ listId:
       >
     );
 
-    // Сортировка категорий по полю order
+    // Preserve the catalog-defined category order.
     return Object.values(grouped).sort((a, b) => a.category.order - b.category.order);
   };
 

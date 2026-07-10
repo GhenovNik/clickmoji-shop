@@ -1,6 +1,7 @@
 'use client';
 
 import Link from 'next/link';
+import Image from 'next/image';
 import { useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import { useSession } from 'next-auth/react';
@@ -206,9 +207,11 @@ export default function HistoryPage() {
                             className="flex items-center gap-3 p-3 rounded-lg bg-gray-50"
                           >
                             {item.isCustom && item.productImageUrl ? (
-                              <img
+                              <Image
                                 src={item.productImageUrl}
                                 alt={item.productName}
+                                width={32}
+                                height={32}
                                 className="w-8 h-8 object-contain"
                               />
                             ) : (

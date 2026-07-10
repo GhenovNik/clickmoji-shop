@@ -23,18 +23,19 @@ export default function Home() {
         {/* Action Buttons */}
         <div className="flex flex-col sm:flex-row flex-wrap items-center justify-center gap-3 sm:gap-4 pt-2 sm:pt-3">
           <Link
-            href="/lists"
+            href="/categories"
             className="w-full sm:w-auto bg-primary hover:bg-primary/90 text-primary-foreground px-6 py-3 rounded-2xl font-bold text-base sm:text-lg shadow-lg hover:shadow-xl hover:-translate-y-1 transition-all flex items-center justify-center gap-2 group"
           >
-            <span>Мои списки</span>
+            <ShoppingCart className="w-5 h-5" />
+            <span>Открыть каталог</span>
             <ArrowRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
           </Link>
           <Link
-            href="/categories"
+            href="/lists"
             className="w-full sm:w-auto bg-white hover:bg-gray-50 text-foreground border-2 border-border px-6 py-3 rounded-2xl font-bold text-base sm:text-lg transition-all flex items-center justify-center gap-2 hover:-translate-y-1 hover:shadow-md"
           >
             <ShoppingCart className="w-5 h-5 text-muted-foreground" />
-            <span>Каталог товаров</span>
+            <span>Мои списки</span>
           </Link>
           <Link
             href="/history"

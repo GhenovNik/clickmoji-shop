@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import Image from 'next/image';
 import type { Item } from '@/hooks/useShoppingListItems';
 import { cn } from '@/lib/utils';
 import { MoreHorizontal, X, MessageSquarePlus, Check } from 'lucide-react';
@@ -38,9 +39,11 @@ export default function ShoppingListItem({
           )}
         >
           {item.product.isCustom && item.product.imageUrl ? (
-            <img
+            <Image
               src={item.product.imageUrl}
               alt={item.product.name}
+              width={48}
+              height={48}
               className="w-12 h-12 object-contain"
             />
           ) : (

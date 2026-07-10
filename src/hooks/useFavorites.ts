@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useSession } from 'next-auth/react';
 import { useRouter } from 'next/navigation';
-import { useLists } from '@/store/lists';
+import { listsQueryKey, useActiveList } from './useListsQuery';
 
 export type FavoriteProduct = {
   id: string;
@@ -54,26 +54,17 @@ const addToListAPI = async (listId: string, items: { productId: string }[]) => {
 export function useFavorites() {
   const router = useRouter();
   const { data: session } = useSession();
-  const { lists, activeListId, setLists } = useLists();
+  const { activeListId } = useActiveList();
   const queryClient = useQueryClient();
 
   const [selectedProducts, setSelectedProducts] = useState<Set<string>>(new Set());
   const [adding, setAdding] = useState(false);
 
-  // Load lists if needed (maintain existing pattern with useLists store)
   useEffect(() => {
     if (!session?.user) {
       router.push('/login');
-      return;
     }
-
-    if (lists.length === 0) {
-      fetch('/api/lists')
-        .then((res) => res.json())
-        .then((data) => setLists(data))
-        .catch((error) => console.error('Error loading lists:', error));
-    }
-  }, [session, router, lists.length, setLists]);
+  }, [session, router]);
 
   // Query for favorites with React Query
   const { data: favorites = [], isLoading: loading } = useQuery({
@@ -144,15 +135,9 @@ export function useFavorites() {
       }));
 
     try {
-      const response = await addToListAPI(activeListId, selectedItems);
+      await addToListAPI(activeListId, selectedItems);
 
-      const listsResponse = await fetch('/api/lists');
-      if (listsResponse.ok) {
-        const listsData = await listsResponse.json();
-        setLists(listsData);
-      }
-
-      // Invalidate list cache to refresh items
+      queryClient.invalidateQueries({ queryKey: listsQueryKey });
       queryClient.invalidateQueries({ queryKey: ['list', activeListId] });
 
       if (activeListId) {

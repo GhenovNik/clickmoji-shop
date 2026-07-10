@@ -180,7 +180,7 @@ async function cleanupUnusedImages(isDryRun: boolean) {
     console.log(`   - Would free: ${totalSizeMB} MB`);
     console.log(`   - Remaining in use: ${usedFileKeys.size} files\n`);
     console.log('💡 Run without --dry-run to actually delete these files');
-    console.log('   Command: npm run cleanup-images');
+    console.log('   Command: npm run db:files');
   } else {
     console.log('🗑️  Deleting unused files...\n');
 

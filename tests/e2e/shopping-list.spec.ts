@@ -1,44 +1,54 @@
-import { test, expect } from '@playwright/test';
+import { expect, test } from '@playwright/test';
+import {
+  E2E_LIST_ID,
+  createShoppingItem,
+  e2eCategory,
+  e2eMilkProduct,
+  mockAuthenticatedShopping,
+} from './fixtures/auth';
 
-test.describe.skip('Shopping List - Product Addition (requires auth + seed)', () => {
-  test.beforeEach(async ({ page }) => {
-    await page.goto('/');
+test.describe('Shopping list smoke flows', () => {
+  test('adds product via search with authenticated fixture @smoke', async ({ page }) => {
+    const state = await mockAuthenticatedShopping(page, [createShoppingItem('seed-item')]);
+
+    await page.goto(`/lists/${E2E_LIST_ID}`);
+
+    await expect(page.getByRole('heading', { name: /E2E список/ })).toBeVisible();
+    await page.getByPlaceholder('Поиск товаров...').fill('молоко');
+
+    const result = page.getByRole('button', { name: /Молоко/ }).first();
+    await expect(result).toBeVisible();
+    const dialogPromise = page.waitForEvent('dialog');
+    await Promise.all([
+      result.click(),
+      dialogPromise.then(async (dialog) => {
+        expect(dialog.message()).toContain('Молоко');
+        expect(dialog.message()).toContain('добавлен');
+        await dialog.accept();
+      }),
+    ]);
+
+    await expect
+      .poll(() => state.addItemRequests)
+      .toEqual([{ items: [{ productId: e2eMilkProduct.id, variantId: null }] }]);
+    await expect.poll(() => state.items).toHaveLength(2);
   });
 
-  test('should add product via search', async ({ page }) => {
-    // Type in search box
-    await page.fill('input[placeholder*="Поиск"]', 'молоко');
+  test('adds product from category grid with authenticated fixture @smoke', async ({ page }) => {
+    const state = await mockAuthenticatedShopping(page);
 
-    // Wait for search results
-    await page.waitForSelector('text=Молоко', { timeout: 5000 });
+    await page.goto(`/categories/${e2eCategory.id}/products?listId=${E2E_LIST_ID}`);
 
-    // Click on product in search results
-    await page.click('text=Молоко');
+    const main = page.getByRole('main');
+    await expect(main.getByTestId('products-grid')).toBeVisible();
+    await main.getByTestId('product-card').first().click();
+    await page.getByRole('button', { name: 'Добавить', exact: true }).click();
 
-    // Verify success message appears
-    await expect(page.locator('text=добавлен в список')).toBeVisible();
-  });
-
-  test('should add product via categories', async ({ page }) => {
-    // Navigate to categories
-    await page.goto('/categories');
-
-    // Select a category (adjust selector based on your UI)
-    try {
-      await page.click('text=Молочные продукты >> visible=true');
-    } catch {
-      // Fallback if exact text not found
-      await page.locator('.category-card').first().click();
-    }
-
-    // Select a product
-    const firstProduct = page.locator('[data-testid="product-card"]').first();
-    await firstProduct.click();
-
-    // Click "Add to list" button
-    await page.click('button:has-text("Добавить в список")');
-
-    // Verify navigation to lists page
-    await expect(page).toHaveURL(/\/lists/);
+    await expect
+      .poll(() => state.addItemRequests)
+      .toEqual([{ items: [{ productId: e2eMilkProduct.id, variantId: null }] }]);
+    await expect.poll(() => state.items).toHaveLength(1);
+    await expect(page).toHaveURL(new RegExp(`/lists/${E2E_LIST_ID}$`));
+    await expect(page.getByText('Молоко')).toBeVisible();
   });
 });

@@ -49,7 +49,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: passwordError }, { status: 400 });
     }
 
-    // Проверка существующего пользователя
+    // Reject duplicate accounts before hashing the password.
     const existingUser = await prisma.user.findUnique({
       where: { email: normalizedEmail },
     });
@@ -61,12 +61,12 @@ export async function POST(request: Request) {
       );
     }
 
-    // Хеширование пароля
+    // Hash the password before persistence.
     const hashedPassword = await bcrypt.hash(password, 12);
 
     const requiresEmailVerification = isEmailVerificationRequired();
 
-    // Создание пользователя
+    // Create the user account.
     const user = await prisma.user.create({
       data: {
         email: normalizedEmail,
@@ -100,7 +100,7 @@ export async function POST(request: Request) {
       }
     }
 
-    // Создание базовых списков покупок для пользователя
+    // Create starter shopping lists for the new account.
     const defaultLists = [
       { name: 'Основной', isActive: true },
       { name: 'На выходные', isActive: false },

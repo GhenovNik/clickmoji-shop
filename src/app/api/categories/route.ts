@@ -47,15 +47,15 @@ export async function POST(request: Request) {
       );
     }
 
-    // Выполняем сдвиг и создание в транзакции
+    // Shift existing positions and create the category atomically.
     const category = await prisma.$transaction(async (tx) => {
-      // Проверяем, занят ли этот order
+      // Check whether the requested position is already occupied.
       const existingCategory = await tx.category.findFirst({
         where: { order },
       });
 
       if (existingCategory) {
-        // Сдвигаем все категории с order >= указанного на +1
+        // Shift categories at and after the requested position.
         await tx.$executeRaw`
           UPDATE categories
           SET "order" = "order" + 1
@@ -63,7 +63,7 @@ export async function POST(request: Request) {
         `;
       }
 
-      // Создаём новую категорию
+      // Create the category at its final position.
       return await tx.category.create({
         data: {
           name,

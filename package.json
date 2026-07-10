@@ -1,7 +1,21 @@
 {
   "name": "clickmoji-shop",
   "version": "0.1.0",
+  "description": "A mobile-first, emoji-first shopping list application.",
   "private": true,
+  "type": "module",
+  "homepage": "https://clickmoji-shop.vercel.app",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/GhenovNik/clickmoji-shop.git"
+  },
+  "bugs": {
+    "url": "https://github.com/GhenovNik/clickmoji-shop/issues"
+  },
+  "engines": {
+    "node": ">=22 <27",
+    "npm": ">=10"
+  },
   "scripts": {
     "dev": "prisma generate && next dev",
     "build": "prisma generate && next build",
@@ -9,19 +23,27 @@
     "postinstall": "prisma generate",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
-    "format": "prettier --write \"src/**/*.{ts,tsx,js,jsx,json,css}\"",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:ui": "vitest --ui",
     "test:coverage": "vitest --coverage",
     "test:e2e": "playwright test",
+    "test:e2e:smoke": "playwright test --grep @smoke --project=chromium",
     "test:e2e:ui": "playwright test --ui",
     "test:e2e:debug": "playwright test --debug",
     "migrate:deploy": "prisma migrate deploy",
     "db:backup": "tsx scripts/db-backup.ts",
     "db:restore": "tsx scripts/db-restore.ts",
-    "check": "npm run typecheck && npm run lint && npm run test",
+    "db:files": "tsx scripts/db-files.ts cleanup-unused-images",
+    "db:files:dry": "tsx scripts/db-files.ts cleanup-unused-images --dry-run",
+    "audit:prod": "npm audit --omit=dev --audit-level=high",
+    "audit:all": "npm audit --audit-level=high",
+    "check": "prisma generate && npm run typecheck && npm run lint && npm run test",
+    "verify": "npm run format:check && npm run check && npm run build",
+    "verify:full": "npm run verify && npm run test:e2e:smoke",
     "prepare": "husky"
   },
   "lint-staged": {
@@ -36,10 +58,23 @@
   "prisma": {
     "seed": "tsx prisma/seed.ts"
   },
+  "overrides": {
+    "effect": "3.21.4",
+    "@prisma/dev": {
+      "@hono/node-server": "1.19.13"
+    },
+    "micromatch": {
+      "picomatch": "2.3.2"
+    },
+    "postcss": "$postcss",
+    "next-auth": {
+      "uuid": "11.1.1"
+    }
+  },
   "dependencies": {
-    "@google/genai": "^1.41.0",
-    "@prisma/adapter-pg": "^7.4.0",
-    "@prisma/client": "^7.4.0",
+    "@google/genai": "^1.52.0",
+    "@prisma/adapter-pg": "^7.8.0",
+    "@prisma/client": "^7.8.0",
     "@tanstack/react-query": "^5.90.21",
     "@tanstack/react-query-devtools": "^5.91.3",
     "@uploadthing/react": "^7.3.3",
@@ -50,20 +85,20 @@
     "emojibase-data": "^17.0.0",
     "fuse.js": "^7.1.0",
     "lucide-react": "^0.564.0",
-    "next": "^16.1.6",
-    "next-auth": "^4.24.13",
-    "openai": "^6.22.0",
+    "next": "^16.2.10",
+    "next-auth": "^4.24.14",
+    "openai": "^6.45.0",
     "pg": "^8.18.0",
-    "react": "^19.2.4",
-    "react-dom": "^19.2.4",
-    "resend": "^6.9.2",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
+    "resend": "^6.16.0",
     "tailwind-merge": "^3.4.1",
     "uploadthing": "^7.7.4",
     "zustand": "^5.0.11"
   },
   "devDependencies": {
-    "@next/bundle-analyzer": "^16.1.6",
-    "@playwright/test": "^1.58.2",
+    "@next/bundle-analyzer": "^16.2.10",
+    "@playwright/test": "^1.61.1",
     "@tailwindcss/postcss": "^4.1.18",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.2",
@@ -72,22 +107,24 @@
     "@types/react-dom": "^19",
     "@typescript-eslint/eslint-plugin": "^8.55.0",
     "@typescript-eslint/parser": "^8.55.0",
-    "@vitejs/plugin-react": "^5.1.4",
+    "@vitejs/plugin-react": "^5.2.0",
+    "@vitest/coverage-v8": "^4.1.10",
+    "@vitest/ui": "^4.1.10",
     "autoprefixer": "^10.4.24",
     "cross-env": "^10.1.0",
     "eslint": "^9.39.2",
-    "eslint-config-next": "^16.1.6",
+    "eslint-config-next": "^16.2.10",
     "eslint-config-prettier": "^10.1.8",
     "eslint-plugin-prettier": "^5.5.5",
     "husky": "^9.1.7",
     "jsdom": "^28.1.0",
     "lint-staged": "^16.2.7",
-    "postcss": "^8.5.6",
+    "postcss": "^8.5.16",
     "prettier": "^3.8.1",
-    "prisma": "^7.4.0",
+    "prisma": "^7.8.0",
     "tailwindcss": "^4.1.18",
     "tsx": "^4.21.0",
     "typescript": "5.9.3",
-    "vitest": "^4.0.18"
+    "vitest": "^4.1.10"
   }
 }

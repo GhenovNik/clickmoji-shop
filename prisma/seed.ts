@@ -8,7 +8,7 @@ const prisma = new PrismaClient({
 async function main() {
   console.log('🌱 Starting seed...');
 
-  // Проверяем наличие категорий
+  // Avoid creating duplicate catalog data when the seed is run again.
   const existingCount = await prisma.category.count();
 
   if (existingCount > 0) {
@@ -333,7 +333,7 @@ async function main() {
     },
   ];
 
-  // Создание категорий и продуктов
+  // Create categories and products.
   for (const categoryData of categories) {
     const { products, ...categoryInfo } = categoryData;
 
@@ -354,7 +354,7 @@ async function main() {
     );
   }
 
-  // Подсчет итогов
+  // Report the final catalog totals.
   const totalCategories = await prisma.category.count();
   const totalProducts = await prisma.product.count();
 

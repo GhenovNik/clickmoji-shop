@@ -7,6 +7,9 @@ All endpoints are implemented as Next.js Route Handlers under `src/app/api`.
 - Authentication uses NextAuth with JWT sessions.
 - Admin-only endpoints validate `session.user.role === "ADMIN"`.
 - Errors are returned as `{ error: string }` with HTTP status codes.
+- Public catalog browsing is allowed for anonymous users through `/categories` and
+  `/categories/:categoryId/products`; user-specific actions such as lists, favorites, history,
+  custom products, imports, and AI creation still require authentication.
 
 ## Auth
 
@@ -125,13 +128,13 @@ All endpoints are implemented as Next.js Route Handlers under `src/app/api`.
 
 - Auth: admin
 - Body: `productNames: string[]`
-- Notes: Gemini categorization + translation + emoji; skips duplicates
+- Notes: Gemini categorization + translation + emoji; skips duplicates; rate limited to 10 requests/hour per admin user; response includes `promptVersion` and `model`
 
 ### `POST /api/products/smart-create`
 
-- Auth: admin
+- Auth: signed in
 - Body: `productName`, `categoryId?`
-- Notes: Gemini analysis; can call `/api/emoji/generate` + `/api/emoji/upload` internally
+- Notes: Gemini analysis through the AI product service; rate limited to 20 requests/hour per user; non-admin users are limited by `User.createdProductsCount` and create user-scoped products, while admins create global products. If a custom image is needed, the route calls the emoji asset service directly and does not self-call `/api/emoji/generate` or `/api/emoji/upload`. Response includes `promptVersion` and `model`.
 
 ### `POST /api/products/move-category`
 
@@ -192,7 +195,7 @@ All endpoints are implemented as Next.js Route Handlers under `src/app/api`.
 
 - Auth: signed in
 - Body: `text`, `listId`
-- Notes: Gemini parses, creates missing products, adds items
+- Notes: Gemini parses, creates missing products, adds items; rate limited to 10 requests/hour per user; response includes `promptVersion` and `model`
 
 ## History
 
@@ -257,14 +260,15 @@ All endpoints are implemented as Next.js Route Handlers under `src/app/api`.
 
 - Auth: admin
 - Body: `productName`
-- Response: `{ base64, message }`
-- Notes: provider selected by `AI_PROVIDER`
+- Response: `{ base64, message, provider, model, promptVersion, cacheKey }`
+- Notes: provider selected by `AI_PROVIDER`; rate limited to 20 requests/hour per admin user
 
 ### `POST /api/emoji/upload`
 
 - Auth: admin
 - Body: `base64`, `productName?`
 - Response: `{ imageUrl, fileName }`
+- Notes: rate limited to 40 requests/hour per admin user
 
 ### `DELETE /api/emoji/delete`
 
@@ -275,4 +279,7 @@ All endpoints are implemented as Next.js Route Handlers under `src/app/api`.
 
 ### `GET|POST /api/uploadthing`
 
-- Auth: handled by UploadThing router
+- Auth: admin for the `productImage` uploader
+- Limits: one image per request, maximum 2 MB
+- Notes: the unused avatar uploader was removed; product and category images share the
+  administrator-only uploader

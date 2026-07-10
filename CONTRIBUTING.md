@@ -26,8 +26,9 @@
 Run before opening PR:
 
 ```bash
-npm run typecheck
-npm run lint
-npm run test
-npm run build
+npm ci
+npm run verify:full
 ```
+
+Use English for source comments, commit messages, pull request descriptions, and public engineering
+documentation. User-visible copy belongs in the localization system once that migration lands.

@@ -1,6 +1,7 @@
 'use client';
 
-import { useState } from 'react';
+import Image from 'next/image';
+import { useEffect, useState } from 'react';
 import { useUploadThing } from '@/lib/uploadthing';
 import EmojiPicker from '../shared/EmojiPicker';
 
@@ -46,9 +47,21 @@ export default function CategoryForm({
   });
 
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [selectedFilePreview, setSelectedFilePreview] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
 
   const { startUpload } = useUploadThing('productImage');
+
+  useEffect(() => {
+    if (!selectedFile) {
+      setSelectedFilePreview(null);
+      return;
+    }
+
+    const previewUrl = URL.createObjectURL(selectedFile);
+    setSelectedFilePreview(previewUrl);
+    return () => URL.revokeObjectURL(previewUrl);
+  }, [selectedFile]);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
@@ -170,10 +183,13 @@ export default function CategoryForm({
       {formData.imageUrl && !selectedFile && (
         <div className="mt-2 p-3 bg-gradient-to-br from-purple-50 to-pink-50 rounded-lg border border-purple-200">
           <div className="flex items-center gap-3">
-            <img
+            <Image
               src={formData.imageUrl}
               alt="AI Generated Icon"
+              width={64}
+              height={64}
               className="w-16 h-16 object-contain bg-white rounded-lg p-2 shadow-sm"
+              unoptimized
             />
             <div className="flex-1">
               <p className="text-sm font-medium text-purple-900">AI-сгенерированная иконка</p>
@@ -203,13 +219,16 @@ export default function CategoryForm({
           onChange={handleFileChange}
           className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
         />
-        {selectedFile && (
+        {selectedFile && selectedFilePreview && (
           <div className="mt-2 p-3 bg-blue-50 rounded-lg border border-blue-200">
             <div className="flex items-center gap-3">
-              <img
-                src={URL.createObjectURL(selectedFile)}
+              <Image
+                src={selectedFilePreview}
                 alt="Preview"
+                width={64}
+                height={64}
                 className="w-16 h-16 object-contain bg-gray-50 rounded-lg p-2 shadow-sm"
+                unoptimized
               />
               <div className="flex-1">
                 <p className="text-sm font-medium text-gray-900">{selectedFile.name}</p>

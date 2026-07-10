@@ -82,7 +82,7 @@ export default function ImportListModal({
         onSuccess();
       }
 
-      // Показываем результаты на 3 секунды, затем закрываем
+      // Keep the result visible briefly before closing the modal.
       setTimeout(() => {
         handleClose();
         router.refresh();

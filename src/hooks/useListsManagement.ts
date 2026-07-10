@@ -1,39 +1,14 @@
 'use client';
 
 import { useEffect } from 'react';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useSession } from 'next-auth/react';
 import { useRouter } from 'next/navigation';
+import { listsQueryKey, useListsQuery } from './useListsQuery';
 
-export type List = {
-  id: string;
-  name: string;
-  isActive: boolean;
-  createdAt: Date;
-  _count: {
-    items: number;
-  };
-};
+export type { List } from './useListsQuery';
 
 // API functions
-const fetchListsAPI = async (): Promise<List[]> => {
-  const response = await fetch('/api/lists');
-  if (!response.ok) throw new Error('Failed to fetch lists');
-
-  const data = await response.json();
-
-  // If no lists exist, initialize
-  if (data.length === 0) {
-    const initResponse = await fetch('/api/lists/init', {
-      method: 'POST',
-    });
-    if (!initResponse.ok) throw new Error('Failed to initialize lists');
-    return initResponse.json();
-  }
-
-  return data;
-};
-
 const createListAPI = async (name: string) => {
   const response = await fetch('/api/lists', {
     method: 'POST',
@@ -65,21 +40,13 @@ export function useListsManagement() {
   }, [session, router]);
 
   // Query for fetching lists
-  const {
-    data: lists = [],
-    isLoading: loading,
-    refetch: fetchLists,
-  } = useQuery({
-    queryKey: ['lists'],
-    queryFn: fetchListsAPI,
-    enabled: !!session?.user,
-  });
+  const { data: lists = [], isLoading: loading } = useListsQuery();
 
   // Mutation for creating list
   const createMutation = useMutation({
     mutationFn: createListAPI,
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['lists'] });
+      queryClient.invalidateQueries({ queryKey: listsQueryKey });
     },
     onError: (error: Error) => {
       alert('Ошибка при создании списка');
@@ -90,7 +57,7 @@ export function useListsManagement() {
   const deleteMutation = useMutation({
     mutationFn: deleteListAPI,
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['lists'] });
+      queryClient.invalidateQueries({ queryKey: listsQueryKey });
     },
     onError: (error: Error) => {
       alert('Ошибка при удалении списка');

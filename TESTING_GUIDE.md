@@ -1,307 +1,104 @@
-# Руководство по тестированию и автоматизации проверки качества кода
+# Testing Guide
 
-## Быстрый старт
+This project uses TypeScript, ESLint, Prettier, Vitest, and Playwright. The default quality gates
+are designed to run without access to production services.
 
-- Локально (до коммита): `npm run check`
-- E2E: `npm run test:e2e` (Playwright поднимает Next.js через `webServer` в `playwright.config.ts`)
-- Полный прогон (эмуляция CI): `npm run check && npm run build && npm run test:e2e`
-
-> Примечание: в Next.js App Router `async` Server Components плохо подходят для unit-тестов — критичные сценарии лучше закрывать E2E.
-
-### Важные замечания по текущей конфигурации
-
-- В проекте используется Next.js 16 и прямая команда `eslint .`
-- UI E2E сценарии в `tests/e2e/public-categories.spec.ts` и `tests/e2e/shopping-list.spec.ts` временно отключены — нужен стабильный seed и auth flow для тестов.
-
-## Исправленные проблемы (2025-12-25)
-
-### ✅ Критические исправления:
-
-1. **ProductSearch - использование устаревшего хранилища**
-   - Файл: `src/components/ProductSearch.tsx`
-   - Проблема: Использовал localStorage вместо серверного API
-   - Исправление: Переключено на `/api/lists/[listId]/items` API
-
-2. **Emoji подбор - слишком много результатов**
-   - Файл: `src/app/api/emoji/search/route.ts:47`
-   - Проблема: Возвращал 30 нерелевантных результатов
-   - Исправление: Ограничено до 5 наиболее релевантных
-
-3. **Автоскролл при редактировании**
-   - Файлы: `src/app/admin/products/page.tsx`, `src/app/admin/categories/page.tsx`
-   - Проблема: Форма открывалась вверху, пользователь не видел
-   - Исправление: Добавлен автоматический скролл к форме и обратно к элементу
-
-4. **Мобильная адаптация форм**
-   - Файлы: админ панель продуктов и категорий
-   - Проблема: Поля ввода и кнопки выходили за пределы экрана
-   - Исправление: Улучшена grid-разметка и overflow-контроль
-
----
-
-## Инструменты для автоматического обнаружения ошибок
-
-### 1. Статический анализ кода (уже установлено)
-
-#### ESLint ✅
-
-**Что проверяет:**
-
-- Синтаксические ошибки
-- Неиспользуемые переменные
-- Потенциальные баги (missing dependencies в useEffect)
-- React хуки правила
-- TypeScript строгость
-
-**Использование:**
+## Quick reference
 
 ```bash
-npm run lint              # Проверка всех файлов
-npm run lint:fix          # Автоматическое исправление
+npm run format:check       # Repository formatting
+npm run check              # Prisma generation, typecheck, lint, and unit tests
+npm run build              # Production build
+npm run test:coverage      # Unit tests with text, JSON, and HTML coverage
+npm run test:e2e:smoke     # Deterministic browser smoke without PostgreSQL
+npm run test:e2e           # Full browser suite with a prepared database
+npm run verify             # Formatting, check, and build
+npm run verify:full        # Full verification plus deterministic browser smoke
 ```
 
-#### TypeScript ✅
+## Unit and contract tests
 
-**Что проверяет:**
-
-- Типизация данных
-- Несуществующие свойства
-- Неправильные типы параметров
-- Null/undefined ошибки
-
-**Использование:**
+Vitest discovers `src/**/*.{test,spec}.{ts,tsx}`. Tests run in JSDOM and load shared setup from
+`src/test/setup.ts`.
 
 ```bash
-npm run typecheck         # Проверка типов без компиляции
-```
-
----
-
-### 2. Инструменты для установки (Историческая справка)
-
-_Этот раздел описывает процесс первоначальной настройки проекта, большинство инструментов уже установлено._
-
-#### A. Prettier - Форматирование кода
-
-```bash
-npm install --save-dev prettier eslint-config-prettier
-```
-
-**Создан `.prettierrc.json`:**
-
-```json
-{
-  "semi": true,
-  "trailingComma": "es5",
-  "singleQuote": true,
-  "tabWidth": 2,
-  "printWidth": 100
-}
-```
-
-**Добавлено в package.json:**
-
-```json
-{
-  "scripts": {
-    "format": "prettier --write \"src/**/*.{ts,tsx,js,jsx,json,css}\""
-  }
-}
-```
-
-#### B. Playwright - E2E тестирование (UI + интеграция)
-
-```bash
-npm install --save-dev @playwright/test
-npx playwright install
-```
-
-**Рекомендуемо: настроить `baseURL` и автозапуск Next.js через `webServer`**
-
-**Создан `playwright.config.ts`:**
-
-```typescript
-import { defineConfig } from '@playwright/test';
-
-const PORT = process.env.PORT ? Number(process.env.PORT) : 3000;
-const BASE_URL = process.env.PLAYWRIGHT_BASE_URL ?? `http://localhost:${PORT}`;
-
-export default defineConfig({
-  testDir: './tests',
-  use: {
-    baseURL: BASE_URL,
-    trace: 'on-first-retry',
-  },
-  webServer: {
-    // Используем production server для консистентности
-    command: 'npm run build && npm run start',
-    url: BASE_URL,
-    reuseExistingServer: !process.env.CI,
-    stdout: 'ignore',
-    stderr: 'pipe',
-  },
-});
-```
-
-**Добавлено в `package.json`:**
-
-```json
-{
-  "scripts": {
-    "test:e2e": "playwright test",
-    "test:e2e:ui": "playwright test --ui"
-  }
-}
-```
-
-#### C. Vitest + React Testing Library - Unit/Component тестирование
-
-```bash
-npm install --save-dev \
-  vitest @vitejs/plugin-react jsdom \
-  @testing-library/react @testing-library/dom @testing-library/jest-dom \
-  vite-tsconfig-paths @vitest/coverage-v8
-```
-
-**Добавлено в `package.json`:**
-
-```json
-{
-  "scripts": {
-    "test": "vitest run",
-    "test:watch": "vitest",
-    "test:ui": "vitest --ui",
-    "typecheck": "tsc --noEmit",
-    "check": "npm run typecheck && npm run lint && npm run test"
-  }
-}
-```
-
-#### D. Lighthouse CI - Проверка производительности и доступности (Отложено)
-
-#### E. Axe DevTools - Accessibility тестирование (Отложено)
-
-#### F. Madge - Анализ зависимостей и циклических импортов (Отложено)
-
----
-
-### 3. Pre-commit hooks (Husky + lint-staged)
-
-**Автоматическая проверка перед коммитом:**
-
-Создан `.husky/pre-commit` вызывающий `npx lint-staged`.
-
-**В package.json настроен автоматический prettier & eslint для новых файлов:**
-
-```json
-{
-  "lint-staged": {
-    "*.{ts,tsx}": ["eslint --fix", "prettier --write"],
-    "*.{json,md,css}": ["prettier --write"]
-  }
-}
-```
-
----
-
-### 4. GitHub Actions CI/CD
-
-В проекте используется `.github/workflows/ci.yml` который запускает команды `npm run check` и `npm run build` автоматически при пуше.
-
-### 5. Recommended VS Code Extensions
-
-**Создать `.vscode/extensions.json` (рекомендовано):**
-
-```json
-{
-  "recommendations": [
-    "dbaeumer.vscode-eslint",
-    "esbenp.prettier-vscode",
-    "bradlc.vscode-tailwindcss",
-    "prisma.prisma",
-    "ms-playwright.playwright"
-  ]
-}
-```
-
----
-
-## Стандартные процессы разработки
-
-### Ежедневная разработка:
-
-```bash
-# 1. Запуск комплексной проверки
-npm run check
-
-# 2. Форматирование кода (если редактор не настроен на автоформат)
-npm run format
-```
-
-### Перед коммитом:
-
-```bash
-# Автоматически через husky (lint-staged)
-git commit -m "feat: add new feature"
-```
-
-### Перед деплоем:
-
-```bash
-# 1. Все тесты и проверки (встроено в CI)
-npm run check
-npm run test:e2e
-
-# 2. Билд
-npm run build
-```
-
----
-
-## Метрики качества кода
-
-### Code Coverage (Vitest)
-
-```bash
+npm run test
+npm run test:watch
+npm run test:ui
 npm run test:coverage
 ```
 
-### Целевые метрики:
+Contract tests protect a small number of cross-file invariants such as documentation/auth labels,
+the active-list database constraint, the Playwright-only auth bypass, client-state ownership, and
+the UploadThing dependency override. They complement behavior tests; they are not a replacement for
+API or browser coverage.
 
-- **Coverage**: >80% для критичных модулей
-- **ESLint**: 0 ошибок
-- **TypeScript**: 0 ошибок
+## Deterministic browser smoke
 
----
+The `@smoke` Playwright tests mock session, catalog, list, and add-item API responses. They verify
+public catalog access and core authenticated list interactions without requiring PostgreSQL.
 
-## Конкретные проверки для вашего проекта
-
-### Проверка Zustand stores:
-
-```typescript
-// tests/stores/shopping-list.test.ts
-import { useShoppingList } from '@/store/shopping-list';
-
-test('должен добавить товар без дубликатов', () => {
-  const store = useShoppingList.getState();
-
-  store.addItems([{ productId: '1', name: 'Milk', emoji: '🥛', categoryName: 'Dairy' }]);
-  store.addItems([{ productId: '1', name: 'Milk', emoji: '🥛', categoryName: 'Dairy' }]);
-
-  expect(store.items).toHaveLength(1);
-});
+```bash
+npx playwright install --with-deps chromium
+npm run test:e2e:smoke
 ```
 
----
+When bundled Chromium is unavailable locally, use an installed Chrome binary:
 
-## Рекомендации по приоритетам на будущее
+```bash
+PLAYWRIGHT_CHROMIUM_CHANNEL=chrome npm run test:e2e:smoke
+```
 
-### Средний приоритет:
+### Test-only authentication bypass
 
-1. Запуск Lighthouse CI для производительности в рамках CI/CD
+The Playwright web server sets `PLAYWRIGHT_AUTH_BYPASS=1` and a dedicated token. Protected-page
+access is bypassed only when both the environment flag and the matching `clickmoji-e2e-auth` cookie
+are present.
 
-### Низкий приоритет:
+Rules:
 
-1. Axe для accessibility
-2. Madge для анализа зависимостей
-3. Visual regression testing (Percy, Chromatic)
+- Never configure `PLAYWRIGHT_AUTH_BYPASS` in preview or production environments.
+- Never reuse the bypass token as an application secret.
+- Keep the bypass gated in `src/proxy.ts` and covered by contract tests.
+- Browser fixtures belong in `tests/e2e/fixtures` and must contain synthetic data only.
+
+## Database-backed browser tests
+
+The full suite includes authentication and API flows that require a disposable PostgreSQL database.
+Do not run it against production.
+
+```bash
+cp .env.example .env.test.local
+# Configure DATABASE_URL for a disposable database.
+npx prisma migrate deploy
+npx prisma db seed
+npm run test:e2e
+```
+
+Use a dedicated OAuth/email configuration or leave those optional integrations disabled. Test data
+must not depend on production users or provider credentials.
+
+## CI
+
+`.github/workflows/ci.yml` runs on pull requests and pushes to `develop` and `master`:
+
+1. `npm ci`
+2. typecheck
+3. lint
+4. unit tests
+5. production build
+6. Chromium installation
+7. deterministic E2E smoke
+
+The `CI / validate` job is the required branch-protection check.
+
+## Expected baseline
+
+- TypeScript: zero errors
+- ESLint: zero errors; warnings should be resolved or explicitly justified
+- Unit/contract tests: all passing
+- Deterministic E2E smoke: all passing
+- Production audit: zero high or critical advisories
+- Full dependency audit: zero high or critical advisories
+
+Run `npm run verify:full` before a release candidate is pushed.

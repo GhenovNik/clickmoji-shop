@@ -3,6 +3,7 @@
 import { Suspense, useEffect, useState } from 'react';
 import { useParams, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
+import Image from 'next/image';
 import { useSession } from 'next-auth/react';
 import { useLists } from '@/store/lists';
 import { useProductSelection } from '@/hooks/useProductSelection';
@@ -41,15 +42,18 @@ function ProductsPageContent() {
   } = useProductSelection(categoryId);
 
   const category = products[0]?.category;
+  const isAuthenticated = Boolean(session?.user);
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 p-6 pb-32">
       <div className="max-w-4xl mx-auto">
         <div className="text-center mb-8">
           {category?.isCustom && category?.imageUrl ? (
-            <img
+            <Image
               src={category.imageUrl}
               alt={category.name}
+              width={96}
+              height={96}
               className="w-24 h-24 object-contain mx-auto mb-2"
             />
           ) : (
@@ -60,7 +64,7 @@ function ProductsPageContent() {
           </h1>
           <p className="text-gray-700">Выберите товары одним нажатием</p>
 
-          {session?.user && (
+          {isAuthenticated && (
             <button
               onClick={() => setIsModalOpen(true)}
               className="mt-4 bg-gradient-to-r from-purple-500 to-indigo-600 hover:from-purple-600 hover:to-indigo-700 text-white px-6 py-2 rounded-lg font-semibold transition-all flex items-center gap-2 mx-auto"
@@ -84,7 +88,7 @@ function ProductsPageContent() {
                   isSelected={selectedProducts.has(product.id)}
                   selectedVariantId={selectedVariants[product.id]}
                   isFavorite={favoriteProducts.has(product.id)}
-                  showFavorite={!!session?.user}
+                  showFavorite={isAuthenticated}
                   onToggle={toggleProduct}
                   onVariantChange={setVariant}
                   onToggleFavorite={toggleFavorite}
@@ -99,7 +103,12 @@ function ProductsPageContent() {
         </div>
       </div>
 
-      <ProductSelectionBar count={selectedProducts.size} adding={adding} onAddToList={addToList} />
+      <ProductSelectionBar
+        count={selectedProducts.size}
+        adding={adding}
+        isAuthenticated={isAuthenticated}
+        onAddToList={addToList}
+      />
 
       {category && (
         <AddProductModal

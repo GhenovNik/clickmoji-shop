@@ -66,3 +66,6 @@ nul
 
 /src/generated/prisma
 /backups/
+
+# Internal planning notes are kept outside the public repository surface.
+/docs/kb/

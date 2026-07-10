@@ -1,10 +1,10 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useSession } from 'next-auth/react';
 import { useRouter } from 'next/navigation';
-import { useLists } from '@/store/lists';
+import { listsQueryKey, useActiveList } from './useListsQuery';
 
 export type Product = {
   id: string;
@@ -70,22 +70,12 @@ const addToListAPI = async (
 export function useProductSelection(categoryId: string) {
   const router = useRouter();
   const { data: session } = useSession();
-  const { lists, activeListId, setLists } = useLists();
+  const { activeListId } = useActiveList();
   const queryClient = useQueryClient();
 
   const [selectedProducts, setSelectedProducts] = useState<Set<string>>(new Set());
   const [selectedVariants, setSelectedVariants] = useState<Record<string, string | null>>({});
   const [adding, setAdding] = useState(false);
-
-  // Load lists if needed (maintain existing pattern with useLists store)
-  useEffect(() => {
-    if (session?.user && lists.length === 0) {
-      fetch('/api/lists')
-        .then((res) => res.json())
-        .then((data) => setLists(data))
-        .catch((error) => console.error('Error loading lists:', error));
-    }
-  }, [session, lists.length, setLists]);
 
   // Query for products by category
   const { data: products = [], isLoading: loading } = useQuery({
@@ -171,6 +161,11 @@ export function useProductSelection(categoryId: string) {
   };
 
   const addToList = async () => {
+    if (!session?.user) {
+      router.push('/login');
+      return;
+    }
+
     if (!activeListId) {
       alert('Сначала выберите список');
       return;
@@ -186,15 +181,9 @@ export function useProductSelection(categoryId: string) {
       }));
 
     try {
-      const response = await addToListAPI(activeListId, selectedItems);
+      await addToListAPI(activeListId, selectedItems);
 
-      const listsResponse = await fetch('/api/lists');
-      if (listsResponse.ok) {
-        const listsData = await listsResponse.json();
-        setLists(listsData);
-      }
-
-      // Invalidate list cache to refresh items
+      queryClient.invalidateQueries({ queryKey: listsQueryKey });
       queryClient.invalidateQueries({ queryKey: ['list', activeListId] });
 
       if (activeListId) {
