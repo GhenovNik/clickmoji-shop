@@ -13,7 +13,7 @@
     "url": "https://github.com/GhenovNik/clickmoji-shop/issues"
   },
   "engines": {
-    "node": ">=22 <27",
+    "node": "24.x",
     "npm": ">=10"
   },
   "scripts": {
@@ -102,7 +102,7 @@
     "@tailwindcss/postcss": "^4.1.18",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.2",
-    "@types/node": "^25",
+    "@types/node": "^24",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19",
     "@typescript-eslint/eslint-plugin": "^8.55.0",

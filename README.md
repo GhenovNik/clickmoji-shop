@@ -50,7 +50,7 @@ the source of truth; React Query owns server-backed client state. See the full
 
 ## Requirements
 
-- Node.js 22 through 26
+- Node.js 24
 - npm 10 or newer
 - PostgreSQL 14 or newer
 

@@ -67,12 +67,17 @@ describe('public showcase contract', () => {
       scripts: Record<string, string>;
       engines: Record<string, string>;
     };
+    const ciWorkflow = read('.github/workflows/ci.yml');
+    const readme = read('README.md');
 
     expect(packageJson.scripts['format:check']).toBe('prettier --check .');
     expect(packageJson.scripts['test:ui']).toBe('vitest --ui');
     expect(packageJson.scripts['test:coverage']).toBe('vitest --coverage');
     expect(packageJson.scripts.verify).toContain('npm run build');
-    expect(packageJson.engines.node).toContain('>=22');
+    expect(packageJson.engines.node).toBe('24.x');
+    expect(read('.nvmrc').trim()).toBe('24');
+    expect(ciWorkflow).toContain('node-version: 24');
+    expect(readme).toContain('- Node.js 24');
   });
 
   it('removes unused upload surfaces and raw provider errors from public APIs', () => {

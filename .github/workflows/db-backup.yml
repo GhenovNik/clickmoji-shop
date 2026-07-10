@@ -15,7 +15,7 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Prepare backup file name
         id: meta
@@ -42,7 +42,7 @@ jobs:
             sh -lc "pg_dump \"\$DATABASE_URL\" -Fc -f \"/backups/${{ steps.meta.outputs.file_name }}\""
 
       - name: Upload backup artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: db-backup-${{ steps.meta.outputs.file_name }}
           path: backups/${{ steps.meta.outputs.file_name }}
@@ -50,7 +50,7 @@ jobs:
           retention-days: 30
 
       - name: Prune old backup artifacts
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         with:
           script: |
             const keep = 14;

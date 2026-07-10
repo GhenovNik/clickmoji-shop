@@ -34,12 +34,14 @@ OPENAI_API_KEY="your-openai-api-key"
 ### Env strategy (Vercel)
 
 - Production (`master`):
-  - Real `DATABASE_URL` (production DB)
+  - Pooled `DATABASE_URL` for the production DB with `sslmode=verify-full`
   - `NEXTAUTH_SECRET` (strong secret). _Note: `NEXTAUTH_URL` is handled automatically by Vercel._
   - OAuth/email keys (`GOOGLE_*`, `RESEND_*`) as needed
   - `UPSTASH_REDIS_*` (recommended)
 - Preview (`develop` and feature branches):
   - Separate preview DB (`DATABASE_URL`)
+  - Never reuse the production database URL; leave database-backed preview routes disabled until a
+    dedicated database or Neon branch is available
   - Separate OAuth app is recommended for preview
   - `UPSTASH_REDIS_*` can be shared or separate
 - Development (local `.env`):
@@ -57,6 +59,8 @@ OPENAI_API_KEY="your-openai-api-key"
 - Restore DB (specific file): `npm run db:restore -- clickmoji-YYYYMMDD-HHMMSS.dump`
 - Production backups must be encrypted, access-controlled, monitored, and restore-tested.
 - Do not use ordinary GitHub Actions artifacts as the long-term production backup store.
+- Before a production migration, create and verify a fresh backup, run `prisma migrate deploy` with
+  a direct/unpooled database URL, and confirm `prisma migrate status` afterwards.
 
 ## Scripts
 
@@ -87,6 +91,7 @@ Execute using `tsx`:
 ## Deploy
 
 - Default target: Vercel
+- Runtime baseline: Node.js 24 in Vercel, `.nvmrc`, package engines, and CI
 - Ensure all environment variables are set per environment
 - Run `prisma migrate deploy` before deploying application code that depends on a migration.
 - Seed only new, empty environments; do not seed production automatically.
