@@ -60,23 +60,22 @@
   },
   "overrides": {
     "effect": "3.21.4",
-    "@prisma/dev": {
-      "@hono/node-server": "1.19.13"
-    },
     "micromatch": {
       "picomatch": "2.3.2"
     },
     "postcss": "$postcss",
     "next-auth": {
       "uuid": "11.1.1"
-    }
+    },
+    "deepmerge-ts": "^8.0.2",
+    "mysql2": "^3.24.4"
   },
   "dependencies": {
     "@google/genai": "^1.52.0",
-    "@prisma/adapter-pg": "^7.8.0",
-    "@prisma/client": "^7.8.0",
-    "@tanstack/react-query": "^5.90.21",
-    "@tanstack/react-query-devtools": "^5.91.3",
+    "@prisma/adapter-pg": "^7.10.0",
+    "@prisma/client": "^7.10.0",
+    "@tanstack/react-query": "^5.101.2",
+    "@tanstack/react-query-devtools": "^5.101.2",
     "@uploadthing/react": "^7.3.3",
     "bcryptjs": "^3.0.3",
     "clsx": "^2.1.1",
@@ -85,8 +84,8 @@
     "emojibase-data": "^17.0.0",
     "fuse.js": "^7.1.0",
     "lucide-react": "^0.564.0",
-    "next": "^16.2.10",
-    "next-auth": "^4.24.14",
+    "next": "^16.3.6",
+    "next-auth": "^4.24.15",
     "openai": "^6.45.0",
     "pg": "^8.18.0",
     "react": "^19.2.7",
@@ -97,34 +96,34 @@
     "zustand": "^5.0.11"
   },
   "devDependencies": {
-    "@next/bundle-analyzer": "^16.2.10",
-    "@playwright/test": "^1.61.1",
-    "@tailwindcss/postcss": "^4.1.18",
+    "@next/bundle-analyzer": "^16.3.6",
+    "@playwright/test": "^1.63.0",
+    "@tailwindcss/postcss": "^4.3.3",
     "@testing-library/jest-dom": "^6.9.1",
-    "@testing-library/react": "^16.3.2",
+    "@testing-library/react": "^16.3.3",
     "@types/node": "^24",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19",
-    "@typescript-eslint/eslint-plugin": "^8.55.0",
-    "@typescript-eslint/parser": "^8.55.0",
+    "@typescript-eslint/eslint-plugin": "^8.70.1",
+    "@typescript-eslint/parser": "^8.70.1",
     "@vitejs/plugin-react": "^5.2.0",
-    "@vitest/coverage-v8": "^4.1.10",
-    "@vitest/ui": "^4.1.10",
-    "autoprefixer": "^10.4.24",
+    "@vitest/coverage-v8": "^4.1.11",
+    "@vitest/ui": "^4.1.11",
+    "autoprefixer": "^10.6.1",
     "cross-env": "^10.1.0",
     "eslint": "^9.39.2",
-    "eslint-config-next": "^16.2.10",
+    "eslint-config-next": "^16.3.6",
     "eslint-config-prettier": "^10.1.8",
-    "eslint-plugin-prettier": "^5.5.5",
+    "eslint-plugin-prettier": "^5.5.6",
     "husky": "^9.1.7",
     "jsdom": "^28.1.0",
     "lint-staged": "^16.2.7",
-    "postcss": "^8.5.16",
-    "prettier": "^3.8.1",
-    "prisma": "^7.8.0",
-    "tailwindcss": "^4.1.18",
-    "tsx": "^4.21.0",
+    "postcss": "^8.5.28",
+    "prettier": "^3.9.9",
+    "prisma": "^7.10.0",
+    "tailwindcss": "^4.3.3",
+    "tsx": "^4.23.15",
     "typescript": "5.9.3",
-    "vitest": "^4.1.10"
+    "vitest": "^4.1.11"
   }
 }
