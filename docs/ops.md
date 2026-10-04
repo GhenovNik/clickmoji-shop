@@ -29,7 +29,30 @@ UPLOADTHING_TOKEN="your-uploadthing-token"
 AI_PROVIDER="gemini" # or "gpt-image"
 GOOGLE_GENAI_API_KEY="your-google-api-key"
 OPENAI_API_KEY="your-openai-api-key"
+
+# Optional image model overrides (opt-in, see docs/ai.md)
+GOOGLE_IMAGE_MODEL="gemini-3.1-flash-image"
+OPENAI_IMAGE_MODEL="gpt-image-2"
 ```
+
+### Image model switch (Vercel)
+
+`GOOGLE_IMAGE_MODEL` and `OPENAI_IMAGE_MODEL` are optional. While both are absent (or empty/whitespace)
+the production image model is unchanged: Google uses `IMAGEN_MODEL` or `imagen-4.0-generate-001`,
+OpenAI uses `gpt-image-1.5`.
+
+- Switch: set the variable in the Vercel project environment (Production and/or Preview) and redeploy.
+  No code release is needed. Only the variable of the active provider is read.
+- Model EOL to plan against: `imagen-4.0-*` was retired by Google on 2026-08-17, `gpt-image-1.5` is
+  retired by OpenAI on 2026-12-01.
+- Verify the value against the grammar before saving, otherwise generation fails with a configuration
+  error naming the variable: `^imagen-[a-z0-9]+(?:[.-][a-z0-9]+)*$` for the Imagen adapter,
+  `^gemini-[a-z0-9]+(?:[.-][a-z0-9]+)*-image(-[a-z0-9]+(?:[.-][a-z0-9]+)*)?$` for the Gemini adapter.
+- Rollback: remove the variable and redeploy. That restores the legacy path (it does not bring a
+  retired model back to life). Rolling back code is a single revert of the squash commit.
+- Check the server log after the first manual generation: adapter error classes (`blocked-prompt`,
+  `blocked`, `incomplete`, `no-image`, `unsupported-format`, `empty-image`, `invalid-png`, `too-large`)
+  are visible in the server log and never in the HTTP response.
 
 ### Env strategy (Vercel)
 
