@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess } from 'node:child_process';
+import { StringDecoder } from 'node:string_decoder';
 
 export const NPM_REGISTRY = 'https://registry.npmjs.org/';
 export const NPM_TIMEOUT_MS = 120_000;
@@ -85,12 +86,6 @@ function killProcessGroup(child: ChildProcess): void {
   }
 }
 
-function terminate(child: ChildProcess): void {
-  if (child.exitCode === null && child.signalCode === null) {
-    killProcessGroup(child);
-  }
-}
-
 export function createNpmAuditRunner(options: SpawnRunnerOptions = {}): AuditRunner {
   const command = options.command ?? 'npm';
   const cwd = options.cwd;
@@ -102,6 +97,7 @@ export function createNpmAuditRunner(options: SpawnRunnerOptions = {}): AuditRun
       let forceTimer: NodeJS.Timeout | null = null;
       let stdout = '';
       let stderr = '';
+      let stderrBytes = 0;
       let outputBytes = 0;
       let timedOut = false;
       let overflow = false;
@@ -213,11 +209,19 @@ export function createNpmAuditRunner(options: SpawnRunnerOptions = {}): AuditRun
           terminate();
         }
       });
-      child.stderr?.setEncoding('utf8');
-      child.stderr?.on('data', (chunk: string) => {
-        if (stderr.length < NPM_MAX_STDERR_BYTES) {
-          stderr = `${stderr}${chunk}`.slice(0, NPM_MAX_STDERR_BYTES);
+      const stderrDecoder = new StringDecoder('utf8');
+      child.stderr?.on('data', (chunk: Buffer) => {
+        const room = NPM_MAX_STDERR_BYTES - stderrBytes;
+        if (room <= 0) {
+          return;
         }
+        // a character is at most four bytes, so a prefix of `room` characters always fits
+        let kept = stderrDecoder.write(chunk).slice(0, room);
+        while (Buffer.byteLength(kept, 'utf8') > room) {
+          kept = kept.slice(0, -1);
+        }
+        stderr += kept;
+        stderrBytes += Buffer.byteLength(kept, 'utf8');
       });
       child.on('error', (error: Error) => {
         finish(buildResult(null, null, error));

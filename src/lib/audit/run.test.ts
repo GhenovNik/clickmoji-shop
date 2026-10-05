@@ -547,6 +547,32 @@ describe('AC-9 npm process failures', () => {
     expect(result.stdout).toBe('');
   }, 20_000);
 
+  it('caps the kept npm stderr by bytes and not by UTF-16 units', async () => {
+    const snowman = String.fromCharCode(0x2603);
+    const command = fakeNpm(
+      tempDir(),
+      `require('node:fs').writeSync(2, String.fromCharCode(0x2603).repeat(2000)); process.exit(2);`
+    );
+
+    const result = await createNpmAuditRunner({ command })([], { ...process.env }, 10_000);
+
+    expect(Buffer.byteLength(result.stderr, 'utf8')).toBeLessThanOrEqual(NPM_MAX_STDERR_BYTES);
+    expect(result.stderr.startsWith(snowman)).toBe(true);
+    expect(result.stderr).not.toContain('\ufffd');
+    // the cap cuts on a character boundary: 4096 bytes hold 1365 whole three-byte characters
+    expect(result.stderr).toBe(snowman.repeat(1365));
+  }, 20_000);
+
+  it('keeps one terminate implementation in the runner module', () => {
+    const source = readFileSync(
+      path.join(REPO_ROOT, 'src', 'lib', 'audit', 'npm-runner.ts'),
+      'utf8'
+    );
+
+    expect(source).not.toMatch(/^function terminate\b/m);
+    expect(source.match(/const terminate = \(\): void =>/g)).toHaveLength(1);
+  });
+
   it('spawns npm in the requested working directory', async () => {
     const directory = tempDir();
     const command = fakeNpm(directory, 'process.stdout.write(process.cwd());');
