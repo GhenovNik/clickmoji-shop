@@ -1,4 +1,5 @@
 // @vitest-environment node
+import { inspect } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   candidateWith,
@@ -92,11 +93,7 @@ const envSnapshot = snapshotEnv();
 function captureConsoleError() {
   const lines: string[] = [];
   const spy = vi.spyOn(console, 'error').mockImplementation((...args: unknown[]) => {
-    lines.push(
-      args
-        .map((arg) => (arg instanceof Error ? `${arg.name}: ${arg.message}` : String(arg)))
-        .join(' ')
-    );
+    lines.push(args.map((arg) => inspect(arg, { depth: 8 })).join(' '));
   });
   return { lines, spy };
 }

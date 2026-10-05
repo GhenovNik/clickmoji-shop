@@ -91,6 +91,7 @@ vi.mock('@/lib/auth-security', async (importOriginal) => {
 });
 
 const { POST } = await import('@/app/api/products/smart-create/route');
+const { EmojiProviderUnavailableError } = await import('@/lib/services/emoji-errors');
 
 const CATEGORY = { id: 'cat-1', name: 'Молочное', nameEn: 'Dairy', order: 1 };
 
@@ -182,4 +183,31 @@ describe('AC-7 POST /api/products/smart-create generation failure contract', () 
     expect(doubles.uploadEmojiBase64Image).not.toHaveBeenCalled();
     expect(doubles.sdkCalls).toHaveLength(0);
   });
+});
+
+describe('AC-16 an unavailable provider degrades to the Unicode emoji', () => {
+  for (const reason of ['missing-key', 'quota', 'auth'] as const) {
+    it(`creates the product with a Unicode emoji and no upload for reason ${reason}`, async () => {
+      doubles.generateAndUploadEmojiAsset.mockRejectedValue(
+        new EmojiProviderUnavailableError({
+          reason,
+          provider: 'gemini',
+          model: 'gemini-3.1-flash-lite-image',
+        })
+      );
+
+      const response = await POST(smartCreateRequest());
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.customEmojiGenerated).toBe(false);
+      const createArgs = doubles.createProduct.mock.calls[0]?.[0] as {
+        data: Record<string, unknown>;
+      };
+      expect(createArgs.data).toMatchObject({ emoji: '🥛', isCustom: false, imageUrl: null });
+      expect(doubles.uploadEmojiImage).not.toHaveBeenCalled();
+      expect(doubles.uploadEmojiBase64Image).not.toHaveBeenCalled();
+      expect(doubles.sdkCalls).toHaveLength(0);
+    });
+  }
 });

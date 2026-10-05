@@ -77,6 +77,7 @@ vi.mock('@/lib/auth-security', async (importOriginal) => {
 });
 
 const { POST } = await import('@/app/api/emoji/generate/route');
+const { EmojiProviderUnavailableError } = await import('@/lib/services/emoji-errors');
 
 function generateRequest(productName = 'Milk') {
   return new Request('http://localhost:3000/api/emoji/generate', {
@@ -136,6 +137,51 @@ describe('AC-7 POST /api/emoji/generate error contract', () => {
 
     expect(response.status).toBe(429);
     expect(doubles.generateEmojiImage).not.toHaveBeenCalled();
+    expect(doubles.sdkCalls).toHaveLength(0);
+  });
+});
+
+describe('AC-16 an unavailable provider is reported as 503', () => {
+  const unavailable = (reason: 'missing-key' | 'quota' | 'auth') =>
+    new EmojiProviderUnavailableError({
+      reason,
+      provider: 'gemini',
+      model: 'gemini-3.1-flash-lite-image',
+    });
+
+  for (const reason of ['missing-key', 'quota', 'auth'] as const) {
+    it(`returns the unavailable-provider body for reason ${reason}`, async () => {
+      doubles.generateEmojiImage.mockRejectedValue(unavailable(reason));
+
+      const response = await POST(generateRequest());
+      const bodyText = await response.text();
+
+      expect(response.status).toBe(503);
+      expect(JSON.parse(bodyText)).toEqual({
+        error:
+          'AI image generation is unavailable right now (provider quota or API key). Pick a regular emoji instead.',
+        code: 'image_provider_unavailable',
+      });
+      expect(bodyText).not.toContain(marker);
+    });
+  }
+
+  it('keeps the previous 500 body for any other generation error', async () => {
+    doubles.generateEmojiImage.mockRejectedValue(new Error(`${marker} ordinary failure`));
+
+    const response = await POST(generateRequest());
+    const bodyText = await response.text();
+
+    expect(response.status).toBe(500);
+    expect(JSON.parse(bodyText)).toEqual({ error: 'Failed to generate emoji' });
+    expect(bodyText).not.toContain(marker);
+  });
+
+  it('does not call the SDK when the provider is unavailable', async () => {
+    doubles.generateEmojiImage.mockRejectedValue(unavailable('quota'));
+
+    await POST(generateRequest());
+
     expect(doubles.sdkCalls).toHaveLength(0);
   });
 });

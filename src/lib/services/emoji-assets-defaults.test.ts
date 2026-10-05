@@ -58,6 +58,7 @@ vi.mock('openai', () => ({
 }));
 
 const { generateEmojiImage } = await import('./emoji-assets');
+const { EmojiProviderUnavailableError } = await import('./emoji-errors');
 
 const PRODUCT = 'Milk';
 const DESCRIPTION = 'cold carton';
@@ -171,18 +172,29 @@ describe('AC-1 provider branch selection stays as before', () => {
   it('requires only the Google key on the gemini branch', async () => {
     setEnv({ GOOGLE_GENAI_API_KEY: undefined });
 
-    await expect(generateEmojiImage(GENERATION_INPUT)).rejects.toThrow(
-      'Google Generative AI API key not configured'
-    );
+    await expect(generateEmojiImage(GENERATION_INPUT)).rejects.toMatchObject({
+      name: 'EmojiProviderUnavailableError',
+      code: 'image_provider_unavailable',
+      reason: 'missing-key',
+      provider: 'gemini',
+      model: 'gemini-3.1-flash-lite-image',
+    });
     expect(sdk.constructorCalls).toHaveLength(0);
   });
 
   it('requires only the OpenAI key on the gpt-image branch', async () => {
     setEnv({ AI_PROVIDER: 'gpt-image', OPENAI_API_KEY: undefined });
 
-    await expect(generateEmojiImage(GENERATION_INPUT)).rejects.toThrow(
-      'OpenAI API key not configured'
+    await expect(generateEmojiImage(GENERATION_INPUT)).rejects.toBeInstanceOf(
+      EmojiProviderUnavailableError
     );
+    await expect(generateEmojiImage(GENERATION_INPUT)).rejects.toMatchObject({
+      name: 'EmojiProviderUnavailableError',
+      code: 'image_provider_unavailable',
+      reason: 'missing-key',
+      provider: 'gpt-image',
+      model: 'gpt-image-2.5-flare',
+    });
     expect(sdk.constructorCalls).toHaveLength(0);
   });
 });
