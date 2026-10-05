@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { chmodSync, existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { runAuditCheck } from './run';
@@ -421,6 +421,20 @@ describe('AC-9 npm process failures', () => {
     expect(result.stderr).toHaveLength(NPM_MAX_STDERR_BYTES);
     expect(result.stderr.startsWith('npm ERR! start')).toBe(true);
     expect(result.stdout).toBe('');
+  }, 20_000);
+
+  it('spawns npm in the requested working directory', async () => {
+    const directory = tempDir();
+    const command = fakeNpm(directory, 'process.stdout.write(process.cwd());');
+
+    const result = await createNpmAuditRunner({ command, cwd: directory })(
+      [],
+      { ...process.env },
+      10_000
+    );
+
+    expect(result.status).toBe(0);
+    expect(realpathSync(result.stdout)).toBe(realpathSync(directory));
   }, 20_000);
 
   it('fails closed when npm output exceeds the stdout buffer', async () => {

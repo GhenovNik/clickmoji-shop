@@ -11,7 +11,7 @@ const NPMRC_PATH = path.join(REPO_ROOT, '.npmrc');
 
 async function main() {
   const decision = await runAuditCheck({
-    runner: createNpmAuditRunner(),
+    runner: createNpmAuditRunner({ cwd: REPO_ROOT }),
     readAllowlistFile: () =>
       existsSync(ALLOWLIST_PATH) ? readFileSync(ALLOWLIST_PATH, 'utf8') : null,
     findProjectNpmrc: () => (existsSync(NPMRC_PATH) ? NPMRC_PATH : null),

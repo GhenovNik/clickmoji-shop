@@ -7,6 +7,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   rmSync,
   writeFileSync,
 } from 'node:fs';
@@ -54,7 +55,7 @@ function installFakeNpm(): string {
       'const args = process.argv.slice(2);',
       'const production = args.includes("--omit=dev");',
       'if (process.env.AUDIT_FAKE_LOG) {',
-      '  fs.appendFileSync(process.env.AUDIT_FAKE_LOG, JSON.stringify({ args, env: process.env }) + "\\n");',
+      '  fs.appendFileSync(process.env.AUDIT_FAKE_LOG, JSON.stringify({ args, cwd: process.cwd(), env: process.env }) + "\\n");',
       '}',
       'const mode = process.env.AUDIT_FAKE_MODE || "reports";',
       'const file = production ? process.env.AUDIT_FAKE_PROD : process.env.AUDIT_FAKE_FULL;',
@@ -86,6 +87,7 @@ interface RunOptions {
   production?: string;
   mode?: string;
   root?: string;
+  processCwd?: string;
 }
 
 function runScript(options: RunOptions = {}) {
@@ -101,7 +103,7 @@ function runScript(options: RunOptions = {}) {
     TSX_BIN,
     [path.join(options.root ?? REPO_ROOT, 'scripts', 'audit-check.ts')],
     {
-      cwd: options.root ?? REPO_ROOT,
+      cwd: options.processCwd ?? options.root ?? REPO_ROOT,
       encoding: 'utf8',
       timeout: 60_000,
       env: {
@@ -124,7 +126,9 @@ function runScript(options: RunOptions = {}) {
     ? readFileSync(logPath, 'utf8')
         .split('\n')
         .filter(Boolean)
-        .map((line) => JSON.parse(line) as { args: string[]; env: Record<string, string> })
+        .map(
+          (line) => JSON.parse(line) as { args: string[]; cwd: string; env: Record<string, string> }
+        )
     : [];
 
   return { result, calls };
@@ -255,6 +259,30 @@ describe('AC-11 the real entrypoint under a fake npm', () => {
 
     expect(result.status).toBe(1);
     expect(result.stdout).toContain('error [config]');
+    expect(calls).toHaveLength(0);
+  });
+
+  it('runs npm in the repository root of the script even when launched elsewhere', () => {
+    const root = materializeScriptTree(initialAllowlistJson());
+
+    const { result, calls } = runScript({ root, processCwd: tempDir() });
+
+    expect(result.status).toBe(0);
+    expect(calls).toHaveLength(2);
+    for (const call of calls) {
+      expect(realpathSync(call.cwd)).toBe(realpathSync(root));
+    }
+  });
+
+  it('refuses the .npmrc of the script root when launched elsewhere', () => {
+    const root = materializeScriptTree(initialAllowlistJson());
+    writeFileSync(path.join(root, '.npmrc'), 'offline=true\n');
+
+    const { result, calls } = runScript({ root, processCwd: tempDir() });
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain('error [config]');
+    expect(result.stdout).toContain(path.join(root, '.npmrc'));
     expect(calls).toHaveLength(0);
   });
 });

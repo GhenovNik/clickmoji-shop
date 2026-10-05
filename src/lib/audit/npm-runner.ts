@@ -33,6 +33,7 @@ export type AuditScope = 'full' | 'production';
 
 export interface SpawnRunnerOptions {
   readonly command?: string;
+  readonly cwd?: string;
   readonly maxOutputBytes?: number;
 }
 
@@ -91,6 +92,7 @@ function terminate(child: ChildProcess): void {
 
 export function createNpmAuditRunner(options: SpawnRunnerOptions = {}): AuditRunner {
   const command = options.command ?? 'npm';
+  const cwd = options.cwd;
   const maxOutputBytes = options.maxOutputBytes ?? NPM_MAX_OUTPUT_BYTES;
 
   return (args, env, timeoutMs) =>
@@ -107,6 +109,7 @@ export function createNpmAuditRunner(options: SpawnRunnerOptions = {}): AuditRun
       try {
         child = spawn(command, [...args], {
           env,
+          cwd,
           shell: false,
           detached: true,
           stdio: ['ignore', 'pipe', 'pipe'],
