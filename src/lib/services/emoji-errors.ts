@@ -120,25 +120,40 @@ export function classifyProviderFailure(error: unknown): ProviderFailureReason |
 }
 
 /**
- * FR-3 classes, longest first: a `blocked-prompt` message also contains `blocked`, and the more
- * specific name is the one an operator needs in the log.
+ * The FR-3 classes of the spec plus the FR-2 configuration class. The class travels on the error
+ * object, so the log record never has to be derived from a message text: a `blocked-prompt` failure
+ * and a `blocked` one are told apart by the field, not by the order of a substring search.
  */
-const GENERATION_ERROR_CLASSES = [
+const EMOJI_IMAGE_ERROR_CLASSES = [
   'blocked-prompt',
-  'unsupported-format',
   'blocked',
   'incomplete',
   'no-image',
+  'unsupported-format',
   'empty-image',
   'invalid-png',
   'too-large',
-];
+] as const;
+
+export type EmojiImageErrorClass = (typeof EMOJI_IMAGE_ERROR_CLASSES)[number];
+
+export type EmojiImageErrorKind = EmojiImageErrorClass | 'configuration';
 
 /**
- * FR-2 configuration errors start with `Invalid <ENV> value`. Only the fixed class name is derived
- * from that text; the variable name and its value stay out of the log.
+ * An image failure the service itself classified: an FR-3 class of the Gemini `generateContent`
+ * response, or an FR-2 configuration error for a model id outside the grammar. The class name is a
+ * field of this error, never a substring matched against the message of an arbitrary SDK error,
+ * whose text may use the same words for an unrelated reason.
  */
-const CONFIGURATION_ERROR_PATTERN = /^Invalid [A-Z0-9_]+ value /;
+export class EmojiImageGenerationError extends Error {
+  readonly kind: EmojiImageErrorKind;
+
+  constructor(kind: EmojiImageErrorKind, message: string) {
+    super(message);
+    this.name = 'EmojiImageGenerationError';
+    this.kind = kind;
+  }
+}
 
 export type EmojiGenerationLogRecord = {
   errorClass: string;
@@ -150,7 +165,9 @@ export type EmojiGenerationLogRecord = {
 
 /**
  * FR-10: the only record a route may log for a generation failure. Fields come from the typed error
- * or from fixed class names; no raw message, body, header or `cause` is ever copied into it.
+ * or from fixed class names; no raw message, body, header or `cause` is ever copied into it. An error
+ * this service did not create has no class of ours, so it is reported as `Error` with its HTTP
+ * status, if the SDK exposes one.
  */
 export function summarizeEmojiGenerationFailure(error: unknown): EmojiGenerationLogRecord {
   if (error instanceof EmojiProviderUnavailableError) {
@@ -162,11 +179,11 @@ export function summarizeEmojiGenerationFailure(error: unknown): EmojiGeneration
     };
   }
 
-  const message = readMessage(error);
-  const generationClass = GENERATION_ERROR_CLASSES.find((className) => message.includes(className));
-  const errorClass =
-    generationClass ?? (CONFIGURATION_ERROR_PATTERN.test(message) ? 'configuration' : 'Error');
+  if (error instanceof EmojiImageGenerationError) {
+    return { errorClass: error.kind };
+  }
+
   const status = readNumberField(error, 'status');
 
-  return status === undefined ? { errorClass } : { errorClass, status };
+  return status === undefined ? { errorClass: 'Error' } : { errorClass: 'Error', status };
 }

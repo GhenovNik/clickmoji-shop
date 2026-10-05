@@ -179,8 +179,10 @@ export async function POST(request: Request) {
       message: 'Product created successfully',
     });
   } catch (error) {
-    // FR-10 applied to the route-level failure too, so no raw provider error reaches the log.
-    console.error('Error in smart product creation:', summarizeEmojiGenerationFailure(error));
+    // Not an image-generation failure: the generation above is caught and swallowed, so nothing of a
+    // provider reaches this log. A Prisma, text analysis or request parsing failure is logged with
+    // its class and message again, as before.
+    console.error('Error in smart product creation:', error);
     return NextResponse.json({ error: 'Failed to create product' }, { status: 500 });
   }
 }

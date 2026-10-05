@@ -33,7 +33,23 @@ export async function POST(request: Request) {
       return rateLimitResponse(userLimit.resetAt);
     }
 
-    const generated = await generateEmojiImage({ productName, description });
+    // Image generation is the only provider call of this route, so it is the only place where a
+    // provider error can appear: FR-10 logging is applied here, and the catch below therefore only
+    // ever sees a failure of the request itself.
+    let generated: Awaited<ReturnType<typeof generateEmojiImage>>;
+    try {
+      generated = await generateEmojiImage({ productName, description });
+    } catch (error) {
+      // FR-10: the log carries allowlisted fields only, never the SDK message, body or cause.
+      console.error('Error generating AI emoji:', summarizeEmojiGenerationFailure(error));
+      if (error instanceof EmojiProviderUnavailableError) {
+        return NextResponse.json(
+          { error: PROVIDER_UNAVAILABLE_MESSAGE, code: IMAGE_PROVIDER_UNAVAILABLE_CODE },
+          { status: 503 }
+        );
+      }
+      return NextResponse.json({ error: 'Failed to generate emoji' }, { status: 500 });
+    }
 
     // Return a preview without persisting it to UploadThing.
     const base64Image = `data:image/png;base64,${generated.imageBuffer.toString('base64')}`;
@@ -47,14 +63,10 @@ export async function POST(request: Request) {
       cacheKey: generated.cacheKey,
     });
   } catch (error) {
-    // FR-10: the log carries allowlisted fields only, never the SDK message, body or cause.
-    console.error('Error generating AI emoji:', summarizeEmojiGenerationFailure(error));
-    if (error instanceof EmojiProviderUnavailableError) {
-      return NextResponse.json(
-        { error: PROVIDER_UNAVAILABLE_MESSAGE, code: IMAGE_PROVIDER_UNAVAILABLE_CODE },
-        { status: 503 }
-      );
-    }
+    // No provider work happens outside the generation block, so this is a failure of the request
+    // itself — a guard, a rate limit or an unparsable body — and it is logged with its class and
+    // message: nothing of an image provider can reach this log.
+    console.error('Error generating AI emoji:', error);
     return NextResponse.json({ error: 'Failed to generate emoji' }, { status: 500 });
   }
 }
