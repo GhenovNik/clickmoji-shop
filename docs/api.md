@@ -283,3 +283,22 @@ All endpoints are implemented as Next.js Route Handlers under `src/app/api`.
 - Limits: one image per request, maximum 2 MB
 - Notes: the unused avatar uploader was removed; product and category images share the
   administrator-only uploader
+
+### Image optimizer allow-list
+
+- `images.remotePatterns` in `next.config.ts` is exactly one entry:
+  `{ protocol: 'https', hostname: 'utfs.io', port: '', pathname: '/f/*', search: '' }`.
+- Guarantee (semantics of the installed Next: `matchRemotePattern` over WHATWG `URL`): the
+  optimizer accepts an initial external URL only with protocol `https:`, hostname exactly
+  `utfs.io`, empty `port` (an explicit `:443` normalizes to empty and passes), empty `search`
+  (a trailing `?` passes), and a pathname matching picomatch `/f/*` with `{ dot: true }` —
+  one non-empty segment after `/f/` with an optional trailing slash. The fragment is not
+  checked; percent-encoding (`%2F`) stays inside one encoded segment.
+- This allow-list is not API validation and does not cover every `<img>`: `products.imageUrl`,
+  `categories.imageUrl`, and `list_history_items.productImageUrl` accept values without this
+  check, and admin renders marked `unoptimized` fetch their source directly.
+- Residual risks of this no-migration narrowing (AGE-997): files of other tenants under the
+  shared `utfs.io/f/*` prefix are still optimized at our expense; future uploads served through
+  the legacy `url` field may drift to `*.ufs.sh` and then miss the optimizer; the optimizer
+  does not re-check the allow-list after the initial request redirect, and per-hop behavior of
+  managed Vercel is not proven here.

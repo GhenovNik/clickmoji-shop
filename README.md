@@ -134,6 +134,10 @@ scripts/          Explicit database and storage administration tools
 - Authentication and AI endpoints are rate-limited; production should use distributed storage.
 - Verification and password-reset tokens are random, hashed at rest, expiring, and single-use.
 - UploadThing product/category uploads are administrator-only.
+- The image optimizer (`/_next/image`) accepts only `https://utfs.io/f/*` (one path segment, no
+  port, no query; see `docs/api.md`). This is not API validation: stored `imageUrl` values are
+  unchecked and admin `unoptimized` renders fetch their source directly. The remaining narrowing
+  limits (shared-prefix files, legacy `url` drift, post-redirect targets) are tracked in AGE-997.
 - The Playwright auth bypass is disabled unless explicit test-only environment flags and a matching
   cookie are present.
 
