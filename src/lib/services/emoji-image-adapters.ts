@@ -2,6 +2,11 @@ import { GoogleGenAI } from '@google/genai';
 import type { GenerateContentResponse } from '@google/genai';
 import OpenAI from 'openai';
 import {
+  classifyProviderFailure,
+  EmojiProviderUnavailableError,
+  type EmojiProvider,
+} from '@/lib/services/emoji-errors';
+import {
   EMOJI_GENERATION_PROMPT_VERSION,
   EMOJI_GENERATION_TRANSPARENT_PROMPT_VERSION,
   getEmojiGenerationPrompt,
@@ -84,6 +89,50 @@ function resolveClientFactory(factory?: EmojiImageClientFactory): ResolvedClient
   };
 }
 
+/**
+ * FR-9: no client is created for a key that is unset, empty or whitespace only. The value itself is
+ * passed to the SDK unchanged.
+ */
+function requireProviderApiKey({
+  apiKey,
+  provider,
+  model,
+}: {
+  apiKey: string;
+  provider: EmojiProvider;
+  model: string;
+}) {
+  if (typeof apiKey !== 'string' || apiKey.trim().length === 0) {
+    throw new EmojiProviderUnavailableError({ reason: 'missing-key', provider, model });
+  }
+}
+
+/**
+ * FR-9 + FR-6: one SDK call per generation, no retry of our own. A quota or auth failure becomes a
+ * typed `EmojiProviderUnavailableError`; every other SDK failure is rethrown unchanged, and the SDK
+ * error itself is not attached to the typed error so it cannot reach a server log.
+ */
+async function callProviderSdk<T>(
+  {
+    provider,
+    model,
+  }: {
+    provider: EmojiProvider;
+    model: string;
+  },
+  operation: () => Promise<T>
+): Promise<T> {
+  try {
+    return await operation();
+  } catch (error) {
+    const reason = classifyProviderFailure(error);
+    if (reason) {
+      throw new EmojiProviderUnavailableError({ reason, provider, model });
+    }
+    throw error;
+  }
+}
+
 function readModelEnv(name: string): string | undefined {
   const raw = process.env[name];
   if (typeof raw !== 'string') {
@@ -137,17 +186,20 @@ async function generateWithGoogleImages({
   model,
   clients,
 }: GenerateImageWithModelInput & { clients: ResolvedClientFactory }): Promise<GeneratedImage> {
+  requireProviderApiKey({ apiKey, provider: 'gemini', model });
   const prompt = getEmojiGenerationPrompt(productName, description);
   const ai = clients.createGoogleClient({ apiKey });
 
-  const response = await ai.models.generateImages({
-    model,
-    prompt,
-    config: {
-      numberOfImages: 1,
-      aspectRatio: '1:1',
-    },
-  });
+  const response = await callProviderSdk({ provider: 'gemini', model }, () =>
+    ai.models.generateImages({
+      model,
+      prompt,
+      config: {
+        numberOfImages: 1,
+        aspectRatio: '1:1',
+      },
+    })
+  );
 
   if (!response?.generatedImages?.length) {
     throw new Error(
@@ -236,17 +288,20 @@ async function generateWithGoogleGenerateContent({
   model,
   clients,
 }: GenerateImageWithModelInput & { clients: ResolvedClientFactory }): Promise<GeneratedImage> {
+  requireProviderApiKey({ apiKey, provider: 'gemini', model });
   const prompt = getEmojiGenerationPrompt(productName, description);
   const ai = clients.createGoogleClient({ apiKey });
 
-  const response = await ai.models.generateContent({
-    model,
-    contents: prompt,
-    config: {
-      responseModalities: ['IMAGE'],
-      imageConfig: { aspectRatio: '1:1' },
-    },
-  });
+  const response = await callProviderSdk({ provider: 'gemini', model }, () =>
+    ai.models.generateContent({
+      model,
+      contents: prompt,
+      config: {
+        responseModalities: ['IMAGE'],
+        imageConfig: { aspectRatio: '1:1' },
+      },
+    })
+  );
 
   return {
     imageBuffer: readGenerateContentImage(response),
@@ -286,15 +341,18 @@ export async function generateWithOpenAI(
 
   // Configuration is validated before any client is created or any request is sent.
   const model = resolveOpenAIImageModel();
+  requireProviderApiKey({ apiKey, provider: 'gpt-image', model });
   const openai = clients.createOpenAIClient({ apiKey });
 
-  const result = await openai.images.generate({
-    model: model as OpenAI.ImageModel,
-    prompt,
-    size: OPENAI_IMAGE_SIZE,
-    quality: OPENAI_IMAGE_QUALITY as 'medium',
-    background: OPENAI_IMAGE_BACKGROUND as 'transparent',
-  });
+  const result = await callProviderSdk({ provider: 'gpt-image', model }, () =>
+    openai.images.generate({
+      model: model as OpenAI.ImageModel,
+      prompt,
+      size: OPENAI_IMAGE_SIZE,
+      quality: OPENAI_IMAGE_QUALITY as 'medium',
+      background: OPENAI_IMAGE_BACKGROUND as 'transparent',
+    })
+  );
 
   const imageBase64 = result.data?.[0]?.b64_json;
   if (!imageBase64) {

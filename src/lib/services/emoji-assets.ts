@@ -5,8 +5,9 @@ import {
   type EmojiImageClientFactory,
 } from '@/lib/services/emoji-image-adapters';
 import { getEmojiGenerationCacheKey } from '@/lib/prompts/emoji-generation';
+import type { EmojiProvider } from '@/lib/services/emoji-errors';
 
-export type EmojiProvider = 'gemini' | 'gpt-image';
+export type { EmojiProvider };
 
 type GenerateEmojiImageOptions = {
   productName: string;
@@ -38,11 +39,9 @@ export async function generateEmojiImage({
 }: GenerateEmojiImageOptions) {
   const provider = getProvider(providerInput);
 
+  // FR-9: a missing key is reported by the adapter, before any SDK client is created.
   if (provider === 'gpt-image') {
-    const apiKey = process.env.OPENAI_API_KEY;
-    if (!apiKey) {
-      throw new Error('OpenAI API key not configured');
-    }
+    const apiKey = process.env.OPENAI_API_KEY ?? '';
     const generated = await generateWithOpenAI({ productName, description, apiKey }, clients);
     return {
       ...generated,
@@ -51,10 +50,7 @@ export async function generateEmojiImage({
     };
   }
 
-  const apiKey = process.env.GOOGLE_GENAI_API_KEY;
-  if (!apiKey) {
-    throw new Error('Google Generative AI API key not configured');
-  }
+  const apiKey = process.env.GOOGLE_GENAI_API_KEY ?? '';
   const generated = await generateWithGoogleImage({ productName, description, apiKey }, clients);
   return {
     ...generated,
@@ -109,8 +105,9 @@ export async function generateAndUploadEmojiAsset({
   productName,
   description,
   provider,
+  clients,
 }: GenerateEmojiImageOptions) {
-  const generated = await generateEmojiImage({ productName, description, provider });
+  const generated = await generateEmojiImage({ productName, description, provider, clients });
   const uploaded = await uploadEmojiImage({
     imageBuffer: generated.imageBuffer,
     productName,
