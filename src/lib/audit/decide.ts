@@ -37,9 +37,12 @@ function errorLine(errorClass: string, message: string): string {
   return `audit-check: error [${errorClass}]: ${message}`;
 }
 
-/** Every field the decision reads, so a repeated key can only be the very same object. */
+/**
+ * Every field the decision reads, JSON-encoded: a report field that carries the separator cannot
+ * forge the key of another advisory object, so a repeated key can only be the very same object.
+ */
 function advisoryKey(item: AuditAdvisory): string {
-  return `${item.url ?? ''}|${item.name}|${item.source}|${item.severity}`;
+  return JSON.stringify([item.url, item.name, item.source, item.severity]);
 }
 
 function blockingLine(
@@ -235,7 +238,7 @@ export function decideAudit(input: DecideInput): Decision {
         continue;
       }
 
-      const allowedKey = `${id}|${item.name}`;
+      const allowedKey = JSON.stringify([id, item.name]);
       if (!allowedKeys.has(allowedKey)) {
         allowedKeys.add(allowedKey);
         allowedLines.push(allowedLine(id, entry, item));

@@ -260,6 +260,117 @@ describe('Б-01 every advisory object is judged on its own', () => {
   });
 });
 
+describe('Б-03 a key built from report fields cannot be forged by a crafted field', () => {
+  it("blocks the reviewer's second object when the joined key of the first one repeats it", () => {
+    const decision = decide(
+      reportJson({
+        a: node({ name: 'braces', via: [advisory({ source: '1|x' })] }),
+        b: node({ name: 'braces|1', via: [advisory({ name: 'braces|1', source: 'x' })] }),
+      }),
+      EMPTY_PROD,
+      initialAllowlistJson()
+    );
+
+    expect(decision.exitCode).toBe(1);
+    expect(text(decision)).toContain(`allowed advisory ${GHSA_BRACES}`);
+    expect(text(decision)).toContain('does not list package braces|1');
+  });
+
+  it("blocks the reviewer's second object on its own, without the first one", () => {
+    const decision = decide(
+      reportJson({
+        b: node({ name: 'braces|1', via: [advisory({ name: 'braces|1', source: 'x' })] }),
+      }),
+      EMPTY_PROD,
+      initialAllowlistJson()
+    );
+
+    expect(decision.exitCode).toBe(1);
+    expect(text(decision)).toContain('does not list package braces|1');
+  });
+
+  /**
+   * The first object is allowed, the second one must still be judged on its own. `source` is the
+   * only field a crafted report may fill freely, so the pipe that collides the joined keys sits in
+   * the fields around it; `url` and `severity` are pinned by FR-9 (a) and (д).
+   */
+  const perField: ReadonlyArray<
+    readonly [string, Record<string, unknown>, Record<string, unknown>, string]
+  > = [
+    [
+      'a pipe splits name and source',
+      { source: '1|x' },
+      { name: 'braces|1', source: 'x' },
+      'does not list package braces|1',
+    ],
+    [
+      'pipes split name and source in three fields',
+      { source: 'a|b|c' },
+      { name: 'braces|a|b', source: 'c' },
+      'does not list package braces|a|b',
+    ],
+    [
+      'a pipe sits in url',
+      { source: '1|x' },
+      { url: `${BRACES_URL}|x`, name: 'braces', source: '1|x' },
+      'is not a GitHub Security Advisory URL',
+    ],
+    [
+      'severity carries no pipe and is still judged',
+      { source: '1|x' },
+      { name: 'braces', source: '1|x', severity: 'critical' },
+      'is above maxSeverity high',
+    ],
+  ];
+
+  it.each(perField)('judges the second object when %s', (_title, first, second, expected) => {
+    const decision = decide(
+      reportJson({
+        allowed: node({ name: 'allowed-pkg', via: [advisory(first)] }),
+        judged: node({ name: 'judged-pkg', via: [advisory(second)] }),
+      }),
+      EMPTY_PROD,
+      initialAllowlistJson()
+    );
+
+    expect(decision.exitCode).toBe(1);
+    expect(text(decision)).toContain(`allowed advisory ${GHSA_BRACES}`);
+    expect(text(decision)).toContain(expected);
+  });
+
+  function allowedLines(decision: { readonly lines: readonly string[] }): string[] {
+    return decision.lines.filter((line) => line.startsWith('audit-check: allowed advisory '));
+  }
+
+  it('still judges one repeated object once and prints its allowed line once', () => {
+    const decision = decide(
+      reportJson({
+        a: node({ name: 'first-pkg', via: [advisory()] }),
+        b: node({ name: 'second-pkg', via: [advisory()] }),
+      }),
+      EMPTY_PROD,
+      initialAllowlistJson()
+    );
+
+    expect(decision.exitCode).toBe(0);
+    expect(allowedLines(decision)).toHaveLength(1);
+  });
+
+  it('prints one allowed line per id and package, not per joined key', () => {
+    const decision = decide(
+      reportJson({
+        a: node({ name: 'braces', via: [advisory({ source: '1|x' })] }),
+        b: node({ name: 'braces|1', via: [advisory({ name: 'braces|1', source: 'x' })] }),
+      }),
+      EMPTY_PROD,
+      initialAllowlistJson({ packages: ['braces', 'braces|1'] })
+    );
+
+    expect(decision.exitCode).toBe(0);
+    expect(allowedLines(decision)).toHaveLength(2);
+  });
+});
+
 describe('Б-02 report keys and via references that live on the prototype', () => {
   const PROTOTYPE_KEYS = ['constructor', 'toString', 'hasOwnProperty', '__proto__'];
 
