@@ -182,6 +182,9 @@ The rules the check enforces:
   request that adds or extends it. The check prints a warning when an exception no longer appears
   in the report, which is the signal to shorten or drop it.
 - A project-level `.npmrc` is refused, because it could redirect the registry or the audit scope.
+- Every line the check prints names its class: `process`, `format`, `schema`, `config` for the
+  refused `.npmrc`, or `vulnerability`, together with the report and the place that failed. Each of
+  those classes exits 1.
 
 The current exception covers `GHSA-vfj7-8cjw-p6xm` (`braces`): the vulnerable version has no patch
 yet, and the glob patterns that reach it come only from repository configuration, so the residual
