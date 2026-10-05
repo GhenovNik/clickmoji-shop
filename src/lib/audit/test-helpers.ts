@@ -196,6 +196,7 @@ export function fakeRunner(respond: (call: RecordedCall, index: number) => Parti
       signal: null,
       error: null,
       stdout: '',
+      stderr: '',
       timedOut: false,
       overflow: false,
       limitBytes: NPM_MAX_OUTPUT_BYTES,

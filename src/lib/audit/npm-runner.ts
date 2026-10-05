@@ -3,6 +3,7 @@ import { spawn, type ChildProcess } from 'node:child_process';
 export const NPM_REGISTRY = 'https://registry.npmjs.org/';
 export const NPM_TIMEOUT_MS = 120_000;
 export const NPM_MAX_OUTPUT_BYTES = 32 * 1024 * 1024;
+export const NPM_MAX_STDERR_BYTES = 4096;
 export const FORCE_FINISH_GRACE_MS = 250;
 
 export interface RunnerResult {
@@ -10,6 +11,7 @@ export interface RunnerResult {
   readonly signal: string | null;
   readonly error: Error | null;
   readonly stdout: string;
+  readonly stderr: string;
   readonly timedOut: boolean;
   readonly overflow: boolean;
   readonly limitBytes: number;
@@ -96,6 +98,7 @@ export function createNpmAuditRunner(options: SpawnRunnerOptions = {}): AuditRun
       let settled = false;
       let forceTimer: NodeJS.Timeout | null = null;
       let stdout = '';
+      let stderr = '';
       let outputBytes = 0;
       let timedOut = false;
       let overflow = false;
@@ -114,6 +117,7 @@ export function createNpmAuditRunner(options: SpawnRunnerOptions = {}): AuditRun
           signal: null,
           error: error instanceof Error ? error : new Error(String(error)),
           stdout: '',
+          stderr: '',
           timedOut: false,
           overflow: false,
           limitBytes: maxOutputBytes,
@@ -131,6 +135,7 @@ export function createNpmAuditRunner(options: SpawnRunnerOptions = {}): AuditRun
         signal,
         error,
         stdout,
+        stderr,
         timedOut,
         overflow,
         limitBytes: maxOutputBytes,
@@ -177,7 +182,12 @@ export function createNpmAuditRunner(options: SpawnRunnerOptions = {}): AuditRun
           terminate();
         }
       });
-      child.stderr?.resume();
+      child.stderr?.setEncoding('utf8');
+      child.stderr?.on('data', (chunk: string) => {
+        if (stderr.length < NPM_MAX_STDERR_BYTES) {
+          stderr = `${stderr}${chunk}`.slice(0, NPM_MAX_STDERR_BYTES);
+        }
+      });
       child.on('error', (error: Error) => {
         finish(buildResult(null, null, error));
       });

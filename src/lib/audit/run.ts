@@ -52,7 +52,9 @@ function processFailure(call: AuditCall, result: RunnerResult, timeoutMs: number
   }
 
   if (result.status !== 0 && result.status !== 1) {
-    return `${name} - npm audit exited with status ${printable(result.status)}`;
+    const summary = `${name} - npm audit exited with status ${printable(result.status)}`;
+    const detail = printable(result.stderr, 200);
+    return detail === 'n/a' ? summary : `${summary} - ${detail}`;
   }
 
   return null;

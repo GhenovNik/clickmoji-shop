@@ -3,7 +3,12 @@ import { chmodSync, existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { runAuditCheck } from './run';
-import { createNpmAuditRunner, NPM_REGISTRY, NPM_TIMEOUT_MS } from './npm-runner';
+import {
+  createNpmAuditRunner,
+  NPM_MAX_STDERR_BYTES,
+  NPM_REGISTRY,
+  NPM_TIMEOUT_MS,
+} from './npm-runner';
 import {
   advisory,
   allowlistJson,
@@ -387,6 +392,36 @@ describe('AC-9 npm process failures', () => {
     await new Promise((resolve) => setTimeout(resolve, 6_500));
     expect(existsSync(marker)).toBe(false);
   }, 30_000);
+
+  it('keeps the first bytes of npm stderr for a status outside {0, 1}', async () => {
+    const command = fakeNpm(
+      tempDir(),
+      "process.stderr.write('npm ERR! code ENOTFOUND\\nnpm ERR! network ENOTFOUND registry.npmjs.org'); process.exit(2);"
+    );
+
+    const decision = await runAuditCheck(
+      options({ runner: createNpmAuditRunner({ command }), timeoutMs: 10_000 })
+    );
+
+    expect(decision.exitCode).toBe(1);
+    expect(text(decision)).toContain('error [process]');
+    expect(text(decision)).toContain('exited with status 2');
+    expect(text(decision)).toContain('npm ERR! code ENOTFOUND npm ERR! network ENOTFOUND');
+  }, 20_000);
+
+  it('caps the kept npm stderr and keeps it out of stdout', async () => {
+    const noise = `npm ERR! start${'y'.repeat(NPM_MAX_STDERR_BYTES)}`;
+    const command = fakeNpm(
+      tempDir(),
+      `process.stderr.write(${JSON.stringify(noise)}); process.exit(2);`
+    );
+
+    const result = await createNpmAuditRunner({ command })([], { ...process.env }, 10_000);
+
+    expect(result.stderr).toHaveLength(NPM_MAX_STDERR_BYTES);
+    expect(result.stderr.startsWith('npm ERR! start')).toBe(true);
+    expect(result.stdout).toBe('');
+  }, 20_000);
 
   it('fails closed when npm output exceeds the stdout buffer', async () => {
     const command = fakeNpm(tempDir(), "process.stdout.write('x'.repeat(4096)); process.exit(0);");
