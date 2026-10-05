@@ -375,26 +375,37 @@ describe('Н-02 a failure outside image generation keeps its diagnostics', () =>
     expect(logged).toContain('text analysis failed');
   });
 
-  it('logs the class and message of an unparsable request body in both routes', async () => {
+  it('logs the class and message of an unparsable request body in smart-create', async () => {
     const records = captureLoggers();
-    const brokenJson = (url: string) =>
-      new Request(url, {
+
+    const response = await smartCreate(
+      new Request('http://localhost:3000/api/products/smart-create', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: `{"productName": ${BODY_MARKER}`,
-      });
-
-    const generateResponse = await emojiGenerate(
-      brokenJson('http://localhost:3000/api/emoji/generate')
-    );
-    const smartCreateResponse = await smartCreate(
-      brokenJson('http://localhost:3000/api/products/smart-create')
+      })
     );
 
-    expect(generateResponse.status).toBe(500);
-    expect(await generateResponse.json()).toEqual({ error: 'Failed to generate emoji' });
-    expect(smartCreateResponse.status).toBe(500);
-    expect(await smartCreateResponse.json()).toEqual({ error: 'Failed to create product' });
+    expect(response.status).toBe(500);
+    expect(await response.json()).toEqual({ error: 'Failed to create product' });
+    const logged = records.map((record) => record.text).join('\n');
+    expect(logged).toContain('SyntaxError');
+    expect(logged).not.toContain(KEY_MARKER);
+  });
+
+  it('logs the class and message of an unparsable request body in the generate route', async () => {
+    const records = captureLoggers();
+
+    const response = await emojiGenerate(
+      new Request('http://localhost:3000/api/emoji/generate', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: `{"productName": ${BODY_MARKER}`,
+      })
+    );
+
+    expect(response.status).toBe(500);
+    expect(await response.json()).toEqual({ error: 'Failed to generate emoji' });
     expect(doubles.sdkCalls).toHaveLength(0);
     const logged = records.map((record) => record.text).join('\n');
     expect(logged).toContain('SyntaxError');
