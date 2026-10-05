@@ -1,20 +1,33 @@
 import { GoogleGenAI } from '@google/genai';
 import type { GenerateContentResponse } from '@google/genai';
 import OpenAI from 'openai';
-import { getEmojiGenerationPrompt } from '@/lib/prompts/emoji-generation';
+import {
+  EMOJI_GENERATION_PROMPT_VERSION,
+  EMOJI_GENERATION_TRANSPARENT_PROMPT_VERSION,
+  getEmojiGenerationPrompt,
+  type EmojiGenerationPromptVersion,
+} from '@/lib/prompts/emoji-generation';
 
 export const GOOGLE_IMAGE_MODEL_ENV = 'GOOGLE_IMAGE_MODEL';
+export const IMAGEN_MODEL_ENV = 'IMAGEN_MODEL';
 export const OPENAI_IMAGE_MODEL_ENV = 'OPENAI_IMAGE_MODEL';
-export const DEFAULT_OPENAI_IMAGE_MODEL = 'gpt-image-1.5';
+
+export const DEFAULT_GOOGLE_IMAGE_MODEL = 'gemini-3.1-flash-lite-image';
+export const DEFAULT_OPENAI_IMAGE_MODEL = 'gpt-image-2.5-flare';
 
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+
+const OPENAI_IMAGE_SIZE = '1024x1024';
+const OPENAI_IMAGE_QUALITY = 'medium';
+const OPENAI_IMAGE_BACKGROUND = 'transparent';
 
 // Model id grammar, not a catalogue of models: an id that matches is routed, it is not guaranteed
 // that the model itself can generate images.
 const IMAGEN_MODEL_ID_PATTERN = /^imagen-[a-z0-9]+(?:[.-][a-z0-9]+)*$/;
 const GEMINI_IMAGE_MODEL_ID_PATTERN =
   /^gemini-[a-z0-9]+(?:[.-][a-z0-9]+)*-image(?:-[a-z0-9]+(?:[.-][a-z0-9]+)*)?$/;
+const OPENAI_IMAGE_MODEL_ID_PATTERN = /^gpt-image-[a-z0-9]+(?:[.-][a-z0-9]+)*$/;
 
 // Values verified against the installed @google/genai FinishReason enum.
 const BLOCKED_FINISH_REASONS = new Set([
@@ -40,9 +53,36 @@ type GeneratedImage = {
   imageBuffer: Buffer;
   model: string;
   prompt: string;
+  promptVersion: EmojiGenerationPromptVersion;
 };
 
 type GoogleImageAdapter = 'generateImages' | 'generateContent';
+
+export type GoogleImageClient = Pick<GoogleGenAI, 'models'>;
+export type OpenAIImageClient = Pick<OpenAI, 'images'>;
+
+/**
+ * SDK clients are injectable so callers outside a request (the AGE-347 paid probe) can own
+ * transport options such as retries and timeouts without changing the request contract.
+ */
+export type EmojiImageClientFactory = {
+  createGoogleClient?: (options: { apiKey: string }) => GoogleImageClient;
+  createOpenAIClient?: (options: { apiKey: string }) => OpenAIImageClient;
+};
+
+type ResolvedClientFactory = Required<EmojiImageClientFactory>;
+
+const DEFAULT_CLIENT_FACTORY: ResolvedClientFactory = {
+  createGoogleClient: ({ apiKey }) => new GoogleGenAI({ apiKey }),
+  createOpenAIClient: ({ apiKey }) => new OpenAI({ apiKey }),
+};
+
+function resolveClientFactory(factory?: EmojiImageClientFactory): ResolvedClientFactory {
+  return {
+    createGoogleClient: factory?.createGoogleClient ?? DEFAULT_CLIENT_FACTORY.createGoogleClient,
+    createOpenAIClient: factory?.createOpenAIClient ?? DEFAULT_CLIENT_FACTORY.createOpenAIClient,
+  };
+}
 
 function readModelEnv(name: string): string | undefined {
   const raw = process.env[name];
@@ -53,7 +93,22 @@ function readModelEnv(name: string): string | undefined {
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
-function resolveGoogleImageAdapter(model: string): GoogleImageAdapter {
+/**
+ * FR-1: the first non-empty trimmed value wins, `IMAGEN_MODEL` is the deprecated synonym of
+ * `GOOGLE_IMAGE_MODEL`, and without either variable the operator default applies. The name of the
+ * variable that supplied the value is returned too, so a configuration error names it.
+ */
+function readGoogleImageModel(): { env: string; model: string } {
+  for (const env of [GOOGLE_IMAGE_MODEL_ENV, IMAGEN_MODEL_ENV]) {
+    const model = readModelEnv(env);
+    if (model !== undefined) {
+      return { env, model };
+    }
+  }
+  return { env: GOOGLE_IMAGE_MODEL_ENV, model: DEFAULT_GOOGLE_IMAGE_MODEL };
+}
+
+function resolveGoogleImageAdapter(model: string, env: string): GoogleImageAdapter {
   if (IMAGEN_MODEL_ID_PATTERN.test(model)) {
     return 'generateImages';
   }
@@ -61,44 +116,18 @@ function resolveGoogleImageAdapter(model: string): GoogleImageAdapter {
     return 'generateContent';
   }
   throw new Error(
-    `Invalid ${GOOGLE_IMAGE_MODEL_ENV} value "${model}": expected an Imagen model id (${IMAGEN_MODEL_ID_PATTERN.source}) for generateImages or a Gemini image model id (${GEMINI_IMAGE_MODEL_ID_PATTERN.source}) for generateContent`
+    `Invalid ${env} value "${model}": expected an Imagen model id (${IMAGEN_MODEL_ID_PATTERN.source}) for generateImages or a Gemini image model id (${GEMINI_IMAGE_MODEL_ID_PATTERN.source}) for generateContent`
   );
 }
 
-async function generateWithLegacyGemini({
-  productName,
-  description,
-  apiKey,
-}: GenerateImageInput): Promise<GeneratedImage> {
-  const prompt = getEmojiGenerationPrompt(productName, description);
-  const ai = new GoogleGenAI({ apiKey });
-  const model = process.env.IMAGEN_MODEL || 'imagen-4.0-generate-001';
-
-  const response = await ai.models.generateImages({
-    model,
-    prompt,
-    config: {
-      numberOfImages: 1,
-      aspectRatio: '1:1',
-    },
-  });
-
-  if (!response?.generatedImages?.length) {
+function resolveOpenAIImageModel(): string {
+  const model = readModelEnv(OPENAI_IMAGE_MODEL_ENV) ?? DEFAULT_OPENAI_IMAGE_MODEL;
+  if (!OPENAI_IMAGE_MODEL_ID_PATTERN.test(model)) {
     throw new Error(
-      'No image generated by Imagen - content may have been blocked by safety filters'
+      `Invalid ${OPENAI_IMAGE_MODEL_ENV} value "${model}": expected a GPT Image model id (${OPENAI_IMAGE_MODEL_ID_PATTERN.source}) that supports images.generate with a base64 PNG response`
     );
   }
-
-  const imageBytes = response.generatedImages[0]?.image?.imageBytes;
-  if (!imageBytes) {
-    throw new Error('Missing image data in Imagen response');
-  }
-
-  return {
-    imageBuffer: Buffer.from(imageBytes, 'base64'),
-    model,
-    prompt,
-  };
+  return model;
 }
 
 async function generateWithGoogleImages({
@@ -106,9 +135,10 @@ async function generateWithGoogleImages({
   description,
   apiKey,
   model,
-}: GenerateImageWithModelInput): Promise<GeneratedImage> {
+  clients,
+}: GenerateImageWithModelInput & { clients: ResolvedClientFactory }): Promise<GeneratedImage> {
   const prompt = getEmojiGenerationPrompt(productName, description);
-  const ai = new GoogleGenAI({ apiKey });
+  const ai = clients.createGoogleClient({ apiKey });
 
   const response = await ai.models.generateImages({
     model,
@@ -134,6 +164,7 @@ async function generateWithGoogleImages({
     imageBuffer: Buffer.from(imageBytes, 'base64'),
     model,
     prompt,
+    promptVersion: EMOJI_GENERATION_PROMPT_VERSION,
   };
 }
 
@@ -150,6 +181,18 @@ function classifyFinishReason(finishReason: string | undefined) {
 function readBlockedPromptReason(response: GenerateContentResponse) {
   const blockReason = response?.promptFeedback?.blockReason;
   return blockReason ? String(blockReason) : 'none';
+}
+
+function assertUsablePngBytes(imageBuffer: Buffer) {
+  if (imageBuffer.length === 0) {
+    throw new Error('Emoji image generation empty-image: image data decoded to zero bytes');
+  }
+  if (!imageBuffer.subarray(0, PNG_SIGNATURE.length).equals(PNG_SIGNATURE)) {
+    throw new Error('Emoji image generation invalid-png: image data is not a PNG');
+  }
+  if (imageBuffer.length > MAX_IMAGE_BYTES) {
+    throw new Error(`Emoji image generation too-large: image exceeds ${MAX_IMAGE_BYTES} bytes`);
+  }
 }
 
 function readGenerateContentImage(response: GenerateContentResponse): Buffer {
@@ -181,15 +224,7 @@ function readGenerateContentImage(response: GenerateContentResponse): Buffer {
   }
 
   const imageBuffer = Buffer.from(data, 'base64');
-  if (imageBuffer.length === 0) {
-    throw new Error('Emoji image generation empty-image: image data decoded to zero bytes');
-  }
-  if (!imageBuffer.subarray(0, PNG_SIGNATURE.length).equals(PNG_SIGNATURE)) {
-    throw new Error('Emoji image generation invalid-png: image data is not a PNG');
-  }
-  if (imageBuffer.length > MAX_IMAGE_BYTES) {
-    throw new Error(`Emoji image generation too-large: image exceeds ${MAX_IMAGE_BYTES} bytes`);
-  }
+  assertUsablePngBytes(imageBuffer);
 
   return imageBuffer;
 }
@@ -199,9 +234,10 @@ async function generateWithGoogleGenerateContent({
   description,
   apiKey,
   model,
-}: GenerateImageWithModelInput): Promise<GeneratedImage> {
+  clients,
+}: GenerateImageWithModelInput & { clients: ResolvedClientFactory }): Promise<GeneratedImage> {
   const prompt = getEmojiGenerationPrompt(productName, description);
-  const ai = new GoogleGenAI({ apiKey });
+  const ai = clients.createGoogleClient({ apiKey });
 
   const response = await ai.models.generateContent({
     model,
@@ -216,18 +252,20 @@ async function generateWithGoogleGenerateContent({
     imageBuffer: readGenerateContentImage(response),
     model,
     prompt,
+    promptVersion: EMOJI_GENERATION_PROMPT_VERSION,
   };
 }
 
-export async function generateWithGoogleImage(input: GenerateImageInput): Promise<GeneratedImage> {
-  const configuredModel = readModelEnv(GOOGLE_IMAGE_MODEL_ENV);
-  if (configuredModel === undefined) {
-    return generateWithLegacyGemini(input);
-  }
+export async function generateWithGoogleImage(
+  input: GenerateImageInput,
+  clientFactory?: EmojiImageClientFactory
+): Promise<GeneratedImage> {
+  const clients = resolveClientFactory(clientFactory);
+  const { env, model } = readGoogleImageModel();
 
   // Configuration is validated before any client is created or any request is sent.
-  const adapter = resolveGoogleImageAdapter(configuredModel);
-  const modelInput = { ...input, model: configuredModel };
+  const adapter = resolveGoogleImageAdapter(model, env);
+  const modelInput = { ...input, model, clients };
 
   if (adapter === 'generateImages') {
     return generateWithGoogleImages(modelInput);
@@ -235,18 +273,27 @@ export async function generateWithGoogleImage(input: GenerateImageInput): Promis
   return generateWithGoogleGenerateContent(modelInput);
 }
 
-export async function generateWithOpenAI({
-  productName,
-  description,
-  apiKey,
-}: GenerateImageInput): Promise<GeneratedImage> {
-  const prompt = getEmojiGenerationPrompt(productName, description);
-  const model = readModelEnv(OPENAI_IMAGE_MODEL_ENV) ?? DEFAULT_OPENAI_IMAGE_MODEL;
-  const openai = new OpenAI({ apiKey });
+export async function generateWithOpenAI(
+  { productName, description, apiKey }: GenerateImageInput,
+  clientFactory?: EmojiImageClientFactory
+): Promise<GeneratedImage> {
+  const clients = resolveClientFactory(clientFactory);
+  const prompt = getEmojiGenerationPrompt(
+    productName,
+    description,
+    EMOJI_GENERATION_TRANSPARENT_PROMPT_VERSION
+  );
+
+  // Configuration is validated before any client is created or any request is sent.
+  const model = resolveOpenAIImageModel();
+  const openai = clients.createOpenAIClient({ apiKey });
 
   const result = await openai.images.generate({
-    model,
+    model: model as OpenAI.ImageModel,
     prompt,
+    size: OPENAI_IMAGE_SIZE,
+    quality: OPENAI_IMAGE_QUALITY as 'medium',
+    background: OPENAI_IMAGE_BACKGROUND as 'transparent',
   });
 
   const imageBase64 = result.data?.[0]?.b64_json;
@@ -254,9 +301,13 @@ export async function generateWithOpenAI({
     throw new Error('No image data from GPT Image');
   }
 
+  const imageBuffer = Buffer.from(imageBase64, 'base64');
+  assertUsablePngBytes(imageBuffer);
+
   return {
-    imageBuffer: Buffer.from(imageBase64, 'base64'),
+    imageBuffer,
     model,
     prompt,
+    promptVersion: EMOJI_GENERATION_TRANSPARENT_PROMPT_VERSION,
   };
 }

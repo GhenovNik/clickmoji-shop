@@ -1,9 +1,10 @@
 import { UTApi } from 'uploadthing/server';
-import { generateWithGoogleImage, generateWithOpenAI } from '@/lib/services/emoji-image-adapters';
 import {
-  EMOJI_GENERATION_PROMPT_VERSION,
-  getEmojiGenerationCacheKey,
-} from '@/lib/prompts/emoji-generation';
+  generateWithGoogleImage,
+  generateWithOpenAI,
+  type EmojiImageClientFactory,
+} from '@/lib/services/emoji-image-adapters';
+import { getEmojiGenerationCacheKey } from '@/lib/prompts/emoji-generation';
 
 export type EmojiProvider = 'gemini' | 'gpt-image';
 
@@ -11,6 +12,7 @@ type GenerateEmojiImageOptions = {
   productName: string;
   description?: string;
   provider?: string;
+  clients?: EmojiImageClientFactory;
 };
 
 type UploadEmojiImageOptions = {
@@ -32,21 +34,20 @@ export async function generateEmojiImage({
   productName,
   description,
   provider: providerInput = process.env.AI_PROVIDER,
+  clients,
 }: GenerateEmojiImageOptions) {
   const provider = getProvider(providerInput);
-  const cacheKey = getEmojiGenerationCacheKey(productName, description);
 
   if (provider === 'gpt-image') {
     const apiKey = process.env.OPENAI_API_KEY;
     if (!apiKey) {
       throw new Error('OpenAI API key not configured');
     }
-    const generated = await generateWithOpenAI({ productName, description, apiKey });
+    const generated = await generateWithOpenAI({ productName, description, apiKey }, clients);
     return {
       ...generated,
       provider,
-      promptVersion: EMOJI_GENERATION_PROMPT_VERSION,
-      cacheKey,
+      cacheKey: getEmojiGenerationCacheKey(productName, description, generated.promptVersion),
     };
   }
 
@@ -54,12 +55,11 @@ export async function generateEmojiImage({
   if (!apiKey) {
     throw new Error('Google Generative AI API key not configured');
   }
-  const generated = await generateWithGoogleImage({ productName, description, apiKey });
+  const generated = await generateWithGoogleImage({ productName, description, apiKey }, clients);
   return {
     ...generated,
     provider,
-    promptVersion: EMOJI_GENERATION_PROMPT_VERSION,
-    cacheKey,
+    cacheKey: getEmojiGenerationCacheKey(productName, description, generated.promptVersion),
   };
 }
 

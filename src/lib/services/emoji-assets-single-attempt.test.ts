@@ -83,6 +83,11 @@ function expectUnchangedMetadata(
   provider: string
 ) {
   expect(result.provider).toBe(provider);
+  if (provider === 'gpt-image') {
+    expect(result.promptVersion).toBe('emoji-image-v1-transparent');
+    expect(result.cacheKey).toBe('emoji-image-v1-transparent:milk:cold carton');
+    return;
+  }
   expect(result.promptVersion).toBe(EMOJI_GENERATION_PROMPT_VERSION);
   expect(result.cacheKey).toBe(getEmojiGenerationCacheKey(PRODUCT, DESCRIPTION));
 }
@@ -113,7 +118,16 @@ afterEach(() => {
 });
 
 describe('AC-6 returned model id and unchanged metadata', () => {
-  it('reports the legacy Imagen model and unchanged metadata', async () => {
+  it('reports the default Gemini image model and unchanged metadata', async () => {
+    setEnv({ IMAGEN_MODEL: undefined });
+
+    const result = await generateEmojiImage(ASSET_INPUT);
+
+    expect(result.model).toBe('gemini-3.1-flash-lite-image');
+    expectUnchangedMetadata(result, 'gemini');
+  });
+
+  it('reports the deprecated IMAGEN_MODEL synonym and unchanged metadata', async () => {
     const result = await generateEmojiImage(ASSET_INPUT);
 
     expect(result.model).toBe('imagen-4.0-fast-generate-001');
@@ -138,16 +152,16 @@ describe('AC-6 returned model id and unchanged metadata', () => {
     expectUnchangedMetadata(result, 'gemini');
   });
 
-  it('reports the legacy OpenAI model and unchanged metadata', async () => {
-    setEnv({ AI_PROVIDER: 'gpt-image' });
+  it('reports the default OpenAI model and transparent-variant metadata', async () => {
+    setEnv({ AI_PROVIDER: 'gpt-image', IMAGEN_MODEL: undefined });
 
     const result = await generateEmojiImage(ASSET_INPUT);
 
-    expect(result.model).toBe('gpt-image-1.5');
+    expect(result.model).toBe('gpt-image-2.5-flare');
     expectUnchangedMetadata(result, 'gpt-image');
   });
 
-  it('reports the configured OpenAI model and unchanged metadata', async () => {
+  it('reports the configured OpenAI model and transparent-variant metadata', async () => {
     setEnv({ AI_PROVIDER: 'gpt-image', OPENAI_IMAGE_MODEL: 'gpt-image-2' });
 
     const result = await generateEmojiImage(ASSET_INPUT);
@@ -156,11 +170,22 @@ describe('AC-6 returned model id and unchanged metadata', () => {
     expectUnchangedMetadata(result, 'gpt-image');
   });
 
-  it('keeps generateAndUploadEmojiAsset metadata for the legacy Imagen path', async () => {
+  it('keeps generateAndUploadEmojiAsset metadata for the deprecated synonym path', async () => {
     const asset = await generateAndUploadEmojiAsset(ASSET_INPUT);
 
     expect(asset.imageUrl).toBe('https://utfs.io/f/synthetic.png');
     expect(asset.model).toBe('imagen-4.0-fast-generate-001');
+    expectUnchangedMetadata(asset, 'gemini');
+    expect(sdk.uploadFilesCalls).toHaveLength(1);
+  });
+
+  it('keeps generateAndUploadEmojiAsset metadata for the default generateContent path', async () => {
+    setEnv({ IMAGEN_MODEL: undefined });
+
+    const asset = await generateAndUploadEmojiAsset(ASSET_INPUT);
+
+    expect(asset.imageUrl).toBe('https://utfs.io/f/synthetic.png');
+    expect(asset.model).toBe('gemini-3.1-flash-lite-image');
     expectUnchangedMetadata(asset, 'gemini');
     expect(sdk.uploadFilesCalls).toHaveLength(1);
   });
@@ -295,5 +320,61 @@ describe('AC-8 exactly one adapter attempt per generation', () => {
     const bytes = Buffer.from(await sdk.uploadFilesCalls[0].arrayBuffer());
     expect(bytes.equals(TINY_PNG_BYTES)).toBe(true);
     expect(asset.imageUrl).toBe('https://utfs.io/f/synthetic.png');
+  });
+
+  it('performs a single generateContent attempt for the default model when the call rejects', async () => {
+    setEnv({ IMAGEN_MODEL: undefined });
+    sdk.generateContentImpl = () => {
+      throw new Error('provider unavailable');
+    };
+
+    await expect(generateAndUploadEmojiAsset(ASSET_INPUT)).rejects.toThrow('provider unavailable');
+
+    expect(sdk.generateContentCalls).toHaveLength(1);
+    expect(sdk.generateContentCalls[0]?.model).toBe('gemini-3.1-flash-lite-image');
+    expect(sdk.generateImagesCalls).toHaveLength(0);
+    expect(sdk.imagesGenerateCalls).toHaveLength(0);
+    expect(sdk.uploadFilesCalls).toHaveLength(0);
+  });
+
+  it('performs a single generateContent attempt for the default model on a blocked soft failure', async () => {
+    setEnv({ IMAGEN_MODEL: undefined });
+    sdk.generateContentImpl = () =>
+      generateContentResponse(candidateWith([imagePart()], 'IMAGE_SAFETY'));
+
+    await expect(generateAndUploadEmojiAsset(ASSET_INPUT)).rejects.toThrow(/blocked/);
+
+    expect(sdk.generateContentCalls).toHaveLength(1);
+    expect(sdk.generateImagesCalls).toHaveLength(0);
+    expect(sdk.imagesGenerateCalls).toHaveLength(0);
+    expect(sdk.uploadFilesCalls).toHaveLength(0);
+  });
+
+  it('performs a single images.generate attempt for the default model when the call rejects', async () => {
+    setEnv({ AI_PROVIDER: 'gpt-image', IMAGEN_MODEL: undefined });
+    sdk.imagesGenerateImpl = () => {
+      throw new Error('provider unavailable');
+    };
+
+    await expect(generateAndUploadEmojiAsset(ASSET_INPUT)).rejects.toThrow('provider unavailable');
+
+    expect(sdk.imagesGenerateCalls).toHaveLength(1);
+    expect(sdk.imagesGenerateCalls[0]?.model).toBe('gpt-image-2.5-flare');
+    expect(sdk.generateImagesCalls).toHaveLength(0);
+    expect(sdk.generateContentCalls).toHaveLength(0);
+    expect(sdk.uploadFilesCalls).toHaveLength(0);
+  });
+
+  it('uploads the decoded PNG bytes on the default generateContent path', async () => {
+    setEnv({ IMAGEN_MODEL: undefined });
+
+    const asset = await generateAndUploadEmojiAsset(ASSET_INPUT);
+
+    expect(sdk.generateContentCalls).toHaveLength(1);
+    expect(sdk.generateContentCalls[0]?.model).toBe('gemini-3.1-flash-lite-image');
+    expect(sdk.generateImagesCalls).toHaveLength(0);
+    expect(sdk.uploadFilesCalls).toHaveLength(1);
+    const bytes = Buffer.from(await sdk.uploadFilesCalls[0].arrayBuffer());
+    expect(bytes.equals(TINY_PNG_BYTES)).toBe(true);
   });
 });
