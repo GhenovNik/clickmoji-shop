@@ -17,6 +17,7 @@ import {
   liveProduction,
   node,
   reportJson,
+  reportWithRawVulnerabilities,
   text,
 } from './test-helpers';
 import type { ReportLabel } from './types';
@@ -236,6 +237,39 @@ describe('AC-8 report format errors fail closed', () => {
       expect(text(decision)).toContain(reportName);
       expect(text(decision)).toContain(expected);
     }
+  });
+});
+
+describe('Н-03 report values that reach the failure message', () => {
+  it.each(['full', 'production'] as ReportLabel[])(
+    'prints an injected %s report node key as one printable line',
+    async (label) => {
+      const badReport = reportWithRawVulnerabilities(
+        `{"x\\n::error::injected": ${JSON.stringify({ severity: 'high', via: ['micromatch'] })}}`
+      );
+      const { runner } = fixturesRunner(
+        label === 'full' ? badReport : liveFull(),
+        label === 'production' ? badReport : liveProduction()
+      );
+
+      const decision = await runAuditCheck(options({ runner }));
+
+      expect(decision.exitCode).toBe(1);
+      expect(text(decision)).toContain('error [format]');
+      expect(text(decision)).toContain('vulnerabilities.x ::error::injected.name must be a string');
+      expect(text(decision)).not.toMatch(/^::error::/m);
+    }
+  );
+
+  it('prints an injected allowlist field name as one printable line', async () => {
+    const raw = `{\n  "version": 1,\n  "exceptions": [],\n  "x\\n::error::injected": 1\n}\n`;
+
+    const decision = await runAuditCheck(options({ readAllowlistFile: () => raw }));
+
+    expect(decision.exitCode).toBe(1);
+    expect(text(decision)).toContain('error [schema]');
+    expect(text(decision)).toContain('unknown field "x ::error::injected"');
+    expect(text(decision)).not.toMatch(/^::error::/m);
   });
 });
 

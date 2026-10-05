@@ -111,7 +111,10 @@ export function parseAllowlist(raw: string): AllowlistParseResult {
 
   for (const key of Object.keys(parsed)) {
     if (!(ROOT_FIELDS as readonly string[]).includes(key)) {
-      return invalid('audit-allowlist.json', `audit-allowlist.json: unknown field "${key}"`);
+      return invalid(
+        'audit-allowlist.json',
+        `audit-allowlist.json: unknown field "${printable(key)}"`
+      );
     }
   }
 
@@ -135,7 +138,10 @@ export function parseAllowlist(raw: string): AllowlistParseResult {
 
     for (const key of Object.keys(value)) {
       if (!(ENTRY_FIELDS as readonly string[]).includes(key)) {
-        return invalid(`${path}.${key}`, `${path}.${key}: unknown field "${key}"`);
+        return invalid(
+          `${path}.${printable(key)}`,
+          `${path}.${printable(key)}: unknown field "${printable(key)}"`
+        );
       }
     }
 

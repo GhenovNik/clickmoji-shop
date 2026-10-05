@@ -79,7 +79,7 @@ export function parseReport(label: ReportLabel, stdout: string): ReportParseResu
   const vulnerabilities = new Map<string, ReportNode>();
 
   for (const [key, value] of Object.entries(parsed.vulnerabilities)) {
-    const path = `vulnerabilities.${key}`;
+    const path = `vulnerabilities.${printable(key)}`;
 
     if (!isPlainObject(value)) {
       return invalid(path, `${path} must be a JSON object`);
