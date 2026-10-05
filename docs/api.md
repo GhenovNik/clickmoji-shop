@@ -286,19 +286,22 @@ All endpoints are implemented as Next.js Route Handlers under `src/app/api`.
 
 ### Image optimizer allow-list
 
-- `images.remotePatterns` in `next.config.ts` is exactly one entry:
-  `{ protocol: 'https', hostname: 'utfs.io', port: '', pathname: '/f/*', search: '' }`.
+- `images.remotePatterns` in `next.config.ts` is exactly two entries, in this order:
+  `{ protocol: 'https', hostname: 'utfs.io', port: '', pathname: '/f/*', search: '' }` and
+  `{ protocol: 'https', hostname: '3kv5vvupx6.ufs.sh', port: '', pathname: '/f/*', search: '' }`
+  (legacy `utfs.io` plus our UploadThing app host; `ufs.sh` / `*.ufs.sh` removed).
 - Guarantee (semantics of the installed Next: `matchRemotePattern` over WHATWG `URL`): the
   optimizer accepts an initial external URL only with protocol `https:`, hostname exactly
-  `utfs.io`, empty `port` (an explicit `:443` normalizes to empty and passes), empty `search`
-  (a trailing `?` passes), and a pathname matching picomatch `/f/*` with `{ dot: true }` —
-  one non-empty segment after `/f/` with an optional trailing slash. The fragment is not
-  checked; percent-encoding (`%2F`) stays inside one encoded segment.
+  `utfs.io` or exactly `3kv5vvupx6.ufs.sh` (no substitution; other `ufs.sh` subdomains and
+  `x.3kv5vvupx6.ufs.sh` do not pass), empty `port` (an explicit `:443` normalizes to empty
+  and passes), empty `search` (a trailing `?` passes), and a pathname matching picomatch
+  `/f/*` with `{ dot: true }` — one non-empty segment after `/f/` with an optional trailing
+  slash. The fragment is not checked; percent-encoding (`%2F`) stays inside one encoded segment.
 - This allow-list is not API validation and does not cover every `<img>`: `products.imageUrl`,
   `categories.imageUrl`, and `list_history_items.productImageUrl` accept values without this
   check, and admin renders marked `unoptimized` fetch their source directly.
 - Residual risks of this no-migration narrowing (AGE-997): files of other tenants under the
   shared `utfs.io/f/*` prefix are still optimized at our expense; future uploads served through
-  the legacy `url` field may drift to `*.ufs.sh` and then miss the optimizer; the optimizer
-  does not re-check the allow-list after the initial request redirect, and per-hop behavior of
-  managed Vercel is not proven here.
+  the legacy `url` field may drift to a different app host and then miss the optimizer; the
+  optimizer does not re-check the allow-list after the initial request redirect, and per-hop
+  behavior of managed Vercel is not proven here.

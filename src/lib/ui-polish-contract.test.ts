@@ -31,14 +31,23 @@ describe('UI polish contract', () => {
         pathname: '/f/*',
         search: '',
       },
+      {
+        protocol: 'https',
+        hostname: '3kv5vvupx6.ufs.sh',
+        port: '',
+        pathname: '/f/*',
+        search: '',
+      },
     ];
     const remotePatterns = nextConfig.images?.remotePatterns;
     expect(remotePatterns).toEqual(expectedRemotePatterns);
-    const pattern = remotePatterns?.[0];
-    if (!pattern) throw new Error('expected exactly one remotePattern');
+    if (!remotePatterns) throw new Error('expected exactly two remotePatterns');
+    const matches = (src: string) =>
+      remotePatterns.some((pattern) => matchRemotePattern(pattern, new URL(src)));
 
     const allowed = [
       'https://utfs.io/f/abc123.png',
+      'https://3kv5vvupx6.ufs.sh/f/abc123.png',
       'https://utfs.io/f/abc123.png/',
       'https://utfs.io:443/f/abc123.png',
       'https://utfs.io/f/abc123.png?',
@@ -55,14 +64,19 @@ describe('UI polish contract', () => {
       'https://utfs.io/',
       'https://abc.ufs.sh/f/a',
       'https://ufs.sh/f/a',
+      'https://x.3kv5vvupx6.ufs.sh/f/a',
+      'https://3kv5vvupx6.ufs.sh/x/a',
+      'https://3kv5vvupx6.ufs.sh:8443/f/a',
+      'https://3kv5vvupx6.ufs.sh/f/a?x=1',
+      'http://3kv5vvupx6.ufs.sh/f/a',
       'https://utfsXio/f/a',
       'https://evil.example/f/a',
     ];
     for (const src of allowed) {
-      expect(matchRemotePattern(pattern, new URL(src)), src).toBe(true);
+      expect(matches(src), src).toBe(true);
     }
     for (const src of denied) {
-      expect(matchRemotePattern(pattern, new URL(src)), src).toBe(false);
+      expect(matches(src), src).toBe(false);
     }
   });
 
