@@ -107,7 +107,8 @@ npm run test:e2e:smoke      # Run deterministic browser smoke tests without Post
 npm run test:e2e            # Run the full browser suite; requires a prepared database
 npm run verify              # Formatting, static checks, unit tests, and production build
 npm run verify:full         # Full verification plus deterministic browser smoke
-npm run audit:prod          # Audit production dependencies at high severity or above
+npm run audit:all           # Audit all dependencies with the time-limited exception policy
+npm run audit:prod          # Strict audit of production dependencies at high severity or above
 ```
 
 See [TESTING_GUIDE.md](TESTING_GUIDE.md) for the database-backed E2E prerequisites and the
@@ -138,6 +139,56 @@ scripts/          Explicit database and storage administration tools
 
 Dependency advisories are reviewed by reachability and compatibility. The project does not use
 `npm audit fix --force` because its suggested downgrades can replace supported framework versions.
+
+### Dependency advisory exceptions
+
+`npm run audit:all` runs `scripts/audit-check.ts` instead of a bare `npm audit`. The check calls
+`npm audit --json` twice, once for the whole tree and once with `--omit=dev`, and fails closed: an
+unreachable registry, a changed report format, an unreadable exception file, or any unresolved
+high or critical advisory exits with code 1.
+
+`audit-allowlist.json` in the repository root is the only way to accept a high or critical
+advisory. Every exception must name the exact advisory, stay inside development dependencies,
+carry a severity cap and an expiry date, and point at a Linear issue:
+
+```json
+{
+  "version": 1,
+  "exceptions": [
+    {
+      "id": "GHSA-vfj7-8cjw-p6xm",
+      "packages": ["braces"],
+      "reason": "why the advisory is unreachable and what the residual risk is",
+      "scope": "dev",
+      "maxSeverity": "high",
+      "expires": "2026-11-04",
+      "issue": "AGE-951"
+    }
+  ]
+}
+```
+
+The rules the check enforces:
+
+- `scope` is always `dev`. `npm run audit:prod` stays strict: any high or critical advisory in the
+  production dependency tree fails, even when an exception exists.
+- `expires` is a calendar date and the exception is valid until the end of that day in UTC. An
+  expired entry fails the check even after the advisory has left the report, so removing an
+  exception is a deliberate, reviewed step.
+- `maxSeverity` caps the advisory severity the entry accepts; a raise above the cap fails again.
+- `packages` lists the vulnerable packages the advisory may be reported for, and the advisory URL
+  must be exactly `https://github.com/advisories/<GHSA id>`.
+- Every entry carries the Linear issue that tracks it, and each exception is reviewed in the pull
+  request that adds or extends it. The check prints a warning when an exception no longer appears
+  in the report, which is the signal to shorten or drop it.
+- A project-level `.npmrc` is refused, because it could redirect the registry or the audit scope.
+- Every error line names its class — `process`, `format`, `schema`, `config` for the refused
+  `.npmrc`, or `vulnerability` — together with the place that failed, and each of those classes
+  exits 1. The `allowed advisory`, `ok` and `warning` lines carry no class.
+
+The current exception covers `GHSA-vfj7-8cjw-p6xm` (`braces`): the vulnerable version has no patch
+yet, and the glob patterns that reach it come only from repository configuration, so the residual
+risk is limited to developer tooling.
 
 ## Documentation
 
