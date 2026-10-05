@@ -292,7 +292,7 @@ describe('Б-03 a key built from report fields cannot be forged by a crafted fie
   /**
    * The first object is allowed, the second one must still be judged on its own. `source` is the
    * only field a crafted report may fill freely, so the pipe that collides the joined keys sits in
-   * the fields around it; `url` and `severity` are pinned by FR-9 (a) and (д).
+   * the fields around it; `url` and `severity` are pinned by FR-9 (a) and (d).
    */
   const perField: ReadonlyArray<
     readonly [string, Record<string, unknown>, Record<string, unknown>, string]
