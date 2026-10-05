@@ -173,6 +173,91 @@ describe('AC-2 unresolved advisories', () => {
   });
 });
 
+describe('Б-01 every advisory object is judged on its own', () => {
+  const sameIdentity = { name: 'other-pkg', url: OTHER_URL, source: 1240992 };
+
+  function twoObjects(first: string, second: string): string {
+    return reportJson({
+      'moderate-node': node({
+        name: 'other-pkg',
+        severity: first,
+        via: [advisory({ ...sameIdentity, severity: first })],
+      }),
+      'critical-node': node({
+        name: 'other-pkg',
+        severity: second,
+        via: [advisory({ ...sameIdentity, severity: second })],
+      }),
+    });
+  }
+
+  it('blocks a critical object that repeats a moderate object with the same url, name and source', () => {
+    const decision = decide(twoObjects('moderate', 'critical'), EMPTY_PROD, initialAllowlistJson());
+
+    expect(decision.exitCode).toBe(1);
+    expect(text(decision)).toContain('severity critical');
+    expect(text(decision)).toContain(`no allowlist entry for ${GHSA_OTHER}`);
+  });
+
+  it('blocks a critical object that repeats an allowed object and exceeds maxSeverity', () => {
+    const decision = decide(
+      twoObjects('moderate', 'critical'),
+      EMPTY_PROD,
+      allowlistJson([entry({ id: GHSA_OTHER, packages: ['other-pkg'], maxSeverity: 'high' })])
+    );
+
+    expect(decision.exitCode).toBe(1);
+    expect(text(decision)).toContain('severity critical');
+    expect(text(decision)).toContain('is above maxSeverity high');
+  });
+
+  it('blocks a critical object that repeats a high object without any entry', () => {
+    const decision = decide(twoObjects('high', 'critical'), EMPTY_PROD, allowlistJson([]));
+
+    expect(decision.exitCode).toBe(1);
+    expect(text(decision)).toContain('severity critical');
+    expect(text(decision)).toContain(`no allowlist entry for ${GHSA_OTHER}`);
+  });
+
+  it('still blocks when the critical object comes first and the moderate one repeats it', () => {
+    const decision = decide(twoObjects('critical', 'moderate'), EMPTY_PROD, initialAllowlistJson());
+
+    expect(decision.exitCode).toBe(1);
+    expect(text(decision)).toContain(`no allowlist entry for ${GHSA_OTHER}`);
+  });
+
+  it('allows the high object of two objects that differ only in severity', () => {
+    const decision = decide(
+      reportJson({
+        'other-pkg': node({
+          name: 'other-pkg',
+          severity: 'high',
+          via: [
+            advisory({ ...sameIdentity, severity: 'moderate' }),
+            advisory({ ...sameIdentity, severity: 'high' }),
+          ],
+        }),
+      }),
+      EMPTY_PROD,
+      allowlistJson([entry({ id: GHSA_OTHER, packages: ['other-pkg'] })])
+    );
+
+    expect(decision.exitCode).toBe(0);
+    expect(text(decision)).toContain(`allowed advisory ${GHSA_OTHER}`);
+  });
+
+  it('reports the repeated live advisory object once instead of once per node', () => {
+    const decision = decide(liveFull(), liveProduction(), initialAllowlistJson());
+
+    const allowedLines = decision.lines.filter((line) =>
+      line.includes(`allowed advisory ${GHSA_BRACES}`)
+    );
+
+    expect(decision.exitCode).toBe(0);
+    expect(allowedLines).toHaveLength(1);
+  });
+});
+
 describe('AC-3 via graph traversal and severity consistency', () => {
   it('(a) blocks a string via entry that references a missing node', () => {
     const decision = decide(bracesChain(['micromatch']), EMPTY_PROD, initialAllowlistJson());

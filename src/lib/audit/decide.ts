@@ -36,6 +36,11 @@ function errorLine(errorClass: string, message: string): string {
   return `audit-check: error [${errorClass}]: ${message}`;
 }
 
+/** Every field the decision reads, so a repeated key can only be the very same object. */
+function advisoryKey(item: AuditAdvisory): string {
+  return `${item.url ?? ''}|${item.name}|${item.source}|${item.severity}`;
+}
+
 function blockingLine(
   name: string,
   severity: Severity,
@@ -175,7 +180,7 @@ export function decideAudit(input: DecideInput): Decision {
         continue;
       }
 
-      const key = `${item.url ?? ''}|${item.name}|${item.source}`;
+      const key = advisoryKey(item);
       if (seenAdvisories.has(key)) {
         continue;
       }
