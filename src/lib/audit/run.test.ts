@@ -84,6 +84,16 @@ function isRunning(pid: number | undefined): boolean {
   }
 }
 
+function settleDeadline(timeoutMs: number): Promise<never> {
+  return new Promise<never>((_resolve, reject) => {
+    const timer = setTimeout(
+      () => reject(new Error(`the npm runner did not settle within ${timeoutMs} ms`)),
+      timeoutMs
+    );
+    timer.unref();
+  });
+}
+
 function waitForExit(child: ChildProcess, timeoutMs: number): Promise<string | null> {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(
@@ -438,6 +448,32 @@ describe('AC-9 npm process failures', () => {
 
     await new Promise((resolve) => setTimeout(resolve, 6_500));
     expect(existsSync(marker)).toBe(false);
+  }, 30_000);
+
+  it('bounds the wall time when a detached grandchild keeps the pipe open after the kill', async () => {
+    const directory = tempDir();
+    const marker = path.join(directory, 'detached-grandchild-marker.txt');
+    const grandchild = `setTimeout(() => require('node:fs').writeFileSync(${JSON.stringify(marker)}, 'late'), 5000)`;
+    const command = fakeNpm(
+      directory,
+      [
+        "const { spawn } = require('node:child_process');",
+        `spawn(process.execPath, ['-e', ${JSON.stringify(grandchild)}], { detached: true, stdio: ['ignore', 'inherit', 'inherit'] }).unref();`,
+        'setTimeout(() => {}, 25_000);',
+      ].join('\n')
+    );
+
+    const started = Date.now();
+    const result = await Promise.race([
+      createNpmAuditRunner({ command })([], { ...process.env }, 1_000),
+      settleDeadline(4_000),
+    ]);
+    const elapsed = Date.now() - started;
+
+    expect(result.timedOut).toBe(true);
+    expect(elapsed).toBeLessThan(2_500);
+    // the grandchild left the process group, so only the grace timer could end the wait
+    await waitFor(() => existsSync(marker), 10_000);
   }, 30_000);
 
   it('leaves no npm process behind when the check itself is interrupted', async () => {
