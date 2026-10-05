@@ -149,8 +149,8 @@ describe('AC-7 allowlist file schema', () => {
     );
   });
 
-  it('rejects a scope other than dev', async () => {
-    await expectRejected(allowlistJson([entry({ scope: 'prod' })]), 'scope must be "dev"');
+  it.each([['prod'], ['DEV'], [''], [null], [7]])('rejects the scope %s', async (scope) => {
+    await expectRejected(allowlistJson([entry({ scope })]), 'scope must be "dev"');
   });
 
   it.each([['moderate'], ['info'], ['HIGH'], [null], [7]])(
@@ -170,7 +170,11 @@ describe('AC-7 allowlist file schema', () => {
     ['tomorrow'],
     ['2026-11-04T00:00:00Z'],
     [''],
-  ])('rejects the impossible date %s', async (expires) => {
+    [null],
+    [7],
+    [true],
+    [['2026-11-04']],
+  ])('rejects the impossible expires value %s', async (expires) => {
     await expectRejected(
       allowlistJson([entry({ expires })]),
       'must be an existing calendar date (YYYY-MM-DD)'

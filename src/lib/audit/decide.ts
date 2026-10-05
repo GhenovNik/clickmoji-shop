@@ -1,4 +1,4 @@
-import { findExpiredEntry, isEntryExpired } from './allowlist';
+import { findExpiredEntry } from './allowlist';
 import { printable } from './text';
 import {
   isHighSeverity,
@@ -208,18 +208,6 @@ export function decideAudit(input: DecideInput): Decision {
       const entry = entriesById.get(id);
       if (entry === undefined) {
         findings.push(blockingLine(item.name, item.severity, item, `no allowlist entry for ${id}`));
-        continue;
-      }
-
-      if (isEntryExpired(entry, now)) {
-        findings.push(
-          blockingLine(
-            item.name,
-            item.severity,
-            item,
-            `allowlist entry ${id} expired on ${entry.expires}`
-          )
-        );
         continue;
       }
 

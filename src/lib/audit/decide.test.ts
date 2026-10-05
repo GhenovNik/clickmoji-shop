@@ -20,7 +20,8 @@ import {
   text,
 } from './test-helpers';
 import { readFileSync } from 'node:fs';
-import { ALLOWLIST_FILE, readFixture } from './test-helpers';
+import path from 'node:path';
+import { ALLOWLIST_FILE, readFixture, REPO_ROOT } from './test-helpers';
 
 function bracesChain(via: unknown[]): string {
   return reportJson({
@@ -634,5 +635,24 @@ describe('AC-5 allowlist expiry inside the pure decision', () => {
 
     expect(decision.exitCode).toBe(1);
     expect(text(decision)).toContain('exceptions[0].expires 2026-10-04 is in the past');
+  });
+
+  it('rejects an expired exception even when its advisory is in the report', () => {
+    const decision = decide(
+      bracesChain([advisory()]),
+      EMPTY_PROD,
+      initialAllowlistJson({ expires: '2026-10-01' })
+    );
+
+    expect(decision.exitCode).toBe(1);
+    expect(text(decision)).toContain('error [schema]');
+    expect(text(decision)).toContain('exceptions[0].expires 2026-10-01 is in the past');
+  });
+
+  it('keeps one authoritative expiry check in the decision module', () => {
+    const source = readFileSync(path.join(REPO_ROOT, 'src', 'lib', 'audit', 'decide.ts'), 'utf8');
+
+    expect(source.match(/findExpiredEntry\(/g)).toHaveLength(1);
+    expect(source).not.toMatch(/isEntryExpired/);
   });
 });
