@@ -1,0 +1,62 @@
+{
+  "auditReportVersion": 2,
+  "vulnerabilities": {
+    "audit-leaf": {
+      "name": "audit-leaf",
+      "severity": "high",
+      "isDirect": true,
+      "via": [
+        {
+          "source": 10001,
+          "name": "audit-leaf",
+          "dependency": "audit-leaf",
+          "title": "Moderate on v1",
+          "url": "https://github.com/advisories/GHSA-2345-2345-2345",
+          "severity": "moderate",
+          "range": "1.0.0"
+        },
+        {
+          "source": 10002,
+          "name": "audit-leaf",
+          "dependency": "audit-leaf",
+          "title": "High on v2",
+          "url": "https://github.com/advisories/GHSA-3456-3456-3456",
+          "severity": "high",
+          "range": "2.0.0"
+        }
+      ],
+      "effects": ["audit-parent"],
+      "range": "*",
+      "nodes": ["node_modules/audit-leaf", "node_modules/audit-parent/node_modules/audit-leaf"],
+      "fixAvailable": false
+    },
+    "audit-parent": {
+      "name": "audit-parent",
+      "severity": "moderate",
+      "isDirect": true,
+      "via": ["audit-leaf"],
+      "effects": [],
+      "range": "*",
+      "nodes": ["node_modules/audit-parent"],
+      "fixAvailable": false
+    }
+  },
+  "metadata": {
+    "vulnerabilities": {
+      "info": 0,
+      "low": 0,
+      "moderate": 1,
+      "high": 1,
+      "critical": 0,
+      "total": 2
+    },
+    "dependencies": {
+      "prod": 4,
+      "dev": 0,
+      "optional": 0,
+      "peer": 0,
+      "peerOptional": 0,
+      "total": 3
+    }
+  }
+}
