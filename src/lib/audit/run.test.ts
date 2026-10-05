@@ -60,12 +60,16 @@ function fakeNpm(directory: string, body: string): string {
   return file;
 }
 
-async function waitFor(probe: () => boolean, timeoutMs: number): Promise<void> {
+async function waitFor(
+  probe: () => boolean,
+  timeoutMs: number,
+  description?: string
+): Promise<void> {
   const deadline = Date.now() + timeoutMs;
 
   while (!probe()) {
     if (Date.now() > deadline) {
-      throw new Error(`the condition was not met within ${timeoutMs} ms`);
+      throw new Error(`${description ?? 'the condition'} was not met within ${timeoutMs} ms`);
     }
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
@@ -456,11 +460,19 @@ describe('AC-9 npm process failures', () => {
     const releaseMarker = path.join(directory, 'detached-grandchild-release.txt');
     const lateMarker = path.join(directory, 'detached-grandchild-late.txt');
     const eventWaitMs = 30_000;
-    // the grandchild reports its own start, then keeps the pipe open until the test releases it and
-    // writes the late marker, so the survival is observed as events and no wait rides on a fixed delay
+    // the grandchild can only hold the pipe while the runner waits for it if the fake npm reaches
+    // its spawn before the timeout fires, and a node start-up under load costs hundreds of
+    // milliseconds, so the timeout carries a reserve instead of racing that start-up: 15 s against a
+    // start-up measured at 281 ms while the full suite saturated ten cores
+    const spawnReserveMs = 15_000;
+    const settleMarginMs = 2_500;
+    const settleDeadlineMs = spawnReserveMs + settleMarginMs + 3_000;
+    // the grandchild reports the wall clock of its own start, then keeps the pipe open until the test
+    // releases it and writes the late marker, so the survival is observed as events and no wait rides
+    // on a fixed delay
     const grandchild = [
       "const fs = require('node:fs');",
-      `fs.writeFileSync(${JSON.stringify(startedMarker)}, 'started');`,
+      `fs.writeFileSync(${JSON.stringify(startedMarker)}, String(Date.now()));`,
       'const idle = new Int32Array(new SharedArrayBuffer(4));',
       'const giveUpAt = Date.now() + 60_000;',
       `while (!fs.existsSync(${JSON.stringify(releaseMarker)}) && Date.now() < giveUpAt) {`,
@@ -479,18 +491,37 @@ describe('AC-9 npm process failures', () => {
 
     const started = Date.now();
     const result = await Promise.race([
-      createNpmAuditRunner({ command })([], { ...process.env }, 1_000),
-      settleDeadline(4_000),
+      createNpmAuditRunner({ command })([], { ...process.env }, spawnReserveMs),
+      settleDeadline(settleDeadlineMs),
     ]);
     const elapsed = Date.now() - started;
 
     expect(result.timedOut).toBe(true);
-    expect(elapsed).toBeLessThan(2_500);
+    // the runner settles on its timeout plus the 250 ms grace, not on the pipe the grandchild holds:
+    // the deadline of the race stays above that bound so this assertion is the one that fires
+    expect(elapsed).toBeLessThan(spawnReserveMs + settleMarginMs);
     // the grandchild left the process group, so only the grace timer could end the wait: it has to
-    // still be alive after the kill, which the marker it writes after the release proves
-    await waitFor(() => existsSync(startedMarker), eventWaitMs);
+    // still be alive after the kill, which the marker it writes after the release proves, and its own
+    // start has to fall before the timeout, or it never held the pipe the runner was waiting for
+    await waitFor(
+      () => existsSync(startedMarker),
+      eventWaitMs,
+      'the fake npm spawning the detached grandchild'
+    );
+    const grandchildStartedAt = Number(readFileSync(startedMarker, 'utf8'));
+
+    if (grandchildStartedAt > started + spawnReserveMs) {
+      throw new Error(
+        `the detached grandchild started ${grandchildStartedAt - started} ms into the run, at or after the ${spawnReserveMs} ms timeout, so it never held the pipe while the runner waited`
+      );
+    }
+
     writeFileSync(releaseMarker, 'release');
-    await waitFor(() => existsSync(lateMarker), eventWaitMs);
+    await waitFor(
+      () => existsSync(lateMarker),
+      eventWaitMs,
+      'the detached grandchild writing the late marker'
+    );
   }, 90_000);
 
   it('leaves no npm process behind when the check itself is interrupted', async () => {
@@ -501,8 +532,10 @@ describe('AC-9 npm process failures', () => {
       directory,
       [
         "const fs = require('node:fs');",
-        `fs.writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));`,
         `fs.appendFileSync(${JSON.stringify(logFile)}, 'audit\\n');`,
+        // the pid file goes last, so the test that waits for it never sees a fake npm that is still
+        // writing its start-up files and is about to be killed in the middle of them
+        `fs.writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));`,
         'setTimeout(() => {}, 25_000);',
       ].join('\n')
     );
@@ -531,6 +564,11 @@ describe('AC-9 npm process failures', () => {
     expect(npmSurvived).toBe(false);
     expect(signal).toBe('SIGINT');
     // an interrupted check must not start the second npm call
+    await waitFor(
+      () => existsSync(logFile),
+      5_000,
+      'the fake npm logging its call before the pid file'
+    );
     expect(readFileSync(logFile, 'utf8').trim().split('\n')).toHaveLength(1);
   }, 60_000);
 
