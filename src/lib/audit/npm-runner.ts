@@ -3,6 +3,7 @@ import { spawn, type ChildProcess } from 'node:child_process';
 export const NPM_REGISTRY = 'https://registry.npmjs.org/';
 export const NPM_TIMEOUT_MS = 120_000;
 export const NPM_MAX_OUTPUT_BYTES = 32 * 1024 * 1024;
+export const FORCE_FINISH_GRACE_MS = 250;
 
 export interface RunnerResult {
   readonly status: number | null;
@@ -62,9 +63,27 @@ export function buildIsolatedEnv(base: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   return env as NodeJS.ProcessEnv;
 }
 
+/** A grandchild can keep the stdout pipe open after the direct child is gone, so the whole group is killed. */
+function killProcessGroup(child: ChildProcess): void {
+  if (child.pid !== undefined) {
+    try {
+      process.kill(-child.pid, 'SIGKILL');
+      return;
+    } catch {
+      // the group is already gone, the direct child may still be left
+    }
+  }
+
+  try {
+    child.kill('SIGKILL');
+  } catch {
+    return;
+  }
+}
+
 function terminate(child: ChildProcess): void {
   if (child.exitCode === null && child.signalCode === null) {
-    child.kill('SIGKILL');
+    killProcessGroup(child);
   }
 }
 
@@ -75,6 +94,7 @@ export function createNpmAuditRunner(options: SpawnRunnerOptions = {}): AuditRun
   return (args, env, timeoutMs) =>
     new Promise<RunnerResult>((resolve) => {
       let settled = false;
+      let forceTimer: NodeJS.Timeout | null = null;
       let stdout = '';
       let outputBytes = 0;
       let timedOut = false;
@@ -85,6 +105,7 @@ export function createNpmAuditRunner(options: SpawnRunnerOptions = {}): AuditRun
         child = spawn(command, [...args], {
           env,
           shell: false,
+          detached: true,
           stdio: ['ignore', 'pipe', 'pipe'],
         });
       } catch (error) {
@@ -101,10 +122,20 @@ export function createNpmAuditRunner(options: SpawnRunnerOptions = {}): AuditRun
         return;
       }
 
-      const timer = setTimeout(() => {
-        timedOut = true;
-        terminate(child);
-      }, timeoutMs);
+      const buildResult = (
+        status: number | null,
+        signal: string | null,
+        error: Error | null
+      ): RunnerResult => ({
+        status,
+        signal,
+        error,
+        stdout,
+        timedOut,
+        overflow,
+        limitBytes: maxOutputBytes,
+        outputBytes,
+      });
 
       const finish = (result: RunnerResult): void => {
         if (settled) {
@@ -112,8 +143,30 @@ export function createNpmAuditRunner(options: SpawnRunnerOptions = {}): AuditRun
         }
         settled = true;
         clearTimeout(timer);
+        if (forceTimer !== null) {
+          clearTimeout(forceTimer);
+        }
         resolve(result);
       };
+
+      /** The pipe can stay open in a grandchild that outlives the kill, so the streams are dropped. */
+      const forceFinish = (): void => {
+        child.stdout?.destroy();
+        child.stderr?.destroy();
+        finish(buildResult(child.exitCode, child.signalCode, null));
+      };
+
+      const terminate = (): void => {
+        killProcessGroup(child);
+        if (forceTimer === null) {
+          forceTimer = setTimeout(forceFinish, FORCE_FINISH_GRACE_MS);
+        }
+      };
+
+      const timer = setTimeout(() => {
+        timedOut = true;
+        terminate();
+      }, timeoutMs);
 
       child.stdout?.setEncoding('utf8');
       child.stdout?.on('data', (chunk: string) => {
@@ -121,33 +174,15 @@ export function createNpmAuditRunner(options: SpawnRunnerOptions = {}): AuditRun
         outputBytes += Buffer.byteLength(chunk, 'utf8');
         if (outputBytes > maxOutputBytes) {
           overflow = true;
-          terminate(child);
+          terminate();
         }
       });
       child.stderr?.resume();
       child.on('error', (error: Error) => {
-        finish({
-          status: null,
-          signal: null,
-          error,
-          stdout,
-          timedOut,
-          overflow,
-          limitBytes: maxOutputBytes,
-          outputBytes,
-        });
+        finish(buildResult(null, null, error));
       });
       child.on('close', (status, signal) => {
-        finish({
-          status,
-          signal: signal ?? null,
-          error: null,
-          stdout,
-          timedOut,
-          overflow,
-          limitBytes: maxOutputBytes,
-          outputBytes,
-        });
+        finish(buildResult(status, signal ?? null, null));
       });
     });
 }

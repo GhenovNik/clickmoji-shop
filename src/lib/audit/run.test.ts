@@ -330,6 +330,30 @@ describe('AC-9 npm process failures', () => {
     expect(existsSync(marker)).toBe(false);
   }, 20_000);
 
+  it('bounds the wall time when a grandchild of npm keeps the stdout pipe open', async () => {
+    const directory = tempDir();
+    const marker = path.join(directory, 'grandchild-marker.txt');
+    const wrapper = path.join(directory, 'npm');
+    writeFileSync(
+      wrapper,
+      ['#!/bin/sh', `( sleep 6; touch '${marker}' ) &`, 'wait', ''].join('\n')
+    );
+    chmodSync(wrapper, 0o755);
+
+    const started = Date.now();
+    const decision = await runAuditCheck(
+      options({ runner: createNpmAuditRunner({ command: wrapper }), timeoutMs: 1_000 })
+    );
+    const elapsed = Date.now() - started;
+
+    expect(decision.exitCode).toBe(1);
+    expect(text(decision)).toContain('timed out after 1000 ms');
+    expect(elapsed).toBeLessThan(2_500);
+
+    await new Promise((resolve) => setTimeout(resolve, 6_500));
+    expect(existsSync(marker)).toBe(false);
+  }, 30_000);
+
   it('fails closed when npm output exceeds the stdout buffer', async () => {
     const command = fakeNpm(tempDir(), "process.stdout.write('x'.repeat(4096)); process.exit(0);");
 
