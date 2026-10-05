@@ -518,6 +518,46 @@ describe('AC-15 classification reads status strings and codes, not raw messages'
     ).rejects.toMatchObject({ reason: 'quota', provider: 'gemini', model: gemini.model });
   });
 
+  it('reports auth for a PERMISSION_DENIED status string', async () => {
+    const failure = Object.assign(new Error(`${MARKER} status string`), {
+      status: 'PERMISSION_DENIED',
+    });
+
+    await expect(
+      generateEmojiImage({
+        productName: 'Milk',
+        provider: gemini.provider,
+        clients: failingClientFactory(gemini, failure),
+      })
+    ).rejects.toMatchObject({ reason: 'auth', provider: 'gemini', model: gemini.model });
+  });
+
+  it('reports quota for a rate_limit_exceeded code without an HTTP status', async () => {
+    const failure = Object.assign(new Error(`${MARKER} code only`), {
+      code: 'rate_limit_exceeded',
+    });
+
+    await expect(
+      generateEmojiImage({
+        productName: 'Milk',
+        provider: gemini.provider,
+        clients: failingClientFactory(gemini, failure),
+      })
+    ).rejects.toMatchObject({ reason: 'quota', provider: 'gemini', model: gemini.model });
+  });
+
+  it('keeps the previous error for an API_KEY_INVALID message behind a 500 status', async () => {
+    const failure = Object.assign(new Error(`${MARKER} API_KEY_INVALID`), { status: 500 });
+
+    await expect(
+      generateEmojiImage({
+        productName: 'Milk',
+        provider: gemini.provider,
+        clients: failingClientFactory(gemini, failure),
+      })
+    ).rejects.toBe(failure);
+  });
+
   it('does not leak the SDK body or the key into the typed error', async () => {
     const failure = googleApiError(429, googleErrorBody('RESOURCE_EXHAUSTED'));
     let caught: unknown;

@@ -195,4 +195,25 @@ describe('AC-11 blocked Google image responses reach the routes as before', () =
     expect(lines.join('\n')).toMatch(/blocked/);
     expect(lines.join('\n')).not.toContain(SYNTHETIC_GOOGLE_KEY);
   });
+
+  // The more specific class name is the one an operator needs: a blocked prompt must not be
+  // reported as the generic blocked class of the finishReason table.
+  it('logs a blocked prompt as blocked-prompt, not as blocked', async () => {
+    doubles.generateContentImpl = () => ({ promptFeedback: { blockReason: 'SAFETY' } });
+    const { lines } = captureConsoleError();
+
+    const response = await emojiGenerate(
+      new Request('http://localhost:3000/api/emoji/generate', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ productName: 'Milk' }),
+      })
+    );
+    const bodyText = await response.text();
+
+    expect(response.status).toBe(500);
+    expect(JSON.parse(bodyText)).toEqual({ error: 'Failed to generate emoji' });
+    expect(lines.join('\n')).toContain("errorClass: 'blocked-prompt'");
+    expect(lines.join('\n')).not.toContain("errorClass: 'blocked'");
+  });
 });

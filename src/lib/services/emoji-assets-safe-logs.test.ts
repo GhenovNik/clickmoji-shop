@@ -266,22 +266,6 @@ describe('AC-17 server logs of a provider failure carry allowlisted fields only'
     expect(logged).not.toContain(KEY_MARKER);
   });
 
-  it('keeps the previous 500 and logs no raw text for a route-level failure', async () => {
-    doubles.createProduct.mockRejectedValue(new Error(`Prisma write failed: ${BODY_MARKER}`));
-    const records = captureLoggers();
-
-    const response = await smartCreate(smartCreateRequest());
-    const body = await response.json();
-
-    expect(response.status).toBe(500);
-    expect(body).toEqual({ error: 'Failed to create product' });
-    expect(records.filter((record) => record.level === 'error')).not.toHaveLength(0);
-    const logged = records.map((record) => record.text).join('\n');
-    expect(logged).toContain("errorClass: 'Error'");
-    expect(logged).not.toContain(BODY_MARKER);
-    expect(logged).not.toContain(KEY_MARKER);
-  });
-
   it('keeps the previous 500 and logs no raw SDK text for an unclassified provider error', async () => {
     doubles.sdkFailure = () => {
       throw Object.assign(new Error(`500 {"error":{"message":"${BODY_MARKER}"}}`), {
@@ -301,8 +285,119 @@ describe('AC-17 server logs of a provider failure carry allowlisted fields only'
     expect(records.filter((record) => record.level === 'error')).not.toHaveLength(0);
     const logged = records.map((record) => record.text).join('\n');
     expect(logged).toContain("errorClass: 'Error'");
+    expect(logged).toContain('status: 500');
     expect(logged).not.toContain(BODY_MARKER);
     expect(logged).not.toContain(HEADERS_MARKER);
+    expect(logged).not.toContain(KEY_MARKER);
+  });
+
+  // FR-10 covers generation failures. A class name is derived from errors the service created, never
+  // from a substring of an arbitrary SDK message, so an upstream error that happens to use an FR-3
+  // word stays a plain failure in the log.
+  const CLASS_LIKE_MESSAGES = [
+    'the upstream request was blocked by an edge policy',
+    'the upstream response was incomplete and the stream ended',
+    'the upstream returned no-image for an unrelated reason',
+  ];
+
+  for (const message of CLASS_LIKE_MESSAGES) {
+    it(`logs an SDK error reading ${JSON.stringify(message)} as a plain error`, async () => {
+      doubles.sdkFailure = () => {
+        throw new Error(`${message} (${BODY_MARKER})`);
+      };
+      const records = captureLoggers();
+
+      const response = await emojiGenerate(emojiGenerateRequest());
+      const bodyText = await response.text();
+
+      expect(response.status).toBe(500);
+      expect(JSON.parse(bodyText)).toEqual({ error: 'Failed to generate emoji' });
+      const logged = records.map((record) => record.text).join('\n');
+      expect(logged).toContain("errorClass: 'Error'");
+      for (const className of [
+        'blocked-prompt',
+        'blocked',
+        'incomplete',
+        'no-image',
+        'unsupported-format',
+        'empty-image',
+        'invalid-png',
+        'too-large',
+      ]) {
+        expect(logged).not.toContain(`errorClass: '${className}'`);
+      }
+      expect(logged).not.toContain(BODY_MARKER);
+      expect(logged).not.toContain(KEY_MARKER);
+      expect(bodyText).not.toContain(BODY_MARKER);
+    });
+  }
+});
+
+/**
+ * A failure outside image generation — Prisma, the text analysis of the product or the JSON parse of
+ * the request — cannot reach the allowlist of FR-10, because no SDK error is involved. Its class and
+ * message are logged again, so such a failure stays diagnosable in the server log.
+ */
+describe('Н-02 a failure outside image generation keeps its diagnostics', () => {
+  it('logs the class and message of a Prisma write failure in smart-create', async () => {
+    const prismaFailure = Object.assign(new Error(`Prisma write failed: ${BODY_MARKER}`), {
+      name: 'PrismaClientKnownRequestError',
+    });
+    doubles.createProduct.mockRejectedValue(prismaFailure);
+    const records = captureLoggers();
+
+    const response = await smartCreate(smartCreateRequest());
+    const body = await response.json();
+
+    expect(response.status).toBe(500);
+    expect(body).toEqual({ error: 'Failed to create product' });
+    const logged = records.map((record) => record.text).join('\n');
+    expect(logged).toContain('PrismaClientKnownRequestError');
+    expect(logged).toContain('Prisma write failed');
+  });
+
+  it('logs the class and message of a failed product text analysis', async () => {
+    const analysisFailure = Object.assign(new Error(`text analysis failed: ${BODY_MARKER}`), {
+      name: 'ApiError',
+    });
+    doubles.analyzeSmartProduct.mockRejectedValue(analysisFailure);
+    doubles.createProduct.mockClear();
+    const records = captureLoggers();
+
+    const response = await smartCreate(smartCreateRequest());
+    const body = await response.json();
+
+    expect(response.status).toBe(500);
+    expect(body).toEqual({ error: 'Failed to create product' });
+    expect(doubles.createProduct).not.toHaveBeenCalled();
+    const logged = records.map((record) => record.text).join('\n');
+    expect(logged).toContain('ApiError');
+    expect(logged).toContain('text analysis failed');
+  });
+
+  it('logs the class and message of an unparsable request body in both routes', async () => {
+    const records = captureLoggers();
+    const brokenJson = (url: string) =>
+      new Request(url, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: `{"productName": ${BODY_MARKER}`,
+      });
+
+    const generateResponse = await emojiGenerate(
+      brokenJson('http://localhost:3000/api/emoji/generate')
+    );
+    const smartCreateResponse = await smartCreate(
+      brokenJson('http://localhost:3000/api/products/smart-create')
+    );
+
+    expect(generateResponse.status).toBe(500);
+    expect(await generateResponse.json()).toEqual({ error: 'Failed to generate emoji' });
+    expect(smartCreateResponse.status).toBe(500);
+    expect(await smartCreateResponse.json()).toEqual({ error: 'Failed to create product' });
+    expect(doubles.sdkCalls).toHaveLength(0);
+    const logged = records.map((record) => record.text).join('\n');
+    expect(logged).toContain('SyntaxError');
     expect(logged).not.toContain(KEY_MARKER);
   });
 });

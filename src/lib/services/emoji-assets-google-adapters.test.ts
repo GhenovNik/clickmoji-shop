@@ -121,6 +121,8 @@ describe('AC-3 Google adapter selection by model id grammar', () => {
     });
   }
 
+  // An id of another grammar is rejected too, so the Imagen branch is covered by negatives of its
+  // own: a case flag, a missing end anchor or a missing start anchor would accept one of them.
   const REJECTED_MODELS = [
     'gemini-image',
     'gemini-imagen',
@@ -134,6 +136,15 @@ describe('AC-3 Google adapter selection by model id grammar', () => {
     'gemini-2.5-flash',
     'dall-e-3',
     'foo',
+    'imagen-',
+    'imagen--4',
+    'imagen-4.0-',
+    'imagen-4.0-generate-001-',
+    'Imagen-4.0-generate-001',
+    'imagen-4.0\ngenerate-001',
+    'imagen-4.0-generate-001\nfoo',
+    'gemini-3.1-flash-image\nfoo',
+    'foo\ngemini-3.1-flash-image',
   ];
 
   for (const rejected of REJECTED_MODELS) {
@@ -316,6 +327,15 @@ describe('AC-5 generateContent response classification', () => {
     sdk.generateContentImpl = () =>
       generateContentResponse(
         candidateWith([imagePart({ inlineData: { mimeType: 'image/png', data: '' } })], 'STOP')
+      );
+
+    await expect(generateWithGoogleModel('gemini-3.1-flash-image')).rejects.toThrow(/empty-image/);
+  });
+
+  it('classifies an image part without a data field as empty-image', async () => {
+    sdk.generateContentImpl = () =>
+      generateContentResponse(
+        candidateWith([imagePart({ inlineData: { mimeType: 'image/png' } })], 'STOP')
       );
 
     await expect(generateWithGoogleModel('gemini-3.1-flash-image')).rejects.toThrow(/empty-image/);

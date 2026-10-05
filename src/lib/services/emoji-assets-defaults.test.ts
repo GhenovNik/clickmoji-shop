@@ -197,6 +197,19 @@ describe('AC-1 provider branch selection stays as before', () => {
     });
     expect(sdk.constructorCalls).toHaveLength(0);
   });
+
+  // The provider value is compared exactly, as before the migration: a model id is trimmed, the
+  // provider name is not, so a stray space in AI_PROVIDER keeps the gemini branch.
+  it('keeps the gemini branch for AI_PROVIDER with surrounding whitespace', async () => {
+    setEnv({ AI_PROVIDER: ' gpt-image ' });
+
+    const result = await generateEmojiImage(GENERATION_INPUT);
+
+    expect(result.provider).toBe('gemini');
+    expect(sdk.generateContentCalls).toHaveLength(1);
+    expect(sdk.generateImagesCalls).toHaveLength(0);
+    expect(sdk.imagesGenerateCalls).toHaveLength(0);
+  });
 });
 
 describe('AC-1 default Google model is Gemini 3.1 Flash Lite Image', () => {
