@@ -30,11 +30,10 @@ AI_PROVIDER="gemini" # or "gpt-image"; anything else falls back to the gemini br
 GOOGLE_GENAI_API_KEY="your-google-api-key"
 OPENAI_API_KEY="your-openai-api-key"
 
-# Optional image model overrides. Leave them unset to use the defaults (see docs/ai.md):
-# GOOGLE_IMAGE_MODEL -> gemini-3.1-flash-lite-image (models.generateContent)
-# OPENAI_IMAGE_MODEL -> gpt-image-2.5-flare (images.generate, background transparent)
-GOOGLE_IMAGE_MODEL="gemini-3.1-flash-image"
-OPENAI_IMAGE_MODEL="gpt-image-2.5-flare"
+# Optional image model overrides. Leave them unset to use the defaults (see docs/ai.md).
+# Uncomment a line only to switch the model on purpose; copied as they are, they keep the defaults:
+# GOOGLE_IMAGE_MODEL="gemini-3.1-flash-lite-image"   # models.generateContent
+# OPENAI_IMAGE_MODEL="gpt-image-2.5-flare"           # images.generate, background transparent
 
 # Deprecated synonym of GOOGLE_IMAGE_MODEL; read only when that variable is unset/empty/whitespace.
 # IMAGEN_MODEL="gemini-3.1-flash-image"
