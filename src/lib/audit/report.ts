@@ -61,7 +61,7 @@ export function parseReport(label: ReportLabel, stdout: string): ReportParseResu
     return invalid('root', 'report root must be a JSON object');
   }
 
-  if ('error' in parsed) {
+  if (Object.hasOwn(parsed, 'error')) {
     return invalid('error', `report carries an npm error field: ${describeNpmError(parsed.error)}`);
   }
 
@@ -76,7 +76,7 @@ export function parseReport(label: ReportLabel, stdout: string): ReportParseResu
     return invalid('vulnerabilities', 'vulnerabilities must be a JSON object');
   }
 
-  const vulnerabilities: Record<string, ReportNode> = {};
+  const vulnerabilities = new Map<string, ReportNode>();
 
   for (const [key, value] of Object.entries(parsed.vulnerabilities)) {
     const path = `vulnerabilities.${key}`;
@@ -118,12 +118,12 @@ export function parseReport(label: ReportLabel, stdout: string): ReportParseResu
       via.push(parsedAdvisory.advisory);
     }
 
-    vulnerabilities[key] = {
+    vulnerabilities.set(key, {
       key,
       name: value.name,
       severity: value.severity,
       via,
-    };
+    });
   }
 
   return { ok: true, report: { label, vulnerabilities } };

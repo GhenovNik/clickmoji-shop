@@ -16,6 +16,7 @@ import {
   liveProduction,
   node,
   reportJson,
+  reportWithRawVulnerabilities,
   text,
 } from './test-helpers';
 import { readFileSync } from 'node:fs';
@@ -255,6 +256,110 @@ describe('Б-01 every advisory object is judged on its own', () => {
 
     expect(decision.exitCode).toBe(0);
     expect(allowedLines).toHaveLength(1);
+  });
+});
+
+describe('Б-02 report keys and via references that live on the prototype', () => {
+  const PROTOTYPE_KEYS = ['constructor', 'toString', 'hasOwnProperty', '__proto__'];
+
+  function rawNode(fields: Record<string, unknown>): string {
+    return JSON.stringify(node(fields));
+  }
+
+  it.each(PROTOTYPE_KEYS)('judges a node whose key is %s', (key) => {
+    const nodeJson = rawNode({
+      name: 'proto-pkg',
+      severity: 'critical',
+      via: [advisory({ name: 'proto-pkg', severity: 'critical', url: OTHER_URL })],
+    });
+
+    const decision = decide(
+      reportWithRawVulnerabilities(`{${JSON.stringify(key)}: ${nodeJson}}`),
+      EMPTY_PROD,
+      initialAllowlistJson()
+    );
+
+    expect(decision.exitCode).toBe(1);
+    expect(text(decision)).toContain('proto-pkg');
+    expect(text(decision)).toContain(`no allowlist entry for ${GHSA_OTHER}`);
+  });
+
+  it.each(PROTOTYPE_KEYS)('applies the production gate to a node whose key is %s', (key) => {
+    const nodeJson = rawNode({
+      name: 'proto-pkg',
+      severity: 'critical',
+      via: [advisory({ name: 'proto-pkg', severity: 'critical', url: OTHER_URL })],
+    });
+
+    const decision = decide(
+      EMPTY_PROD,
+      reportWithRawVulnerabilities(`{${JSON.stringify(key)}: ${nodeJson}}`),
+      initialAllowlistJson()
+    );
+
+    expect(decision.exitCode).toBe(1);
+    expect(text(decision)).toContain('production gate');
+    expect(text(decision)).toContain('proto-pkg');
+  });
+
+  it.each(PROTOTYPE_KEYS)('treats a via reference to %s as a missing node', (key) => {
+    const decision = decide(
+      reportJson({ 'safe-pkg': node({ name: 'safe-pkg', via: [key] }) }),
+      EMPTY_PROD,
+      initialAllowlistJson()
+    );
+
+    expect(decision.exitCode).toBe(1);
+    expect(text(decision)).toContain(`references missing node ${key}`);
+  });
+
+  it('resolves a real node whose key is a prototype key through the via graph', () => {
+    const decision = decide(
+      reportWithRawVulnerabilities(
+        `{"parent-pkg": ${rawNode({ name: 'parent-pkg', severity: 'moderate', via: ['constructor'] })}, "constructor": ${rawNode(
+          { name: 'braces', severity: 'moderate', via: [advisory({ severity: 'moderate' })] }
+        )}}`
+      ),
+      EMPTY_PROD,
+      initialAllowlistJson()
+    );
+
+    expect(decision.exitCode).toBe(0);
+    expect(text(decision)).toContain('audit-check: ok: 0 allowed advisory');
+  });
+
+  it('judges prototype-named packages of an allowlist entry literally', () => {
+    const listed = allowlistJson([
+      entry({ id: GHSA_OTHER, packages: ['constructor', '__proto__', 'toString'] }),
+    ]);
+
+    const allowed = decide(
+      reportJson({
+        constructor: node({
+          name: 'constructor',
+          via: [advisory({ name: 'constructor', url: OTHER_URL })],
+        }),
+      }),
+      EMPTY_PROD,
+      listed
+    );
+
+    expect(allowed.exitCode).toBe(0);
+    expect(text(allowed)).toContain(`allowed advisory ${GHSA_OTHER}`);
+
+    const blocked = decide(
+      reportJson({
+        hasOwnProperty: node({
+          name: 'hasOwnProperty',
+          via: [advisory({ name: 'hasOwnProperty', url: OTHER_URL })],
+        }),
+      }),
+      EMPTY_PROD,
+      listed
+    );
+
+    expect(blocked.exitCode).toBe(1);
+    expect(text(blocked)).toContain('does not list package hasOwnProperty');
   });
 });
 

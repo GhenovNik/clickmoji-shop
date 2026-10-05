@@ -140,7 +140,7 @@ export function parseAllowlist(raw: string): AllowlistParseResult {
     }
 
     for (const field of ENTRY_FIELDS) {
-      if (!(field in value)) {
+      if (!Object.hasOwn(value, field)) {
         return invalid(`${path}.${field}`, `${path}.${field} is required`);
       }
     }

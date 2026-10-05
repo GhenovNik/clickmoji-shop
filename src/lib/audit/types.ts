@@ -22,7 +22,7 @@ export interface ReportNode {
 
 export interface AuditReport {
   readonly label: ReportLabel;
-  readonly vulnerabilities: Readonly<Record<string, ReportNode>>;
+  readonly vulnerabilities: ReadonlyMap<string, ReportNode>;
 }
 
 export interface AllowlistEntry {

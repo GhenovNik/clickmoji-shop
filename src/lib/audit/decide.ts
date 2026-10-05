@@ -73,7 +73,7 @@ function reachableAdvisories(report: AuditReport, startKey: string): Traversal {
 
   while (queue.length > 0) {
     const key = queue.shift() as string;
-    const node = report.vulnerabilities[key];
+    const node = report.vulnerabilities.get(key);
 
     if (node === undefined) {
       missingNode = missingNode ?? key;
@@ -163,7 +163,7 @@ export function decideAudit(input: DecideInput): Decision {
   const allowedKeys = new Set<string>();
   const presentIds = new Set<string>();
 
-  for (const node of Object.values(production.vulnerabilities)) {
+  for (const node of production.vulnerabilities.values()) {
     if (isHighSeverity(node.severity)) {
       findings.push(blockingLine(node.name, node.severity, null, PRODUCTION_GATE_REASON));
     }
@@ -174,7 +174,7 @@ export function decideAudit(input: DecideInput): Decision {
     }
   }
 
-  for (const node of Object.values(full.vulnerabilities)) {
+  for (const node of full.vulnerabilities.values()) {
     for (const item of node.via) {
       if (typeof item === 'string') {
         continue;
@@ -257,11 +257,11 @@ export function decideAudit(input: DecideInput): Decision {
     }
   }
 
-  for (const node of Object.values(full.vulnerabilities)) {
+  for (const node of full.vulnerabilities.values()) {
     checkChain(full, node, findings);
   }
 
-  for (const node of Object.values(production.vulnerabilities)) {
+  for (const node of production.vulnerabilities.values()) {
     checkChain(production, node, findings);
   }
 

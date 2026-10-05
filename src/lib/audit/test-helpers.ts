@@ -42,6 +42,11 @@ export function reportJson(vulnerabilities: Record<string, unknown>): string {
   )}\n`;
 }
 
+/** A report whose `vulnerabilities` object is written as raw JSON, so keys an object literal cannot own (`__proto__`) survive. */
+export function reportWithRawVulnerabilities(vulnerabilitiesJson: string): string {
+  return `{\n  "auditReportVersion": 2,\n  "vulnerabilities": ${vulnerabilitiesJson}\n}\n`;
+}
+
 export const EMPTY_PROD = reportJson({});
 
 export function node(fields: Record<string, unknown>): Record<string, unknown> {
