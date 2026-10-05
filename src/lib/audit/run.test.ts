@@ -452,8 +452,22 @@ describe('AC-9 npm process failures', () => {
 
   it('bounds the wall time when a detached grandchild keeps the pipe open after the kill', async () => {
     const directory = tempDir();
-    const marker = path.join(directory, 'detached-grandchild-marker.txt');
-    const grandchild = `setTimeout(() => require('node:fs').writeFileSync(${JSON.stringify(marker)}, 'late'), 5000)`;
+    const startedMarker = path.join(directory, 'detached-grandchild-started.txt');
+    const releaseMarker = path.join(directory, 'detached-grandchild-release.txt');
+    const lateMarker = path.join(directory, 'detached-grandchild-late.txt');
+    const eventWaitMs = 30_000;
+    // the grandchild reports its own start, then keeps the pipe open until the test releases it and
+    // writes the late marker, so the survival is observed as events and no wait rides on a fixed delay
+    const grandchild = [
+      "const fs = require('node:fs');",
+      `fs.writeFileSync(${JSON.stringify(startedMarker)}, 'started');`,
+      'const idle = new Int32Array(new SharedArrayBuffer(4));',
+      'const giveUpAt = Date.now() + 60_000;',
+      `while (!fs.existsSync(${JSON.stringify(releaseMarker)}) && Date.now() < giveUpAt) {`,
+      '  Atomics.wait(idle, 0, 0, 25);',
+      '}',
+      `fs.writeFileSync(${JSON.stringify(lateMarker)}, 'late');`,
+    ].join('\n');
     const command = fakeNpm(
       directory,
       [
@@ -472,9 +486,12 @@ describe('AC-9 npm process failures', () => {
 
     expect(result.timedOut).toBe(true);
     expect(elapsed).toBeLessThan(2_500);
-    // the grandchild left the process group, so only the grace timer could end the wait
-    await waitFor(() => existsSync(marker), 10_000);
-  }, 30_000);
+    // the grandchild left the process group, so only the grace timer could end the wait: it has to
+    // still be alive after the kill, which the marker it writes after the release proves
+    await waitFor(() => existsSync(startedMarker), eventWaitMs);
+    writeFileSync(releaseMarker, 'release');
+    await waitFor(() => existsSync(lateMarker), eventWaitMs);
+  }, 90_000);
 
   it('leaves no npm process behind when the check itself is interrupted', async () => {
     const directory = tempDir();
