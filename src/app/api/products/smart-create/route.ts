@@ -4,6 +4,7 @@ import { requireUser } from '@/lib/auth-guards';
 import { checkRateLimit, rateLimitResponse } from '@/lib/auth-security';
 import { analyzeSmartProduct } from '@/lib/services/ai-products';
 import { generateAndUploadEmojiAsset } from '@/lib/services/emoji-assets';
+import { summarizeEmojiGenerationFailure } from '@/lib/services/emoji-errors';
 
 export async function POST(request: Request) {
   try {
@@ -136,7 +137,8 @@ export async function POST(request: Request) {
         isCustom = true;
         finalEmoji = aiResult.emoji || '🎨';
       } catch (error) {
-        console.error('Error generating custom emoji:', error);
+        // FR-10: the log carries allowlisted fields only, never the SDK message, body or cause.
+        console.error('Error generating custom emoji:', summarizeEmojiGenerationFailure(error));
         // Continue with Unicode emoji if generation fails
       }
     }
@@ -177,6 +179,9 @@ export async function POST(request: Request) {
       message: 'Product created successfully',
     });
   } catch (error) {
+    // Not an image-generation failure: the generation above is caught and swallowed, so nothing of a
+    // provider reaches this log. A Prisma, text analysis or request parsing failure is logged with
+    // its class and message again, as before.
     console.error('Error in smart product creation:', error);
     return NextResponse.json({ error: 'Failed to create product' }, { status: 500 });
   }
