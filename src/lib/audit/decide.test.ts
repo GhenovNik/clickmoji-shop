@@ -363,6 +363,32 @@ describe('Б-02 report keys and via references that live on the prototype', () =
   });
 });
 
+describe('Н-01 the allowed advisory line tells the truth', () => {
+  it('prints the entry reason, not the package list, under the reason label', () => {
+    const decision = decide(bracesChain([advisory()]), EMPTY_PROD, initialAllowlistJson());
+
+    expect(text(decision)).toContain(
+      `audit-check: allowed advisory ${GHSA_BRACES} for package braces (severity high, scope dev, expires 2026-11-04, issue AGE-951, packages: braces, reason: dev-only glob tooling, tracked in AGE-951)`
+    );
+    expect(text(decision)).not.toContain('reason: braces');
+  });
+
+  it('truncates a long reason instead of printing the whole file field', () => {
+    const decision = decide(
+      bracesChain([advisory()]),
+      EMPTY_PROD,
+      initialAllowlistJson({ reason: `stack exhaustion ${'x'.repeat(400)}` })
+    );
+
+    const line = decision.lines.find((entry) => entry.includes('allowed advisory')) ?? '';
+
+    expect(line).toContain('reason: stack exhaustion');
+    expect(line).toContain('...');
+    expect(line).toContain('packages: braces');
+    expect(line.length).toBeLessThan(400);
+  });
+});
+
 describe('AC-3 via graph traversal and severity consistency', () => {
   it('(a) blocks a string via entry that references a missing node', () => {
     const decision = decide(bracesChain(['micromatch']), EMPTY_PROD, initialAllowlistJson());

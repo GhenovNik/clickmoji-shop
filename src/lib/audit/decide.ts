@@ -4,6 +4,7 @@ import {
   isHighSeverity,
   severityRank,
   type Allowlist,
+  type AllowlistEntry,
   type AuditAdvisory,
   type AuditReport,
   type Decision,
@@ -52,12 +53,9 @@ function blockingLine(
   return `audit-check: blocking vulnerability: package ${printable(name)} (severity ${severity}, source ${source}, url ${url}) - ${reason}`;
 }
 
-function allowedLine(
-  id: string,
-  entry: { readonly packages: readonly string[]; readonly expires: string; readonly issue: string },
-  advisory: AuditAdvisory
-): string {
-  return `audit-check: allowed advisory ${id} for package ${printable(advisory.name)} (severity ${advisory.severity}, scope dev, expires ${entry.expires}, issue ${entry.issue}, reason: ${printable(entry.packages.join(', '))})`;
+function allowedLine(id: string, entry: AllowlistEntry, advisory: AuditAdvisory): string {
+  const packages = printable(entry.packages.join(', '));
+  return `audit-check: allowed advisory ${id} for package ${printable(advisory.name)} (severity ${advisory.severity}, scope dev, expires ${entry.expires}, issue ${entry.issue}, packages: ${packages}, reason: ${printable(entry.reason)})`;
 }
 
 interface Traversal {

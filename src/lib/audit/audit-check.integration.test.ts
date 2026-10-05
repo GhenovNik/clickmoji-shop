@@ -140,6 +140,22 @@ describe('AC-11 the real entrypoint under a fake npm', () => {
     expect(result.stdout).toContain('2026-11-04');
   });
 
+  it('prints the package list and the real entry reason on the allowed line', () => {
+    const { result } = runScript();
+    const allowlist = JSON.parse(
+      readFileSync(path.join(REPO_ROOT, 'audit-allowlist.json'), 'utf8')
+    ) as {
+      exceptions: { reason: string }[];
+    };
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain(
+      'packages: braces, reason: braces <= 3.0.3 has a stack-exhaustion denial of service'
+    );
+    expect(result.stdout).not.toMatch(/reason: braces\)/);
+    expect(result.stdout).toContain(allowlist.exceptions[0].reason.slice(0, 40));
+  });
+
   it('calls npm twice with the pinned arguments and a sanitized environment', () => {
     const { result, calls } = runScript();
 
