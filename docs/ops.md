@@ -26,33 +26,47 @@ UPSTASH_REDIS_REST_TOKEN="your-upstash-rest-token"
 UPLOADTHING_TOKEN="your-uploadthing-token"
 
 # AI Integration
-AI_PROVIDER="gemini" # or "gpt-image"
+AI_PROVIDER="gemini" # or "gpt-image"; anything else falls back to the gemini branch
 GOOGLE_GENAI_API_KEY="your-google-api-key"
 OPENAI_API_KEY="your-openai-api-key"
 
-# Optional image model overrides (opt-in, see docs/ai.md)
+# Optional image model overrides. Leave them unset to use the defaults (see docs/ai.md):
+# GOOGLE_IMAGE_MODEL -> gemini-3.1-flash-lite-image (models.generateContent)
+# OPENAI_IMAGE_MODEL -> gpt-image-2.5-flare (images.generate, background transparent)
 GOOGLE_IMAGE_MODEL="gemini-3.1-flash-image"
-OPENAI_IMAGE_MODEL="gpt-image-2"
+OPENAI_IMAGE_MODEL="gpt-image-2.5-flare"
+
+# Deprecated synonym of GOOGLE_IMAGE_MODEL; read only when that variable is unset/empty/whitespace.
+# IMAGEN_MODEL="gemini-3.1-flash-image"
 ```
 
 ### Image model switch (Vercel)
 
-`GOOGLE_IMAGE_MODEL` and `OPENAI_IMAGE_MODEL` are optional. While both are absent (or empty/whitespace)
-the production image model is unchanged: Google uses `IMAGEN_MODEL` or `imagen-4.0-generate-001`,
-OpenAI uses `gpt-image-1.5`.
+`GOOGLE_IMAGE_MODEL` and `OPENAI_IMAGE_MODEL` are optional. While both are absent (or empty or
+whitespace) production uses the defaults chosen on 2026-10-04: Google
+`gemini-3.1-flash-lite-image` through `models.generateContent`, OpenAI `gpt-image-2.5-flare`
+through `images.generate` with `size 1024x1024`, `quality medium` and `background transparent`.
 
+- Before any change, write down the current values and whether each of `AI_PROVIDER`,
+  `GOOGLE_IMAGE_MODEL`, `IMAGEN_MODEL` and `OPENAI_IMAGE_MODEL` is present (no secrets).
 - Switch: set the variable in the Vercel project environment (Production and/or Preview) and redeploy.
-  No code release is needed. Only the variable of the active provider is read.
+  No code release is needed. Only the variables of the active provider are read.
 - Model EOL to plan against: `imagen-4.0-*` was retired by Google on 2026-08-17, `gpt-image-1.5` is
-  retired by OpenAI on 2026-12-01.
+  retired by OpenAI on 2026-12-01. The two current defaults have no announced shutdown date.
 - Verify the value against the grammar before saving, otherwise generation fails with a configuration
   error naming the variable: `^imagen-[a-z0-9]+(?:[.-][a-z0-9]+)*$` for the Imagen adapter,
-  `^gemini-[a-z0-9]+(?:[.-][a-z0-9]+)*-image(-[a-z0-9]+(?:[.-][a-z0-9]+)*)?$` for the Gemini adapter.
-- Rollback: remove the variable and redeploy. That restores the legacy path (it does not bring a
-  retired model back to life). Rolling back code is a single revert of the squash commit.
+  `^gemini-[a-z0-9]+(?:[.-][a-z0-9]+)*-image(-[a-z0-9]+(?:[.-][a-z0-9]+)*)?$` for the Gemini adapter,
+  `^gpt-image-[a-z0-9]+(?:[.-][a-z0-9]+)*$` for the OpenAI branch.
+- Three separate actions, do not mix them up:
+  - **roll back the configuration**: restore exactly the values written down above and redeploy;
+  - **return to the default**: delete the override variable and redeploy (this is not a rollback);
+  - **roll back the code**: revert the squash commit and redeploy — that restores the retired
+    `imagen-4.0-generate-001` default, so it does not promise a working generation path.
 - Check the server log after the first manual generation: adapter error classes (`blocked-prompt`,
   `blocked`, `incomplete`, `no-image`, `unsupported-format`, `empty-image`, `invalid-png`, `too-large`)
   are visible in the server log and never in the HTTP response.
+- Google has no transparent background, so emoji from the Google branch carry a white field; see the
+  known limitations and the provider comparison in `docs/ai.md`.
 
 ### Env strategy (Vercel)
 
