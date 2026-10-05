@@ -371,6 +371,42 @@ describe('Б-03 a key built from report fields cannot be forged by a crafted fie
   });
 });
 
+describe('Н-09 the production report is walked like the full one', () => {
+  it('blocks a low production node whose via references a node the report does not carry', () => {
+    const decision = decide(
+      reportJson({}),
+      reportJson({
+        'prod-pkg': node({ name: 'prod-pkg', severity: 'low', via: ['ghost'] }),
+      }),
+      initialAllowlistJson()
+    );
+
+    expect(decision.exitCode).toBe(1);
+    expect(text(decision)).toContain('references missing node ghost');
+    expect(text(decision)).not.toContain('production gate');
+  });
+
+  it('blocks a production node whose severity is above the highest reachable advisory', () => {
+    const decision = decide(
+      reportJson({}),
+      reportJson({
+        'prod-pkg': node({
+          name: 'prod-pkg',
+          severity: 'moderate',
+          via: [advisory({ name: 'prod-pkg', severity: 'low', url: OTHER_URL })],
+        }),
+      }),
+      initialAllowlistJson()
+    );
+
+    expect(decision.exitCode).toBe(1);
+    expect(text(decision)).toContain(
+      'chain consistency: declared severity moderate is above the highest reachable advisory severity low'
+    );
+    expect(text(decision)).not.toContain('production gate');
+  });
+});
+
 describe('Б-02 report keys and via references that live on the prototype', () => {
   const PROTOTYPE_KEYS = ['constructor', 'toString', 'hasOwnProperty', '__proto__'];
 
