@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { inspect } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { restoreEnv, snapshotEnv } from '@/test/emoji-image-fixtures';
 
 const BODY_MARKER = 'synthetic-sdk-body-marker-347';
 const KEY_MARKER = 'synthetic-key-marker-347';
@@ -82,6 +83,7 @@ const { POST: emojiGenerate } = await import('@/app/api/emoji/generate/route');
 const { POST: smartCreate } = await import('@/app/api/products/smart-create/route');
 
 const CATEGORY = { id: 'cat-1', name: 'Молочное', nameEn: 'Dairy', order: 1 };
+const envSnapshot = snapshotEnv();
 
 /**
  * Every logger of the process is captured with a deep rendering, so a nested SDK error, its raw body
@@ -156,6 +158,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  restoreEnv(envSnapshot);
 });
 
 describe('AC-17 server logs of a provider failure carry allowlisted fields only', () => {
@@ -241,6 +244,26 @@ describe('AC-17 server logs of a provider failure carry allowlisted fields only'
     expect(logged).not.toContain(BODY_MARKER);
     expect(logged).not.toContain(KEY_MARKER);
     expect(bodyText).not.toContain(BODY_MARKER);
+  });
+
+  it('keeps a configuration error distinguishable without logging its value', async () => {
+    process.env.GOOGLE_IMAGE_MODEL = 'not-a-model-id';
+    doubles.sdkFailure = () => {
+      throw new Error(`${BODY_MARKER} must not be reached`);
+    };
+    const records = captureLoggers();
+
+    const response = await emojiGenerate(emojiGenerateRequest());
+    const bodyText = await response.text();
+
+    expect(response.status).toBe(500);
+    expect(JSON.parse(bodyText)).toEqual({ error: 'Failed to generate emoji' });
+    expect(doubles.sdkCalls).toHaveLength(0);
+    expect(records.filter((record) => record.level === 'error')).not.toHaveLength(0);
+    const logged = records.map((record) => record.text).join('\n');
+    expect(logged).toContain("errorClass: 'configuration'");
+    expect(logged).not.toContain('not-a-model-id');
+    expect(logged).not.toContain(KEY_MARKER);
   });
 
   it('keeps the previous 500 and logs no raw text for a route-level failure', async () => {

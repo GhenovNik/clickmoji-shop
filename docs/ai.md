@@ -98,8 +98,8 @@ What a caller sees:
 
 Server logs of a generation failure carry an allowlisted record only — error class, `reason`, HTTP
 status, provider and resolved model. The raw SDK message, body, headers and `cause` are never passed
-to `console.error` in either route, and a non-typed error is normalized to its FR-3 class name or to
-`Error`.
+to `console.error` in either route, and a non-typed error is normalized to its FR-3 class name, to
+`configuration` for an invalid model id, or to `Error`.
 
 ### Prompt variants and metadata
 

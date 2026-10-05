@@ -134,6 +134,12 @@ const GENERATION_ERROR_CLASSES = [
   'too-large',
 ];
 
+/**
+ * FR-2 configuration errors start with `Invalid <ENV> value`. Only the fixed class name is derived
+ * from that text; the variable name and its value stay out of the log.
+ */
+const CONFIGURATION_ERROR_PATTERN = /^Invalid [A-Z0-9_]+ value /;
+
 export type EmojiGenerationLogRecord = {
   errorClass: string;
   reason?: EmojiProviderUnavailableReason;
@@ -157,8 +163,9 @@ export function summarizeEmojiGenerationFailure(error: unknown): EmojiGeneration
   }
 
   const message = readMessage(error);
+  const generationClass = GENERATION_ERROR_CLASSES.find((className) => message.includes(className));
   const errorClass =
-    GENERATION_ERROR_CLASSES.find((className) => message.includes(className)) ?? 'Error';
+    generationClass ?? (CONFIGURATION_ERROR_PATTERN.test(message) ? 'configuration' : 'Error');
   const status = readNumberField(error, 'status');
 
   return status === undefined ? { errorClass } : { errorClass, status };
