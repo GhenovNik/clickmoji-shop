@@ -5,6 +5,7 @@ export const NPM_TIMEOUT_MS = 120_000;
 export const NPM_MAX_OUTPUT_BYTES = 32 * 1024 * 1024;
 export const NPM_MAX_STDERR_BYTES = 4096;
 export const FORCE_FINISH_GRACE_MS = 250;
+const FORWARDED_SIGNALS: readonly NodeJS.Signals[] = ['SIGINT', 'SIGTERM'];
 
 export interface RunnerResult {
   readonly status: number | null;
@@ -145,17 +146,44 @@ export function createNpmAuditRunner(options: SpawnRunnerOptions = {}): AuditRun
         outputBytes,
       });
 
+      const signalListeners: Array<readonly [NodeJS.Signals, () => void]> = [];
+
+      const removeSignalListeners = (): void => {
+        for (const [signal, listener] of signalListeners) {
+          process.removeListener(signal, listener);
+        }
+        signalListeners.length = 0;
+      };
+
       const finish = (result: RunnerResult): void => {
         if (settled) {
           return;
         }
         settled = true;
         clearTimeout(timer);
+        removeSignalListeners();
         if (forceTimer !== null) {
           clearTimeout(forceTimer);
         }
         resolve(result);
       };
+
+      /**
+       * The child leads its own process group, so a signal from the terminal never reaches npm:
+       * the group is killed here and the signal is then re-raised, which keeps the interrupted
+       * check from starting the second npm call.
+       */
+      const forwardSignal = (signal: NodeJS.Signals): void => {
+        killProcessGroup(child);
+        removeSignalListeners();
+        process.kill(process.pid, signal);
+      };
+
+      for (const signal of FORWARDED_SIGNALS) {
+        const listener = (): void => forwardSignal(signal);
+        signalListeners.push([signal, listener]);
+        process.on(signal, listener);
+      }
 
       /** The pipe can stay open in a grandchild that outlives the kill, so the streams are dropped. */
       const forceFinish = (): void => {

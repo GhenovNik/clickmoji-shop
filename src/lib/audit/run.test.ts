@@ -1,5 +1,14 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { chmodSync, existsSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
+import { spawn, type ChildProcess } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { runAuditCheck } from './run';
@@ -23,6 +32,7 @@ import {
   node,
   reportJson,
   reportWithRawVulnerabilities,
+  REPO_ROOT,
   text,
 } from './test-helpers';
 import type { ReportLabel } from './types';
@@ -48,6 +58,43 @@ function fakeNpm(directory: string, body: string): string {
   writeFileSync(file, `#!/usr/bin/env node\n${body}\n`);
   chmodSync(file, 0o755);
   return file;
+}
+
+async function waitFor(probe: () => boolean, timeoutMs: number): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+
+  while (!probe()) {
+    if (Date.now() > deadline) {
+      throw new Error(`the condition was not met within ${timeoutMs} ms`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+}
+
+function isRunning(pid: number | undefined): boolean {
+  if (pid === undefined) {
+    return false;
+  }
+
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function waitForExit(child: ChildProcess, timeoutMs: number): Promise<string | null> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(
+      () => reject(new Error(`the check process did not exit within ${timeoutMs} ms`)),
+      timeoutMs
+    );
+    child.once('exit', (_code, signal) => {
+      clearTimeout(timer);
+      resolve(signal);
+    });
+  });
 }
 
 function options(overrides: Partial<Parameters<typeof runAuditCheck>[0]> = {}) {
@@ -392,6 +439,47 @@ describe('AC-9 npm process failures', () => {
     await new Promise((resolve) => setTimeout(resolve, 6_500));
     expect(existsSync(marker)).toBe(false);
   }, 30_000);
+
+  it('leaves no npm process behind when the check itself is interrupted', async () => {
+    const directory = tempDir();
+    const pidFile = path.join(directory, 'npm.pid');
+    const logFile = path.join(directory, 'npm-calls.log');
+    fakeNpm(
+      directory,
+      [
+        "const fs = require('node:fs');",
+        `fs.writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));`,
+        `fs.appendFileSync(${JSON.stringify(logFile)}, 'audit\\n');`,
+        'setTimeout(() => {}, 25_000);',
+      ].join('\n')
+    );
+
+    const check = spawn(
+      process.execPath,
+      ['--import', 'tsx', path.join(REPO_ROOT, 'scripts', 'audit-check.ts')],
+      {
+        cwd: REPO_ROOT,
+        env: { ...process.env, PATH: `${directory}${path.delimiter}${process.env.PATH ?? ''}` },
+        stdio: ['ignore', 'pipe', 'pipe'],
+      }
+    );
+
+    await waitFor(() => existsSync(pidFile), 20_000);
+    const npmPid = Number(readFileSync(pidFile, 'utf8'));
+    check.kill('SIGINT');
+    const signal = await waitForExit(check, 20_000);
+    await waitFor(() => !isRunning(npmPid), 10_000);
+    const npmSurvived = isRunning(npmPid);
+
+    if (npmSurvived) {
+      process.kill(npmPid, 'SIGKILL');
+    }
+
+    expect(npmSurvived).toBe(false);
+    expect(signal).toBe('SIGINT');
+    // an interrupted check must not start the second npm call
+    expect(readFileSync(logFile, 'utf8').trim().split('\n')).toHaveLength(1);
+  }, 60_000);
 
   it('keeps the first bytes of npm stderr for a status outside {0, 1}', async () => {
     const command = fakeNpm(
