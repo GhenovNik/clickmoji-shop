@@ -11,6 +11,7 @@ import {
   entry,
   fakeRunner,
   fixturesRunner,
+  forbiddenRunner,
   initialAllowlistJson,
   liveFull,
   liveProduction,
@@ -97,6 +98,19 @@ describe('AC-4 allowlist expiry in UTC', () => {
     );
 
     expect(decision.exitCode).toBe(1);
+    expect(text(decision)).toContain('exceptions[0].expires 2026-10-01 is in the past');
+  });
+
+  it('AC-5 rejects an expired exception before npm is called at all', async () => {
+    const decision = await runAuditCheck(
+      options({
+        runner: forbiddenRunner(),
+        readAllowlistFile: () => initialAllowlistJson({ expires: '2026-10-01' }),
+      })
+    );
+
+    expect(decision.exitCode).toBe(1);
+    expect(text(decision)).toContain('error [schema]');
     expect(text(decision)).toContain('exceptions[0].expires 2026-10-01 is in the past');
   });
 
@@ -386,14 +400,15 @@ describe('AC-10 npm invocation isolation', () => {
   });
 
   it('strips NODE_ENV and every npm_config variable from the child environment', async () => {
+    const env = process.env as Record<string, string | undefined>;
     const previous = {
-      NODE_ENV: process.env.NODE_ENV,
-      offline: process.env.npm_config_offline,
-      registry: process.env.NPM_CONFIG_REGISTRY,
+      NODE_ENV: env.NODE_ENV,
+      offline: env.npm_config_offline,
+      registry: env.NPM_CONFIG_REGISTRY,
     };
-    process.env.NODE_ENV = 'production';
-    process.env.npm_config_offline = 'true';
-    process.env.NPM_CONFIG_REGISTRY = 'http://127.0.0.1:9/';
+    env.NODE_ENV = 'production';
+    env.npm_config_offline = 'true';
+    env.NPM_CONFIG_REGISTRY = 'http://127.0.0.1:9/';
 
     try {
       const { runner, calls } = fixturesRunner(liveFull(), liveProduction());
@@ -405,14 +420,14 @@ describe('AC-10 npm invocation isolation', () => {
         expect(Object.keys(call.env).filter((key) => /^npm_config_/i.test(key))).toEqual([]);
         expect(call.env).not.toHaveProperty('NODE_ENV');
       }
-      expect(process.env.NODE_ENV).toBe('production');
+      expect(env.NODE_ENV).toBe('production');
     } finally {
-      if (previous.NODE_ENV === undefined) delete process.env.NODE_ENV;
-      else process.env.NODE_ENV = previous.NODE_ENV;
-      if (previous.offline === undefined) delete process.env.npm_config_offline;
-      else process.env.npm_config_offline = previous.offline;
-      if (previous.registry === undefined) delete process.env.NPM_CONFIG_REGISTRY;
-      else process.env.NPM_CONFIG_REGISTRY = previous.registry;
+      if (previous.NODE_ENV === undefined) delete env.NODE_ENV;
+      else env.NODE_ENV = previous.NODE_ENV;
+      if (previous.offline === undefined) delete env.npm_config_offline;
+      else env.npm_config_offline = previous.offline;
+      if (previous.registry === undefined) delete env.NPM_CONFIG_REGISTRY;
+      else env.NPM_CONFIG_REGISTRY = previous.registry;
     }
   });
 

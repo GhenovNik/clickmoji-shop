@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { runAuditCheck } from './run';
-import type { Decision } from './decide';
+import type { Decision } from './types';
 import {
   GHSA_BRACES,
   allowlistJson,

@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "exceptions": [
+    {
+      "id": "GHSA-vfj7-8cjw-p6xm",
+      "packages": ["braces"],
+      "reason": "braces <= 3.0.3 has a stack-exhaustion denial of service through deeply nested patterns and no patched version exists yet (first_patched_version is null). The glob patterns that reach braces come only from repository configuration: @next/eslint-plugin-next builds its patterns from settings.next.rootDir, which eslint.config.mjs does not set, and lint-staged takes its patterns from package.json and matches file paths as strings. No user input reaches braces and braces is absent from the production bundle. Residual risk: a pull request with malicious configuration could take down developer dev tooling (lint or a hook) locally or in CI; that is denial of dev tooling service, not code execution. Tracked in AGE-951 and reviewed in every pull request.",
+      "scope": "dev",
+      "maxSeverity": "high",
+      "expires": "2026-11-04",
+      "issue": "AGE-951"
+    }
+  ]
+}

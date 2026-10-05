@@ -19,7 +19,7 @@ import {
   text,
 } from './test-helpers';
 import { readFileSync } from 'node:fs';
-import { ALLOWLIST_FILE } from './test-helpers';
+import { ALLOWLIST_FILE, readFixture } from './test-helpers';
 
 function bracesChain(via: unknown[]): string {
   return reportJson({
@@ -253,17 +253,14 @@ describe('AC-3 via graph traversal and severity consistency', () => {
   });
 
   it('accepts the saved real npm two-version graph once the high advisory is allowed', () => {
-    const realGraph = readFileSync(
-      new URL('./fixtures/real-npm-graph.json', import.meta.url),
-      'utf8'
-    );
+    const realGraph = readFixture('real-npm-graph.json');
 
     const decision = decide(
       realGraph,
       EMPTY_PROD,
       allowlistJson([
         entry({
-          id: GHSA_OTHER,
+          id: 'GHSA-3456-3456-3456',
           packages: ['audit-leaf'],
           expires: '2026-11-04',
         }),
@@ -271,17 +268,17 @@ describe('AC-3 via graph traversal and severity consistency', () => {
     );
 
     expect(decision.exitCode).toBe(0);
-    expect(text(decision)).toContain(`allowed advisory ${GHSA_OTHER}`);
+    expect(text(decision)).toContain('allowed advisory GHSA-3456-3456-3456');
     expect(text(decision)).toContain('audit-leaf');
   });
 
   it('keeps the real two-version fixture honest: the parent is moderate and the leaf is high', () => {
-    const realGraph = JSON.parse(
-      readFileSync(new URL('./fixtures/real-npm-graph.json', import.meta.url), 'utf8')
-    ) as Record<string, { severity: string }>;
+    const graph = JSON.parse(readFixture('real-npm-graph.json')) as {
+      vulnerabilities: Record<string, { severity: string }>;
+    };
 
-    expect(realGraph['audit-parent'].severity).toBe('moderate');
-    expect(realGraph['audit-leaf'].severity).toBe('high');
+    expect(graph.vulnerabilities['audit-parent'].severity).toBe('moderate');
+    expect(graph.vulnerabilities['audit-leaf'].severity).toBe('high');
   });
 });
 
@@ -369,5 +366,57 @@ describe('AC-6 production gate', () => {
     expect(decision.exitCode).toBe(1);
     expect(text(decision)).toContain('production gate');
     expect(text(decision)).toContain('prod-pkg');
+  });
+
+  it('(c3) blocks a production node whose own severity is high even when its advisory is moderate', () => {
+    const decision = decide(
+      reportJson({}),
+      reportJson({
+        'prod-pkg': node({
+          name: 'prod-pkg',
+          severity: 'high',
+          via: [advisory({ name: 'prod-pkg', severity: 'moderate', url: OTHER_URL })],
+        }),
+      }),
+      initialAllowlistJson()
+    );
+
+    expect(decision.exitCode).toBe(1);
+    expect(text(decision)).toContain(
+      'package prod-pkg (severity high, source n/a, url n/a) - production gate'
+    );
+  });
+});
+
+describe('AC-5 allowlist expiry inside the pure decision', () => {
+  const cleanReport = reportJson({
+    'low-pkg': node({
+      name: 'low-pkg',
+      severity: 'low',
+      via: [advisory({ name: 'low-pkg', severity: 'low' })],
+    }),
+  });
+
+  it('keeps an exception whose expires day is still running in UTC', () => {
+    const decision = decide(
+      cleanReport,
+      EMPTY_PROD,
+      initialAllowlistJson({ expires: '2026-10-04' }),
+      '2026-10-04T23:59:59.999Z'
+    );
+
+    expect(decision.exitCode).toBe(0);
+  });
+
+  it('rejects an exception from the first millisecond of the next UTC day', () => {
+    const decision = decide(
+      cleanReport,
+      EMPTY_PROD,
+      initialAllowlistJson({ expires: '2026-10-04' }),
+      '2026-10-05T00:00:00.000Z'
+    );
+
+    expect(decision.exitCode).toBe(1);
+    expect(text(decision)).toContain('exceptions[0].expires 2026-10-04 is in the past');
   });
 });

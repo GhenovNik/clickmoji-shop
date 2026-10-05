@@ -1,28 +1,24 @@
 import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { parseAllowlist } from './allowlist';
 import { parseReport } from './report';
-import { decideAudit, type Decision } from './decide';
-import type { AuditRunner, RunnerResult } from './npm-runner';
-import type { AuditReport, ReportLabel } from './types';
+import { decideAudit } from './decide';
+import { NPM_MAX_OUTPUT_BYTES, type AuditRunner, type RunnerResult } from './npm-runner';
+import type { AuditReport, Decision, ReportLabel } from './types';
 
-export const REPO_ROOT = fileURLToPath(new URL('../../../../', import.meta.url));
+export const REPO_ROOT = process.cwd();
 export const ALLOWLIST_FILE = path.join(REPO_ROOT, 'audit-allowlist.json');
 
 export const GHSA_BRACES = 'GHSA-vfj7-8cjw-p6xm';
 export const BRACES_URL = 'https://github.com/advisories/GHSA-vfj7-8cjw-p6xm';
-export const GHSA_OTHER = 'GHSA-aaaa-1111-2222';
-export const OTHER_URL = 'https://github.com/advisories/GHSA-aaaa-1111-2222';
+export const GHSA_OTHER = 'GHSA-2345-67qr-jmpx';
+export const OTHER_URL = `https://github.com/advisories/${GHSA_OTHER}`;
 
 export const NOW = '2026-10-04T12:00:00.000Z';
 export const EXPIRES = '2026-11-04';
 
 export function readFixture(name: string): string {
-  return readFileSync(
-    path.join(fileURLToPath(new URL('.', import.meta.url)), 'fixtures', name),
-    'utf8'
-  );
+  return readFileSync(path.join(REPO_ROOT, 'src', 'lib', 'audit', 'fixtures', name), 'utf8');
 }
 
 export function reportJson(vulnerabilities: Record<string, unknown>): string {
@@ -156,7 +152,7 @@ export function liveFullWithAdvisorySeverity(severity: string, nodeSeverity?: st
 }
 
 export interface RecordedCall {
-  args: string[];
+  args: readonly string[];
   env: NodeJS.ProcessEnv;
   timeoutMs: number;
   configFiles: Record<string, string | null>;
@@ -190,15 +186,19 @@ export function fakeRunner(respond: (call: RecordedCall, index: number) => Parti
     calls.push(call);
     const override = respond(call, calls.length - 1);
 
-    return {
+    const merged: RunnerResult = {
       status: 1,
       signal: null,
       error: null,
       stdout: '',
       timedOut: false,
       overflow: false,
+      limitBytes: NPM_MAX_OUTPUT_BYTES,
+      outputBytes: 0,
       ...override,
     };
+
+    return { ...merged, outputBytes: Buffer.byteLength(merged.stdout, 'utf8') };
   };
 
   return { runner, calls };
