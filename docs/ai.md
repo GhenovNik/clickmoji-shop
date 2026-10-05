@@ -66,6 +66,41 @@ and never contains keys or response content. Classes are visible in the server l
 existing `console.error` of the callers) and are not exposed in HTTP responses. Exactly one adapter
 call is made per generation: there is no fallback to another provider or model.
 
+### Provider unavailability
+
+When the provider itself cannot serve the request, the service throws a typed
+`EmojiProviderUnavailableError` (`src/lib/services/emoji-errors.ts`) with `name`,
+`code: 'image_provider_unavailable'`, `reason`, `provider` and the resolved `model`. It carries
+neither the SDK error nor its message, body, headers or `cause`.
+
+| `reason`      | Recognized from                                                                                                                             |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `missing-key` | `GOOGLE_GENAI_API_KEY` / `OPENAI_API_KEY` unset, empty or whitespace only. No SDK client is created, so there are 0 SDK calls and 0 uploads |
+| `quota`       | HTTP 429, `RESOURCE_EXHAUSTED`, `insufficient_quota`, `rate_limit_exceeded`                                                                 |
+| `auth`        | HTTP 401 or 403, `UNAUTHENTICATED`, `PERMISSION_DENIED`, and a Google HTTP 400 whose body carries `API_KEY_INVALID`                         |
+
+The Google SDK reports a status in the message text when its retry layer is active, so
+`Retryable HTTP Error: Too Many Requests` and `Non-retryable exception Unauthorized|Forbidden sending
+request` are recognized as a fallback for a missing numeric status. Everything else keeps the previous
+error and the previous HTTP response: a plain 400 / `INVALID_ARGUMENT`, a 500, a network failure, an
+invalid model id (a configuration error naming the variable) and every error class above. There is no
+retry of our own and no fallback to the other provider or model.
+
+What a caller sees:
+
+- `POST /api/emoji/generate` answers **503** with
+  `{ "error": "AI image generation is unavailable right now (provider quota or API key). Pick a regular emoji instead.", "code": "image_provider_unavailable" }`.
+  The admin UI shows that `error` text in its existing alert; no UI code changed. Any other
+  generation failure still answers the previous 500 `{ "error": "Failed to generate emoji" }`.
+- `POST /api/products/smart-create` treats it like any other generation failure: the product is
+  created with the Unicode emoji, `isCustom=false`, `imageUrl=null`, the response reports
+  `customEmojiGenerated=false`, and no upload is started.
+
+Server logs of a generation failure carry an allowlisted record only — error class, `reason`, HTTP
+status, provider and resolved model. The raw SDK message, body, headers and `cause` are never passed
+to `console.error` in either route, and a non-typed error is normalized to its FR-3 class name or to
+`Error`.
+
 ### Prompt variants and metadata
 
 `src/lib/prompts/emoji-generation.ts` holds one template with two variants of the two white-field
@@ -117,6 +152,10 @@ do not pay for server-side API calls.
   per hour per user; OpenAI Tier 1 allows 5 images per minute for the whole organization, so
   concurrent load can return 429 from the provider. Shared budget, queueing and concurrency are a
   follow-up before a real multi-user launch.
+- **The Google key has no image quota yet.** The key in production answered `429` on both paid probe
+  attempts, so the project most likely has no billing or no image quota for it. Until the operator
+  enables billing, the Google branch cannot generate: the generate route answers the 503
+  `image_provider_unavailable` body and smart-create creates the product with a Unicode emoji.
 - **Cost and time ceiling.** One adapter call per generation, with the SDK's own internal retries and
   timeouts unchanged; an explicit time/cost limit is a follow-up.
 
@@ -148,12 +187,26 @@ against the branch SHA recorded in the log manifest.
 
 - Dry run (fake transport, synthetic key, no paid call): **PASS** for both providers — one attempt
   each, one HTTP request per attempt (no retries), real SDK request bodies matching FR-1/FR-8,
-  both negative controls rejected, synthetic marker absent from the log.
-- Paid run (at most 3 attempts per provider, real provider key, artifacts under
-  `~/.local/share/dev-harness/artifacts/AGE-347/visual/`): **PLACEHOLDER — the coordinator runs this
-  stage.** Nothing in this table is a measurement until `probe-log.json` and the per-provider PNGs
-  from that run are in place; OpenAI cost stays _not measured_ until the `usage` block of a real
-  response is recorded.
+  all negative controls rejected, synthetic marker absent from the log
+  (`probe-log-dry-run.json`, `probe-dry-run-console.txt`).
+- Paid run, OpenAI `gpt-image-2.5-flare`, 1 of 3 attempts: **PASS**. 1024x1024, alpha channel,
+  0 of 8176 opaque border samples, no near-white opaque pixels in the mid ring, 32.8% opaque pixels
+  as the subject, 867 374 bytes in 11.2 s, `returnedModel = gpt-image-2.5-flare`,
+  `promptVersion = emoji-image-v1-transparent`, sha256 `bd1d747c…` (`probe/out/probe-log.json`,
+  `visual/probe-openai-1.png`, `visual/probe-openai-1-on-magenta.png`). Inspection on the magenta
+  backdrop confirmed transparency around the silhouette and no white plate or painted checkerboard.
+  The harness recorded `FAIL-image-validation` for this attempt because of its own
+  `no-plate-in-mid-ring` heuristic, which is not part of the spec: it measured 18.9% opaque at the
+  0.18 inset while the subject is large (bbox y 121-919) and crosses that ring. Every criterion the
+  spec does list passed. Cost: **not measured** — the response carried no recorded `usage` block.
+- Paid run, Google `gemini-3.1-flash-lite-image`, 2 of 3 attempts: **FAIL without generation and
+  without a charge**. Both `generateContent` calls answered `429 Too Many Requests` in ~260-280 ms;
+  the model itself exists (`GET models` → 200). Per protocol a 429 is an unclear outcome, so the
+  Google run was stopped there. The Google attempt wrote no artifact: `probe/out/probe-gemini-1.png`
+  is the dry-run fake-transport image (23 102 bytes, sha256 `22396318…`), not a Google generation.
+- The probe is **closed**: the operator decided on 2026-10-04 not to enable Google billing, not to
+  change the Vercel environment and not to run further live probes. The Google `generateContent` path
+  therefore stays unproven against the live API, and mocks in the test suite are its evidence.
 
 ## Implemented flows
 
@@ -169,6 +222,8 @@ against the branch SHA recorded in the log manifest.
   `src/lib/services/emoji-assets.ts`.
 - Image provider adapters (legacy Imagen, Gemini `generateContent`, OpenAI, response classification)
   live in `src/lib/services/emoji-image-adapters.ts`.
+- Provider unavailability (`EmojiProviderUnavailableError`, its classification and the allowlisted
+  log record) lives in `src/lib/services/emoji-errors.ts`.
 - Route handlers are responsible for auth, request validation, rate-limit checks, service calls,
   and HTTP responses.
 - Internal self-HTTP between route handlers is avoided. `smart-create` calls the emoji asset
