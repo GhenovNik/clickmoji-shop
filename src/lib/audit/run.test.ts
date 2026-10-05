@@ -549,10 +549,11 @@ describe('AC-9 npm process failures', () => {
 
   it('caps the kept npm stderr by bytes and not by UTF-16 units', async () => {
     const snowman = String.fromCharCode(0x2603);
-    const command = fakeNpm(
-      tempDir(),
-      `require('node:fs').writeSync(2, String.fromCharCode(0x2603).repeat(2000)); process.exit(2);`
-    );
+    const chunk = `const snowman = String.fromCharCode(0x2603).repeat(700);
+const write = () => require('node:fs').writeSync(2, snowman);
+write();
+setTimeout(() => { write(); setTimeout(() => { write(); process.exit(2); }, 30); }, 30);`;
+    const command = fakeNpm(tempDir(), chunk);
 
     const result = await createNpmAuditRunner({ command })([], { ...process.env }, 10_000);
 
