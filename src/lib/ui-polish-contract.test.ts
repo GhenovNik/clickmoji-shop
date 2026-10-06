@@ -1,6 +1,8 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { matchRemotePattern } from 'next/dist/shared/lib/match-remote-pattern';
+import nextConfig from '../../next.config';
 
 function read(relativePath: string) {
   return readFileSync(path.join(process.cwd(), relativePath), 'utf8');
@@ -21,10 +23,61 @@ describe('UI polish contract', () => {
   });
 
   it('allows optimized UploadThing images', () => {
-    const nextConfig = read('next.config.ts');
-    expect(nextConfig).toContain('remotePatterns');
-    expect(nextConfig).toContain('utfs.io');
-    expect(nextConfig).toContain('ufs.sh');
+    const expectedRemotePatterns = [
+      {
+        protocol: 'https',
+        hostname: 'utfs.io',
+        port: '',
+        pathname: '/f/*',
+        search: '',
+      },
+      {
+        protocol: 'https',
+        hostname: '3kv5vvupx6.ufs.sh',
+        port: '',
+        pathname: '/f/*',
+        search: '',
+      },
+    ];
+    const remotePatterns = nextConfig.images?.remotePatterns;
+    expect(remotePatterns).toEqual(expectedRemotePatterns);
+    if (!remotePatterns) throw new Error('expected exactly two remotePatterns');
+    const matches = (src: string) =>
+      remotePatterns.some((pattern) => matchRemotePattern(pattern, new URL(src)));
+
+    const allowed = [
+      'https://utfs.io/f/abc123.png',
+      'https://3kv5vvupx6.ufs.sh/f/abc123.png',
+      'https://utfs.io/f/abc123.png/',
+      'https://utfs.io:443/f/abc123.png',
+      'https://utfs.io/f/abc123.png?',
+      'https://utfs.io/f/abc123.png#x',
+      'https://utfs.io/f/a%2Fb',
+    ];
+    const denied = [
+      'http://utfs.io/f/a',
+      'https://utfs.io:8443/f/a',
+      'https://utfs.io/f/a?x=1',
+      'https://utfs.io/x/a',
+      'https://utfs.io/f/a/b',
+      'https://utfs.io/f/',
+      'https://utfs.io/',
+      'https://abc.ufs.sh/f/a',
+      'https://ufs.sh/f/a',
+      'https://x.3kv5vvupx6.ufs.sh/f/a',
+      'https://3kv5vvupx6.ufs.sh/x/a',
+      'https://3kv5vvupx6.ufs.sh:8443/f/a',
+      'https://3kv5vvupx6.ufs.sh/f/a?x=1',
+      'http://3kv5vvupx6.ufs.sh/f/a',
+      'https://utfsXio/f/a',
+      'https://evil.example/f/a',
+    ];
+    for (const src of allowed) {
+      expect(matches(src), src).toBe(true);
+    }
+    for (const src of denied) {
+      expect(matches(src), src).toBe(false);
+    }
   });
 
   it('uses next/image on user-facing custom image surfaces', () => {

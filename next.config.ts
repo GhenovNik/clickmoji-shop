@@ -22,14 +22,16 @@ const nextConfig: NextConfig = {
       {
         protocol: 'https',
         hostname: 'utfs.io',
+        port: '',
+        pathname: '/f/*',
+        search: '',
       },
       {
         protocol: 'https',
-        hostname: 'ufs.sh',
-      },
-      {
-        protocol: 'https',
-        hostname: '*.ufs.sh',
+        hostname: '3kv5vvupx6.ufs.sh',
+        port: '',
+        pathname: '/f/*',
+        search: '',
       },
     ],
   },
