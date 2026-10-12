@@ -91,7 +91,7 @@
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
     "resend": "^6.16.0",
-    "tailwind-merge": "^3.4.1",
+    "tailwind-merge": "^3.7.0",
     "uploadthing": "^7.7.4",
     "zustand": "^5.0.15"
   },
