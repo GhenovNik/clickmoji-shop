@@ -2,7 +2,9 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   chmodSync,
   existsSync,
+  mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   realpathSync,
   rmSync,
@@ -104,6 +106,11 @@ function waitForExit(child: ChildProcess, timeoutMs: number): Promise<string | n
       () => reject(new Error(`the check process did not exit within ${timeoutMs} ms`)),
       timeoutMs
     );
+    if (child.exitCode !== null || child.signalCode !== null) {
+      clearTimeout(timer);
+      resolve(child.signalCode);
+      return;
+    }
     child.once('exit', (_code, signal) => {
       clearTimeout(timer);
       resolve(signal);
@@ -524,53 +531,223 @@ describe('AC-9 npm process failures', () => {
     );
   }, 90_000);
 
-  it('leaves no npm process behind when the check itself is interrupted', async () => {
-    const directory = tempDir();
-    const pidFile = path.join(directory, 'npm.pid');
-    const logFile = path.join(directory, 'npm-calls.log');
-    fakeNpm(
-      directory,
-      [
-        "const fs = require('node:fs');",
-        `fs.appendFileSync(${JSON.stringify(logFile)}, 'audit\\n');`,
-        // the pid file goes last, so the test that waits for it never sees a fake npm that is still
-        // writing its start-up files and is about to be killed in the middle of them
-        `fs.writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));`,
+  it.each(['SIGINT', 'SIGTERM', 'SIGHUP'] as const)(
+    'leaves no npm process or config behind when interrupted by %s',
+    async (interruption) => {
+      const directory = tempDir();
+      const pidFile = path.join(directory, 'npm.pid');
+      const grandchildPidFile = path.join(directory, 'grandchild.pid');
+      const configFile = path.join(directory, 'config-directory.txt');
+      const logFile = path.join(directory, 'npm-calls.log');
+      const isolatedTmp = path.join(directory, 'tmp');
+      mkdirSync(isolatedTmp);
+      const sentinel = path.join(isolatedTmp, 'audit-check-unrelated');
+      mkdirSync(sentinel);
+      writeFileSync(path.join(sentinel, 'keep.txt'), 'unrelated');
+      const grandchild = [
+        "require('node:fs').writeFileSync(process.argv[1], String(process.pid));",
         'setTimeout(() => {}, 25_000);',
-      ].join('\n')
-    );
+      ].join('\n');
+      fakeNpm(
+        directory,
+        [
+          "const fs = require('node:fs');",
+          "const path = require('node:path');",
+          `fs.appendFileSync(${JSON.stringify(logFile)}, 'audit\\n');`,
+          "const config = process.argv.find(arg => arg.startsWith('--userconfig='));",
+          `fs.writeFileSync(${JSON.stringify(configFile)}, path.dirname(config.slice('--userconfig='.length)));`,
+          `require('node:child_process').spawn(process.execPath, ['-e', ${JSON.stringify(grandchild)}, ${JSON.stringify(grandchildPidFile)}], { stdio: 'inherit' });`,
+          // The pid file is the final startup marker; the grandchild has its own marker.
+          `fs.writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));`,
+          'setTimeout(() => {}, 25_000);',
+        ].join('\n')
+      );
+      const check = spawn(
+        process.execPath,
+        ['--import', 'tsx', path.join(REPO_ROOT, 'scripts', 'audit-check.ts')],
+        {
+          cwd: REPO_ROOT,
+          env: {
+            ...process.env,
+            PATH: `${directory}${path.delimiter}${process.env.PATH ?? ''}`,
+            TMPDIR: isolatedTmp,
+          },
+          stdio: ['ignore', 'pipe', 'pipe'],
+        }
+      );
 
-    const check = spawn(
-      process.execPath,
-      ['--import', 'tsx', path.join(REPO_ROOT, 'scripts', 'audit-check.ts')],
-      {
-        cwd: REPO_ROOT,
-        env: { ...process.env, PATH: `${directory}${path.delimiter}${process.env.PATH ?? ''}` },
-        stdio: ['ignore', 'pipe', 'pipe'],
+      try {
+        await waitFor(() => existsSync(pidFile) && existsSync(grandchildPidFile), 20_000);
+        const npmPid = Number(readFileSync(pidFile, 'utf8'));
+        const grandchildPid = Number(readFileSync(grandchildPidFile, 'utf8'));
+        const configDirectory = readFileSync(configFile, 'utf8');
+        expect(existsSync(path.join(configDirectory, 'user.npmrc'))).toBe(true);
+        expect(existsSync(path.join(configDirectory, 'global.npmrc'))).toBe(true);
+        const exited = waitForExit(check, 20_000);
+        check.kill(interruption);
+        expect(await exited).toBe(interruption);
+        expect(check.exitCode).toBeNull();
+        await waitFor(() => !isRunning(npmPid) && !isRunning(grandchildPid), 10_000);
+        expect(isRunning(npmPid)).toBe(false);
+        expect(isRunning(grandchildPid)).toBe(false);
+        expect(readFileSync(logFile, 'utf8').trim().split('\n')).toHaveLength(1);
+        expect(existsSync(configDirectory)).toBe(false);
+        expect(readdirSync(isolatedTmp).filter((name) => name.startsWith('audit-check-'))).toEqual([
+          'audit-check-unrelated',
+        ]);
+        expect(readFileSync(path.join(sentinel, 'keep.txt'), 'utf8')).toBe('unrelated');
+      } finally {
+        // Also bounded when a mutation breaks forwarding or startup assertions fail.
+        for (const file of [pidFile, grandchildPidFile]) {
+          if (existsSync(file)) {
+            const pid = Number(readFileSync(file, 'utf8'));
+            try {
+              process.kill(-pid, 'SIGKILL');
+            } catch {
+              // A grandchild shares npm's group, or the group is already gone.
+            }
+            if (isRunning(pid)) process.kill(pid, 'SIGKILL');
+          }
+        }
+        if (check.exitCode === null && check.signalCode === null) {
+          const exited = waitForExit(check, 5_000);
+          check.kill('SIGKILL');
+          await exited;
+        }
       }
+    },
+    60_000
+  );
+
+  it.each([0, 2])(
+    'removes only its config directory after npm exits with status %s',
+    async (status) => {
+      const directory = tempDir();
+      const isolatedTmp = path.join(directory, 'tmp');
+      mkdirSync(isolatedTmp);
+      const sentinel = path.join(isolatedTmp, 'audit-check-unrelated');
+      mkdirSync(sentinel);
+      writeFileSync(path.join(sentinel, 'keep.txt'), 'unrelated');
+      const configFile = path.join(directory, 'config-directory.txt');
+      fakeNpm(
+        directory,
+        [
+          "const fs = require('node:fs');",
+          "const config = process.argv.find(arg => arg.startsWith('--userconfig='));",
+          `fs.writeFileSync(${JSON.stringify(configFile)}, require('node:path').dirname(config.slice('--userconfig='.length)));`,
+          `process.stdout.write(process.argv.includes('--omit=dev') ? ${JSON.stringify(liveProduction())} : ${JSON.stringify(liveFull())});`,
+          `process.exitCode = ${status};`,
+        ].join('\n')
+      );
+      const check = spawn(
+        process.execPath,
+        ['--import', 'tsx', path.join(REPO_ROOT, 'scripts', 'audit-check.ts')],
+        {
+          cwd: REPO_ROOT,
+          env: {
+            ...process.env,
+            PATH: `${directory}${path.delimiter}${process.env.PATH ?? ''}`,
+            TMPDIR: isolatedTmp,
+          },
+          stdio: ['ignore', 'pipe', 'pipe'],
+        }
+      );
+      try {
+        expect(await waitForExit(check, 20_000)).toBeNull();
+        expect(check.exitCode).toBe(status === 0 ? 0 : 1);
+        expect(existsSync(readFileSync(configFile, 'utf8'))).toBe(false);
+        expect(readdirSync(isolatedTmp).filter((name) => name.startsWith('audit-check-'))).toEqual([
+          'audit-check-unrelated',
+        ]);
+        expect(readFileSync(path.join(sentinel, 'keep.txt'), 'utf8')).toBe('unrelated');
+      } finally {
+        if (check.exitCode === null && check.signalCode === null) {
+          const exited = waitForExit(check, 5_000);
+          check.kill('SIGKILL');
+          await exited;
+        }
+      }
+    },
+    30_000
+  );
+
+  it.each(['success', 'error', 'timeout', 'overflow'] as const)(
+    'restores the exact signal listener baseline after repeated %s calls',
+    async (mode) => {
+      const signals = ['SIGINT', 'SIGTERM', 'SIGHUP'] as const;
+      const sentinel = (): void => {};
+      for (const signal of signals) process.on(signal, sentinel);
+      const baseline = signals.map((signal) => process.rawListeners(signal));
+      const directory = tempDir();
+      const command =
+        mode === 'error'
+          ? path.join(directory, 'missing-npm')
+          : fakeNpm(
+              directory,
+              mode === 'timeout'
+                ? 'setTimeout(() => {}, 25_000);'
+                : "process.stdout.write('x'.repeat(4096));"
+            );
+      try {
+        for (let call = 0; call < 3; call++) {
+          const result = await createNpmAuditRunner({
+            command,
+            maxOutputBytes: mode === 'overflow' ? 1024 : undefined,
+          })([], { ...process.env }, mode === 'timeout' ? 50 : 10_000);
+          expect(result.error !== null).toBe(mode === 'error');
+          expect(result.timedOut).toBe(mode === 'timeout');
+          expect(result.overflow).toBe(mode === 'overflow');
+          if (mode === 'success') expect(result.status).toBe(0);
+          for (const [index, signal] of signals.entries()) {
+            const listeners = process.rawListeners(signal);
+            expect(listeners).toHaveLength(baseline[index].length);
+            listeners.forEach((listener, position) =>
+              expect(listener).toBe(baseline[index][position])
+            );
+          }
+        }
+        await runAuditCheck(options());
+        await expect(
+          runAuditCheck(
+            options({
+              runner: async () => {
+                throw new Error('runner failed');
+              },
+            })
+          )
+        ).rejects.toThrow('runner failed');
+        for (const [index, signal] of signals.entries()) {
+          const listeners = process.rawListeners(signal);
+          expect(listeners).toHaveLength(baseline[index].length);
+          listeners.forEach((listener, position) =>
+            expect(listener).toBe(baseline[index][position])
+          );
+        }
+      } finally {
+        for (const [index, signal] of signals.entries()) {
+          for (const listener of process.rawListeners(signal)) {
+            if (!baseline[index].includes(listener)) {
+              process.removeListener(signal, listener as () => void);
+            }
+          }
+          process.removeListener(signal, sentinel);
+        }
+      }
+    },
+    30_000
+  );
+
+  it('keeps a well-formed prefix when a four-byte symbol crosses the stderr cap', async () => {
+    const command = fakeNpm(
+      tempDir(),
+      `process.stderr.write('a'.repeat(4093) + '😀😀'); process.exitCode = 2;`
     );
-
-    await waitFor(() => existsSync(pidFile), 20_000);
-    const npmPid = Number(readFileSync(pidFile, 'utf8'));
-    check.kill('SIGINT');
-    const signal = await waitForExit(check, 20_000);
-    await waitFor(() => !isRunning(npmPid), 10_000);
-    const npmSurvived = isRunning(npmPid);
-
-    if (npmSurvived) {
-      process.kill(npmPid, 'SIGKILL');
-    }
-
-    expect(npmSurvived).toBe(false);
-    expect(signal).toBe('SIGINT');
-    // an interrupted check must not start the second npm call
-    await waitFor(
-      () => existsSync(logFile),
-      5_000,
-      'the fake npm logging its call before the pid file'
-    );
-    expect(readFileSync(logFile, 'utf8').trim().split('\n')).toHaveLength(1);
-  }, 60_000);
+    const result = await createNpmAuditRunner({ command })([], { ...process.env }, 10_000);
+    expect(result.status).toBe(2);
+    expect(result.stderr).toBe('a'.repeat(4093));
+    expect(Buffer.byteLength(result.stderr, 'utf8')).toBeLessThanOrEqual(NPM_MAX_STDERR_BYTES);
+    expect(result.stderr.isWellFormed()).toBe(true);
+  }, 20_000);
 
   it('keeps the first bytes of npm stderr for a status outside {0, 1}', async () => {
     const command = fakeNpm(

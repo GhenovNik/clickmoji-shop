@@ -6,7 +6,7 @@ export const NPM_TIMEOUT_MS = 120_000;
 export const NPM_MAX_OUTPUT_BYTES = 32 * 1024 * 1024;
 export const NPM_MAX_STDERR_BYTES = 4096;
 export const FORCE_FINISH_GRACE_MS = 250;
-const FORWARDED_SIGNALS: readonly NodeJS.Signals[] = ['SIGINT', 'SIGTERM'];
+const FORWARDED_SIGNALS: readonly NodeJS.Signals[] = ['SIGINT', 'SIGTERM', 'SIGHUP'];
 
 export interface RunnerResult {
   readonly status: number | null;
@@ -215,9 +215,9 @@ export function createNpmAuditRunner(options: SpawnRunnerOptions = {}): AuditRun
         if (room <= 0) {
           return;
         }
-        // a character is at most four bytes, so a prefix of `room` characters always fits
+        // A prefix of `room` UTF-16 units can exceed the byte budget or split a surrogate pair.
         let kept = stderrDecoder.write(chunk).slice(0, room);
-        while (Buffer.byteLength(kept, 'utf8') > room) {
+        while (Buffer.byteLength(kept, 'utf8') > room || /[\ud800-\udbff]$/.test(kept)) {
           kept = kept.slice(0, -1);
         }
         stderr += kept;
