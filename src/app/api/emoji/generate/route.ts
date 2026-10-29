@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { requireAdmin } from '@/lib/auth-guards';
 import { checkRateLimit, rateLimitResponse } from '@/lib/auth-security';
+import { enforceAiQuota } from '@/lib/ai-quota';
 import { generateEmojiImage } from '@/lib/services/emoji-assets';
 import {
   EmojiProviderUnavailableError,
@@ -32,6 +33,10 @@ export async function POST(request: Request) {
     if (!userLimit.allowed) {
       return rateLimitResponse(userLimit.resetAt);
     }
+
+    // One unit of the administrator's daily AI budget for the image.
+    const quotaResponse = await enforceAiQuota(session.user);
+    if (quotaResponse) return quotaResponse;
 
     // Image generation is the only provider call of this route, so it is the only place where a
     // provider error can appear: FR-10 logging is applied here, and the catch below therefore only

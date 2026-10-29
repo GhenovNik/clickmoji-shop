@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { requireAdmin } from '@/lib/auth-guards';
 import { checkRateLimit, rateLimitResponse } from '@/lib/auth-security';
+import { enforceAiQuota } from '@/lib/ai-quota';
 import { processProductBatch, type ProcessedProduct } from '@/lib/services/ai-products';
 
 export async function POST(request: Request) {
@@ -49,6 +50,10 @@ export async function POST(request: Request) {
         { status: 400 }
       );
     }
+
+    // One unit of the administrator's daily AI budget for the batch analysis (one provider call).
+    const quotaResponse = await enforceAiQuota(session.user);
+    if (quotaResponse) return quotaResponse;
 
     const {
       products: processedProducts,

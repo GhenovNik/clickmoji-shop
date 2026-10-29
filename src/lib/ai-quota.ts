@@ -5,13 +5,18 @@ import { prisma } from '@/lib/prisma';
 // shares it. The hourly `checkRateLimit` limits stay in front of it; without Upstash they are
 // counted per instance and reset on a cold start, so on their own they do not bound spend.
 //
-// One unit is one request that may call a paid model: a text analysis (import-text, smart-create)
-// or an image generation inside smart-create. The window is the UTC calendar day.
+// One unit is one call to a paid provider; it is reserved right before that call. The window is
+// the UTC calendar day. Routes that take units:
+// - POST /api/lists/import-text: 1 (text analysis)
+// - POST /api/products/smart-create: 1 (text analysis) + 1 (custom image, only when needed)
+// - POST /api/emoji/generate (admin): 1 (image)
+// - POST /api/products/bulk-import (admin): 1 (text analysis of the whole batch)
 //
-// Defaults are deliberately conservative and can be changed per environment:
-// - AI_DAILY_CALLS_PER_USER  (default 30)
-// - AI_DAILY_CALLS_PER_ADMIN (default 300)
-// A value of 0 turns paid AI off for that role.
+// Limit per role, read on every request:
+// - AI_DAILY_CALLS_PER_USER for USER, AI_DAILY_CALLS_PER_ADMIN for ADMIN
+// - unset, empty or not a plain non-negative integer: the default (30 / 300)
+// - 0: paid AI is off for that role (403, no provider call)
+// - N > 0: at most N units per UTC day (429 with Retry-After once used up)
 
 export const AI_DAILY_CALLS_DEFAULTS = { USER: 30, ADMIN: 300 } as const;
 
@@ -26,8 +31,8 @@ export type AiQuotaDecision =
 export function aiDailyLimit(role: Role): number {
   const isAdmin = role === 'ADMIN';
   const raw = isAdmin ? process.env.AI_DAILY_CALLS_PER_ADMIN : process.env.AI_DAILY_CALLS_PER_USER;
-  const parsed = Number.parseInt(raw?.trim() ?? '', 10);
-  if (Number.isInteger(parsed) && parsed >= 0) return parsed;
+  const value = raw?.trim() ?? '';
+  if (/^\d+$/.test(value)) return Number(value);
   return isAdmin ? AI_DAILY_CALLS_DEFAULTS.ADMIN : AI_DAILY_CALLS_DEFAULTS.USER;
 }
 
@@ -67,8 +72,11 @@ export async function reserveAiCall({
 }
 
 /**
- * Route helper: null when the call may proceed, otherwise the response to return. Fails closed:
- * if the budget cannot be checked (database error, migration not applied), no paid call is made.
+ * Route helper: null when the paid call may proceed, otherwise the response to return instead of
+ * making it: 403 when paid AI is off for the role, 429 when today's budget is used up, 503 when the
+ * budget cannot be checked (database error, migration not applied). A route that has already made
+ * a paid call may treat a non-null result as "skip the optional next call" instead (smart-create's
+ * image), see docs/ai.md.
  */
 export async function enforceAiQuota(user: { id: string; role: Role }): Promise<Response | null> {
   let decision: AiQuotaDecision;
@@ -83,6 +91,10 @@ export async function enforceAiQuota(user: { id: string; role: Role }): Promise<
   }
 
   if (decision.allowed) return null;
+
+  if (decision.limit === 0) {
+    return NextResponse.json({ error: 'AI-функции отключены для этой роли.' }, { status: 403 });
+  }
 
   const retryAfter = Math.max(Math.ceil((decision.resetAt - Date.now()) / 1000), 1);
   return NextResponse.json(
