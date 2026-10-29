@@ -128,13 +128,13 @@ All endpoints are implemented as Next.js Route Handlers under `src/app/api`.
 
 - Auth: admin
 - Body: `productNames: string[]`
-- Notes: Gemini categorization + translation + emoji; skips duplicates; rate limited to 10 requests/hour per admin user; response includes `promptVersion` and `model`
+- Notes: Gemini categorization + translation + emoji; skips duplicates; rate limited to 10 requests/hour per admin user and takes one unit of the admin daily AI budget before the analysis (`403` off, `429` used up, `503` unreadable; no provider call then); response includes `promptVersion` and `model`
 
 ### `POST /api/products/smart-create`
 
 - Auth: signed in
 - Body: `productName`, `categoryId?`
-- Notes: Gemini analysis through the AI product service; rate limited to 20 requests/hour per user; the text analysis and the custom image each take a unit of the per-user daily AI budget (`429` once it is used up, `503` if it cannot be checked; without an image unit the product keeps its Unicode emoji, see `docs/ai.md`); non-admin users are limited by `User.createdProductsCount` and create user-scoped products, while admins create global products. If a custom image is needed, the route calls the emoji asset service directly and does not self-call `/api/emoji/generate` or `/api/emoji/upload`. Response includes `promptVersion` and `model`.
+- Notes: Gemini analysis through the AI product service; rate limited to 20 requests/hour per user; the text analysis takes a unit of the daily AI budget first (`403` off, `429` used up, `503` unreadable; no provider call then); the custom image takes a second unit after the analysis, and if that one is refused for any reason the product is still created with its Unicode emoji (see `docs/ai.md`); non-admin users are limited by `User.createdProductsCount` and create user-scoped products, while admins create global products. If a custom image is needed, the route calls the emoji asset service directly and does not self-call `/api/emoji/generate` or `/api/emoji/upload`. Response includes `promptVersion` and `model`.
 
 ### `POST /api/products/move-category`
 
@@ -197,7 +197,7 @@ All endpoints are implemented as Next.js Route Handlers under `src/app/api`.
 
 - Auth: signed in
 - Body: `text`, `listId`
-- Notes: Gemini parses, creates missing products, adds items; rate limited to 10 requests/hour per user and takes one unit of the per-user daily AI budget (`429` once it is used up, `503` if it cannot be checked); response includes `promptVersion` and `model`
+- Notes: Gemini parses, creates missing products, adds items; rate limited to 10 requests/hour per user and takes one unit of the daily AI budget before the analysis (`403` off, `429` used up, `503` unreadable; no provider call then); response includes `promptVersion` and `model`
 
 ## History
 
@@ -267,7 +267,7 @@ All endpoints are implemented as Next.js Route Handlers under `src/app/api`.
 - Auth: admin
 - Body: `productName`
 - Response: `{ base64, message, provider, model, promptVersion, cacheKey }`
-- Notes: provider selected by `AI_PROVIDER`; rate limited to 20 requests/hour per admin user
+- Notes: provider selected by `AI_PROVIDER`; rate limited to 20 requests/hour per admin user and takes one unit of the admin daily AI budget before the provider call (`403` off, `429` used up, `503` unreadable; no provider call then)
 
 ### `POST /api/emoji/upload`
 

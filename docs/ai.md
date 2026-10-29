@@ -272,19 +272,36 @@ on their own they do not bound spend:
 - `POST /api/products/smart-create`: `ai:smart-create:<userId>`, 20 requests/hour
 - `POST /api/lists/import-text`: `ai:import:<userId>`, 10 requests/hour
 
-The paid calls a regular user can trigger also take a unit of a daily budget per user, stored in
-PostgreSQL (`ai_usage_counters`, `src/lib/ai-quota.ts`) and therefore shared by every instance,
-with or without Upstash:
+Every paid provider call also takes a unit of a daily budget per user, stored in PostgreSQL
+(`ai_usage_counters`, `src/lib/ai-quota.ts`) and therefore shared by every instance, with or without
+Upstash. The unit is reserved right before the call it pays for:
 
-- `POST /api/lists/import-text`: 1 unit for the text analysis
-- `POST /api/products/smart-create`: 1 unit for the text analysis and 1 more for the custom image;
-  when the image unit is not available the product keeps its Unicode emoji
-- Window: the UTC calendar day. Over budget: `429` with `Retry-After` until the next UTC midnight
-- Defaults: `AI_DAILY_CALLS_PER_USER=30`, `AI_DAILY_CALLS_PER_ADMIN=300`; `0` turns paid AI off for
-  that role. These numbers are conservative placeholders, not a product decision
-- If the budget cannot be checked (database error, migration not applied) the route answers `503`
-  and makes no paid call
-- Admin-only routes (`/api/emoji/generate`, `/api/products/bulk-import`) keep only the hourly limits
+| Route                             | Auth  | Units                                                                               |
+| --------------------------------- | ----- | ----------------------------------------------------------------------------------- |
+| `POST /api/lists/import-text`     | user  | 1 for the text analysis                                                             |
+| `POST /api/products/smart-create` | user  | 1 for the text analysis, 1 more for the custom image when the analysis asks for one |
+| `POST /api/emoji/generate`        | admin | 1 for the image                                                                     |
+| `POST /api/products/bulk-import`  | admin | 1 for the analysis of the whole batch (one provider call)                           |
+
+Limit per role, read on every request (`AI_DAILY_CALLS_PER_USER` for users,
+`AI_DAILY_CALLS_PER_ADMIN` for administrators):
+
+- unset, empty or anything other than a plain non-negative integer (`abc`, `-1`, `1.5`): the default,
+  30 for users and 300 for administrators. These defaults are conservative placeholders, not a
+  product decision
+- `0`: paid AI is off for that role; the route answers `403` and makes no provider call
+- `N > 0`: at most `N` units per UTC calendar day; once they are used the route answers `429` with
+  `Retry-After` until the next UTC midnight
+
+Outcome of a reservation, by stage:
+
+1. Before the first (or only) paid call of a request: `403` (off), `429` (used up) or `503` (the
+   budget cannot be read: database error, migration not applied). No provider call is made and
+   nothing is written. This is the only stage of import-text, emoji/generate and bulk-import.
+2. smart-create, before the custom image, after the paid text analysis already succeeded: any
+   refusal (off, used up or unreadable budget) skips the image only. The request still succeeds,
+   the product is created with the Unicode emoji from the analysis (`customEmojiGenerated: false`),
+   the same outcome as a failed image generation. It does not answer `503`.
 
 ## Cache strategy
 
