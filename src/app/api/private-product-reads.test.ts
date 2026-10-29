@@ -107,6 +107,8 @@ vi.mock('@/lib/prisma', () => {
       create: async ({ data }: { data: Row }) => ({ id: 'restored-list', ...data }),
     },
     item: {
+      findMany: async ({ where }: { where: Row }) =>
+        ITEMS.filter((item) => matches(item, where)).map(withProduct),
       findFirst: async ({ where }: { where: Row }) =>
         ITEMS.find((item) => matches(item, where)) ?? null,
       findUnique: async ({ where }: { where: Row }) =>
@@ -134,6 +136,8 @@ vi.mock('@/lib/prisma', () => {
       }),
       create: doubles.createHistory,
     },
+    // Row lock taken by POST /api/history before it reads the snapshot.
+    $queryRaw: async () => [{ id: LIST.id, name: LIST.name }],
     $transaction: async (run: (tx: unknown) => unknown) => run(prisma),
   };
   return { prisma };
