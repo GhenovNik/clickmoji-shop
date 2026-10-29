@@ -236,11 +236,41 @@ describe('POST /api/history (complete a list)', () => {
 });
 
 describe('GET /api/history', () => {
+  // A snapshot item carries no provenance of its own, so access is only confirmed while its
+  // product exists and is visible. A missing product is not treated as permission.
   it("hides snapshot items of another user's private product", async () => {
     const body = await (await historyRoute.GET()).json();
 
-    expect(productIds(body[0].items)).toEqual(['global-1', 'private-b', 'deleted-product', null]);
+    expect(productIds(body[0].items)).toEqual(['global-1', 'private-b']);
     expect(JSON.stringify(body)).not.toContain('Сыр бабушки Ани');
+  });
+
+  it("keeps hiding another user's private snapshot after that product is deleted", async () => {
+    const index = PRODUCTS.findIndex((product) => product.id === 'private-a');
+    const [deleted] = PRODUCTS.splice(index, 1);
+    try {
+      const body = await (await historyRoute.GET()).json();
+
+      expect(productIds(body[0].items)).toEqual(['global-1', 'private-b']);
+      expect(JSON.stringify(body)).not.toContain('Сыр бабушки Ани');
+    } finally {
+      PRODUCTS.splice(index, 0, deleted);
+    }
+  });
+
+  it('hides snapshot items without a product or with a deleted product', async () => {
+    const body = await (await historyRoute.GET()).json();
+    const names = body[0].items.map((item: Row) => item.productName);
+
+    expect(names).not.toContain('Старый');
+    expect(names).not.toContain('Без ссылки');
+  });
+
+  it("returns the caller's own private and global snapshot items", async () => {
+    const body = await (await historyRoute.GET()).json();
+    const names = body[0].items.map((item: Row) => item.productName);
+
+    expect(names).toEqual(['Молоко', 'Мой хлеб']);
   });
 });
 

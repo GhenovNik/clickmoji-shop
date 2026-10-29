@@ -16,8 +16,10 @@ export async function GET() {
       take: 50,
     });
 
-    // Snapshots copy product names, so a legacy snapshot item of another user's private product
-    // is dropped here. Items whose product was deleted or that carry no product stay visible.
+    // Snapshots copy product names but carry no provenance of their own, so a snapshot item is
+    // returned only while its product exists and is visible to this user. A deleted or missing
+    // product is not permission: a legacy snapshot of another user's private product would
+    // otherwise reappear once that product is deleted.
     const snapshotProductIds = [
       ...new Set(
         history.flatMap((entry) =>
@@ -25,22 +27,22 @@ export async function GET() {
         )
       ),
     ];
-    const hiddenProducts =
+    const visibleProducts =
       snapshotProductIds.length > 0
         ? await prisma.product.findMany({
             where: {
               id: { in: snapshotProductIds },
-              NOT: visibleProductsWhere(session.user.id),
+              ...visibleProductsWhere(session.user.id),
             },
             select: { id: true },
           })
         : [];
-    const hiddenIds = new Set(hiddenProducts.map((product) => product.id));
+    const visibleIds = new Set(visibleProducts.map((product) => product.id));
 
     return NextResponse.json(
       history.map((entry) => ({
         ...entry,
-        items: entry.items.filter((item) => !item.productId || !hiddenIds.has(item.productId)),
+        items: entry.items.filter((item) => !!item.productId && visibleIds.has(item.productId)),
       }))
     );
   } catch (error) {
