@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { requireUser } from '@/lib/auth-guards';
+import { visibleItemsWhere, visibleProductsWhere } from '@/lib/product-visibility';
 
 export async function GET() {
   try {
@@ -15,7 +16,35 @@ export async function GET() {
       take: 50,
     });
 
-    return NextResponse.json(history);
+    // Snapshots copy product names but carry no provenance of their own, so a snapshot item is
+    // returned only while its product exists and is visible to this user. A deleted or missing
+    // product is not permission: a legacy snapshot of another user's private product would
+    // otherwise reappear once that product is deleted.
+    const snapshotProductIds = [
+      ...new Set(
+        history.flatMap((entry) =>
+          entry.items.map((item) => item.productId).filter((id): id is string => !!id)
+        )
+      ),
+    ];
+    const visibleProducts =
+      snapshotProductIds.length > 0
+        ? await prisma.product.findMany({
+            where: {
+              id: { in: snapshotProductIds },
+              ...visibleProductsWhere(session.user.id),
+            },
+            select: { id: true },
+          })
+        : [];
+    const visibleIds = new Set(visibleProducts.map((product) => product.id));
+
+    return NextResponse.json(
+      history.map((entry) => ({
+        ...entry,
+        items: entry.items.filter((item) => !!item.productId && visibleIds.has(item.productId)),
+      }))
+    );
   } catch (error) {
     console.error('Error fetching history:', error);
     return NextResponse.json({ error: 'Failed to fetch history' }, { status: 500 });
@@ -39,6 +68,7 @@ export async function POST(request: Request) {
       where: { id: listId, userId: session.user.id },
       include: {
         items: {
+          where: visibleItemsWhere(session.user.id),
           include: {
             product: {
               include: {

@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { requireUser } from '@/lib/auth-guards';
+import { visibleProductsWhere } from '@/lib/product-visibility';
 
 // POST /api/lists/[listId]/items - add products to a shopping list.
 export async function POST(request: Request, { params }: { params: Promise<{ listId: string }> }) {
@@ -33,9 +34,10 @@ export async function POST(request: Request, { params }: { params: Promise<{ lis
     const createdItems = [];
 
     for (const item of items) {
-      // Reject references to products that no longer exist.
-      const productExists = await prisma.product.findUnique({
-        where: { id: item.productId },
+      // Reject products that no longer exist or are another user's private product.
+      const productExists = await prisma.product.findFirst({
+        where: { id: item.productId, ...visibleProductsWhere(session.user.id) },
+        select: { id: true },
       });
 
       if (!productExists) {

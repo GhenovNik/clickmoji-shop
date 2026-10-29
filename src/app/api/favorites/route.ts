@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { requireUser } from '@/lib/auth-guards';
+import { visibleProductsWhere } from '@/lib/product-visibility';
 
 // GET /api/favorites - list the current user's favorite products.
 export async function GET() {
@@ -12,6 +13,7 @@ export async function GET() {
     const favorites = await prisma.favorite.findMany({
       where: {
         userId: session.user.id,
+        product: visibleProductsWhere(session.user.id),
       },
       include: {
         product: {
@@ -51,9 +53,10 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Product ID is required' }, { status: 400 });
     }
 
-    // Reject references to products that no longer exist.
-    const product = await prisma.product.findUnique({
-      where: { id: productId },
+    // Reject products that no longer exist or are another user's private product.
+    const product = await prisma.product.findFirst({
+      where: { id: productId, ...visibleProductsWhere(session.user.id) },
+      select: { id: true },
     });
 
     if (!product) {
