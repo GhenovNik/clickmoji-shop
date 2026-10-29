@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { requireUser } from '@/lib/auth-guards';
+import { visibleProductsWhere } from '@/lib/product-visibility';
 
 export async function POST(
   request: Request,
@@ -33,7 +34,7 @@ export async function POST(
 
     const [products, variants] = await Promise.all([
       prisma.product.findMany({
-        where: { id: { in: productIds } },
+        where: { id: { in: productIds }, ...visibleProductsWhere(session.user.id) },
         select: { id: true },
       }),
       prisma.productVariant.findMany({

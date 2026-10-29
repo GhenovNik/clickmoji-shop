@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { requireUser } from '@/lib/auth-guards';
+import { visibleItemsWhere } from '@/lib/product-visibility';
 
 // PUT /api/lists/[listId]/items/[itemId] - update a list item.
 export async function PUT(
@@ -24,6 +25,16 @@ export async function PUT(
 
     if (!list) {
       return NextResponse.json({ error: 'List not found' }, { status: 404 });
+    }
+
+    // A legacy item of another user's private product is neither updated nor returned.
+    const existingItem = await prisma.item.findFirst({
+      where: { id: itemId, listId, ...visibleItemsWhere(session.user.id) },
+      select: { id: true },
+    });
+
+    if (!existingItem) {
+      return NextResponse.json({ error: 'Item not found' }, { status: 404 });
     }
 
     const { isPurchased, note } = await request.json();

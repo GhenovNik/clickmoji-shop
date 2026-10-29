@@ -9,3 +9,11 @@ export function visibleProductsWhere(userId: string | null | undefined): Prisma.
     OR: [{ isGlobal: true }, ...(userId ? [{ createdById: userId }] : [])],
   };
 }
+
+/**
+ * List items whose product the user may see. Items created before the write paths enforced
+ * visibility can reference another user's private product; reads must not return them.
+ */
+export function visibleItemsWhere(userId: string | null | undefined): Prisma.ItemWhereInput {
+  return { product: visibleProductsWhere(userId) };
+}

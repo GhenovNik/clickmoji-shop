@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { requireUser } from '@/lib/auth-guards';
+import { visibleItemsWhere } from '@/lib/product-visibility';
 
 // GET /api/lists - list the current user's shopping lists.
 export async function GET() {
@@ -16,7 +17,7 @@ export async function GET() {
       include: {
         _count: {
           select: {
-            items: true,
+            items: { where: visibleItemsWhere(session.user.id) },
           },
         },
       },

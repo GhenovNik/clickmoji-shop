@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { requireUser } from '@/lib/auth-guards';
+import { visibleItemsWhere } from '@/lib/product-visibility';
 
 // GET /api/lists/[listId] - fetch a shopping list.
 export async function GET(request: Request, { params }: { params: Promise<{ listId: string }> }) {
@@ -18,6 +19,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ list
       },
       include: {
         items: {
+          where: visibleItemsWhere(session.user.id),
           include: {
             product: {
               include: {
@@ -29,7 +31,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ list
         },
         _count: {
           select: {
-            items: true,
+            items: { where: visibleItemsWhere(session.user.id) },
           },
         },
       },
