@@ -134,7 +134,7 @@ All endpoints are implemented as Next.js Route Handlers under `src/app/api`.
 
 - Auth: signed in
 - Body: `productName`, `categoryId?`
-- Notes: Gemini analysis through the AI product service; rate limited to 20 requests/hour per user; non-admin users are limited by `User.createdProductsCount` and create user-scoped products, while admins create global products. If a custom image is needed, the route calls the emoji asset service directly and does not self-call `/api/emoji/generate` or `/api/emoji/upload`. Response includes `promptVersion` and `model`.
+- Notes: Gemini analysis through the AI product service; rate limited to 20 requests/hour per user; the text analysis and the custom image each take a unit of the per-user daily AI budget (`429` once it is used up, `503` if it cannot be checked; without an image unit the product keeps its Unicode emoji, see `docs/ai.md`); non-admin users are limited by `User.createdProductsCount` and create user-scoped products, while admins create global products. If a custom image is needed, the route calls the emoji asset service directly and does not self-call `/api/emoji/generate` or `/api/emoji/upload`. Response includes `promptVersion` and `model`.
 
 ### `POST /api/products/move-category`
 
@@ -178,8 +178,10 @@ All endpoints are implemented as Next.js Route Handlers under `src/app/api`.
 ### `POST /api/lists/:listId/items`
 
 - Auth: signed in
-- Body: `items: Array<{ productId, variantId?, note? }>`
-- Notes: allows duplicates (different notes)
+- Body: `items: Array<{ productId, variantId?, note? }>`, at most 100 items
+- Notes: allows duplicates (different notes); all-or-nothing: the whole batch is validated (`400` for
+  more than 100 items, a missing `productId` or a variant of another product, `404` for a product the
+  user cannot see) before one transactional insert, so an error never leaves part of the batch
 
 ### `PUT /api/lists/:listId/items/:itemId`
 
@@ -195,7 +197,7 @@ All endpoints are implemented as Next.js Route Handlers under `src/app/api`.
 
 - Auth: signed in
 - Body: `text`, `listId`
-- Notes: Gemini parses, creates missing products, adds items; rate limited to 10 requests/hour per user; response includes `promptVersion` and `model`
+- Notes: Gemini parses, creates missing products, adds items; rate limited to 10 requests/hour per user and takes one unit of the per-user daily AI budget (`429` once it is used up, `503` if it cannot be checked); response includes `promptVersion` and `model`
 
 ## History
 
@@ -208,7 +210,10 @@ All endpoints are implemented as Next.js Route Handlers under `src/app/api`.
 
 - Auth: signed in
 - Body: `listId`
-- Notes: snapshots list items into history and clears items from the source list
+- Notes: snapshots list items into history and clears items from the source list in one
+  transaction under a row lock on the list; only the items that were snapshotted are removed, so an
+  item added concurrently stays in the list. A second complete of the same list gets `400`
+  (`List is empty`)
 
 ### `DELETE /api/history/:historyId`
 
@@ -220,7 +225,8 @@ All endpoints are implemented as Next.js Route Handlers under `src/app/api`.
 - Auth: signed in
 - Body: `name?`
 - Response: `{ listId, createdCount, skippedCount }`
-- Notes: restores history snapshot into a new list and skips missing/invalid product references
+- Notes: restores history snapshot into a new list and skips missing/invalid product references;
+  the list and its items are created in one transaction, so a failure leaves no list behind
 
 ## Favorites
 
