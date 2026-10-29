@@ -1,6 +1,9 @@
 // @vitest-environment node
 import { inspect } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+// The shared daily AI budget is covered by src/app/api/ai-daily-quota.test.ts.
+vi.mock('@/lib/ai-quota', () => ({ enforceAiQuota: async () => null }));
 import {
   candidateWith,
   generateContentResponse,

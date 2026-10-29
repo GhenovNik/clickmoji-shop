@@ -260,15 +260,31 @@ Text automation prompts use `AI_PRODUCTS_PROMPT_VERSION` from
 `src/lib/services/ai-products.ts`. AI responses include prompt metadata where it is useful for
 debugging or cache strategy.
 
-## Rate limits
+## Rate limits and daily budget
 
-AI endpoints use `checkRateLimit` with the in-memory fallback or Upstash Redis when configured:
+AI endpoints use `checkRateLimit` with the in-memory fallback or Upstash Redis when configured.
+Without Upstash these hourly limits are counted per server instance and reset on a cold start, so
+on their own they do not bound spend:
 
 - `POST /api/emoji/generate`: `ai:emoji-generate:<userId>`, 20 requests/hour
 - `POST /api/emoji/upload`: `ai:emoji-upload:<userId>`, 40 requests/hour
 - `POST /api/products/bulk-import`: `ai:bulk-import:<userId>`, 10 requests/hour
 - `POST /api/products/smart-create`: `ai:smart-create:<userId>`, 20 requests/hour
 - `POST /api/lists/import-text`: `ai:import:<userId>`, 10 requests/hour
+
+The paid calls a regular user can trigger also take a unit of a daily budget per user, stored in
+PostgreSQL (`ai_usage_counters`, `src/lib/ai-quota.ts`) and therefore shared by every instance,
+with or without Upstash:
+
+- `POST /api/lists/import-text`: 1 unit for the text analysis
+- `POST /api/products/smart-create`: 1 unit for the text analysis and 1 more for the custom image;
+  when the image unit is not available the product keeps its Unicode emoji
+- Window: the UTC calendar day. Over budget: `429` with `Retry-After` until the next UTC midnight
+- Defaults: `AI_DAILY_CALLS_PER_USER=30`, `AI_DAILY_CALLS_PER_ADMIN=300`; `0` turns paid AI off for
+  that role. These numbers are conservative placeholders, not a product decision
+- If the budget cannot be checked (database error, migration not applied) the route answers `503`
+  and makes no paid call
+- Admin-only routes (`/api/emoji/generate`, `/api/products/bulk-import`) keep only the hourly limits
 
 ## Cache strategy
 

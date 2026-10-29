@@ -3,6 +3,7 @@ import { prisma } from '@/lib/prisma';
 import { requireUser } from '@/lib/auth-guards';
 import { visibleProductsWhere } from '@/lib/product-visibility';
 import { checkRateLimit, rateLimitResponse } from '@/lib/auth-security';
+import { enforceAiQuota } from '@/lib/ai-quota';
 import { parseShoppingListText, type ParsedShoppingListProduct } from '@/lib/services/ai-products';
 
 export async function POST(request: Request) {
@@ -71,6 +72,10 @@ export async function POST(request: Request) {
         { status: 400 }
       );
     }
+
+    // One unit of the shared daily AI budget, taken only when the provider is about to be called.
+    const quotaResponse = await enforceAiQuota(session.user);
+    if (quotaResponse) return quotaResponse;
 
     const {
       products: parsedProducts,

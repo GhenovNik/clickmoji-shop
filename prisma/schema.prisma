@@ -21,6 +21,7 @@ model User {
   favorites Favorite[]
   histories ListHistory[]
   createdProducts Product[] @relation("UserCreatedProducts")
+  aiUsage   AiUsageCounter[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -48,6 +49,18 @@ model PasswordResetToken {
 
   @@index([email])
   @@map("password_reset_tokens")
+}
+
+// Paid AI calls per user and UTC day, shared by every server instance (src/lib/ai-quota.ts).
+model AiUsageCounter {
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  windowStart DateTime
+  count       Int      @default(0)
+  updatedAt   DateTime @default(now())
+
+  @@id([userId, windowStart])
+  @@map("ai_usage_counters")
 }
 
 enum UserRole {

@@ -3,6 +3,7 @@ import { prisma } from '@/lib/prisma';
 import { requireUser } from '@/lib/auth-guards';
 import { visibleProductsWhere } from '@/lib/product-visibility';
 import { checkRateLimit, rateLimitResponse } from '@/lib/auth-security';
+import { enforceAiQuota } from '@/lib/ai-quota';
 import { analyzeSmartProduct } from '@/lib/services/ai-products';
 import { generateAndUploadEmojiAsset } from '@/lib/services/emoji-assets';
 import { summarizeEmojiGenerationFailure } from '@/lib/services/emoji-errors';
@@ -70,6 +71,10 @@ export async function POST(request: Request) {
       );
     }
 
+    // One unit of the shared daily AI budget for the text analysis.
+    const quotaResponse = await enforceAiQuota(dbUser);
+    if (quotaResponse) return quotaResponse;
+
     const {
       result: aiResult,
       promptVersion,
@@ -135,7 +140,9 @@ export async function POST(request: Request) {
     let isCustom = false;
     let finalEmoji = aiResult.emoji || '📦';
 
-    if (aiResult.needsCustomEmoji) {
+    // The image is a second paid call with its own unit; without one the product keeps the
+    // Unicode emoji, like after a failed generation.
+    if (aiResult.needsCustomEmoji && !(await enforceAiQuota(dbUser))) {
       try {
         const emojiAsset = await generateAndUploadEmojiAsset({
           productName: aiResult.nameRu,

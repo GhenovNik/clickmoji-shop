@@ -10,7 +10,7 @@ Source of truth: `prisma/schema.prisma`.
 - `password` is stored as a bcrypt hash (created in registration handler)
 - `emailVerified` is nullable and used by verification-gated sign-in
 - `createdProductsCount` tracks non-admin smart-created custom products
-- Relations: `lists`, `favorites`, `histories`
+- Relations: `lists`, `favorites`, `histories`, `aiUsage`
 
 ### EmailVerificationToken
 
@@ -52,6 +52,14 @@ Source of truth: `prisma/schema.prisma`.
 - `listName`, `completedAt`
 - Relations: `user`, optional `list`, `items`
 - Stores snapshots of completed shopping lists
+
+### AiUsageCounter
+
+- Table `ai_usage_counters`, primary key (`userId`, `windowStart`), `count`, `updatedAt`
+- One row per user and UTC day that used paid AI; deleted with the user (cascade)
+- Written only by `src/lib/ai-quota.ts` through a conditional upsert, so concurrent requests on
+  any server instance cannot push `count` past the daily limit
+- Rows of past days are not read again and are not cleaned up automatically yet
 
 ### ListHistoryItem
 

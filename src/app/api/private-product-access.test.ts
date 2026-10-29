@@ -1,6 +1,9 @@
 // @vitest-environment node
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+// The shared daily AI budget is covered by src/app/api/ai-daily-quota.test.ts.
+vi.mock('@/lib/ai-quota', () => ({ enforceAiQuota: async () => null }));
+
 // A product with isGlobal=false belongs to its creator only: GET /api/products and /api/search
 // already hide it from everyone else. These tests pin the same rule on the routes that accept a
 // product id or look a product up by name.
