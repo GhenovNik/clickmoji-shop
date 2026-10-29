@@ -4,6 +4,7 @@ import Image from 'next/image';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useSession } from 'next-auth/react';
 import { listsQueryKey, useActiveList } from '@/hooks/useListsQuery';
+import { queryKeys } from '@/lib/query-keys';
 
 type FavoriteProduct = {
   id: string;
@@ -71,7 +72,7 @@ export default function FavoritesSection() {
   const queryClient = useQueryClient();
 
   const { data: favorites = [], isLoading: loading } = useQuery({
-    queryKey: ['favorites'],
+    queryKey: queryKeys.favorites(),
     queryFn: fetchFavoritesAPI,
     enabled: !!session?.user,
   });
@@ -79,17 +80,17 @@ export default function FavoritesSection() {
   const updateUsageMutation = useMutation({
     mutationFn: updateFavoriteUsageAPI,
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['favorites'] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.favorites() });
     },
   });
 
   const removeMutation = useMutation({
     mutationFn: removeFavoriteAPI,
     onMutate: async (productId) => {
-      await queryClient.cancelQueries({ queryKey: ['favorites'] });
-      const previousFavorites = queryClient.getQueryData<FavoriteProduct[]>(['favorites']);
+      await queryClient.cancelQueries({ queryKey: queryKeys.favorites() });
+      const previousFavorites = queryClient.getQueryData<FavoriteProduct[]>(queryKeys.favorites());
 
-      queryClient.setQueryData<FavoriteProduct[]>(['favorites'], (old) => {
+      queryClient.setQueryData<FavoriteProduct[]>(queryKeys.favorites(), (old) => {
         if (!old) return old;
         return old.filter((fav) => fav.product.id !== productId);
       });
@@ -98,11 +99,11 @@ export default function FavoritesSection() {
     },
     onError: (err, productId, context) => {
       if (context?.previousFavorites) {
-        queryClient.setQueryData(['favorites'], context.previousFavorites);
+        queryClient.setQueryData(queryKeys.favorites(), context.previousFavorites);
       }
     },
     onSettled: () => {
-      queryClient.invalidateQueries({ queryKey: ['favorites'] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.favorites() });
     },
   });
 
@@ -110,7 +111,7 @@ export default function FavoritesSection() {
     mutationFn: addFavoriteToListAPI,
     onSuccess: (_, variables) => {
       queryClient.invalidateQueries({ queryKey: listsQueryKey });
-      queryClient.invalidateQueries({ queryKey: ['list', variables.listId] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.list(variables.listId) });
     },
   });
 

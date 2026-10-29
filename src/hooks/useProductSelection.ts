@@ -5,6 +5,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useSession } from 'next-auth/react';
 import { useRouter } from 'next/navigation';
 import { listsQueryKey, useActiveList } from './useListsQuery';
+import { queryKeys } from '@/lib/query-keys';
 
 export type Product = {
   id: string;
@@ -79,14 +80,14 @@ export function useProductSelection(categoryId: string) {
 
   // Query for products by category
   const { data: products = [], isLoading: loading } = useQuery({
-    queryKey: ['products', categoryId],
+    queryKey: queryKeys.categoryProducts(categoryId),
     queryFn: () => fetchProductsByCategoryAPI(categoryId),
     enabled: !!categoryId,
   });
 
   // Query for favorites
   const { data: favoritesData = [] } = useQuery({
-    queryKey: ['favorites'],
+    queryKey: queryKeys.favorites(),
     queryFn: fetchFavoritesAPI,
     enabled: !!session?.user,
   });
@@ -99,7 +100,7 @@ export function useProductSelection(categoryId: string) {
   const addFavoriteMutation = useMutation({
     mutationFn: addFavoriteAPI,
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['favorites'] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.favorites() });
     },
   });
 
@@ -107,7 +108,7 @@ export function useProductSelection(categoryId: string) {
   const removeFavoriteMutation = useMutation({
     mutationFn: removeFavoriteAPI,
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['favorites'] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.favorites() });
     },
   });
 
@@ -184,7 +185,7 @@ export function useProductSelection(categoryId: string) {
       await addToListAPI(activeListId, selectedItems);
 
       queryClient.invalidateQueries({ queryKey: listsQueryKey });
-      queryClient.invalidateQueries({ queryKey: ['list', activeListId] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.list(activeListId) });
 
       if (activeListId) {
         router.push(`/lists/${activeListId}`);

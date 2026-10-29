@@ -6,6 +6,8 @@ import { useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import { useSession } from 'next-auth/react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { queryKeys } from '@/lib/query-keys';
+import { useRestoreHistory } from '@/hooks/useListMutations';
 
 type HistoryItem = {
   id: string;
@@ -42,6 +44,7 @@ export default function HistoryPage() {
   const queryClient = useQueryClient();
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [restoring, setRestoring] = useState(false);
+  const restoreMutation = useRestoreHistory();
 
   useEffect(() => {
     if (!session?.user) {
@@ -50,7 +53,7 @@ export default function HistoryPage() {
   }, [session, router]);
 
   const { data: history = [], isLoading } = useQuery({
-    queryKey: ['history'],
+    queryKey: queryKeys.history(),
     queryFn: fetchHistory,
     enabled: !!session?.user,
   });
@@ -69,17 +72,7 @@ export default function HistoryPage() {
     try {
       const listName = `Список от ${formatDate(historyList.completedAt)}`;
 
-      const restoreResponse = await fetch(`/api/history/${historyId}/restore`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: listName }),
-      });
-
-      if (!restoreResponse.ok) {
-        throw new Error('Failed to restore history');
-      }
-
-      const { listId } = await restoreResponse.json();
+      const { listId } = await restoreMutation.mutateAsync({ historyId, name: listName });
       router.push(`/lists/${listId}`);
     } catch (error) {
       console.error('Error restoring list:', error);
@@ -95,7 +88,7 @@ export default function HistoryPage() {
     try {
       const res = await fetch(`/api/history/${historyId}`, { method: 'DELETE' });
       if (!res.ok) throw new Error('Failed to delete history');
-      queryClient.invalidateQueries({ queryKey: ['history'] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.history() });
     } catch (error) {
       console.error('Error deleting history:', error);
       alert('Не удалось удалить историю');

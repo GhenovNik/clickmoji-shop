@@ -2,6 +2,8 @@
 
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useRouter } from 'next/navigation';
+import { queryKeys } from '@/lib/query-keys';
+import { useCompleteList } from '@/hooks/useListMutations';
 
 export type Item = {
   id: string;
@@ -97,25 +99,26 @@ export function useShoppingListItems(listId: string) {
     isLoading: loading,
     refetch: fetchListItems,
   } = useQuery({
-    queryKey: ['list', listId],
+    queryKey: queryKeys.list(listId),
     queryFn: () => fetchListAPI(listId),
     enabled: !!listId,
   });
 
   const items = list?.items || [];
+  const completeMutation = useCompleteList();
 
   // Mutation for toggling purchased status with optimistic updates
   const toggleMutation = useMutation({
     mutationFn: togglePurchasedAPI,
     onMutate: async ({ itemId, isPurchased }) => {
       // Cancel outgoing refetches
-      await queryClient.cancelQueries({ queryKey: ['list', listId] });
+      await queryClient.cancelQueries({ queryKey: queryKeys.list(listId) });
 
       // Snapshot previous value
-      const previousList = queryClient.getQueryData<ListData>(['list', listId]);
+      const previousList = queryClient.getQueryData<ListData>(queryKeys.list(listId));
 
       // Optimistically update
-      queryClient.setQueryData<ListData>(['list', listId], (old) => {
+      queryClient.setQueryData<ListData>(queryKeys.list(listId), (old) => {
         if (!old) return old;
         return {
           ...old,
@@ -128,11 +131,11 @@ export function useShoppingListItems(listId: string) {
     onError: (err, variables, context) => {
       // Rollback on error
       if (context?.previousList) {
-        queryClient.setQueryData(['list', listId], context.previousList);
+        queryClient.setQueryData(queryKeys.list(listId), context.previousList);
       }
     },
     onSettled: () => {
-      queryClient.invalidateQueries({ queryKey: ['list', listId] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.list(listId) });
     },
   });
 
@@ -140,10 +143,10 @@ export function useShoppingListItems(listId: string) {
   const removeMutation = useMutation({
     mutationFn: removeItemAPI,
     onMutate: async ({ itemId }) => {
-      await queryClient.cancelQueries({ queryKey: ['list', listId] });
-      const previousList = queryClient.getQueryData<ListData>(['list', listId]);
+      await queryClient.cancelQueries({ queryKey: queryKeys.list(listId) });
+      const previousList = queryClient.getQueryData<ListData>(queryKeys.list(listId));
 
-      queryClient.setQueryData<ListData>(['list', listId], (old) => {
+      queryClient.setQueryData<ListData>(queryKeys.list(listId), (old) => {
         if (!old) return old;
         return {
           ...old,
@@ -155,11 +158,11 @@ export function useShoppingListItems(listId: string) {
     },
     onError: (err, variables, context) => {
       if (context?.previousList) {
-        queryClient.setQueryData(['list', listId], context.previousList);
+        queryClient.setQueryData(queryKeys.list(listId), context.previousList);
       }
     },
     onSettled: () => {
-      queryClient.invalidateQueries({ queryKey: ['list', listId] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.list(listId) });
     },
   });
 
@@ -167,10 +170,10 @@ export function useShoppingListItems(listId: string) {
   const updateNoteMutation = useMutation({
     mutationFn: updateNoteAPI,
     onMutate: async ({ itemId, note }) => {
-      await queryClient.cancelQueries({ queryKey: ['list', listId] });
-      const previousList = queryClient.getQueryData<ListData>(['list', listId]);
+      await queryClient.cancelQueries({ queryKey: queryKeys.list(listId) });
+      const previousList = queryClient.getQueryData<ListData>(queryKeys.list(listId));
 
-      queryClient.setQueryData<ListData>(['list', listId], (old) => {
+      queryClient.setQueryData<ListData>(queryKeys.list(listId), (old) => {
         if (!old) return old;
         return {
           ...old,
@@ -182,11 +185,11 @@ export function useShoppingListItems(listId: string) {
     },
     onError: (err, variables, context) => {
       if (context?.previousList) {
-        queryClient.setQueryData(['list', listId], context.previousList);
+        queryClient.setQueryData(queryKeys.list(listId), context.previousList);
       }
     },
     onSettled: () => {
-      queryClient.invalidateQueries({ queryKey: ['list', listId] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.list(listId) });
     },
   });
 
@@ -218,19 +221,11 @@ export function useShoppingListItems(listId: string) {
   };
 
   const completeList = async () => {
-    if (items.length === 0) return;
+    // A second tap while the first request runs would only get "List is empty" back.
+    if (items.length === 0 || completeMutation.isPending) return;
 
     try {
-      const response = await fetch('/api/history', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ listId }),
-      });
-
-      if (!response.ok) {
-        throw new Error('Failed to complete list');
-      }
-
+      await completeMutation.mutateAsync(listId);
       router.push('/history');
     } catch (error) {
       console.error('Error completing list:', error);

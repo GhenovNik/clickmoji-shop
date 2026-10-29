@@ -34,4 +34,11 @@ describe('client server-state ownership contract', () => {
     expect(filesContaining(/shopping-list-storage|@\/store\/shopping-list/)).toEqual([]);
     expect(filesContaining(/\bsetLists\b|\bgetActiveList\b|useLists\.getState\(/)).toEqual([]);
   });
+
+  it('builds shopper-facing React Query keys only from src/lib/query-keys.ts', () => {
+    // A literal key next to the factory could silently miss an invalidation. Admin screens keep
+    // their own keys for now.
+    const literalKey = /queryKey:\s*\[|QueryData(<[^>]*>)?\(\s*\[/;
+    expect(filesContaining(literalKey).filter((file) => !file.includes('admin'))).toEqual([]);
+  });
 });

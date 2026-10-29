@@ -6,6 +6,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useRouter } from 'next/navigation';
 import { useSession } from 'next-auth/react';
 import { listsQueryKey, useActiveList } from '@/hooks/useListsQuery';
+import { queryKeys } from '@/lib/query-keys';
 
 type SearchProduct = {
   id: string;
@@ -83,7 +84,7 @@ export default function ProductSearch() {
 
   // Search query
   const { data: results = [], isLoading } = useQuery({
-    queryKey: ['search', debouncedQuery],
+    queryKey: queryKeys.searchQuery(debouncedQuery),
     queryFn: () => searchProductsAPI(debouncedQuery),
     enabled: debouncedQuery.trim().length > 0,
   });
@@ -121,7 +122,7 @@ export default function ProductSearch() {
     }) => addProductToListAPI(listId, productId, variantId),
     onSuccess: (_, variables) => {
       queryClient.invalidateQueries({ queryKey: listsQueryKey });
-      queryClient.invalidateQueries({ queryKey: ['list', variables.listId] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.list(variables.listId) });
     },
   });
 
