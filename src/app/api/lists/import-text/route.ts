@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { requireUser } from '@/lib/auth-guards';
+import { visibleProductsWhere } from '@/lib/product-visibility';
 import { checkRateLimit, rateLimitResponse } from '@/lib/auth-security';
 import { parseShoppingListText, type ParsedShoppingListProduct } from '@/lib/services/ai-products';
 
@@ -111,14 +112,18 @@ export async function POST(request: Request) {
           continue;
         }
 
-        // Check if product exists in database
+        // Reuse a product this user can see; another user's private product is never matched.
         let dbProduct = await prisma.product.findFirst({
           where: {
-            OR: [{ name: product.nameRu }, { nameEn: product.nameEn }],
+            AND: [
+              visibleProductsWhere(session.user.id),
+              { OR: [{ name: product.nameRu }, { nameEn: product.nameEn }] },
+            ],
           },
         });
 
-        // If product doesn't exist, create it
+        // A missing product is created like in smart-create: private to a regular user and
+        // global only when an administrator imports it.
         if (!dbProduct) {
           dbProduct = await prisma.product.create({
             data: {
@@ -128,6 +133,8 @@ export async function POST(request: Request) {
               categoryId: category.id,
               isCustom: false,
               imageUrl: null,
+              isGlobal: session.user.role === 'ADMIN',
+              createdById: session.user.id,
             },
           });
 

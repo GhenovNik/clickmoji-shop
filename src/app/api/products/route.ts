@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { requireAdmin } from '@/lib/auth-guards';
 import { auth } from '@/lib/auth';
+import { visibleProductsWhere } from '@/lib/product-visibility';
 
 export async function GET(request: Request) {
   try {
@@ -9,9 +10,7 @@ export async function GET(request: Request) {
     const { searchParams } = new URL(request.url);
     const categoryId = searchParams.get('categoryId');
 
-    const accessFilter = {
-      OR: [{ isGlobal: true }, ...(session?.user?.id ? [{ createdById: session.user.id }] : [])],
-    };
+    const accessFilter = visibleProductsWhere(session?.user?.id);
 
     if (!categoryId) {
       // Return the full visible catalog when no category is selected.

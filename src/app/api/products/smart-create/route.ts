@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { requireUser } from '@/lib/auth-guards';
+import { visibleProductsWhere } from '@/lib/product-visibility';
 import { checkRateLimit, rateLimitResponse } from '@/lib/auth-security';
 import { analyzeSmartProduct } from '@/lib/services/ai-products';
 import { generateAndUploadEmojiAsset } from '@/lib/services/emoji-assets';
@@ -98,14 +99,20 @@ export async function POST(request: Request) {
       );
     }
 
-    // Check if product already exists
+    // Check if a product visible to this user already exists; another user's private product
+    // must not be returned (it would leak its id and creator).
     const existingProduct = await prisma.product.findFirst({
       where: {
-        OR: [
-          { name: aiResult.nameRu },
-          { nameEn: aiResult.nameEn },
-          { name: productName },
-          { nameEn: productName },
+        AND: [
+          visibleProductsWhere(dbUser.id),
+          {
+            OR: [
+              { name: aiResult.nameRu },
+              { nameEn: aiResult.nameEn },
+              { name: productName },
+              { nameEn: productName },
+            ],
+          },
         ],
       },
       include: {
