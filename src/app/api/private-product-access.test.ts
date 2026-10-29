@@ -25,7 +25,7 @@ const PRODUCTS: ProductRow[] = [
   { id: 'private-b', name: 'Мой хлеб', nameEn: 'My bread', isGlobal: false, createdById: 'user-b' },
 ];
 
-// Minimal Prisma `where` semantics: field equality, OR and AND.
+// Minimal Prisma `where` semantics: field equality, `in`, OR and AND.
 function matches(row: Record<string, unknown>, where: Record<string, unknown>): boolean {
   return Object.entries(where).every(([key, value]) => {
     if (key === 'OR') {
@@ -33,6 +33,9 @@ function matches(row: Record<string, unknown>, where: Record<string, unknown>): 
     }
     if (key === 'AND') {
       return (value as Record<string, unknown>[]).every((clause) => matches(row, clause));
+    }
+    if (value && typeof value === 'object' && 'in' in value) {
+      return (value.in as unknown[]).includes(row[key]);
     }
     return row[key] === value;
   });
@@ -63,10 +66,20 @@ vi.mock('@/lib/prisma', () => ({
     product: {
       findUnique: (args: { where: Record<string, unknown> }) => findProduct(args),
       findFirst: (args: { where: Record<string, unknown> }) => findProduct(args),
+      findMany: async ({ where }: { where: Record<string, unknown> }) =>
+        PRODUCTS.filter((row) => matches(row, where)),
       create: doubles.createProduct,
     },
-    productVariant: { findUnique: async () => null },
-    item: { create: doubles.createItem },
+    productVariant: { findUnique: async () => null, findMany: async () => [] },
+    item: {
+      create: doubles.createItem,
+      createManyAndReturn: async ({ data }: { data: Array<{ productId: string }> }) =>
+        Promise.all(data.map((row) => doubles.createItem({ data: row }))),
+    },
+    $transaction: async (run: (tx: unknown) => unknown) => {
+      const { prisma } = await import('@/lib/prisma');
+      return run(prisma);
+    },
     favorite: { upsert: doubles.upsertFavorite },
     user: {
       findUnique: async () => ({ id: 'user-b', role: 'USER', createdProductsCount: 0 }),
