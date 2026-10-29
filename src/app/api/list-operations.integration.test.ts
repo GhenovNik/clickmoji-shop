@@ -18,6 +18,7 @@ type Hook = () => Promise<void>;
 const hooks = vi.hoisted(() => ({
   afterSnapshotRead: undefined as Hook | undefined,
   afterProductLookup: undefined as Hook | undefined,
+  afterItemUpdate: undefined as Hook | undefined,
   userId: '',
 }));
 
@@ -38,6 +39,11 @@ vi.mock('@/lib/prisma', async () => {
         async findMany({ args, query }) {
           const result = await query(args);
           await hooks.afterSnapshotRead?.();
+          return result;
+        },
+        async update({ args, query }) {
+          const result = await query(args);
+          await hooks.afterItemUpdate?.();
           return result;
         },
       },
@@ -68,6 +74,7 @@ describe.skipIf(!url)('list operations on PostgreSQL', () => {
     addItems: typeof import('@/app/api/lists/[listId]/items/route');
     history: typeof import('@/app/api/history/route');
     restore: typeof import('@/app/api/history/[historyId]/restore/route');
+    updateItem: typeof import('@/app/api/lists/[listId]/items/[itemId]/route');
   };
   let categoryId: string;
   let listId: string;
@@ -101,6 +108,7 @@ describe.skipIf(!url)('list operations on PostgreSQL', () => {
       addItems: await import('@/app/api/lists/[listId]/items/route'),
       history: await import('@/app/api/history/route'),
       restore: await import('@/app/api/history/[historyId]/restore/route'),
+      updateItem: await import('@/app/api/lists/[listId]/items/[itemId]/route'),
     };
 
     const user = await other.user.create({ data: { email: `it-${suffix}@example.test` } });
@@ -132,6 +140,7 @@ describe.skipIf(!url)('list operations on PostgreSQL', () => {
   beforeEach(async () => {
     hooks.afterSnapshotRead = undefined;
     hooks.afterProductLookup = undefined;
+    hooks.afterItemUpdate = undefined;
     vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const list = await other.list.create({ data: { userId: hooks.userId, name: 'Покупки' } });
     listId = list.id;
@@ -192,10 +201,82 @@ describe.skipIf(!url)('list operations on PostgreSQL', () => {
   it('creates one snapshot when the same list is completed twice at once', async () => {
     await other.item.create({ data: { listId, productId: productIds[0] } });
 
-    const statuses = (await Promise.all([complete(), complete()])).map((r) => r.status).sort();
+    // The second complete starts while the first holds its snapshot read; it either finishes on
+    // its own or is observed waiting for a lock before the first one continues.
+    let second: Promise<Response> | undefined;
+    hooks.afterSnapshotRead = async () => {
+      if (second) return;
+      second = complete();
+      await Promise.race([second, lockWaitObserved()]);
+    };
+
+    const first = await complete();
+    const statuses = [first.status, (await second!).status].sort();
 
     expect(statuses).toEqual([200, 400]);
     expect(await other.listHistory.count({ where: { listId } })).toBe(1);
+  });
+
+  it('does not confirm an item update that the completed snapshot misses', async () => {
+    const item = await other.item.create({
+      data: { listId, productId: productIds[0], note: '1 л', isPurchased: false },
+    });
+
+    // PUT /api/lists/[listId]/items/[itemId] arrives right after the snapshot read.
+    let update: Promise<Response> | undefined;
+    hooks.afterSnapshotRead = async () => {
+      if (update) return;
+      update = routes.updateItem.PUT(
+        new Request('http://localhost/', {
+          method: 'PUT',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ note: '3 л', isPurchased: true }),
+        }),
+        { params: Promise.resolve({ listId, itemId: item.id }) }
+      );
+      await Promise.race([update, lockWaitObserved()]);
+    };
+
+    const response = await complete();
+    const updateStatus = (await update!).status;
+
+    expect(response.status).toBe(200);
+    const [snapshot] = (await response.json()).items as Array<{
+      note: string | null;
+      isPurchased: boolean;
+    }>;
+    // A 200 for the update must mean the update is what was archived.
+    const lostUpdate = updateStatus === 200 && (snapshot.note !== '3 л' || !snapshot.isPurchased);
+    expect({ updateStatus, snapshot, lostUpdate }).toMatchObject({ lostUpdate: false });
+    expect(await other.item.count({ where: { listId } })).toBe(0);
+  });
+
+  it('archives an item update that holds the list lock when complete starts', async () => {
+    const item = await other.item.create({
+      data: { listId, productId: productIds[0], note: '1 л', isPurchased: false },
+    });
+
+    // complete arrives while the PUT has written but not yet committed its update.
+    let completion: Promise<Response> | undefined;
+    hooks.afterItemUpdate = async () => {
+      if (completion) return;
+      completion = complete();
+      await Promise.race([completion, lockWaitObserved()]);
+    };
+
+    const updated = await routes.updateItem.PUT(
+      new Request('http://localhost/', {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ note: '3 л', isPurchased: true }),
+      }),
+      { params: Promise.resolve({ listId, itemId: item.id }) }
+    );
+    const response = await completion!;
+
+    expect([updated.status, response.status]).toEqual([200, 200]);
+    const [snapshot] = (await response.json()).items;
+    expect(snapshot).toMatchObject({ note: '3 л', isPurchased: true });
   });
 
   it('leaves no list behind when a restored product disappears before the insert', async () => {

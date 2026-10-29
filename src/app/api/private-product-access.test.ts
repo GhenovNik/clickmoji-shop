@@ -79,6 +79,8 @@ vi.mock('@/lib/prisma', () => ({
       createManyAndReturn: async ({ data }: { data: Array<{ productId: string }> }) =>
         Promise.all(data.map((row) => doubles.createItem({ data: row }))),
     },
+    // List row lock taken before items are inserted (lockOwnedList).
+    $queryRaw: async () => [{ id: 'list-b', name: 'Покупки' }],
     $transaction: async (run: (tx: unknown) => unknown) => {
       const { prisma } = await import('@/lib/prisma');
       return run(prisma);

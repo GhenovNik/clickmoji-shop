@@ -185,6 +185,22 @@ export function createFakeListDb(seed: Partial<FakeState> = {}) {
           return rows;
         }
       ),
+      findFirst: record(
+        'item.findFirst',
+        ({ where, select: fields }: { where: Row; select?: Row }) => {
+          const row = state.items.find((i) => matches(i as unknown as Row, where));
+          return row ? select({ ...row }, fields) : null;
+        }
+      ),
+      update: record(
+        'item.update',
+        ({ where, data, include }: { where: Row; data: Row; include?: Row }) => {
+          const row = state.items.find((i) => matches(i as unknown as Row, where));
+          if (!row) throw new Error('fake-list-db: record to update not found');
+          Object.assign(row, data);
+          return withItemRelations(row, include);
+        }
+      ),
       create: record('item.create', ({ data, include }: { data: Row; include?: Row }) =>
         withItemRelations(insertItem(data), include)
       ),
@@ -263,18 +279,25 @@ export function createFakeListDb(seed: Partial<FakeState> = {}) {
         return { ...history, items };
       }),
     },
-    // Only the row lock used by POST /api/history: SELECT id, name FROM lists WHERE id = $1 AND
-    // "userId" = $2 FOR UPDATE. A single in-memory caller never waits, so the lock is a no-op.
-    $queryRaw: record('$queryRaw', (strings: TemplateStringsArray, ...values: unknown[]) => {
+    // Only the row locks taken by POST /api/history, recorded as `$queryRaw:<table>`:
+    // - SELECT id, name FROM lists WHERE id = $1 AND "userId" = $2 FOR UPDATE
+    // - SELECT id FROM items WHERE "listId" = $1 FOR UPDATE
+    // A single in-memory caller never waits, so the locks themselves are no-ops.
+    $queryRaw: async (strings: TemplateStringsArray, ...values: unknown[]) => {
       const sql = strings.join('?');
-      if (!/FROM\s+lists\b/i.test(sql) || !/FOR UPDATE/i.test(sql)) {
+      const table = /FROM\s+(lists|items)\b/i.exec(sql)?.[1];
+      if (!table || !/FOR UPDATE/i.test(sql)) {
         throw new Error(`fake-list-db: unsupported raw query: ${sql}`);
+      }
+      calls.push(`$queryRaw:${table}`);
+      if (table === 'items') {
+        return state.items.filter((i) => i.listId === values[0]).map((i) => ({ id: i.id }));
       }
       const [listId, userId] = values;
       return state.lists
         .filter((l) => l.id === listId && l.userId === userId)
         .map((l) => ({ id: l.id, name: l.name }));
-    }),
+    },
   };
 
   const prisma = {

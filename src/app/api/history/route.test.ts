@@ -83,6 +83,18 @@ describe('POST /api/history (complete a list)', () => {
     expect(snapshotProductIds()).toEqual(['milk', 'bread']);
   });
 
+  it('locks the list and then its items before reading the snapshot', async () => {
+    // Without the item locks a concurrent PUT (note, isPurchased) could commit between the read
+    // and the delete, return 200, and vanish with the item.
+    const response = await complete();
+
+    expect(response.status).toBe(200);
+    const order = holder.db.calls.filter((call) =>
+      ['$queryRaw:lists', '$queryRaw:items', 'item.findMany'].includes(call)
+    );
+    expect(order).toEqual(['$queryRaw:lists', '$queryRaw:items', 'item.findMany']);
+  });
+
   it('moves every item it read into one snapshot and empties the list', async () => {
     const response = await complete();
 

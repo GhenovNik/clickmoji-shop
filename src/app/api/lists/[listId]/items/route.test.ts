@@ -142,6 +142,19 @@ describe('POST /api/lists/[listId]/items is all-or-nothing', () => {
   });
 });
 
+describe('POST /api/lists/[listId]/items takes the list lock', () => {
+  it('locks the list row before it inserts, like every other change to the items', async () => {
+    const response = await addItems([{ productId: 'milk' }]);
+
+    expect(response.status).toBe(200);
+    expect(
+      holder.db.calls.filter((call) =>
+        ['$queryRaw:lists', 'item.createManyAndReturn'].includes(call)
+      )
+    ).toEqual(['$queryRaw:lists', 'item.createManyAndReturn']);
+  });
+});
+
 describe('POST /api/lists/[listId]/items is bounded', () => {
   it('rejects a batch above 100 items with 400 and writes nothing', async () => {
     const items = Array.from({ length: 101 }, () => ({ productId: 'milk' }));

@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { requireUser } from '@/lib/auth-guards';
 import { visibleProductsWhere } from '@/lib/product-visibility';
+import { lockOwnedList } from '@/lib/list-lock';
 
 export async function GET() {
   try {
@@ -68,16 +69,16 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'List ID is required' }, { status: 400 });
     }
 
-    // Reading the snapshot and removing the items is one transaction under a row lock on the
-    // list, and only the items that were read are removed. A second complete of the same list
-    // waits for the lock and then finds the list empty; an item added concurrently either is in
-    // the snapshot or stays in the list (its insert takes a KEY SHARE lock on the list row for
-    // the foreign key, so it waits until this transaction commits).
+    // Reading the snapshot and removing the items is one transaction that holds the list lock
+    // (see lockOwnedList) and then the item rows, and only the items that were read are removed.
+    // Every add, update and delete of an item takes the same list lock first, so it either commits
+    // before the snapshot is read (and is in it) or waits and then finds the item gone; a second
+    // complete waits and then finds the list empty. Lock order is always list, then items.
     const result = await prisma.$transaction(async (tx): Promise<CompleteResult> => {
-      const locked = await tx.$queryRaw<Array<{ id: string; name: string }>>`
-        SELECT id, name FROM lists WHERE id = ${listId} AND "userId" = ${userId} FOR UPDATE`;
-      const list = locked[0];
+      const list = await lockOwnedList(tx, listId, userId);
       if (!list) return { status: 'not-found' };
+
+      await tx.$queryRaw`SELECT id FROM items WHERE "listId" = ${list.id} FOR UPDATE`;
 
       const items = await tx.item.findMany({
         where: { listId: list.id },

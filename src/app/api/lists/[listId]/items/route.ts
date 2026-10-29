@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { requireUser } from '@/lib/auth-guards';
 import { visibleProductsWhere } from '@/lib/product-visibility';
+import { lockOwnedList } from '@/lib/list-lock';
 
 // Upper bound for one request; the largest category has far fewer products than this.
 export const MAX_ITEMS_PER_BATCH = 100;
@@ -94,9 +95,11 @@ export async function POST(request: Request, { params }: { params: Promise<{ lis
       }
     }
 
-    // Duplicate products are allowed when users need separate notes.
-    const createdItems = await prisma.$transaction((tx) =>
-      tx.item.createManyAndReturn({
+    // Duplicate products are allowed when users need separate notes. The insert runs under the
+    // list lock shared by every change to the list's items (see lockOwnedList).
+    const createdItems = await prisma.$transaction(async (tx) => {
+      if (!(await lockOwnedList(tx, listId, session.user.id))) return null;
+      return tx.item.createManyAndReturn({
         data: batch.map((item) => ({
           listId,
           productId: item.productId,
@@ -110,8 +113,12 @@ export async function POST(request: Request, { params }: { params: Promise<{ lis
             },
           },
         },
-      })
-    );
+      });
+    });
+
+    if (!createdItems) {
+      return NextResponse.json({ error: 'List not found' }, { status: 404 });
+    }
 
     return NextResponse.json({
       createdItems,
