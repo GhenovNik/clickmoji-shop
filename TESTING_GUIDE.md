@@ -88,7 +88,11 @@ the in-memory fake (`src/test/fake-list-db.ts`) cannot. It is skipped unless
 ```bash
 DATABASE_URL=postgresql://... npx prisma migrate deploy
 INTEGRATION_DATABASE_URL=postgresql://... npx vitest run src/app/api/list-operations
+INTEGRATION_DATABASE_URL=postgresql://... npx vitest run src/app/api/lists/import-text src/lib/ai-quota
 ```
+
+`src/app/api/lists/import-text/import-text.integration.test.ts` runs "import list from text" end to
+end the same way, with only the `@google/genai` SDK faked.
 
 ## CI
 
