@@ -28,7 +28,7 @@ const PRODUCTS: ProductRow[] = [
   { id: 'private-b', name: 'Мой хлеб', nameEn: 'My bread', isGlobal: false, createdById: 'user-b' },
 ];
 
-// Minimal Prisma `where` semantics: field equality, `in`, OR and AND.
+// Minimal Prisma `where` semantics: field equality, `in`, `equals` (with mode), OR and AND.
 function matches(row: Record<string, unknown>, where: Record<string, unknown>): boolean {
   return Object.entries(where).every(([key, value]) => {
     if (key === 'OR') {
@@ -39,6 +39,11 @@ function matches(row: Record<string, unknown>, where: Record<string, unknown>): 
     }
     if (value && typeof value === 'object' && 'in' in value) {
       return (value.in as unknown[]).includes(row[key]);
+    }
+    if (value && typeof value === 'object' && 'equals' in value) {
+      const insensitive = (value as { mode?: string }).mode === 'insensitive';
+      const fold = (v: unknown) => (insensitive ? String(v).toLowerCase() : v);
+      return fold(row[key]) === fold(value.equals);
     }
     return row[key] === value;
   });
@@ -220,6 +225,7 @@ describe('POST /api/lists/import-text', () => {
   function importText(nameRu: string, nameEn: string) {
     doubles.parseShoppingListText.mockResolvedValue({
       products: [{ nameRu, nameEn, categoryName: 'Dairy', emoji: '🧀' }],
+      invalid: [],
       promptVersion: 'test',
       model: 'test',
     });

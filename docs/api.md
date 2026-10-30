@@ -197,7 +197,11 @@ All endpoints are implemented as Next.js Route Handlers under `src/app/api`.
 
 - Auth: signed in
 - Body: `text`, `listId`
-- Notes: Gemini parses, creates missing products, adds items; rate limited to 10 requests/hour per user and takes one unit of the daily AI budget before the analysis (`403` off, `429` used up, `503` unreadable; no provider call then); response includes `promptVersion` and `model`
+- Notes: Gemini parses, creates missing products, adds items; an existing product the user can see
+  is reused by name (Russian or English, ignoring case and surrounding spaces) whatever category the
+  model chose; a category (English name, Russian name or the `English (Russian)` form of the prompt,
+  any case) is needed only to create a missing product; an unusable entry in the AI response is
+  reported in `results.failed` and the rest is imported; rate limited to 10 requests/hour per user and takes one unit of the daily AI budget before the analysis (`403` off, `429` used up, `503` unreadable; no provider call then); response includes `promptVersion` and `model`
 
 ## History
 

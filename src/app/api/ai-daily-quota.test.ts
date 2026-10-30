@@ -60,6 +60,7 @@ vi.mock('@/lib/prisma', () => ({
     },
     product: {
       findFirst: async () => null,
+      findMany: async () => [],
       create: doubles.createProduct,
     },
     item: { create: async ({ data }: { data: Record<string, unknown> }) => data },
@@ -98,6 +99,7 @@ beforeEach(() => {
   doubles.requireUser.mockResolvedValue({ session: { user: { id: 'user-b', role: 'USER' } } });
   doubles.parseShoppingListText.mockResolvedValue({
     products: [{ nameRu: 'Тархун', nameEn: 'Tarragon soda', categoryName: 'Drinks', emoji: '🥤' }],
+    invalid: [],
     promptVersion: 'v',
     model: 'm',
   });

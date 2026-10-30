@@ -79,6 +79,7 @@ export async function POST(request: Request) {
 
     const {
       products: parsedProducts,
+      invalid: invalidEntries,
       promptVersion,
       model,
     } = await parseShoppingListText({
@@ -99,41 +100,65 @@ export async function POST(request: Request) {
       added: [] as Array<{ name: string; category: string; note?: string }>,
       created: [] as Array<{ name: string; category: string; note?: string }>,
       skipped: [] as Array<{ name: string; reason: string }>,
-      failed: [] as Array<{ product: ParsedShoppingListProduct; reason: string }>,
+      failed: [] as Array<{ product: Partial<ParsedShoppingListProduct>; reason: string }>,
     };
+
+    for (const entry of invalidEntries) {
+      results.failed.push({
+        product: (entry && typeof entry === 'object' ? entry : {}) as ParsedShoppingListProduct,
+        reason: 'Unrecognized entry in the AI response',
+      });
+    }
+
+    const categoryNameOf = new Map(categories.map((c) => [c.id, c.name]));
 
     for (const product of parsedProducts) {
       try {
-        // Find category
-        const category = categories.find(
-          (c) => c.nameEn === product.categoryName || c.name === product.categoryName
-        );
+        const nameRu = product.nameRu.trim();
+        const nameEn = product.nameEn.trim();
 
-        if (!category) {
-          results.failed.push({
-            product,
-            reason: `Category "${product.categoryName}" not found`,
-          });
-          continue;
-        }
-
-        // Reuse a product this user can see; another user's private product is never matched.
-        let dbProduct = await prisma.product.findFirst({
+        // An existing product the user can see is reused whatever category the model chose, and
+        // regardless of letter case or surrounding spaces; another user's private product is
+        // never matched. Exact matches win over case-insensitive ones, then the oldest product.
+        const candidates = await prisma.product.findMany({
           where: {
             AND: [
               visibleProductsWhere(session.user.id),
-              { OR: [{ name: product.nameRu }, { nameEn: product.nameEn }] },
+              {
+                OR: [
+                  { name: { equals: nameRu, mode: 'insensitive' } },
+                  { nameEn: { equals: nameEn, mode: 'insensitive' } },
+                ],
+              },
             ],
           },
+          orderBy: { createdAt: 'asc' },
+          take: 10,
         });
+        let dbProduct =
+          candidates.find((c) => c.name === nameRu) ??
+          candidates.find((c) => c.nameEn === nameEn) ??
+          candidates[0] ??
+          null;
 
-        // A missing product is created like in smart-create: private to a regular user and
-        // global only when an administrator imports it.
+        // A category is needed only to create a missing product.
         if (!dbProduct) {
+          const category = findCategory(categories, product.categoryName);
+
+          if (!category) {
+            results.failed.push({
+              product,
+              reason: `Category "${product.categoryName}" not found`,
+            });
+            continue;
+          }
+
+          // A missing product is created like in smart-create: private to a regular user and
+          // global only when an administrator imports it.
           dbProduct = await prisma.product.create({
             data: {
-              name: product.nameRu,
-              nameEn: product.nameEn,
+              name: nameRu,
+              nameEn,
               emoji: product.emoji || '📦',
               categoryId: category.id,
               isCustom: false,
@@ -162,7 +187,7 @@ export async function POST(request: Request) {
 
         results.added.push({
           name: dbProduct.name,
-          category: category.name,
+          category: categoryNameOf.get(dbProduct.categoryId) ?? '',
           note: product.note,
         });
       } catch (error) {
@@ -183,4 +208,18 @@ export async function POST(request: Request) {
     console.error('Error importing list:', error);
     return NextResponse.json({ error: 'Failed to import list' }, { status: 500 });
   }
+}
+
+const normalized = (value: string) => value.trim().toLocaleLowerCase('ru');
+
+// The prompt lists categories as "Dairy (<Russian name>)" and asks for exact names; accept the
+// English name, the Russian name or that listed form, ignoring case and surrounding spaces.
+function findCategory<T extends { name: string; nameEn: string }>(
+  categories: T[],
+  categoryName: string
+): T | undefined {
+  const wanted = normalized(categoryName);
+  return categories.find((c) =>
+    [c.nameEn, c.name, `${c.nameEn} (${c.name})`].some((form) => normalized(form) === wanted)
+  );
 }
