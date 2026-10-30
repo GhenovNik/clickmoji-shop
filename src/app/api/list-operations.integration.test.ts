@@ -245,9 +245,16 @@ describe.skipIf(!url)('list operations on PostgreSQL', () => {
       note: string | null;
       isPurchased: boolean;
     }>;
-    // A 200 for the update must mean the update is what was archived.
+    // A 200 for the update must mean the update is what was archived (no lost update) ...
     const lostUpdate = updateStatus === 200 && (snapshot.note !== '3 л' || !snapshot.isPurchased);
-    expect({ updateStatus, snapshot, lostUpdate }).toMatchObject({ lostUpdate: false });
+    expect(lostUpdate).toBe(false);
+    // ... and with the list lock the PUT waits for the completion, then finds the item gone: the
+    // only expected outcome is 404 with the snapshot holding the values read before it. Any other
+    // status (a 500 included) fails here.
+    expect({ updateStatus, snapshot }).toMatchObject({
+      updateStatus: 404,
+      snapshot: { note: '1 л', isPurchased: false },
+    });
     expect(await other.item.count({ where: { listId } })).toBe(0);
   });
 
