@@ -168,7 +168,24 @@ describe('POST /api/lists/import-text with products that exist in the catalog', 
 
     expect(result.status).toBe(200);
     expect(result.addedProductIds).toEqual(['milk', 'eggs']);
-    expect(result.body.results.failed).toHaveLength(1);
+    expect(result.body.results.failed).toEqual([
+      { product: { nameRu: '???' }, reason: 'Unrecognized entry in the AI response' },
+    ]);
+  });
+
+  it('reports a malformed entry as a plain DTO, never echoing non-string fields', async () => {
+    const result = await runImport([
+      milk,
+      { nameRu: { text: 'Сыр' }, nameEn: ['Cheese'], categoryName: 'Dairy', emoji: 7 },
+      'just a string',
+    ]);
+
+    expect(result.status).toBe(200);
+    expect(result.addedProductIds).toEqual(['milk']);
+    expect(result.body.results.failed).toEqual([
+      { product: {}, reason: 'Unrecognized entry in the AI response' },
+      { product: {}, reason: 'Unrecognized entry in the AI response' },
+    ]);
   });
 });
 

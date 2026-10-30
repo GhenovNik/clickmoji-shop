@@ -103,9 +103,12 @@ export async function POST(request: Request) {
       failed: [] as Array<{ product: Partial<ParsedShoppingListProduct>; reason: string }>,
     };
 
+    // An unusable entry is reported with its Russian name only, and only when that is a string:
+    // whatever else the model returned is never echoed to the client.
     for (const entry of invalidEntries) {
+      const nameRu = (entry as { nameRu?: unknown } | null)?.nameRu;
       results.failed.push({
-        product: (entry && typeof entry === 'object' ? entry : {}) as ParsedShoppingListProduct,
+        product: typeof nameRu === 'string' ? { nameRu } : {},
         reason: 'Unrecognized entry in the AI response',
       });
     }

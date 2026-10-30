@@ -208,7 +208,10 @@ export default function ImportListModal({
                 <div className="space-y-1 text-sm text-red-700">
                   {result.failed.map((item, i) => (
                     <p key={i}>
-                      • {item.product?.nameRu || 'Unknown'}: {item.reason}
+                      •{' '}
+                      {(typeof item.product?.nameRu === 'string' && item.product.nameRu) ||
+                        'Unknown'}
+                      : {String(item.reason)}
                     </p>
                   ))}
                 </div>

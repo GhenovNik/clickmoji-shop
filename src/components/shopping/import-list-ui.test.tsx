@@ -82,3 +82,35 @@ describe('import list from text, as the shopper sees it', () => {
     await waitFor(() => expect(list.textContent).toContain('Молоко'), { timeout: 1500 });
   });
 });
+
+describe('import result report', () => {
+  it('still renders when a failed entry carries a non-string product name', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        Response.json({
+          results: {
+            added: [{ name: 'Молоко', category: 'Молочное' }],
+            created: [],
+            skipped: [],
+            failed: [{ product: { nameRu: { text: 'Сыр' } }, reason: 'Unrecognized entry' }],
+          },
+        })
+      )
+    );
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <ImportListModal listId="list-1" isOpen onClose={vi.fn()} />
+      </QueryClientProvider>
+    );
+
+    fireEvent.change(screen.getByLabelText('Вставьте список покупок'), {
+      target: { value: 'Молоко, сыр' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /Импортировать/ }));
+
+    expect(await screen.findByText('Импорт завершён!')).toBeTruthy();
+    expect(screen.getByText(/Unknown: Unrecognized entry/)).toBeTruthy();
+  });
+});
