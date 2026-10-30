@@ -100,17 +100,11 @@ export async function POST(request: Request) {
       added: [] as Array<{ name: string; category: string; note?: string }>,
       created: [] as Array<{ name: string; category: string; note?: string }>,
       skipped: [] as Array<{ name: string; reason: string }>,
-      failed: [] as Array<{ product: Partial<ParsedShoppingListProduct>; reason: string }>,
+      failed: [] as FailedEntry[],
     };
 
-    // An unusable entry is reported with its Russian name only, and only when that is a string:
-    // whatever else the model returned is never echoed to the client.
     for (const entry of invalidEntries) {
-      const nameRu = (entry as { nameRu?: unknown } | null)?.nameRu;
-      results.failed.push({
-        product: typeof nameRu === 'string' ? { nameRu } : {},
-        reason: 'Unrecognized entry in the AI response',
-      });
+      results.failed.push(failedEntry(entry, 'Unrecognized entry in the AI response'));
     }
 
     const categoryNameOf = new Map(categories.map((c) => [c.id, c.name]));
@@ -149,10 +143,9 @@ export async function POST(request: Request) {
           const category = findCategory(categories, product.categoryName);
 
           if (!category) {
-            results.failed.push({
-              product,
-              reason: `Category "${product.categoryName}" not found`,
-            });
+            results.failed.push(
+              failedEntry(product, `Category "${product.categoryName}" not found`)
+            );
             continue;
           }
 
@@ -194,10 +187,9 @@ export async function POST(request: Request) {
           note: product.note,
         });
       } catch (error) {
-        results.failed.push({
-          product,
-          reason: error instanceof Error ? error.message : 'Unknown error',
-        });
+        results.failed.push(
+          failedEntry(product, error instanceof Error ? error.message : 'Unknown error')
+        );
       }
     }
 
@@ -225,4 +217,27 @@ function findCategory<T extends { name: string; nameEn: string }>(
   return categories.find((c) =>
     [c.nameEn, c.name, `${c.nameEn} (${c.name})`].some((form) => normalized(form) === wanted)
   );
+}
+
+// What the client gets for an entry that was not added: two strings, never the raw AI output, so
+// the import report can always be rendered. Missing, empty or non-string names get a fallback.
+type FailedEntry = { product: { nameRu: string; nameEn: string }; reason: string };
+
+const UNRECOGNIZED_NAME_RU = 'Нераспознанная позиция';
+const UNRECOGNIZED_NAME_EN = 'Unrecognized item';
+
+function failedEntry(entry: unknown, reason: string): FailedEntry {
+  const { nameRu, nameEn } = (entry && typeof entry === 'object' ? entry : {}) as Record<
+    string,
+    unknown
+  >;
+  const text = (value: unknown, fallback: string) =>
+    typeof value === 'string' && value.trim() ? value.trim() : fallback;
+  return {
+    product: {
+      nameRu: text(nameRu, UNRECOGNIZED_NAME_RU),
+      nameEn: text(nameEn, UNRECOGNIZED_NAME_EN),
+    },
+    reason,
+  };
 }

@@ -210,7 +210,7 @@ export default function ImportListModal({
                     <p key={i}>
                       •{' '}
                       {(typeof item.product?.nameRu === 'string' && item.product.nameRu) ||
-                        'Unknown'}
+                        'Нераспознанная позиция'}
                       : {String(item.reason)}
                     </p>
                   ))}

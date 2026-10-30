@@ -11,7 +11,8 @@ export type ImportResults = {
   added: Array<{ name: string; category: string; note?: string }>;
   created: Array<{ name: string; category: string; note?: string }>;
   skipped: Array<{ name: string; reason: string }>;
-  failed: Array<{ product?: { nameRu?: string }; reason: string }>;
+  // Strings-only DTO from the route (fallback names for unusable AI entries).
+  failed: Array<{ product?: { nameRu?: string; nameEn?: string }; reason: string }>;
 };
 
 function invalidate(queryClient: QueryClient, keys: ReadonlyArray<readonly unknown[]>) {

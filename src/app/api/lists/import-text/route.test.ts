@@ -169,11 +169,14 @@ describe('POST /api/lists/import-text with products that exist in the catalog', 
     expect(result.status).toBe(200);
     expect(result.addedProductIds).toEqual(['milk', 'eggs']);
     expect(result.body.results.failed).toEqual([
-      { product: { nameRu: '???' }, reason: 'Unrecognized entry in the AI response' },
+      {
+        product: { nameRu: '???', nameEn: 'Unrecognized item' },
+        reason: 'Unrecognized entry in the AI response',
+      },
     ]);
   });
 
-  it('reports a malformed entry as a plain DTO, never echoing non-string fields', async () => {
+  it('reports malformed entries as a strings-only DTO with fallback names', async () => {
     const result = await runImport([
       milk,
       { nameRu: { text: 'Сыр' }, nameEn: ['Cheese'], categoryName: 'Dairy', emoji: 7 },
@@ -182,10 +185,11 @@ describe('POST /api/lists/import-text with products that exist in the catalog', 
 
     expect(result.status).toBe(200);
     expect(result.addedProductIds).toEqual(['milk']);
-    expect(result.body.results.failed).toEqual([
-      { product: {}, reason: 'Unrecognized entry in the AI response' },
-      { product: {}, reason: 'Unrecognized entry in the AI response' },
-    ]);
+    const unrecognized = {
+      product: { nameRu: 'Нераспознанная позиция', nameEn: 'Unrecognized item' },
+      reason: 'Unrecognized entry in the AI response',
+    };
+    expect(result.body.results.failed).toEqual([unrecognized, unrecognized]);
   });
 });
 
@@ -210,8 +214,12 @@ describe('POST /api/lists/import-text with unknown products', () => {
     ]);
 
     expect(result.addedProductIds).toEqual(['milk']);
+    // Failed valid entries use the same strings-only DTO: no emoji, note or category echoed.
     expect(result.body.results.failed).toEqual([
-      expect.objectContaining({ reason: 'Category "Beverages" not found' }),
+      {
+        product: { nameRu: 'Тархун', nameEn: 'Tarragon soda' },
+        reason: 'Category "Beverages" not found',
+      },
     ]);
   });
 });

@@ -111,6 +111,6 @@ describe('import result report', () => {
     fireEvent.click(screen.getByRole('button', { name: /Импортировать/ }));
 
     expect(await screen.findByText('Импорт завершён!')).toBeTruthy();
-    expect(screen.getByText(/Unknown: Unrecognized entry/)).toBeTruthy();
+    expect(screen.getByText(/Нераспознанная позиция: Unrecognized entry/)).toBeTruthy();
   });
 });
