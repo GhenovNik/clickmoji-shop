@@ -5,7 +5,7 @@ import { visibleProductsWhere } from '@/lib/product-visibility';
 import { lockOwnedList } from '@/lib/list-lock';
 
 // Upper bound for one request; the largest category has far fewer products than this.
-export const MAX_ITEMS_PER_BATCH = 100;
+const MAX_ITEMS_PER_BATCH = 100;
 
 type NewItem = { productId: string; variantId: string | null; note: string | null };
 
