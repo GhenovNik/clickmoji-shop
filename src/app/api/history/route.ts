@@ -1,7 +1,8 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { requireUser } from '@/lib/auth-guards';
-import { visibleItemsWhere, visibleProductsWhere } from '@/lib/product-visibility';
+import { visibleProductsWhere } from '@/lib/product-visibility';
+import { lockOwnedList } from '@/lib/list-lock';
 
 export async function GET() {
   try {
@@ -51,11 +52,15 @@ export async function GET() {
   }
 }
 
+type CompleteResult =
+  { status: 'not-found' } | { status: 'empty' } | { status: 'completed'; history: unknown };
+
 export async function POST(request: Request) {
   try {
     const guard = await requireUser();
     if (guard instanceof Response) return guard;
     const { session } = guard;
+    const userId = session.user.id;
 
     const body = await request.json();
     const { listId } = body;
@@ -64,40 +69,54 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'List ID is required' }, { status: 400 });
     }
 
-    const list = await prisma.list.findUnique({
-      where: { id: listId, userId: session.user.id },
-      include: {
-        items: {
-          where: visibleItemsWhere(session.user.id),
-          include: {
-            product: {
-              include: {
-                category: true,
-              },
+    // Reading the snapshot and removing the items is one transaction that holds the list lock
+    // (see lockOwnedList) and then the item rows, and only the items that were read are removed.
+    // Every add, update and delete of an item takes the same list lock first, so it either commits
+    // before the snapshot is read (and is in it) or waits and then finds the item gone; a second
+    // complete waits and then finds the list empty. Lock order is always list, then items.
+    const result = await prisma.$transaction(async (tx): Promise<CompleteResult> => {
+      const list = await lockOwnedList(tx, listId, userId);
+      if (!list) return { status: 'not-found' };
+
+      await tx.$queryRaw`SELECT id FROM items WHERE "listId" = ${list.id} FOR UPDATE`;
+
+      const items = await tx.item.findMany({
+        where: { listId: list.id },
+        include: {
+          product: {
+            include: {
+              category: true,
             },
-            variant: true,
           },
+          variant: true,
         },
-      },
-    });
+      });
 
-    if (!list) {
-      return NextResponse.json({ error: 'List not found' }, { status: 404 });
-    }
+      // Items of another user's private product (legacy rows) are removed with the rest of the
+      // list but never copied into the snapshot.
+      const visibleProducts =
+        items.length > 0
+          ? await tx.product.findMany({
+              where: {
+                id: { in: [...new Set(items.map((item) => item.productId))] },
+                ...visibleProductsWhere(userId),
+              },
+              select: { id: true },
+            })
+          : [];
+      const visibleIds = new Set(visibleProducts.map((product) => product.id));
+      const snapshotItems = items.filter((item) => visibleIds.has(item.productId));
 
-    if (list.items.length === 0) {
-      return NextResponse.json({ error: 'List is empty' }, { status: 400 });
-    }
+      if (snapshotItems.length === 0) return { status: 'empty' };
 
-    const history = await prisma.$transaction(async (tx) => {
       const createdHistory = await tx.listHistory.create({
         data: {
-          userId: session.user.id,
+          userId,
           listId: list.id,
           listName: list.name,
           completedAt: new Date(),
           items: {
-            create: list.items.map((item) => ({
+            create: snapshotItems.map((item) => ({
               productId: item.productId,
               variantId: item.variantId,
               productName: item.product.name,
@@ -116,12 +135,22 @@ export async function POST(request: Request) {
         include: { items: true },
       });
 
-      await tx.item.deleteMany({ where: { listId: list.id } });
+      await tx.item.deleteMany({
+        where: { listId: list.id, id: { in: items.map((item) => item.id) } },
+      });
 
-      return createdHistory;
+      return { status: 'completed', history: createdHistory };
     });
 
-    return NextResponse.json(history);
+    if (result.status === 'not-found') {
+      return NextResponse.json({ error: 'List not found' }, { status: 404 });
+    }
+
+    if (result.status === 'empty') {
+      return NextResponse.json({ error: 'List is empty' }, { status: 400 });
+    }
+
+    return NextResponse.json(result.history);
   } catch (error) {
     console.error('Error completing list:', error);
     return NextResponse.json({ error: 'Failed to complete list' }, { status: 500 });

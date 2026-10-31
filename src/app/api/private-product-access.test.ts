@@ -1,6 +1,9 @@
 // @vitest-environment node
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+// The shared daily AI budget is covered by src/app/api/ai-daily-quota.test.ts.
+vi.mock('@/lib/ai-quota', () => ({ enforceAiQuota: async () => null }));
+
 // A product with isGlobal=false belongs to its creator only: GET /api/products and /api/search
 // already hide it from everyone else. These tests pin the same rule on the routes that accept a
 // product id or look a product up by name.
@@ -25,7 +28,7 @@ const PRODUCTS: ProductRow[] = [
   { id: 'private-b', name: 'Мой хлеб', nameEn: 'My bread', isGlobal: false, createdById: 'user-b' },
 ];
 
-// Minimal Prisma `where` semantics: field equality, OR and AND.
+// Minimal Prisma `where` semantics: field equality, `in`, `equals` (with mode), OR and AND.
 function matches(row: Record<string, unknown>, where: Record<string, unknown>): boolean {
   return Object.entries(where).every(([key, value]) => {
     if (key === 'OR') {
@@ -33,6 +36,14 @@ function matches(row: Record<string, unknown>, where: Record<string, unknown>): 
     }
     if (key === 'AND') {
       return (value as Record<string, unknown>[]).every((clause) => matches(row, clause));
+    }
+    if (value && typeof value === 'object' && 'in' in value) {
+      return (value.in as unknown[]).includes(row[key]);
+    }
+    if (value && typeof value === 'object' && 'equals' in value) {
+      const insensitive = (value as { mode?: string }).mode === 'insensitive';
+      const fold = (v: unknown) => (insensitive ? String(v).toLowerCase() : v);
+      return fold(row[key]) === fold(value.equals);
     }
     return row[key] === value;
   });
@@ -63,10 +74,22 @@ vi.mock('@/lib/prisma', () => ({
     product: {
       findUnique: (args: { where: Record<string, unknown> }) => findProduct(args),
       findFirst: (args: { where: Record<string, unknown> }) => findProduct(args),
+      findMany: async ({ where }: { where: Record<string, unknown> }) =>
+        PRODUCTS.filter((row) => matches(row, where)),
       create: doubles.createProduct,
     },
-    productVariant: { findUnique: async () => null },
-    item: { create: doubles.createItem },
+    productVariant: { findUnique: async () => null, findMany: async () => [] },
+    item: {
+      create: doubles.createItem,
+      createManyAndReturn: async ({ data }: { data: Array<{ productId: string }> }) =>
+        Promise.all(data.map((row) => doubles.createItem({ data: row }))),
+    },
+    // List row lock taken before items are inserted (lockOwnedList).
+    $queryRaw: async () => [{ id: 'list-b', name: 'Покупки' }],
+    $transaction: async (run: (tx: unknown) => unknown) => {
+      const { prisma } = await import('@/lib/prisma');
+      return run(prisma);
+    },
     favorite: { upsert: doubles.upsertFavorite },
     user: {
       findUnique: async () => ({ id: 'user-b', role: 'USER', createdProductsCount: 0 }),
@@ -202,6 +225,7 @@ describe('POST /api/lists/import-text', () => {
   function importText(nameRu: string, nameEn: string) {
     doubles.parseShoppingListText.mockResolvedValue({
       products: [{ nameRu, nameEn, categoryName: 'Dairy', emoji: '🧀' }],
+      invalid: [],
       promptVersion: 'test',
       model: 'test',
     });

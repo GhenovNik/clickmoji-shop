@@ -98,14 +98,24 @@ export function parseProcessedProductsResponse(responseText: string): ProcessedP
   return parsed;
 }
 
-export function parseShoppingListResponse(responseText: string): ParsedShoppingListProduct[] {
-  const products = parseProcessedProductsResponse(responseText);
-  return products.map((product) => ({
+// One unusable entry must not discard the rest of a pasted list: valid entries are returned and
+// the others are reported back as `invalid`, so the route can list them as failed. A response
+// that is not a JSON array is still an error.
+export function parseShoppingListResponse(responseText: string): {
+  products: ParsedShoppingListProduct[];
+  invalid: unknown[];
+} {
+  const parsed = parseJson(responseText);
+  if (!Array.isArray(parsed)) {
+    throw new Error('Invalid shopping list AI response');
+  }
+  const products = parsed.filter(isProcessedProduct).map((product) => ({
     ...product,
     note: assertString((product as ParsedShoppingListProduct).note)
       ? (product as ParsedShoppingListProduct).note
       : undefined,
   }));
+  return { products, invalid: parsed.filter((entry) => !isProcessedProduct(entry)) };
 }
 
 function categoriesPrompt(categories: ProductCategory[]) {
@@ -299,7 +309,7 @@ export async function parseShoppingListText({
   const prompt = buildShoppingListPrompt({ text, categories });
   const responseText = await generateText({ apiKey, prompt });
   return {
-    products: parseShoppingListResponse(responseText),
+    ...parseShoppingListResponse(responseText),
     promptVersion: AI_PRODUCTS_PROMPT_VERSION,
     model: DEFAULT_TEXT_MODEL,
   };

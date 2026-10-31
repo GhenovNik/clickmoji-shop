@@ -78,6 +78,22 @@ npm run test:e2e
 Use a dedicated OAuth/email configuration or leave those optional integrations disabled. Test data
 must not depend on production users or provider credentials.
 
+## Database-backed list operation tests
+
+`src/app/api/list-operations.integration.test.ts` runs batch add, complete and restore against a real
+PostgreSQL to check the row lock, the foreign-key lock interaction and transaction rollback, which
+the in-memory fake (`src/test/fake-list-db.ts`) cannot. It is skipped unless
+`INTEGRATION_DATABASE_URL` is set, so CI (no database service) skips it. Use a disposable database:
+
+```bash
+DATABASE_URL=postgresql://... npx prisma migrate deploy
+INTEGRATION_DATABASE_URL=postgresql://... npx vitest run src/app/api/list-operations
+INTEGRATION_DATABASE_URL=postgresql://... npx vitest run src/app/api/lists/import-text src/lib/ai-quota
+```
+
+`src/app/api/lists/import-text/import-text.integration.test.ts` runs "import list from text" end to
+end the same way, with only the `@google/genai` SDK faked.
+
 ## CI
 
 `.github/workflows/ci.yml` runs on pull requests and pushes to `develop` and `master`:

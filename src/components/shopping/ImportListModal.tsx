@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { useImportListText, type ImportResults } from '@/hooks/useListMutations';
 
 interface ImportListModalProps {
   listId: string;
@@ -10,29 +10,6 @@ interface ImportListModalProps {
   onSuccess?: () => void;
 }
 
-type ImportResultEntry = {
-  name: string;
-  category: string;
-  note?: string;
-};
-
-type ImportResultSkipped = {
-  name: string;
-  reason: string;
-};
-
-type ImportResultFailed = {
-  product?: { nameRu?: string };
-  reason: string;
-};
-
-type ImportResults = {
-  added: ImportResultEntry[];
-  created: ImportResultEntry[];
-  skipped: ImportResultSkipped[];
-  failed: ImportResultFailed[];
-};
-
 export default function ImportListModal({
   listId,
   isOpen,
@@ -40,10 +17,10 @@ export default function ImportListModal({
   onSuccess,
 }: ImportListModalProps) {
   const [text, setText] = useState('');
-  const [isImporting, setIsImporting] = useState(false);
   const [error, setError] = useState('');
   const [result, setResult] = useState<ImportResults | null>(null);
-  const router = useRouter();
+  const importMutation = useImportListText();
+  const isImporting = importMutation.isPending;
 
   if (!isOpen) return null;
 
@@ -57,23 +34,8 @@ export default function ImportListModal({
       return;
     }
 
-    setIsImporting(true);
-
     try {
-      const res = await fetch('/api/lists/import-text', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          text: text.trim(),
-          listId,
-        }),
-      });
-
-      const data = await res.json();
-
-      if (!res.ok) {
-        throw new Error(data.error || 'Ошибка при импорте списка');
-      }
+      const data = await importMutation.mutateAsync({ listId, text: text.trim() });
 
       setResult(data.results);
       setText('');
@@ -82,15 +44,13 @@ export default function ImportListModal({
         onSuccess();
       }
 
-      // Keep the result visible briefly before closing the modal.
+      // Keep the result visible briefly before closing the modal. The list behind it is already
+      // refetching: the mutation invalidated the list and, when products were created, the catalog.
       setTimeout(() => {
         handleClose();
-        router.refresh();
       }, 3000);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Произошла ошибка');
-    } finally {
-      setIsImporting(false);
     }
   };
 
@@ -248,7 +208,10 @@ export default function ImportListModal({
                 <div className="space-y-1 text-sm text-red-700">
                   {result.failed.map((item, i) => (
                     <p key={i}>
-                      • {item.product?.nameRu || 'Unknown'}: {item.reason}
+                      •{' '}
+                      {(typeof item.product?.nameRu === 'string' && item.product.nameRu) ||
+                        'Нераспознанная позиция'}
+                      : {String(item.reason)}
                     </p>
                   ))}
                 </div>

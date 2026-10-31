@@ -58,22 +58,28 @@ export async function POST(
         isPurchased: false,
       }));
 
-    const list = await prisma.list.create({
-      data: {
-        userId: session.user.id,
-        name: name || history.listName,
-        isActive: false,
-      },
-    });
-
-    if (itemsToCreate.length > 0) {
-      await prisma.item.createMany({
-        data: itemsToCreate.map((item) => ({
-          ...item,
-          listId: list.id,
-        })),
+    // The list and its items are created together: if an insert fails (for example a product
+    // deleted after the lookup above), no empty or half-filled list is left behind.
+    const list = await prisma.$transaction(async (tx) => {
+      const created = await tx.list.create({
+        data: {
+          userId: session.user.id,
+          name: name || history.listName,
+          isActive: false,
+        },
       });
-    }
+
+      if (itemsToCreate.length > 0) {
+        await tx.item.createMany({
+          data: itemsToCreate.map((item) => ({
+            ...item,
+            listId: created.id,
+          })),
+        });
+      }
+
+      return created;
+    });
 
     return NextResponse.json({
       listId: list.id,

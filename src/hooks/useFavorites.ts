@@ -5,6 +5,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useSession } from 'next-auth/react';
 import { useRouter } from 'next/navigation';
 import { listsQueryKey, useActiveList } from './useListsQuery';
+import { queryKeys } from '@/lib/query-keys';
 
 export type FavoriteProduct = {
   id: string;
@@ -68,7 +69,7 @@ export function useFavorites() {
 
   // Query for favorites with React Query
   const { data: favorites = [], isLoading: loading } = useQuery({
-    queryKey: ['favorites'],
+    queryKey: queryKeys.favorites(),
     queryFn: fetchFavoritesAPI,
     enabled: !!session?.user,
   });
@@ -77,10 +78,10 @@ export function useFavorites() {
   const removeMutation = useMutation({
     mutationFn: removeFromFavoritesAPI,
     onMutate: async (productId) => {
-      await queryClient.cancelQueries({ queryKey: ['favorites'] });
-      const previousFavorites = queryClient.getQueryData<FavoriteProduct[]>(['favorites']);
+      await queryClient.cancelQueries({ queryKey: queryKeys.favorites() });
+      const previousFavorites = queryClient.getQueryData<FavoriteProduct[]>(queryKeys.favorites());
 
-      queryClient.setQueryData<FavoriteProduct[]>(['favorites'], (old) => {
+      queryClient.setQueryData<FavoriteProduct[]>(queryKeys.favorites(), (old) => {
         if (!old) return old;
         return old.filter((fav) => fav.product.id !== productId);
       });
@@ -96,11 +97,11 @@ export function useFavorites() {
     },
     onError: (err, productId, context) => {
       if (context?.previousFavorites) {
-        queryClient.setQueryData(['favorites'], context.previousFavorites);
+        queryClient.setQueryData(queryKeys.favorites(), context.previousFavorites);
       }
     },
     onSettled: () => {
-      queryClient.invalidateQueries({ queryKey: ['favorites'] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.favorites() });
     },
   });
 
@@ -138,7 +139,7 @@ export function useFavorites() {
       await addToListAPI(activeListId, selectedItems);
 
       queryClient.invalidateQueries({ queryKey: listsQueryKey });
-      queryClient.invalidateQueries({ queryKey: ['list', activeListId] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.list(activeListId) });
 
       if (activeListId) {
         router.push(`/lists/${activeListId}`);

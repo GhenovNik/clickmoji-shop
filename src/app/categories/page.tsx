@@ -9,6 +9,7 @@ import { useSearchParams } from 'next/navigation';
 import { useLists } from '@/store/lists';
 import ProductSearch from '@/components/ProductSearch';
 import { CategoryCardSkeleton } from '@/components/ui/Skeleton';
+import { queryKeys } from '@/lib/query-keys';
 
 type Category = {
   id: string;
@@ -43,7 +44,7 @@ function CategoriesPageContent() {
   }, [searchParams, setActiveList]);
 
   const { data: categories = [], isLoading: loading } = useQuery({
-    queryKey: ['categories'],
+    queryKey: queryKeys.categories(),
     queryFn: fetchCategoriesAPI,
   });
 
