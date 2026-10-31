@@ -30,7 +30,7 @@ AI_PROVIDER="gemini" # or "gpt-image"; anything else falls back to the gemini br
 GOOGLE_GENAI_API_KEY="your-google-api-key"
 OPENAI_API_KEY="your-openai-api-key"
 
-# Optional text model override for product automation. Unset/empty/whitespace = gemini-3.5-flash-lite.
+# Optional text model override for product automation. Unset/empty/whitespace = gemini-3.8-flash.
 # Must be a Gemini text model id (an image model id is rejected). See docs/ai.md.
 # GOOGLE_TEXT_MODEL="gemini-3.8-flash"
 

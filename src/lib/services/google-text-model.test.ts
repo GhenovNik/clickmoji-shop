@@ -21,7 +21,7 @@ afterEach(() => {
 
 describe('resolveGoogleTextModel', () => {
   it('uses the default when the variable is unset, empty or whitespace', () => {
-    expect(DEFAULT_GOOGLE_TEXT_MODEL).toBe('gemini-3.5-flash-lite');
+    expect(DEFAULT_GOOGLE_TEXT_MODEL).toBe('gemini-3.8-flash');
 
     expect(resolveGoogleTextModel()).toBe(DEFAULT_GOOGLE_TEXT_MODEL);
     process.env[GOOGLE_TEXT_MODEL_ENV] = '';

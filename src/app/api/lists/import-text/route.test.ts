@@ -9,13 +9,21 @@ type Row = Record<string, unknown>;
 
 const state = vi.hoisted(() => ({
   reply: '',
+  prompts: [] as string[],
   products: [] as Row[],
   items: [] as Row[],
+  failCatalog: false,
+  failCreate: false,
 }));
 
 vi.mock('@google/genai', () => ({
   GoogleGenAI: class {
-    models = { generateContent: async () => ({ text: state.reply }) };
+    models = {
+      generateContent: async ({ contents }: { contents: string }) => {
+        state.prompts.push(contents);
+        return { text: state.reply };
+      },
+    };
   },
 }));
 
@@ -57,9 +65,12 @@ vi.mock('@/lib/prisma', () => {
       product: {
         findFirst: async ({ where }: { where: Row }) =>
           state.products.find((row) => matches(row, where)) ?? null,
-        findMany: async ({ where }: { where: Row }) =>
-          state.products.filter((row) => matches(row, where)),
+        findMany: async ({ where }: { where: Row }) => {
+          if (state.failCatalog) throw new Error('catalog read failed');
+          return state.products.filter((row) => matches(row, where));
+        },
         create: async ({ data }: { data: Row }) => {
+          if (state.failCreate) throw new Error('insert refused');
           const row = { id: `new-${++sequence}`, ...data };
           state.products.push(row);
           return row;
@@ -87,22 +98,26 @@ const catalogProduct = (id: string, name: string, nameEn: string, categoryId: st
   createdAt: new Date('2026-01-01T00:00:00Z'),
 });
 
-async function runImport(reply: unknown[]) {
-  state.reply = JSON.stringify(reply);
+async function runImportText(reply: string, text = 'Молоко\nЯйца\nХлеб белый') {
+  state.reply = reply;
   const response = await POST(
     new Request('http://localhost/api/lists/import-text', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ text: 'Молоко\nЯйца\nХлеб белый', listId: 'list-b' }),
+      body: JSON.stringify({ text, listId: 'list-b' }),
     })
   );
   return {
     status: response.status,
     body: await response.json(),
     addedProductIds: state.items.map((item) => item.productId),
+    itemNotes: state.items.map((item) => item.note),
     createdProducts: state.products.filter((row) => row.createdById === 'user-b').length,
+    prompt: state.prompts.at(-1) ?? '',
   };
 }
+
+const runImport = (reply: unknown[], text?: string) => runImportText(JSON.stringify(reply), text);
 
 const milk = { nameRu: 'Молоко', nameEn: 'Milk', categoryName: 'Dairy', emoji: '🥛' };
 const eggs = { nameRu: 'Яйца', nameEn: 'Eggs', categoryName: 'Dairy', emoji: '🥚' };
@@ -116,7 +131,10 @@ const bread = {
 beforeEach(() => {
   vi.spyOn(console, 'error').mockImplementation(() => undefined);
   process.env.GOOGLE_GENAI_API_KEY = 'synthetic-google-genai-key-for-tests';
+  state.prompts = [];
   state.items = [];
+  state.failCatalog = false;
+  state.failCreate = false;
   state.products = [
     catalogProduct('milk', 'Молоко', 'Milk', 'cat-dairy'),
     catalogProduct('eggs', 'Яйца', 'Eggs', 'cat-dairy'),
@@ -219,6 +237,131 @@ describe('POST /api/lists/import-text with unknown products', () => {
       {
         product: { nameRu: 'Тархун', nameEn: 'Tarragon soda' },
         reason: 'Category "Beverages" not found',
+      },
+    ]);
+  });
+});
+
+describe('catalog-aware text import prompt', () => {
+  it('shows the visible catalog and the category hints without a translate-to-Russian task', async () => {
+    const result = await runImport([milk]);
+
+    expect(result.prompt).toContain('- milk | Молоко | Milk | Молочные продукты');
+    expect(result.prompt).toContain('existingProductId');
+    expect(result.prompt).toContain('Dairy (Молочные продукты) — milk, cream, sour cream');
+    expect(result.prompt).toContain('food and drinks never belong to a pharmacy');
+    expect(result.prompt).toMatch(/сметана, сливки, кефир -> 🥛/);
+    expect(result.prompt).not.toMatch(/translate each product/i);
+    expect(result.prompt).not.toContain(
+      'Translate each product to Russian (nameRu) and English (nameEn)'
+    );
+  });
+
+  it('reuses the catalog product returned by id', async () => {
+    const result = await runImport([{ existingProductId: 'bread', note: '1 батон' }], 'Хлеб');
+
+    expect(result.status).toBe(200);
+    expect(result.addedProductIds).toEqual(['bread']);
+    expect(result.itemNotes).toEqual(['1 батон']);
+    expect(result.createdProducts).toBe(0);
+  });
+
+  it('ignores an id outside the visible catalog and matches the name instead', async () => {
+    const result = await runImport([{ existingProductId: 'ghost-id', nameRu: 'Молоко' }], 'Молоко');
+
+    expect(result.status).toBe(200);
+    expect(result.addedProductIds).toEqual(['milk']);
+    expect(result.createdProducts).toBe(0);
+  });
+});
+
+describe('no double translation and quantity notes', () => {
+  it('creates "сметана 20%" as "Сметана" with the closest dairy emoji 🥛 and the note "20%"', async () => {
+    const result = await runImport(
+      [{ nameRu: 'сметана 20%', nameEn: 'Sour cream', categoryName: 'Dairy', emoji: '🥛' }],
+      'сметана 20%'
+    );
+
+    expect(result.status).toBe(200);
+    expect(result.createdProducts).toBe(1);
+    const created = state.products.at(-1);
+    expect(created).toMatchObject({
+      name: 'Сметана',
+      nameEn: 'Sour cream',
+      emoji: '🥛',
+      categoryId: 'cat-dairy',
+    });
+    expect(result.itemNotes).toEqual(['20%']);
+    expect(result.addedProductIds).toEqual([created?.id]);
+  });
+
+  it('turns "сливки 33%" into "Сливки" with note "33%", never "Крем"', async () => {
+    const result = await runImport(
+      [{ nameRu: 'сливки 33%', nameEn: 'Cream', categoryName: 'Dairy', emoji: '🥛' }],
+      'сливки 33%'
+    );
+
+    const created = state.products.at(-1);
+    expect(created).toMatchObject({ name: 'Сливки', categoryId: 'cat-dairy' });
+    expect(created?.name).not.toBe('Крем');
+    expect(result.itemNotes).toEqual(['33%']);
+  });
+
+  it('reuses the catalog "Молоко" when the model writes "Молоко 2.5%"', async () => {
+    const result = await runImport(
+      [{ nameRu: 'Молоко 2.5%', nameEn: 'Milk', categoryName: 'Dairy', emoji: '🥛' }],
+      'Молоко 2.5%'
+    );
+
+    expect(result.status).toBe(200);
+    expect(result.addedProductIds).toEqual(['milk']);
+    expect(result.itemNotes).toEqual(['2.5%']);
+    expect(result.createdProducts).toBe(0);
+  });
+
+  it('keeps the box placeholder only when the model returned no valid emoji', async () => {
+    const result = await runImport(
+      [{ nameRu: 'сметана', nameEn: 'Sour cream', categoryName: 'Dairy', emoji: 'not-an-emoji' }],
+      'сметана'
+    );
+
+    expect(state.products.at(-1)).toMatchObject({ emoji: '📦' });
+    expect(result.createdProducts).toBe(1);
+  });
+});
+
+describe('import failure paths', () => {
+  it('answers 500 without a provider call when the visible catalog cannot be read', async () => {
+    state.failCatalog = true;
+
+    const result = await runImport([milk]);
+
+    expect(result.status).toBe(500);
+    expect(state.prompts).toEqual([]);
+    expect(state.items).toEqual([]);
+  });
+
+  it('reports a provider reply that is not a JSON array as 500 and adds nothing', async () => {
+    const result = await runImportText('not-json');
+
+    expect(result.status).toBe(500);
+    expect(state.items).toEqual([]);
+  });
+
+  it('reports a refused product insert for that entry and keeps the rest', async () => {
+    state.failCreate = true;
+
+    const result = await runImport(
+      [{ nameRu: 'Сметана', nameEn: 'Sour cream', categoryName: 'Dairy', emoji: '🥛' }, milk],
+      'сметана\nМолоко'
+    );
+
+    expect(result.status).toBe(200);
+    expect(result.addedProductIds).toEqual(['milk']);
+    expect(result.body.results.failed).toEqual([
+      {
+        product: { nameRu: 'Сметана', nameEn: 'Sour cream' },
+        reason: 'insert refused',
       },
     ]);
   });
