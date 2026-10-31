@@ -4,9 +4,13 @@ import Link from 'next/link';
 
 interface ShoppingListEmptyStateProps {
   listName: string;
+  onImport: () => void;
 }
 
-export default function ShoppingListEmptyState({ listName }: ShoppingListEmptyStateProps) {
+export default function ShoppingListEmptyState({
+  listName,
+  onImport,
+}: ShoppingListEmptyStateProps) {
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 p-6">
       <div className="max-w-2xl mx-auto">
@@ -28,12 +32,21 @@ export default function ShoppingListEmptyState({ listName }: ShoppingListEmptySt
             <div className="text-8xl mb-4">🛒</div>
             <h1 className="text-3xl font-bold mb-4 text-gray-900">{listName} пуст</h1>
             <p className="text-gray-700 mb-8">Добавьте товары из категорий</p>
-            <Link
-              href="/categories"
-              className="inline-block bg-blue-600 hover:bg-blue-700 text-white px-8 py-3 rounded-xl font-semibold transition-colors"
-            >
-              Добавить товары
-            </Link>
+            <div className="flex flex-col sm:flex-row items-center justify-center gap-3">
+              <Link
+                href="/categories"
+                className="inline-block bg-blue-600 hover:bg-blue-700 text-white px-8 py-3 rounded-xl font-semibold transition-colors"
+              >
+                Добавить товары
+              </Link>
+              <button
+                onClick={onImport}
+                className="inline-flex items-center justify-center gap-2 bg-gradient-to-r from-green-500 to-teal-600 hover:from-green-600 hover:to-teal-700 text-white px-8 py-3 rounded-xl font-semibold transition-all"
+              >
+                <span>📋</span>
+                <span>Импорт из текста</span>
+              </button>
+            </div>
           </div>
         </div>
       </div>
