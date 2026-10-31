@@ -1,7 +1,9 @@
 import 'dotenv/config';
 import { mkdirSync } from 'fs';
 import { resolve } from 'path';
+import { fileURLToPath } from 'url';
 import { spawn } from 'child_process';
+import { POSTGRES_DOCKER_IMAGE } from './postgres-docker-image';
 
 function timestamp() {
   const now = new Date();
@@ -34,6 +36,29 @@ function sanitizeDatabaseUrl(rawUrl: string): string {
   return parsed.toString();
 }
 
+export function buildBackupDockerArgs({
+  pgUrl,
+  backupDir,
+  fileName,
+}: {
+  pgUrl: string;
+  backupDir: string;
+  fileName: string;
+}): string[] {
+  return [
+    'run',
+    '--rm',
+    '-e',
+    `DATABASE_URL=${pgUrl}`,
+    '--mount',
+    `type=bind,source=${backupDir},target=/backups`,
+    POSTGRES_DOCKER_IMAGE,
+    'sh',
+    '-lc',
+    `pg_dump "$DATABASE_URL" -Fc -f "/backups/${fileName}"`,
+  ];
+}
+
 async function main() {
   const databaseUrl = process.env.DATABASE_URL?.trim();
   if (!databaseUrl) {
@@ -51,23 +76,14 @@ async function main() {
 
   console.log(`Creating backup: backups/${fileName}`);
 
-  await run('docker', [
-    'run',
-    '--rm',
-    '-e',
-    `DATABASE_URL=${pgUrl}`,
-    '--mount',
-    `type=bind,source=${backupDir},target=/backups`,
-    'postgres:16-alpine',
-    'sh',
-    '-lc',
-    `pg_dump "$DATABASE_URL" -Fc -f "/backups/${fileName}"`,
-  ]);
+  await run('docker', buildBackupDockerArgs({ pgUrl, backupDir, fileName }));
 
   console.log(`Backup created: backups/${fileName}`);
 }
 
-main().catch((error) => {
-  console.error('Backup failed:', error instanceof Error ? error.message : error);
-  process.exit(1);
-});
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  main().catch((error) => {
+    console.error('Backup failed:', error instanceof Error ? error.message : error);
+    process.exit(1);
+  });
+}

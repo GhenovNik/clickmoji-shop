@@ -8,6 +8,23 @@ AI is used for emoji generation and product automation. Providers can be switche
   reachable only through the legacy `models.generateImages` adapter
 - OpenAI SDK: GPT Image (optional)
 
+## Text model selection
+
+The text model used by product automation (smart-create, bulk import, list import from free text)
+is configuration, not code. Unset, empty or whitespace-only `GOOGLE_TEXT_MODEL` uses the operator
+default `gemini-3.5-flash-lite` (free tier, single user; decision 2026-10-30). A non-empty value is
+trimmed and must match `^gemini-[a-z0-9]+(?:[.-][a-z0-9]+)*$` and must not be an image model id
+(`^gemini-[a-z0-9]+(?:[.-][a-z0-9]+)*-image(?:-[a-z0-9]+(?:[.-][a-z0-9]+)*)?$`). Anything else fails
+with a configuration error naming `GOOGLE_TEXT_MODEL` before any SDK call.
+
+The resolved model is passed to `models.generateContent({ model, contents, config: {
+responseMimeType: 'application/json' } })` and returned as `model` in the service response and the
+route body. JSON response mode is requested because the free-tier flash-lite model is less forgiving
+with free-form output; the existing parsing (markdown fences, control characters) stays as fallback.
+
+`gemini-2.5-flash` access is limited to existing users per Google release notes 2026-09-18;
+`gemini-3.8-flash` is the stronger alternative.
+
 ## Image model selection
 
 The image model is configuration, not code. Every value below is the operator default from the

@@ -30,6 +30,10 @@ AI_PROVIDER="gemini" # or "gpt-image"; anything else falls back to the gemini br
 GOOGLE_GENAI_API_KEY="your-google-api-key"
 OPENAI_API_KEY="your-openai-api-key"
 
+# Optional text model override for product automation. Unset/empty/whitespace = gemini-3.5-flash-lite.
+# Must be a Gemini text model id (an image model id is rejected). See docs/ai.md.
+# GOOGLE_TEXT_MODEL="gemini-3.8-flash"
+
 # Optional image model overrides. Leave them unset to use the defaults (see docs/ai.md).
 # Uncomment a line only to switch the model on purpose; copied as they are, they keep the defaults:
 # GOOGLE_IMAGE_MODEL="gemini-3.1-flash-lite-image"   # models.generateContent
@@ -93,6 +97,8 @@ through `images.generate` with `size 1024x1024`, `quality medium` and `backgroun
 - Backup DB (to `backups/*.dump`): `npm run db:backup`
 - Restore DB (latest backup): `npm run db:restore`
 - Restore DB (specific file): `npm run db:restore -- clickmoji-YYYYMMDD-HHMMSS.dump`
+- Both run `pg_dump` / `pg_restore` in the `postgres:17-alpine` image: production is PostgreSQL 17.11
+  and a `pg_dump` 16 client refuses a 17 server.
 - Production backups must be encrypted, access-controlled, monitored, and restore-tested.
 - Do not use ordinary GitHub Actions artifacts as the long-term production backup store.
 - Before a production migration, create and verify a fresh backup, run `prisma migrate deploy` with
