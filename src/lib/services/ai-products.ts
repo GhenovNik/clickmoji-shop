@@ -1,13 +1,21 @@
 import { GoogleGenAI } from '@google/genai';
 import { resolveGoogleTextModel } from '@/lib/services/google-text-model';
 
-export const AI_PRODUCTS_PROMPT_VERSION = 'ai-products-v1';
+export const AI_PRODUCTS_PROMPT_VERSION = 'ai-products-v2';
 
 export type ProductCategory = {
   id: string;
   name: string;
   nameEn: string;
   order?: number;
+};
+
+/** The compact view of a visible catalog product that the parser prompt can reference by id. */
+export type CatalogProductPromptEntry = {
+  id: string;
+  name: string;
+  nameEn: string;
+  categoryName: string;
 };
 
 export type SmartProductResult = {
@@ -26,7 +34,12 @@ export type ProcessedProduct = {
   emoji: string;
 };
 
-export type ParsedShoppingListProduct = ProcessedProduct & {
+export type ParsedShoppingListProduct = {
+  existingProductId?: string;
+  nameRu: string;
+  nameEn: string;
+  categoryName: string;
+  emoji: string;
   note?: string;
 };
 
@@ -98,6 +111,35 @@ export function parseProcessedProductsResponse(responseText: string): ProcessedP
   return parsed;
 }
 
+// A parser entry is either a reference to a visible catalog product (`existingProductId`) or a
+// complete new-product proposal. Fields that are absent are kept as empty strings so the route can
+// still report the entry; it validates the id against the catalog and cleans the proposal.
+function parseShoppingListEntry(value: unknown): ParsedShoppingListProduct | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const entry = value as Record<string, unknown>;
+  const existingProductId = assertString(entry.existingProductId)
+    ? entry.existingProductId.trim()
+    : undefined;
+  const nameRu = assertString(entry.nameRu) ? entry.nameRu.trim() : '';
+  const nameEn = assertString(entry.nameEn) ? entry.nameEn.trim() : '';
+  const categoryName = assertString(entry.categoryName) ? entry.categoryName.trim() : '';
+  const emoji = typeof entry.emoji === 'string' ? entry.emoji.trim() : '';
+  const note = assertString(entry.note) ? entry.note.trim() : undefined;
+
+  const completeNewProduct =
+    !!nameRu && !!nameEn && !!categoryName && typeof entry.emoji === 'string';
+  if (!existingProductId && !completeNewProduct) return null;
+
+  return {
+    ...(existingProductId ? { existingProductId } : {}),
+    nameRu,
+    nameEn,
+    categoryName,
+    emoji,
+    ...(note ? { note } : {}),
+  };
+}
+
 // One unusable entry must not discard the rest of a pasted list: valid entries are returned and
 // the others are reported back as `invalid`, so the route can list them as failed. A response
 // that is not a JSON array is still an error.
@@ -109,17 +151,59 @@ export function parseShoppingListResponse(responseText: string): {
   if (!Array.isArray(parsed)) {
     throw new Error('Invalid shopping list AI response');
   }
-  const products = parsed.filter(isProcessedProduct).map((product) => ({
-    ...product,
-    note: assertString((product as ParsedShoppingListProduct).note)
-      ? (product as ParsedShoppingListProduct).note
-      : undefined,
-  }));
-  return { products, invalid: parsed.filter((entry) => !isProcessedProduct(entry)) };
+  const products: ParsedShoppingListProduct[] = [];
+  const invalid: unknown[] = [];
+  for (const entry of parsed) {
+    const product = parseShoppingListEntry(entry);
+    if (product) products.push(product);
+    else invalid.push(entry);
+  }
+  return { products, invalid };
+}
+
+const CATEGORY_HINTS: Array<[RegExp, string]> = [
+  [/dairy|молоч/i, 'milk, cream, sour cream, kefir, yogurt, cheese, butter, eggs'],
+  [/bread|bakery|хлеб|выпеч/i, 'bread, rolls, pastry, flour'],
+  [
+    /pharm|аптек|health|здоров/i,
+    'medicines, vitamins and personal care only; never food or drinks',
+  ],
+  [/meat|мяс/i, 'meat, poultry, sausage'],
+  [/fish|рыб/i, 'fish and seafood'],
+  [/vegetable|овощ|зелен/i, 'vegetables and greens'],
+  [/fruit|фрукт|ягод/i, 'fruit and berries'],
+  [/drink|beverage|напит/i, 'water, juice, soda, tea, coffee'],
+  [/grocery|бакал|круп/i, 'grains, pasta, sugar, salt, oil, spices'],
+  [/spice|спец|приправ/i, 'spices and seasoning'],
+  [/frozen|замор/i, 'frozen food'],
+  [/sweet|dessert|слад|кондитер/i, 'sweets, chocolate, desserts'],
+  [/household|бытов|cleaning|хим/i, 'cleaning and household goods'],
+  [/baby|дет/i, 'baby food and care'],
+];
+
+function categoryHint(category: ProductCategory) {
+  const haystack = `${category.nameEn} ${category.name}`;
+  return CATEGORY_HINTS.find(([pattern]) => pattern.test(haystack))?.[1];
 }
 
 function categoriesPrompt(categories: ProductCategory[]) {
-  return categories.map((category) => `${category.nameEn} (${category.name})`).join(', ');
+  return categories
+    .map((category) => {
+      const hint = categoryHint(category);
+      return `- ${category.nameEn} (${category.name})${hint ? ` — ${hint}` : ''}`;
+    })
+    .join('\n');
+}
+
+const compactField = (value: string) => value.replace(/\s+/g, ' ').trim();
+
+function catalogPrompt(catalog: CatalogProductPromptEntry[]) {
+  if (catalog.length === 0) return 'The visible catalog is empty.';
+  const lines = catalog.map(
+    (product) =>
+      `- ${compactField(product.id)} | ${compactField(product.name)} | ${compactField(product.nameEn)} | ${compactField(product.categoryName)}`
+  );
+  return lines.join('\n');
 }
 
 export function buildSmartProductPrompt({
@@ -140,10 +224,11 @@ Product name: "${productName}"
 ${categoryId ? `Suggested category ID: ${categoryId}` : ''}
 
 Tasks:
-1. Translate the product name to Russian (nameRu) and English (nameEn)
-2. Assign it to the MOST appropriate category from the available list
-3. Suggest a single Unicode emoji that represents this product
-4. Determine if a custom AI-generated emoji would be better (needsCustomEmoji: true/false)
+1. Set nameRu to the shopper's own name, cleaned only: remove quantities, units and punctuation and capitalise the first letter. If the name is Russian, keep the Russian word(s) — never translate Russian to English and back. If it is not Russian, give its Russian name.
+2. Set nameEn to the English product name; this field only.
+3. Assign it to the MOST appropriate category from the available list; food and drinks never belong to a pharmacy category.
+4. Suggest the closest single Unicode emoji by meaning (сметана, сливки, кефир -> 🥛; специи -> 🧂); never use the 📦 placeholder, return "" only if no emoji exists.
+5. Determine if a custom AI-generated emoji would be better (needsCustomEmoji: true/false)
 
 IMPORTANT: Be generous with custom emoji - when in doubt, use custom.
 
@@ -155,8 +240,8 @@ Set needsCustomEmoji to FALSE for generic common products with a perfect distinc
 
 Rules:
 - Use exact category names from the list
-- Be precise with translations
-- Choose the simplest, most recognizable emoji
+- Do not rename or "correct" a name that is already Russian
+- Choose the closest, most recognizable emoji
 - If suggesting a category, explain why briefly
 
 Respond ONLY with valid JSON in this exact format:
@@ -178,15 +263,16 @@ export function buildBulkProductsPrompt({
   categories: ProductCategory[];
 }) {
   return `Prompt version: ${AI_PRODUCTS_PROMPT_VERSION}
-You are a grocery categorization assistant. Given a list of product names, translate them to Russian and English, assign them to the most appropriate category, and suggest a Unicode emoji if one exists.
+You are a grocery categorization assistant. Given a list of product names, assign each one to the most appropriate category and suggest a Unicode emoji if one exists.
 
-Available categories: ${categoriesPrompt(categories)}
+Available categories:
+${categoriesPrompt(categories)}
 
 Rules:
-1. Translate each product name to both Russian (nameRu) and English (nameEn)
-2. Assign each product to the MOST appropriate category from the list above
-3. Suggest a single Unicode emoji that represents the product
-4. If NO suitable emoji exists, use an empty string ""
+1. nameRu is the shopper's own name, cleaned only: remove quantities, units and punctuation and capitalise the first letter. If the name is Russian, keep the Russian word(s) — never translate Russian to English and back. If it is not Russian, give its Russian name.
+2. nameEn is the English product name; this field only.
+3. Assign each product to the MOST appropriate category from the list above; food and drinks never belong to a pharmacy category.
+4. Suggest the closest single Unicode emoji by meaning (сметана, сливки, кефир -> 🥛; специи -> 🧂); never use the 📦 placeholder. If NO suitable emoji exists, use an empty string ""
 5. Be precise with categories - use exact names from the list
 
 Input products:
@@ -206,14 +292,20 @@ Respond ONLY with valid JSON array in this exact format:
 export function buildShoppingListPrompt({
   text,
   categories,
+  catalog = [],
 }: {
   text: string;
   categories: ProductCategory[];
+  catalog?: CatalogProductPromptEntry[];
 }) {
   return `Prompt version: ${AI_PRODUCTS_PROMPT_VERSION}
 You are a shopping list parser. Parse the following shopping list text into structured product data.
 
-Available categories: ${categoriesPrompt(categories)}
+Available categories (use the exact English name in categoryName):
+${categoriesPrompt(categories)}
+
+Catalog products visible to this shopper (id | Russian name | English name | category):
+${catalogPrompt(catalog)}
 
 Shopping list text:
 """
@@ -221,28 +313,28 @@ ${text}
 """
 
 Tasks:
-1. Extract each product from the text
-2. Translate each product to Russian (nameRu) and English (nameEn)
-3. Assign each product to the most appropriate category
-4. Suggest a Unicode emoji
-5. Extract quantities or attributes into a separate optional note field
+1. Extract each product from the text; skip empty lines and non-product text, and combine duplicates.
+2. If a line is the same product as a catalog entry above, return only that entry's id:
+   { "existingProductId": "<id copied exactly from the catalog>", "note": "<quantity or attribute>" }
+   Never invent an id and never rename or translate a catalog product.
+3. Otherwise return a new product proposal:
+   - nameRu: the shopper's own word(s), cleaned only — remove quantities, units and punctuation and capitalise the first letter. If the input is Russian, keep the Russian word(s): never translate them to English and back. If the input is not Russian, give its Russian name.
+   - nameEn: the English product name; this field only.
+   - categoryName: the exact English category name from the list above; food and drinks never belong to a pharmacy category.
+   - emoji: the closest single Unicode emoji by meaning (сметана, сливки, кефир -> 🥛; специи -> 🧂). Never use the 📦 placeholder; return "" only if no emoji exists.
+   - note: every quantity or attribute removed from the name ("20%", "2 шт", "1 л", "2L"), not part of nameRu.
 
 Rules:
 - Use exact category names from the list
-- Be precise with translations
+- Do not translate, rename or "correct" a name that is already Russian
 - Skip empty lines or non-product text
 - Combine duplicate products
 
-Respond ONLY with valid JSON array:
-[
-  {
-    "nameRu": "Молоко",
-    "nameEn": "Milk",
-    "categoryName": "Dairy",
-    "emoji": "🥛",
-    "note": "2L"
-  }
-]`;
+Respond ONLY with valid JSON array. Examples:
+Existing catalog product:
+[{ "existingProductId": "catalog-id", "note": "2 шт" }]
+New product:
+[{ "nameRu": "Сметана", "nameEn": "Sour cream", "categoryName": "Dairy", "emoji": "🥛", "note": "20%" }]`;
 }
 
 async function generateText({
@@ -312,13 +404,15 @@ export async function parseShoppingListText({
   apiKey,
   text,
   categories,
+  catalog = [],
 }: {
   apiKey: string;
   text: string;
   categories: ProductCategory[];
+  catalog?: CatalogProductPromptEntry[];
 }) {
   const model = resolveGoogleTextModel();
-  const prompt = buildShoppingListPrompt({ text, categories });
+  const prompt = buildShoppingListPrompt({ text, categories, catalog });
   const responseText = await generateText({ apiKey, prompt, model });
   return {
     ...parseShoppingListResponse(responseText),

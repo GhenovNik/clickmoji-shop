@@ -19,8 +19,13 @@ vi.mock('@google/genai', () => ({
   },
 }));
 
-const { analyzeSmartProduct, processProductBatch, parseShoppingListText } =
-  await import('./ai-products');
+const {
+  analyzeSmartProduct,
+  buildBulkProductsPrompt,
+  buildSmartProductPrompt,
+  processProductBatch,
+  parseShoppingListText,
+} = await import('./ai-products');
 
 const CATEGORIES = [{ id: 'cat-1', name: 'Молочное', nameEn: 'Dairy' }];
 
@@ -111,6 +116,28 @@ describe('text services pass the resolved model to the SDK', () => {
       expect(sdk.calls).toHaveLength(0);
     });
   }
+
+  it('smart-create keeps a Russian name instead of translating it to English and back', () => {
+    const prompt = buildSmartProductPrompt({
+      productName: 'сливки 33%',
+      categories: CATEGORIES,
+    });
+
+    expect(prompt).not.toMatch(/translate the product name to russian/i);
+    expect(prompt).toContain('never translate Russian to English and back');
+    expect(prompt).toContain('Dairy (Молочное) — milk, cream, sour cream');
+  });
+
+  it('bulk import keeps a Russian name instead of translating it to English and back', () => {
+    const prompt = buildBulkProductsPrompt({
+      productNames: ['сливки 33%'],
+      categories: CATEGORIES,
+    });
+
+    expect(prompt).not.toMatch(/translate each product/i);
+    expect(prompt).toContain('never translate Russian to English and back');
+    expect(prompt).toContain('Dairy (Молочное) — milk, cream, sour cream');
+  });
 
   it('propagates an SDK failure without a second call', async () => {
     sdk.error = new Error('synthetic provider failure');

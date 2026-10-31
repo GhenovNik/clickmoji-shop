@@ -48,11 +48,8 @@ vi.mock('@/lib/prisma', () => {
         ],
       },
       product: {
-        // Only the milk product exists; the route asks with case-insensitive name/nameEn filters.
-        findMany: async ({ where }: { where: { AND: Row[] } }) => {
-          const names = JSON.stringify(where.AND[1]).toLowerCase();
-          return names.includes('молоко') || names.includes('"milk"') ? [milk] : [];
-        },
+        // The catalog fetch asks for the products visible to the user; only milk exists here.
+        findMany: async () => [milk],
         create: async () => {
           throw new Error('no product should be created in this test');
         },

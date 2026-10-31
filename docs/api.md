@@ -197,11 +197,20 @@ All endpoints are implemented as Next.js Route Handlers under `src/app/api`.
 
 - Auth: signed in
 - Body: `text`, `listId`
-- Notes: Gemini parses, creates missing products, adds items; an existing product the user can see
-  is reused by name (Russian or English, ignoring case and surrounding spaces) whatever category the
-  model chose; a category (English name, Russian name or the `English (Russian)` form of the prompt,
-  any case) is needed only to create a missing product; an unusable entry in the AI response is
-  reported in `results.failed` and the rest is imported; rate limited to 10 requests/hour per user and takes one unit of the daily AI budget before the analysis (`403` off, `429` used up, `503` unreadable; no provider call then); response includes `promptVersion` and `model`
+- Notes: Gemini parses, creates missing products, adds items. The prompt carries the visible catalog
+  (id, name, nameEn, category; above 400 products only those sharing a word with the text) and the
+  model may return `existingProductId` instead of a new proposal; an id outside the visible catalog
+  is ignored. Before creating anything the server also compares normalised names (lowercase, ё→е,
+  quantities and units such as `20%`, `1 л`, `2 шт`, punctuation removed), so `Молоко 2.5%` reuses
+  the catalog `Молоко` whatever category the model chose. A Russian name is kept as written, only
+  cleaned and capitalised, never translated to English and back; quantities go to `note`. The model
+  is asked for the closest Unicode emoji (📦 only when nothing valid came back) and categories carry
+  a short hint so food never lands in pharmacy. A category (English name, Russian name or the
+  `English (Russian)` form of the prompt, any case, with or without the hint) is needed only to
+  create a missing product; an unusable entry in the AI response is reported in `results.failed` and
+  the rest is imported; rate limited to 10 requests/hour per user and takes one unit of the daily AI
+  budget before the analysis (`403` off, `429` used up, `503` unreadable; no provider call then);
+  response includes `promptVersion` and `model`
 
 ## History
 

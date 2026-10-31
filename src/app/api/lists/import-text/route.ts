@@ -4,7 +4,20 @@ import { requireUser } from '@/lib/auth-guards';
 import { visibleProductsWhere } from '@/lib/product-visibility';
 import { checkRateLimit, rateLimitResponse } from '@/lib/auth-security';
 import { enforceAiQuota } from '@/lib/ai-quota';
-import { parseShoppingListText, type ParsedShoppingListProduct } from '@/lib/services/ai-products';
+import {
+  parseShoppingListText,
+  type CatalogProductPromptEntry,
+  type ParsedShoppingListProduct,
+} from '@/lib/services/ai-products';
+import {
+  isValidEmoji,
+  mergeNotes,
+  normalizeProductName,
+  selectCatalogForPrompt,
+  splitProductNameAndNote,
+} from '@/lib/product-name';
+
+type CatalogProduct = CatalogProductPromptEntry & { categoryId: string };
 
 export async function POST(request: Request) {
   try {
@@ -73,6 +86,25 @@ export async function POST(request: Request) {
       );
     }
 
+    const categoryNameOf = new Map(categories.map((category) => [category.id, category.name]));
+
+    // The model can only reuse products it was shown. Every visible product stays available for
+    // server-side matching; the prompt gets a bounded, text-relevant subset.
+    const visibleProducts = await prisma.product.findMany({
+      where: visibleProductsWhere(session.user.id),
+      select: { id: true, name: true, nameEn: true, categoryId: true },
+      orderBy: { createdAt: 'asc' },
+    });
+    const catalog: CatalogProduct[] = visibleProducts.map((product) => ({
+      id: product.id,
+      name: product.name,
+      nameEn: product.nameEn,
+      categoryId: product.categoryId,
+      categoryName: categoryNameOf.get(product.categoryId) ?? '',
+    }));
+
+    const promptCatalog = selectCatalogForPrompt(catalog, text);
+
     // One unit of the shared daily AI budget, taken only when the provider is about to be called.
     const quotaResponse = await enforceAiQuota(session.user);
     if (quotaResponse) return quotaResponse;
@@ -86,6 +118,7 @@ export async function POST(request: Request) {
       apiKey,
       text,
       categories,
+      catalog: promptCatalog,
     });
 
     if (!Array.isArray(parsedProducts) || parsedProducts.length === 0) {
@@ -107,39 +140,53 @@ export async function POST(request: Request) {
       results.failed.push(failedEntry(entry, 'Unrecognized entry in the AI response'));
     }
 
-    const categoryNameOf = new Map(categories.map((c) => [c.id, c.name]));
+    // Ids the model was shown are trusted only when they belong to the catalog in its prompt;
+    // names are compared with the full visible catalog after normalisation.
+    const catalogById = new Map(promptCatalog.map((product) => [product.id, product]));
+    const catalogByName = new Map<string, CatalogProduct>();
+    for (const catalogProduct of catalog) {
+      for (const value of [catalogProduct.name, catalogProduct.nameEn]) {
+        const key = normalizeProductName(value);
+        if (key && !catalogByName.has(key)) catalogByName.set(key, catalogProduct);
+      }
+    }
+
+    const findCatalogMatch = (product: ParsedShoppingListProduct): CatalogProduct | null => {
+      if (product.existingProductId) {
+        const byId = catalogById.get(product.existingProductId);
+        if (byId) return byId;
+      }
+      for (const value of [product.nameRu, product.nameEn]) {
+        const key = normalizeProductName(value);
+        const byName = key ? catalogByName.get(key) : undefined;
+        if (byName) return byName;
+      }
+      return null;
+    };
 
     for (const product of parsedProducts) {
       try {
-        const nameRu = product.nameRu.trim();
+        const { name: cleanedName, note: nameNote } = splitProductNameAndNote(product.nameRu);
+        const note = mergeNotes(product.note, nameNote);
+        const nameRu = cleanedName || product.nameRu.trim();
         const nameEn = product.nameEn.trim();
-
-        // An existing product the user can see is reused whatever category the model chose, and
-        // regardless of letter case or surrounding spaces; another user's private product is
-        // never matched. Exact matches win over case-insensitive ones, then the oldest product.
-        const candidates = await prisma.product.findMany({
-          where: {
-            AND: [
-              visibleProductsWhere(session.user.id),
-              {
-                OR: [
-                  { name: { equals: nameRu, mode: 'insensitive' } },
-                  { nameEn: { equals: nameEn, mode: 'insensitive' } },
-                ],
-              },
-            ],
-          },
-          orderBy: { createdAt: 'asc' },
-          take: 10,
-        });
-        let dbProduct =
-          candidates.find((c) => c.name === nameRu) ??
-          candidates.find((c) => c.nameEn === nameEn) ??
-          candidates[0] ??
-          null;
+        let dbProduct: { id: string; name: string; categoryId: string } | null =
+          findCatalogMatch(product);
 
         // A category is needed only to create a missing product.
         if (!dbProduct) {
+          if (!nameRu || !nameEn || !product.categoryName.trim()) {
+            results.failed.push(
+              failedEntry(
+                product,
+                product.existingProductId
+                  ? 'Unknown product reference'
+                  : 'Unrecognized entry in the AI response'
+              )
+            );
+            continue;
+          }
+
           const category = findCategory(categories, product.categoryName);
 
           if (!category) {
@@ -150,12 +197,13 @@ export async function POST(request: Request) {
           }
 
           // A missing product is created like in smart-create: private to a regular user and
-          // global only when an administrator imports it.
+          // global only when an administrator imports it. The placeholder is used only when the
+          // model returned nothing that is a single Unicode emoji.
           dbProduct = await prisma.product.create({
             data: {
               name: nameRu,
               nameEn,
-              emoji: product.emoji || '📦',
+              emoji: isValidEmoji(product.emoji) ? product.emoji : '📦',
               categoryId: category.id,
               isCustom: false,
               imageUrl: null,
@@ -167,7 +215,7 @@ export async function POST(request: Request) {
           results.created.push({
             name: dbProduct.name,
             category: category.name,
-            note: product.note,
+            note,
           });
         }
 
@@ -176,7 +224,7 @@ export async function POST(request: Request) {
           data: {
             listId: listId,
             productId: dbProduct.id,
-            note: product.note || null,
+            note: note || null,
             isPurchased: false,
           },
         });
@@ -184,7 +232,7 @@ export async function POST(request: Request) {
         results.added.push({
           name: dbProduct.name,
           category: categoryNameOf.get(dbProduct.categoryId) ?? '',
-          note: product.note,
+          note,
         });
       } catch (error) {
         results.failed.push(
@@ -207,13 +255,13 @@ export async function POST(request: Request) {
 
 const normalized = (value: string) => value.trim().toLocaleLowerCase('ru');
 
-// The prompt lists categories as "Dairy (<Russian name>)" and asks for exact names; accept the
-// English name, the Russian name or that listed form, ignoring case and surrounding spaces.
+// The prompt lists a category with its English name, its local name and a hint; accept the English
+// name, the local name or that listed form (with or without the hint), ignoring case and spaces.
 function findCategory<T extends { name: string; nameEn: string }>(
   categories: T[],
   categoryName: string
 ): T | undefined {
-  const wanted = normalized(categoryName);
+  const wanted = normalized(categoryName.replace(/\s+—.*$/u, ''));
   return categories.find((c) =>
     [c.nameEn, c.name, `${c.nameEn} (${c.name})`].some((form) => normalized(form) === wanted)
   );

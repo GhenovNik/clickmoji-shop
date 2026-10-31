@@ -1,6 +1,6 @@
 export const GOOGLE_TEXT_MODEL_ENV = 'GOOGLE_TEXT_MODEL';
 
-export const DEFAULT_GOOGLE_TEXT_MODEL = 'gemini-3.5-flash-lite';
+export const DEFAULT_GOOGLE_TEXT_MODEL = 'gemini-3.8-flash';
 
 // Model id grammar, not a catalogue of models: an id that matches is routed, it is not guaranteed
 // that the model itself accepts text input.
