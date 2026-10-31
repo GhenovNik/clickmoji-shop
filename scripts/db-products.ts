@@ -3,6 +3,7 @@ import { GoogleGenAI } from '@google/genai';
 import { readFileSync } from 'fs';
 import { join } from 'path';
 import { createPrismaPgAdapter } from '../src/lib/prisma-adapter';
+import { resolveGoogleTextModel } from '../src/lib/services/google-text-model';
 
 const prisma = new PrismaClient({
   adapter: createPrismaPgAdapter(),
@@ -199,6 +200,7 @@ async function importProducts() {
 
   console.log(`📚 Found ${categories.length} categories in database\n`);
 
+  const model = resolveGoogleTextModel();
   const genAI = new GoogleGenAI({ apiKey });
   const categoriesStr = categories.map((c) => `${c.nameEn} (${c.name})`).join(', ');
 
@@ -229,8 +231,9 @@ Respond ONLY with valid JSON array in this exact format:
   console.log('🤖 Processing products with Gemini AI...\n');
 
   const result = await genAI.models.generateContent({
-    model: 'gemini-2.5-flash',
+    model,
     contents: prompt,
+    config: { responseMimeType: 'application/json' },
   });
   const responseText = result.text;
 

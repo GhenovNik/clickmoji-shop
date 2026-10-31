@@ -1,7 +1,7 @@
 import { GoogleGenAI } from '@google/genai';
+import { resolveGoogleTextModel } from '@/lib/services/google-text-model';
 
 export const AI_PRODUCTS_PROMPT_VERSION = 'ai-products-v1';
-const DEFAULT_TEXT_MODEL = 'gemini-2.5-flash';
 
 export type ProductCategory = {
   id: string;
@@ -245,11 +245,20 @@ Respond ONLY with valid JSON array:
 ]`;
 }
 
-async function generateText({ apiKey, prompt }: { apiKey: string; prompt: string }) {
+async function generateText({
+  apiKey,
+  prompt,
+  model,
+}: {
+  apiKey: string;
+  prompt: string;
+  model: string;
+}) {
   const genAI = new GoogleGenAI({ apiKey });
   const result = await genAI.models.generateContent({
-    model: DEFAULT_TEXT_MODEL,
+    model,
     contents: prompt,
+    config: { responseMimeType: 'application/json' },
   });
 
   if (!result.text) {
@@ -270,12 +279,13 @@ export async function analyzeSmartProduct({
   categoryId?: string;
   categories: ProductCategory[];
 }) {
+  const model = resolveGoogleTextModel();
   const prompt = buildSmartProductPrompt({ productName, categoryId, categories });
-  const responseText = await generateText({ apiKey, prompt });
+  const responseText = await generateText({ apiKey, prompt, model });
   return {
     result: parseSmartProductResponse(responseText),
     promptVersion: AI_PRODUCTS_PROMPT_VERSION,
-    model: DEFAULT_TEXT_MODEL,
+    model,
   };
 }
 
@@ -288,12 +298,13 @@ export async function processProductBatch({
   productNames: string[];
   categories: ProductCategory[];
 }) {
+  const model = resolveGoogleTextModel();
   const prompt = buildBulkProductsPrompt({ productNames, categories });
-  const responseText = await generateText({ apiKey, prompt });
+  const responseText = await generateText({ apiKey, prompt, model });
   return {
     products: parseProcessedProductsResponse(responseText),
     promptVersion: AI_PRODUCTS_PROMPT_VERSION,
-    model: DEFAULT_TEXT_MODEL,
+    model,
   };
 }
 
@@ -306,11 +317,12 @@ export async function parseShoppingListText({
   text: string;
   categories: ProductCategory[];
 }) {
+  const model = resolveGoogleTextModel();
   const prompt = buildShoppingListPrompt({ text, categories });
-  const responseText = await generateText({ apiKey, prompt });
+  const responseText = await generateText({ apiKey, prompt, model });
   return {
     ...parseShoppingListResponse(responseText),
     promptVersion: AI_PRODUCTS_PROMPT_VERSION,
-    model: DEFAULT_TEXT_MODEL,
+    model,
   };
 }
