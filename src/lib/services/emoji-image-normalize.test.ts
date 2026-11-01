@@ -76,16 +76,29 @@ describe('normalizeEmojiImage', () => {
     expect(Math.abs(a.right - a.left - (b.right - b.left))).toBeLessThanOrEqual(4);
   });
 
-  it('keeps white details inside the object, reachable only through it', async () => {
+  it('keeps shaded light details inside the object, like coconut flesh', async () => {
     const input = await svg(
       300,
       300,
-      '<circle cx="150" cy="150" r="90" fill="#1e88e5"/><circle cx="150" cy="150" r="30" fill="#ffffff"/>'
+      '<circle cx="150" cy="150" r="90" fill="#6d4c41"/><circle cx="150" cy="150" r="30" fill="#ececec"/>'
     );
 
     const { alphaAt } = await decode(await normalizeEmojiImage(input));
 
     expect(alphaAt(128, 128)).toBe(255);
+  });
+
+  it('clears an enclosed gap of the background colour, like between herb stems', async () => {
+    const input = await svg(
+      300,
+      300,
+      '<circle cx="150" cy="150" r="90" fill="#43a047"/><circle cx="150" cy="150" r="30" fill="#ffffff"/>'
+    );
+
+    const { alphaAt } = await decode(await normalizeEmojiImage(input));
+
+    expect(alphaAt(128, 128)).toBe(0);
+    expect(alphaAt(128, 40)).toBe(255);
   });
 
   it('drops the light grid dashes a Gemini sheet leaves at the cell edge', async () => {

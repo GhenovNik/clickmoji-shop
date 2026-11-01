@@ -70,7 +70,69 @@ function floodBackground(rgb: Buffer, width: number, height: number) {
     fillFrom(y * width);
     fillFrom(y * width + width - 1);
   }
+  clearEnclosedHoles(rgb, background, width, height, stack);
   return background;
+}
+
+// Gaps the edge fill cannot reach (between herb stems, inside a bunch of tomatoes) are cleared
+// too, but only when they are almost exactly the background colour and not a speck: shaded
+// whites of the object itself (coconut flesh, a label) differ from the field by more than this.
+const HOLE_THRESHOLD = 18;
+const HOLE_MIN_SHARE = 0.0005;
+
+function clearEnclosedHoles(
+  rgb: Buffer,
+  background: Uint8Array,
+  width: number,
+  height: number,
+  stack: Int32Array
+) {
+  let count = 0;
+  const sum = [0, 0, 0];
+  for (let i = 0; i < background.length; i++) {
+    if (!background[i]) continue;
+    count++;
+    sum[0] += rgb[i * 3];
+    sum[1] += rgb[i * 3 + 1];
+    sum[2] += rgb[i * 3 + 2];
+  }
+  if (count === 0) return;
+  const [r, g, b] = sum.map((value) => value / count);
+  const nearField = (index: number) =>
+    Math.abs(rgb[index * 3] - r) +
+      Math.abs(rgb[index * 3 + 1] - g) +
+      Math.abs(rgb[index * 3 + 2] - b) <=
+    HOLE_THRESHOLD;
+
+  const minArea = Math.max(16, Math.round(width * height * HOLE_MIN_SHARE));
+  const seen = new Uint8Array(background.length);
+  const component: number[] = [];
+
+  for (let start = 0; start < background.length; start++) {
+    if (background[start] || seen[start] || !nearField(start)) continue;
+    component.length = 0;
+    let top = 0;
+    stack[top++] = start;
+    seen[start] = 1;
+    while (top > 0) {
+      const index = stack[--top];
+      component.push(index);
+      const x = index % width;
+      const neighbours = [
+        x > 0 ? index - 1 : -1,
+        x < width - 1 ? index + 1 : -1,
+        index - width,
+        index + width,
+      ];
+      for (const next of neighbours) {
+        if (next < 0 || next >= background.length || seen[next] || background[next]) continue;
+        if (!nearField(next)) continue;
+        seen[next] = 1;
+        stack[top++] = next;
+      }
+    }
+    if (component.length >= minArea) for (const index of component) background[index] = 1;
+  }
 }
 
 // Separable square min/max filter over a 0/1 mask.
