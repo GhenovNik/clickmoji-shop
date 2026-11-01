@@ -1,0 +1,347 @@
+{
+  "note": "Hand-curated list of common grocery and household items (US grocery categories plus Russian staples), modelled on the Open Food Facts and USDA FoodData Central category trees, minus what the catalog snapshot already has, synonyms included. `redo` lists existing products that have no picture and only the 📦 fallback.",
+  "redo": [
+    {
+      "category": "Овощи",
+      "name": "Кабачок",
+      "nameEn": "Zucchini",
+      "hint": "a light-green zucchini, not a cucumber"
+    },
+    {
+      "category": "Овощи",
+      "name": "Чечевица",
+      "nameEn": "Lentils",
+      "hint": "a small pile of orange lentils"
+    },
+    {
+      "category": "Орехи и Сухофрукты",
+      "name": "Миндальное масло",
+      "nameEn": "Almond butter",
+      "hint": "an open jar of almond butter with an almond beside it"
+    },
+    {
+      "category": "Орехи и Сухофрукты",
+      "name": "Льняное семя",
+      "nameEn": "Flaxseed",
+      "hint": "a small pile of shiny brown flax seeds"
+    }
+  ],
+  "categories": [
+    {
+      "category": "Овощи",
+      "products": [
+        { "name": "Тыква", "nameEn": "Pumpkin" },
+        { "name": "Петрушка", "nameEn": "Parsley", "hint": "a bunch of flat-leaf parsley" },
+        { "name": "Укроп", "nameEn": "Dill", "hint": "a bunch of feathery dill" },
+        { "name": "Кинза", "nameEn": "Cilantro", "hint": "a bunch of cilantro" },
+        { "name": "Мята", "nameEn": "Mint", "hint": "a sprig of fresh mint" },
+        { "name": "Розмарин", "nameEn": "Rosemary", "hint": "two sprigs of rosemary" },
+        { "name": "Артишок", "nameEn": "Artichoke" },
+        { "name": "Стручковая фасоль", "nameEn": "Green beans" },
+        { "name": "Пекинская капуста", "nameEn": "Napa cabbage" },
+        { "name": "Краснокочанная капуста", "nameEn": "Red cabbage" },
+        { "name": "Дайкон", "nameEn": "Daikon radish", "hint": "a long white daikon radish" },
+        { "name": "Окра", "nameEn": "Okra" },
+        { "name": "Хрен", "nameEn": "Horseradish", "hint": "a horseradish root" },
+        {
+          "name": "Помидоры черри",
+          "nameEn": "Cherry tomatoes",
+          "hint": "a sprig of cherry tomatoes"
+        },
+        { "name": "Ростки маша", "nameEn": "Bean sprouts" },
+        { "name": "Халапеньо", "nameEn": "Jalapeño" },
+        { "name": "Пастернак", "nameEn": "Parsnip" }
+      ]
+    },
+    {
+      "category": "Фрукты",
+      "products": [
+        { "name": "Грейпфрут", "nameEn": "Grapefruit" },
+        { "name": "Лайм", "nameEn": "Lime" },
+        { "name": "Гранат", "nameEn": "Pomegranate" },
+        { "name": "Кокос", "nameEn": "Coconut" },
+        { "name": "Хурма", "nameEn": "Persimmon" },
+        { "name": "Папайя", "nameEn": "Papaya" },
+        { "name": "Маракуйя", "nameEn": "Passion fruit" },
+        { "name": "Смородина", "nameEn": "Currants", "hint": "a cluster of blackcurrants" },
+        { "name": "Крыжовник", "nameEn": "Gooseberries" },
+        { "name": "Клюква", "nameEn": "Cranberries" },
+        { "name": "Брусника", "nameEn": "Lingonberries" },
+        {
+          "name": "Облепиха",
+          "nameEn": "Sea buckthorn",
+          "hint": "a branch of orange sea buckthorn berries"
+        },
+        { "name": "Помело", "nameEn": "Pomelo" },
+        { "name": "Айва", "nameEn": "Quince" },
+        { "name": "Личи", "nameEn": "Lychee" },
+        { "name": "Питахайя", "nameEn": "Dragon fruit" },
+        { "name": "Фейхоа", "nameEn": "Feijoa" }
+      ]
+    },
+    {
+      "category": "Молочные продукты",
+      "products": [
+        { "name": "Кефир", "nameEn": "Kefir", "hint": "a white carton of kefir" },
+        {
+          "name": "Ряженка",
+          "nameEn": "Ryazhenka",
+          "hint": "a glass bottle of creamy beige baked milk"
+        },
+        { "name": "Сливки", "nameEn": "Heavy cream", "hint": "a small carton of cream" },
+        { "name": "Моцарелла", "nameEn": "Mozzarella", "hint": "white mozzarella balls" },
+        { "name": "Пармезан", "nameEn": "Parmesan", "hint": "a wedge of hard parmesan" },
+        {
+          "name": "Плавленый сыр",
+          "nameEn": "Processed cheese",
+          "hint": "a round box of cheese wedges"
+        },
+        {
+          "name": "Глазированный сырок",
+          "nameEn": "Glazed curd snack",
+          "hint": "a small chocolate-glazed curd bar"
+        },
+        { "name": "Брынза", "nameEn": "Feta cheese", "hint": "a white block of feta" },
+        { "name": "Творожный сыр", "nameEn": "Cream cheese", "hint": "a tub of cream cheese" },
+        {
+          "name": "Сгущённое молоко",
+          "nameEn": "Condensed milk",
+          "hint": "a tin of condensed milk"
+        },
+        { "name": "Греческий йогурт", "nameEn": "Greek yogurt" },
+        { "name": "Овсяное молоко", "nameEn": "Oat milk", "hint": "a carton of oat milk" },
+        { "name": "Топлёное масло", "nameEn": "Ghee", "hint": "a glass jar of golden ghee" }
+      ]
+    },
+    {
+      "category": "Хлеб и выпечка",
+      "products": [
+        {
+          "name": "Батон",
+          "nameEn": "White loaf",
+          "hint": "an oval Russian white loaf with diagonal cuts"
+        },
+        { "name": "Лаваш", "nameEn": "Lavash", "hint": "a folded thin flatbread" },
+        { "name": "Пита", "nameEn": "Pita bread" },
+        { "name": "Тортилья", "nameEn": "Tortillas" },
+        { "name": "Булочки для бургеров", "nameEn": "Burger buns" },
+        { "name": "Хлебцы", "nameEn": "Crispbread" },
+        { "name": "Пончик", "nameEn": "Donut" },
+        { "name": "Маффин", "nameEn": "Muffin" },
+        { "name": "Сушки", "nameEn": "Sushki", "hint": "a few small crunchy bread rings" },
+        { "name": "Пирог", "nameEn": "Pie" }
+      ]
+    },
+    {
+      "category": "Мясо и мясные продукты",
+      "products": [
+        { "name": "Фарш", "nameEn": "Ground meat" },
+        { "name": "Индейка", "nameEn": "Turkey" },
+        { "name": "Баранина", "nameEn": "Lamb" },
+        { "name": "Утка", "nameEn": "Duck" },
+        { "name": "Куриные крылья", "nameEn": "Chicken wings" },
+        { "name": "Куриное филе", "nameEn": "Chicken breast" },
+        { "name": "Ветчина", "nameEn": "Ham" },
+        { "name": "Салями", "nameEn": "Salami" },
+        {
+          "name": "Варёная колбаса",
+          "nameEn": "Bologna",
+          "hint": "a pink boiled sausage with a slice cut"
+        },
+        { "name": "Печень", "nameEn": "Liver" }
+      ]
+    },
+    {
+      "category": "Рыба и морепродукты",
+      "products": [
+        { "name": "Форель", "nameEn": "Trout" },
+        { "name": "Скумбрия", "nameEn": "Mackerel" },
+        { "name": "Сардины", "nameEn": "Sardines" },
+        { "name": "Минтай", "nameEn": "Pollock" },
+        { "name": "Тилапия", "nameEn": "Tilapia" },
+        { "name": "Крабовые палочки", "nameEn": "Crab sticks" },
+        { "name": "Устрицы", "nameEn": "Oysters" },
+        { "name": "Морская капуста", "nameEn": "Seaweed salad" }
+      ]
+    },
+    {
+      "category": "Крупы и макароны",
+      "products": [
+        { "name": "Булгур", "nameEn": "Bulgur" },
+        { "name": "Кускус", "nameEn": "Couscous" },
+        { "name": "Киноа", "nameEn": "Quinoa" },
+        { "name": "Манка", "nameEn": "Semolina", "hint": "a pack of fine semolina" },
+        { "name": "Кукурузные хлопья", "nameEn": "Corn flakes" },
+        { "name": "Мюсли", "nameEn": "Granola" },
+        { "name": "Сахар", "nameEn": "Sugar" },
+        { "name": "Крахмал", "nameEn": "Starch" },
+        { "name": "Дрожжи", "nameEn": "Yeast" },
+        { "name": "Разрыхлитель", "nameEn": "Baking powder" }
+      ]
+    },
+    {
+      "category": "Масла и соусы",
+      "products": [
+        { "name": "Соль", "nameEn": "Salt" },
+        { "name": "Чёрный перец", "nameEn": "Black pepper", "hint": "a pepper mill" },
+        { "name": "Корица", "nameEn": "Cinnamon" },
+        { "name": "Паприка", "nameEn": "Paprika" },
+        { "name": "Соус барбекю", "nameEn": "BBQ sauce" },
+        { "name": "Острый соус", "nameEn": "Hot sauce" },
+        { "name": "Песто", "nameEn": "Pesto" },
+        {
+          "name": "Соус для пасты",
+          "nameEn": "Pasta sauce",
+          "hint": "a jar of red marinara sauce"
+        },
+        { "name": "Сальса", "nameEn": "Salsa" },
+        { "name": "Тахини", "nameEn": "Tahini" },
+        { "name": "Кунжутное масло", "nameEn": "Sesame oil" },
+        { "name": "Соус ранч", "nameEn": "Ranch dressing" }
+      ]
+    },
+    {
+      "category": "Сладости",
+      "products": [
+        { "name": "Шоколад", "nameEn": "Chocolate bar" },
+        { "name": "Конфеты", "nameEn": "Candies", "hint": "wrapped bonbons" },
+        { "name": "Мармелад", "nameEn": "Gummy candy" },
+        { "name": "Зефир", "nameEn": "Zefir", "hint": "two pastel zefir marshmallows" },
+        { "name": "Пряники", "nameEn": "Pryaniki", "hint": "glazed round gingerbread cookies" },
+        { "name": "Халва", "nameEn": "Halva" },
+        { "name": "Леденец", "nameEn": "Lollipop" },
+        { "name": "Мёд", "nameEn": "Honey" },
+        { "name": "Варенье", "nameEn": "Jam" },
+        { "name": "Шоколадная паста", "nameEn": "Chocolate spread" },
+        { "name": "Жевательная резинка", "nameEn": "Chewing gum" },
+        { "name": "Попкорн", "nameEn": "Popcorn" }
+      ]
+    },
+    {
+      "category": "Консервы и готовая еда",
+      "products": [
+        { "name": "Тушёнка", "nameEn": "Canned stewed meat" },
+        { "name": "Консервированная кукуруза", "nameEn": "Canned corn" },
+        { "name": "Консервированный горошек", "nameEn": "Canned peas" },
+        { "name": "Консервированная фасоль", "nameEn": "Canned beans" },
+        { "name": "Шпроты", "nameEn": "Sprats", "hint": "an open tin of smoked sprats" },
+        { "name": "Суши", "nameEn": "Sushi" },
+        { "name": "Сэндвич", "nameEn": "Sandwich" },
+        { "name": "Чипсы", "nameEn": "Potato chips" },
+        { "name": "Крекеры", "nameEn": "Crackers" }
+      ]
+    },
+    {
+      "category": "Замороженные продукты",
+      "products": [
+        { "name": "Наггетсы", "nameEn": "Chicken nuggets" },
+        { "name": "Картофель фри", "nameEn": "French fries" },
+        { "name": "Котлеты", "nameEn": "Cutlets" },
+        { "name": "Рыбные палочки", "nameEn": "Fish sticks" },
+        { "name": "Лёд", "nameEn": "Ice", "hint": "a bag of ice cubes" }
+      ]
+    },
+    {
+      "category": "Напитки",
+      "products": [
+        { "name": "Квас", "nameEn": "Kvass", "hint": "a bottle of dark-amber kvass" },
+        { "name": "Энергетик", "nameEn": "Energy drink" },
+        { "name": "Морс", "nameEn": "Berry drink", "hint": "a jug of red berry drink" },
+        { "name": "Лимонад", "nameEn": "Lemonade" },
+        { "name": "Какао", "nameEn": "Cocoa" },
+        { "name": "Холодный чай", "nameEn": "Iced tea" },
+        { "name": "Апельсиновый сок", "nameEn": "Orange juice" },
+        { "name": "Кокосовая вода", "nameEn": "Coconut water" },
+        { "name": "Водка", "nameEn": "Vodka" },
+        { "name": "Спортивный напиток", "nameEn": "Sports drink" }
+      ]
+    },
+    {
+      "category": "Бытовая химия",
+      "products": [
+        { "name": "Средство для мытья посуды", "nameEn": "Dish soap" },
+        { "name": "Стиральный порошок", "nameEn": "Laundry powder" },
+        { "name": "Кондиционер для белья", "nameEn": "Fabric softener" },
+        { "name": "Отбеливатель", "nameEn": "Bleach" },
+        { "name": "Средство для стёкол", "nameEn": "Glass cleaner" },
+        { "name": "Освежитель воздуха", "nameEn": "Air freshener" },
+        { "name": "Таблетки для посудомойки", "nameEn": "Dishwasher tablets" },
+        { "name": "Резиновые перчатки", "nameEn": "Rubber gloves" },
+        { "name": "Мешки для мусора", "nameEn": "Trash bags" }
+      ]
+    },
+    {
+      "category": "Товары для дома",
+      "products": [
+        { "name": "Бумажные полотенца", "nameEn": "Paper towels" },
+        { "name": "Салфетки", "nameEn": "Napkins" },
+        { "name": "Фольга", "nameEn": "Aluminum foil" },
+        { "name": "Пищевая плёнка", "nameEn": "Plastic wrap" },
+        { "name": "Пакеты с застёжкой", "nameEn": "Zip bags" },
+        { "name": "Пергамент", "nameEn": "Baking paper" },
+        { "name": "Спички", "nameEn": "Matches" },
+        { "name": "Влажные салфетки", "nameEn": "Wet wipes" },
+        { "name": "Одноразовая посуда", "nameEn": "Disposable plates" }
+      ]
+    },
+    {
+      "category": "Аптека",
+      "products": [
+        { "name": "Капли для носа", "nameEn": "Nasal spray" },
+        { "name": "Сироп от кашля", "nameEn": "Cough syrup" },
+        { "name": "Бинт", "nameEn": "Gauze roll" },
+        { "name": "Антисептик", "nameEn": "Hand sanitizer" },
+        { "name": "Медицинские маски", "nameEn": "Face masks" },
+        { "name": "Глазные капли", "nameEn": "Eye drops" },
+        { "name": "Зубная нить", "nameEn": "Dental floss" },
+        { "name": "Ополаскиватель для рта", "nameEn": "Mouthwash" }
+      ]
+    },
+    {
+      "category": "Косметика",
+      "products": [
+        { "name": "Шампунь", "nameEn": "Shampoo" },
+        { "name": "Бальзам для волос", "nameEn": "Hair conditioner" },
+        { "name": "Гель для душа", "nameEn": "Shower gel" },
+        { "name": "Дезодорант", "nameEn": "Deodorant" },
+        { "name": "Пена для бритья", "nameEn": "Shaving foam" },
+        { "name": "Помада", "nameEn": "Lipstick" },
+        { "name": "Тушь для ресниц", "nameEn": "Mascara" },
+        { "name": "Солнцезащитный крем", "nameEn": "Sunscreen" },
+        { "name": "Крем для рук", "nameEn": "Hand cream" },
+        { "name": "Ватные диски", "nameEn": "Cotton pads" },
+        { "name": "Ватные палочки", "nameEn": "Cotton swabs" },
+        { "name": "Лак для ногтей", "nameEn": "Nail polish" }
+      ]
+    },
+    {
+      "category": "Детское питание",
+      "products": [
+        { "name": "Подгузники", "nameEn": "Diapers" },
+        { "name": "Детская вода", "nameEn": "Baby water" },
+        { "name": "Детский творожок", "nameEn": "Kids' curd snack" }
+      ]
+    },
+    {
+      "category": "Корм для животных",
+      "products": [
+        { "name": "Корм для рыбок", "nameEn": "Fish food" },
+        { "name": "Корм для птиц", "nameEn": "Bird seed" }
+      ]
+    },
+    {
+      "category": "Орехи и Сухофрукты",
+      "products": [
+        { "name": "Фундук", "nameEn": "Hazelnuts" },
+        { "name": "Фисташки", "nameEn": "Pistachios" },
+        { "name": "Кедровые орехи", "nameEn": "Pine nuts" },
+        { "name": "Семечки", "nameEn": "Sunflower seeds" },
+        { "name": "Тыквенные семечки", "nameEn": "Pumpkin seeds" },
+        { "name": "Кунжут", "nameEn": "Sesame seeds" },
+        { "name": "Пекан", "nameEn": "Pecans" },
+        { "name": "Сушёная клюква", "nameEn": "Dried cranberries" },
+        { "name": "Кокосовая стружка", "nameEn": "Coconut flakes" }
+      ]
+    }
+  ]
+}

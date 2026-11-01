@@ -1,0 +1,1407 @@
+{
+  "source": "global products of the production backup taken 2026-10-30 (backups/before-ai-usage-counters.dump), names only",
+  "categories": [
+    {
+      "name": "Овощи",
+      "nameEn": "Vegetables",
+      "products": [
+        {
+          "name": "Авокадо",
+          "nameEn": "Avocado",
+          "emoji": "🥑",
+          "hasImage": false
+        },
+        {
+          "name": "Базилик",
+          "nameEn": "Basil",
+          "emoji": "📦",
+          "hasImage": true
+        },
+        {
+          "name": "Баклажан",
+          "nameEn": "Eggplant",
+          "emoji": "🍆",
+          "hasImage": false
+        },
+        {
+          "name": "Бобы",
+          "nameEn": "Beans",
+          "emoji": "📦",
+          "hasImage": true
+        },
+        {
+          "name": "Болгарский перец",
+          "nameEn": "Bell Pepper",
+          "emoji": "🫑",
+          "hasImage": false
+        },
+        {
+          "name": "Брокколи",
+          "nameEn": "Broccoli",
+          "emoji": "🥦",
+          "hasImage": false
+        },
+        {
+          "name": "Брюква",
+          "nameEn": "Rutabaga",
+          "emoji": "📦",
+          "hasImage": true
+        },
+        {
+          "name": "Брюссельская капуста",
+          "nameEn": "Brussels sprouts",
+          "emoji": "📦",
+          "hasImage": true
+        },
+        {
+          "name": "Горох",
+          "nameEn": "Peas",
+          "emoji": "🫛",
+          "hasImage": false
+        },
+        {
+          "name": "Грибы",
+          "nameEn": "Mushrooms",
+          "emoji": "🍄",
+          "hasImage": false
+        },
+        {
+          "name": "Зеленый лук",
+          "nameEn": "Green onion",
+          "emoji": "📦",
+          "hasImage": true
+        },
+        {
+          "name": "Имбирь",
+          "nameEn": "Ginger",
+          "emoji": "📦",
+          "hasImage": true
+        },
+        {
+          "name": "Кабачок",
+          "nameEn": "Squash",
+          "emoji": "📦",
+          "hasImage": false
+        },
+        {
+          "name": "Капуста",
+          "nameEn": "Cabbage",
+          "emoji": "🥬",
+          "hasImage": false
+        },
+        {
+          "name": "Капуста Кале",
+          "nameEn": "Kale",
+          "emoji": "📦",
+          "hasImage": true
+        },
+        {
+          "name": "Картофель",
+          "nameEn": "Potato",
+          "emoji": "🥔",
+          "hasImage": false
+        },
+        {
+          "name": "Кукуруза",
+          "nameEn": "Corn",
+          "emoji": "🌽",
+          "hasImage": false
+        },
+        {
+          "name": "Лук",
+          "nameEn": "Onion",
+          "emoji": "🧅",
+          "hasImage": false
+        },
+        {
+          "name": "Лук-порей",
+          "nameEn": "Leeks",
+          "emoji": "📦",
+          "hasImage": true
+        },
+        {
+          "name": "Лук-шалот",
+          "nameEn": "Shallots",
+          "emoji": "📦",
+          "hasImage": true
+        },
+        {
+          "name": "Морковь",
+          "nameEn": "Carrot",
+          "emoji": "🥕",
+          "hasImage": false
+        },
+        {
+          "name": "Нут (турецкий горох)",
+          "nameEn": "Chickpeas (garbanzo beans)",
+          "emoji": "📦",
+          "hasImage": true
+        },
+        {
+          "name": "Огурец",
+          "nameEn": "Cucumber",
+          "emoji": "🥒",
+          "hasImage": false
+        },
+        {
+          "name": "Оливки",
+          "nameEn": "Olives",
+          "emoji": "📦",
+          "hasImage": true
+        },
+        {
+          "name": "Перец",
+          "nameEn": "Peppers",
+          "emoji": "📦",
+          "hasImage": true
+        },
+        {
+          "name": "Перец чили",
+          "nameEn": "Chili Pepper",
+          "emoji": "🌶️",
+          "hasImage": false
+        },
+        {
+          "name": "Помидор",
+          "nameEn": "Tomato",
+          "emoji": "🍅",
+          "hasImage": false
+        },
+        {
+          "name": "Помидоры",
+          "nameEn": "Tomatoes",
+          "emoji": "🍅",
+          "hasImage": false
+        },
+        {
+          "name": "Редис",
+          "nameEn": "Radishes",
+          "emoji": "📦",
+          "hasImage": true
+        },
+        {
+          "name": "Репа",
+          "nameEn": "Turnips",
+          "emoji": "📦",
+          "hasImage": true
+        },
+        {
+          "name": "Руккола",
+          "nameEn": "Arugula",
+          "emoji": "📦",
+          "hasImage": true
+        },
+        {
+          "name": "Салат",
+          "nameEn": "Lettuce",
+          "emoji": "🥗",
+          "hasImage": true
+        },
+        {
+          "name": "Свекла",
+          "nameEn": "Beets",
+          "emoji": "📦",
+          "hasImage": true
+        },
+        {
+          "name": "Сельдерей",
+          "nameEn": "Celery",
+          "emoji": "📦",
+          "hasImage": true
+        },
+        {
+          "name": "Сладкий картофель",
+          "nameEn": "Sweet potatoes",
+          "emoji": "📦",
+          "hasImage": true
+        },
+        {
+          "name": "Спаржа",
+          "nameEn": "Asparagus",
+          "emoji": "📦",
+          "hasImage": true
+        },
+        {
+          "name": "Фенхель",
+          "nameEn": "Fennel",
+          "emoji": "📦",
+          "hasImage": true
+        },
+        {
+          "name": "Цветная капуста",
+          "nameEn": "Cauliflower",
+          "emoji": "📦",
+          "hasImage": true
+        },
+        {
+          "name": "Чеснок",
+          "nameEn": "Garlic",
+          "emoji": "🧄",
+          "hasImage": false
+        },
+        {
+          "name": "Чечевица",
+          "nameEn": "Lentils",
+          "emoji": "📦",
+          "hasImage": false
+        },
+        {
+          "name": "Шпинат",
+          "nameEn": "Spinach",
+          "emoji": "📦",
+          "hasImage": true
+        }
+      ]
+    },
+    {
+      "name": "Фрукты",
+      "nameEn": "Fruits",
+      "products": [
+        {
+          "name": "Абрикос",
+          "nameEn": "Apricot",
+          "emoji": "🍑",
+          "hasImage": false
+        },
+        {
+          "name": "Ананас",
+          "nameEn": "Pineapple",
+          "emoji": "🍍",
+          "hasImage": false
+        },
+        {
+          "name": "Апельсин",
+          "nameEn": "Orange",
+          "emoji": "🍊",
+          "hasImage": false
+        },
+        {
+          "name": "Арбуз",
+          "nameEn": "Watermelon",
+          "emoji": "🍉",
+          "hasImage": false
+        },
+        {
+          "name": "Банан",
+          "nameEn": "Banana",
+          "emoji": "🍌",
+          "hasImage": false
+        },
+        {
+          "name": "Виноград",
+          "nameEn": "Grapes",
+          "emoji": "🍇",
+          "hasImage": false
+        },
+        {
+          "name": "Вишня",
+          "nameEn": "Cherry",
+          "emoji": "🍒",
+          "hasImage": false
+        },
+        {
+          "name": "Груша",
+          "nameEn": "Pear",
+          "emoji": "🍐",
+          "hasImage": false
+        },
+        {
+          "name": "Дыни",
+          "nameEn": "Melons",
+          "emoji": "📦",
+          "hasImage": true
+        },
+        {
+          "name": "Ежевика",
+          "nameEn": "Blackberries",
+          "emoji": "🫐",
+          "hasImage": true
+        },
+        {
+          "name": "Инжир",
+          "nameEn": "Figs",
+          "emoji": "📦",
+          "hasImage": true
+        },
+        {
+          "name": "Киви",
+          "nameEn": "Kiwi",
+          "emoji": "🥝",
+          "hasImage": false
+        },
+        {
+          "name": "Клубника",
+          "nameEn": "Strawberry",
+          "emoji": "🍓",
+          "hasImage": false
+        },
+        {
+          "name": "Лимон",
+          "nameEn": "Lemon",
+          "emoji": "🍋",
+          "hasImage": false
+        },
+        {
+          "name": "Малина",
+          "nameEn": "Raspberries",
+          "emoji": "📦",
+          "hasImage": true
+        },
+        {
+          "name": "Манго",
+          "nameEn": "Mango",
+          "emoji": "🥭",
+          "hasImage": false
+        },
+        {
+          "name": "Мандарин",
+          "nameEn": "Mandarin",
+          "emoji": "🍊",
+          "hasImage": false
+        },
+        {
+          "name": "Нектарины",
+          "nameEn": "Nectarines",
+          "emoji": "📦",
+          "hasImage": true
+        },
+        {
+          "name": "Персик",
+          "nameEn": "Peach",
+          "emoji": "🍑",
+          "hasImage": false
+        },
+        {
+          "name": "Персики",
+          "nameEn": "Peaches",
+          "emoji": "🍑",
+          "hasImage": false
+        },
+        {
+          "name": "Слива",
+          "nameEn": "Plum",
+          "emoji": "🫐",
+          "hasImage": true
+        },
+        {
+          "name": "Черника",
+          "nameEn": "Blueberry",
+          "emoji": "🫐",
+          "hasImage": false
+        },
+        {
+          "name": "Яблоки",
+          "nameEn": "Apples",
+          "emoji": "🍎",
+          "hasImage": false
+        },
+        {
+          "name": "Яблоко",
+          "nameEn": "Apple",
+          "emoji": "🍎",
+          "hasImage": false
+        },
+        {
+          "name": "Яблоко Ханикрисп",
+          "nameEn": "Honey crisp apple",
+          "emoji": "🍎",
+          "hasImage": false
+        }
+      ]
+    },
+    {
+      "name": "Молочные продукты",
+      "nameEn": "Dairy",
+      "products": [
+        {
+          "name": "Йогурт",
+          "nameEn": "yogurt",
+          "emoji": "🧃",
+          "hasImage": true
+        },
+        {
+          "name": "Йогурт",
+          "nameEn": "Yogurt",
+          "emoji": "🧃",
+          "hasImage": false
+        },
+        {
+          "name": "Масло сливочное",
+          "nameEn": "Butter",
+          "emoji": "🧈",
+          "hasImage": false
+        },
+        {
+          "name": "Молоко",
+          "nameEn": "Milk",
+          "emoji": "🥛",
+          "hasImage": false
+        },
+        {
+          "name": "Мороженое",
+          "nameEn": "Ice Cream",
+          "emoji": "🍦",
+          "hasImage": false
+        },
+        {
+          "name": "Сметана",
+          "nameEn": "Sour Cream",
+          "emoji": "🥄",
+          "hasImage": true
+        },
+        {
+          "name": "Сыр",
+          "nameEn": "Cheese",
+          "emoji": "🧀",
+          "hasImage": false
+        },
+        {
+          "name": "Творог",
+          "nameEn": "Cottage Cheese",
+          "emoji": "🫕",
+          "hasImage": true
+        },
+        {
+          "name": "Яйца",
+          "nameEn": "Eggs",
+          "emoji": "🥚",
+          "hasImage": false
+        }
+      ]
+    },
+    {
+      "name": "Хлеб и выпечка",
+      "nameEn": "Bread & Bakery",
+      "products": [
+        {
+          "name": "Багет",
+          "nameEn": "Baguette",
+          "emoji": "🥖",
+          "hasImage": false
+        },
+        {
+          "name": "Блины",
+          "nameEn": "Pancakes",
+          "emoji": "🥞",
+          "hasImage": false
+        },
+        {
+          "name": "Бублик",
+          "nameEn": "Bagel",
+          "emoji": "🥯",
+          "hasImage": false
+        },
+        {
+          "name": "Вафли",
+          "nameEn": "Waffles",
+          "emoji": "🧇",
+          "hasImage": false
+        },
+        {
+          "name": "Кекс",
+          "nameEn": "Cupcake",
+          "emoji": "🧁",
+          "hasImage": false
+        },
+        {
+          "name": "Крендель",
+          "nameEn": "Pretzel",
+          "emoji": "🥨",
+          "hasImage": false
+        },
+        {
+          "name": "Круассан",
+          "nameEn": "Croissant",
+          "emoji": "🥐",
+          "hasImage": false
+        },
+        {
+          "name": "Печенье",
+          "nameEn": "Coockies",
+          "emoji": "🍪",
+          "hasImage": false
+        },
+        {
+          "name": "Сухарики",
+          "nameEn": "croutons",
+          "emoji": "",
+          "hasImage": true
+        },
+        {
+          "name": "Торт",
+          "nameEn": "Cake",
+          "emoji": "🍰",
+          "hasImage": false
+        },
+        {
+          "name": "Хлеб белый",
+          "nameEn": "White Bread",
+          "emoji": "🍞",
+          "hasImage": false
+        },
+        {
+          "name": "хлеб ржаной",
+          "nameEn": "riy braed",
+          "emoji": "",
+          "hasImage": true
+        }
+      ]
+    },
+    {
+      "name": "Мясо и мясные продукты",
+      "nameEn": "Meat",
+      "products": [
+        {
+          "name": "Бекон",
+          "nameEn": "Bacon",
+          "emoji": "🥓",
+          "hasImage": false
+        },
+        {
+          "name": "Говядина",
+          "nameEn": "Beef",
+          "emoji": "🐄",
+          "hasImage": false
+        },
+        {
+          "name": "Курица",
+          "nameEn": "Chicken",
+          "emoji": "🍗",
+          "hasImage": false
+        },
+        {
+          "name": "Лобстер",
+          "nameEn": "Lobster",
+          "emoji": "🦞",
+          "hasImage": false
+        },
+        {
+          "name": "Мясо на кости",
+          "nameEn": "Meat on Bone",
+          "emoji": "🍖",
+          "hasImage": false
+        },
+        {
+          "name": "Мясо осла",
+          "nameEn": "Donkey meat",
+          "emoji": "🥩",
+          "hasImage": false
+        },
+        {
+          "name": "Свинина",
+          "nameEn": "Pork",
+          "emoji": "🐖",
+          "hasImage": false
+        },
+        {
+          "name": "Сосиски",
+          "nameEn": "Sausages",
+          "emoji": "🌭",
+          "hasImage": true
+        },
+        {
+          "name": "Стейк",
+          "nameEn": "Steak",
+          "emoji": "🥩",
+          "hasImage": false
+        }
+      ]
+    },
+    {
+      "name": "Консервы и готовая еда",
+      "nameEn": "Canned & Ready Food",
+      "products": [
+        {
+          "name": "Бургер",
+          "nameEn": "Burger",
+          "emoji": "🍔",
+          "hasImage": false
+        },
+        {
+          "name": "Буррито",
+          "nameEn": "Burrito",
+          "emoji": "🌯",
+          "hasImage": false
+        },
+        {
+          "name": "кетчуп",
+          "nameEn": "ketchup",
+          "emoji": "🍑",
+          "hasImage": true
+        },
+        {
+          "name": "Консервы",
+          "nameEn": "Canned Food",
+          "emoji": "🥫",
+          "hasImage": false
+        },
+        {
+          "name": "Куркума",
+          "nameEn": "Turmeric",
+          "emoji": "📦",
+          "hasImage": true
+        },
+        {
+          "name": "Лапша",
+          "nameEn": "Noodles",
+          "emoji": "🍜",
+          "hasImage": false
+        },
+        {
+          "name": "Оливковое масло",
+          "nameEn": "Olive Oil",
+          "emoji": "📦",
+          "hasImage": true
+        },
+        {
+          "name": "Паста",
+          "nameEn": "Pasta",
+          "emoji": "🍝",
+          "hasImage": false
+        },
+        {
+          "name": "Пицца",
+          "nameEn": "Pizza",
+          "emoji": "🍕",
+          "hasImage": false
+        },
+        {
+          "name": "Салат готовый",
+          "nameEn": "Ready Salad",
+          "emoji": "🥗",
+          "hasImage": false
+        },
+        {
+          "name": "Соевый соус",
+          "nameEn": "Soy Sauce",
+          "emoji": "📦",
+          "hasImage": true
+        },
+        {
+          "name": "Соленые огурцы",
+          "nameEn": "Pickles",
+          "emoji": "📦",
+          "hasImage": true
+        },
+        {
+          "name": "Суп",
+          "nameEn": "Soup",
+          "emoji": "🍲",
+          "hasImage": false
+        },
+        {
+          "name": "Тако",
+          "nameEn": "Taco",
+          "emoji": "🌮",
+          "hasImage": false
+        },
+        {
+          "name": "Тофу",
+          "nameEn": "Tofu",
+          "emoji": "📦",
+          "hasImage": true
+        },
+        {
+          "name": "Хумус",
+          "nameEn": "Hummus",
+          "emoji": "📦",
+          "hasImage": true
+        },
+        {
+          "name": "Шаурма",
+          "nameEn": "Shawarma",
+          "emoji": "🥙",
+          "hasImage": false
+        },
+        {
+          "name": "Яблочное пюре",
+          "nameEn": "Applesauce",
+          "emoji": "📦",
+          "hasImage": true
+        }
+      ]
+    },
+    {
+      "name": "Напитки",
+      "nameEn": "Beverages",
+      "products": [
+        {
+          "name": "Вино",
+          "nameEn": "Wine",
+          "emoji": "🍷",
+          "hasImage": false
+        },
+        {
+          "name": "Виски",
+          "nameEn": "Whiskey",
+          "emoji": "🥃",
+          "hasImage": false
+        },
+        {
+          "name": "Вода",
+          "nameEn": "Water",
+          "emoji": "💧",
+          "hasImage": false
+        },
+        {
+          "name": "Газировка",
+          "nameEn": "Soda",
+          "emoji": "🥤",
+          "hasImage": true
+        },
+        {
+          "name": "Клюквенный сок",
+          "nameEn": "Cranberry juice",
+          "emoji": "🧃",
+          "hasImage": false
+        },
+        {
+          "name": "Коктейль",
+          "nameEn": "Cocktail",
+          "emoji": "🍸",
+          "hasImage": false
+        },
+        {
+          "name": "Кофе",
+          "nameEn": "Coffee",
+          "emoji": "☕",
+          "hasImage": false
+        },
+        {
+          "name": "Миндальное молоко",
+          "nameEn": "Almond milk",
+          "emoji": "📦",
+          "hasImage": true
+        },
+        {
+          "name": "Пиво",
+          "nameEn": "Beer",
+          "emoji": "🍺",
+          "hasImage": false
+        },
+        {
+          "name": "Сок",
+          "nameEn": "Juice",
+          "emoji": "🧃",
+          "hasImage": false
+        },
+        {
+          "name": "Томатный сок",
+          "nameEn": "Tomato juice",
+          "emoji": "🧃",
+          "hasImage": true
+        },
+        {
+          "name": "Чай",
+          "nameEn": "Tea",
+          "emoji": "🍵",
+          "hasImage": false
+        },
+        {
+          "name": "Шампанское",
+          "nameEn": "Champagne",
+          "emoji": "🍾",
+          "hasImage": false
+        },
+        {
+          "name": "Яблочный сок",
+          "nameEn": "Apple juice",
+          "emoji": "🧃",
+          "hasImage": false
+        }
+      ]
+    },
+    {
+      "name": "Бытовая химия",
+      "nameEn": "Household Chemicals",
+      "products": [
+        {
+          "name": "Ведро",
+          "nameEn": "Bucket",
+          "emoji": "🪣",
+          "hasImage": false
+        },
+        {
+          "name": "Веник",
+          "nameEn": "Broom",
+          "emoji": "🧹",
+          "hasImage": false
+        },
+        {
+          "name": "Губка",
+          "nameEn": "Sponge",
+          "emoji": "🧽",
+          "hasImage": false
+        },
+        {
+          "name": "Корзина для белья",
+          "nameEn": "Laundry Basket",
+          "emoji": "🧺",
+          "hasImage": false
+        },
+        {
+          "name": "Моющее средство",
+          "nameEn": "Detergent",
+          "emoji": "🧴",
+          "hasImage": false
+        },
+        {
+          "name": "Мыло",
+          "nameEn": "Soap",
+          "emoji": "🧼",
+          "hasImage": false
+        },
+        {
+          "name": "Пена для ванны",
+          "nameEn": "Bubble Bath",
+          "emoji": "🫧",
+          "hasImage": false
+        },
+        {
+          "name": "Туалетная бумага",
+          "nameEn": "Toilet Paper",
+          "emoji": "🧻",
+          "hasImage": false
+        },
+        {
+          "name": "Чистящее средство",
+          "nameEn": "Cleaning Agent",
+          "emoji": "🧪",
+          "hasImage": false
+        }
+      ]
+    },
+    {
+      "name": "Товары для дома",
+      "nameEn": "Home Goods",
+      "products": [
+        {
+          "name": "Батарейки",
+          "nameEn": "Batteries",
+          "emoji": "🔋",
+          "hasImage": false
+        },
+        {
+          "name": "Бритва",
+          "nameEn": "Razor",
+          "emoji": "🪒",
+          "hasImage": false
+        },
+        {
+          "name": "Игрушка",
+          "nameEn": "Toy",
+          "emoji": "🧸",
+          "hasImage": false
+        },
+        {
+          "name": "Коробка",
+          "nameEn": "Box",
+          "emoji": "📦",
+          "hasImage": false
+        },
+        {
+          "name": "Лампочка",
+          "nameEn": "Light Bulb",
+          "emoji": "💡",
+          "hasImage": false
+        },
+        {
+          "name": "Пакеты для запекания",
+          "nameEn": "Oven bags",
+          "emoji": "",
+          "hasImage": true
+        },
+        {
+          "name": "Подарочная упаковка",
+          "nameEn": "Gift Wrap",
+          "emoji": "🎁",
+          "hasImage": false
+        },
+        {
+          "name": "Растение",
+          "nameEn": "Plant",
+          "emoji": "🪴",
+          "hasImage": false
+        },
+        {
+          "name": "Свечи",
+          "nameEn": "Candles",
+          "emoji": "🕯️",
+          "hasImage": false
+        }
+      ]
+    },
+    {
+      "name": "Аптека",
+      "nameEn": "Pharmacy",
+      "products": [
+        {
+          "name": "Витамины",
+          "nameEn": "Vitamins",
+          "emoji": "🧪",
+          "hasImage": true
+        },
+        {
+          "name": "Зубная паста",
+          "nameEn": "Toothpaste",
+          "emoji": "🦷",
+          "hasImage": true
+        },
+        {
+          "name": "Зубная щетка",
+          "nameEn": "Toothbrush",
+          "emoji": "🪥",
+          "hasImage": false
+        },
+        {
+          "name": "Крем",
+          "nameEn": "Cream",
+          "emoji": "🧴",
+          "hasImage": false
+        },
+        {
+          "name": "Крем для лица",
+          "nameEn": "Face cream",
+          "emoji": "",
+          "hasImage": true
+        },
+        {
+          "name": "Пластырь",
+          "nameEn": "Bandage",
+          "emoji": "🩹",
+          "hasImage": false
+        },
+        {
+          "name": "Таблетки",
+          "nameEn": "Pills",
+          "emoji": "💊",
+          "hasImage": false
+        },
+        {
+          "name": "Термометр",
+          "nameEn": "Thermometer",
+          "emoji": "🌡️",
+          "hasImage": false
+        },
+        {
+          "name": "Шприц",
+          "nameEn": "Syringe",
+          "emoji": "💉",
+          "hasImage": false
+        }
+      ]
+    },
+    {
+      "name": "Косметика",
+      "nameEn": "Cosmetics",
+      "products": []
+    },
+    {
+      "name": "Сладости",
+      "nameEn": "Sweets",
+      "products": []
+    },
+    {
+      "name": "Крупы и макароны",
+      "nameEn": "Grains & Pasta",
+      "products": [
+        {
+          "name": "Гречка",
+          "nameEn": "Buckwheat",
+          "emoji": "🌾",
+          "hasImage": true
+        },
+        {
+          "name": "Гритс",
+          "nameEn": "Grits",
+          "emoji": "",
+          "hasImage": true
+        },
+        {
+          "name": "Мамалыга",
+          "nameEn": "Corn grits ",
+          "emoji": "",
+          "hasImage": true
+        },
+        {
+          "name": "Мука",
+          "nameEn": "Flour",
+          "emoji": "🌾",
+          "hasImage": true
+        },
+        {
+          "name": "Овсянка",
+          "nameEn": "Oatmeal",
+          "emoji": "🥣",
+          "hasImage": true
+        },
+        {
+          "name": "Перловка",
+          "nameEn": "Pearl Barley",
+          "emoji": "🌾",
+          "hasImage": false
+        },
+        {
+          "name": "Пшено",
+          "nameEn": "Millet",
+          "emoji": "🌾",
+          "hasImage": false
+        },
+        {
+          "name": "Рис",
+          "nameEn": "Rice",
+          "emoji": "🍚",
+          "hasImage": false
+        },
+        {
+          "name": "Спагетти",
+          "nameEn": "Spaghetti",
+          "emoji": "🍝",
+          "hasImage": false
+        }
+      ]
+    },
+    {
+      "name": "Орехи и Сухофрукты",
+      "nameEn": "Nuts & Dried Fruits",
+      "products": [
+        {
+          "name": "Арахис",
+          "nameEn": "Peanuts",
+          "emoji": "🥜",
+          "hasImage": false
+        },
+        {
+          "name": "Арахисовое масло",
+          "nameEn": "Peanut butter",
+          "emoji": "📦",
+          "hasImage": true
+        },
+        {
+          "name": "Грецкий орех",
+          "nameEn": "Walnuts",
+          "emoji": "🌰",
+          "hasImage": true
+        },
+        {
+          "name": "Изюм",
+          "nameEn": "Raisins",
+          "emoji": "🍇",
+          "hasImage": true
+        },
+        {
+          "name": "Кешью",
+          "nameEn": "Cashews",
+          "emoji": "🥜",
+          "hasImage": false
+        },
+        {
+          "name": "Курага",
+          "nameEn": "Dried Apricots",
+          "emoji": "🍑",
+          "hasImage": false
+        },
+        {
+          "name": "Льняное семя",
+          "nameEn": "Flaxseed",
+          "emoji": "📦",
+          "hasImage": false
+        },
+        {
+          "name": "Миндаль",
+          "nameEn": "Almonds",
+          "emoji": "🌰",
+          "hasImage": true
+        },
+        {
+          "name": "Миндальное масло",
+          "nameEn": "Almond butter",
+          "emoji": "📦",
+          "hasImage": false
+        },
+        {
+          "name": "Орехи",
+          "nameEn": "Nuts",
+          "emoji": "🌰",
+          "hasImage": true
+        },
+        {
+          "name": "Семена чиа",
+          "nameEn": "Chia seeds",
+          "emoji": "📦",
+          "hasImage": true
+        },
+        {
+          "name": "Финики",
+          "nameEn": "Dates",
+          "emoji": "🌴",
+          "hasImage": true
+        },
+        {
+          "name": "Чернослив",
+          "nameEn": "Prunes",
+          "emoji": "🫐",
+          "hasImage": true
+        }
+      ]
+    },
+    {
+      "name": "Масла и соусы",
+      "nameEn": "Oils & Sauces",
+      "products": [
+        {
+          "name": "Горчица",
+          "nameEn": "Mustard",
+          "emoji": "🌭",
+          "hasImage": true
+        },
+        {
+          "name": "Кетчуп",
+          "nameEn": "Ketchup",
+          "emoji": "🍅",
+          "hasImage": false
+        },
+        {
+          "name": "Майонез",
+          "nameEn": "Mayonnaise",
+          "emoji": "🥚",
+          "hasImage": true
+        },
+        {
+          "name": "Подсолнечное масло",
+          "nameEn": "Sunflower Oil",
+          "emoji": "🫗",
+          "hasImage": true
+        },
+        {
+          "name": "Томатная паста",
+          "nameEn": "Tomato Paste",
+          "emoji": "🍅",
+          "hasImage": true
+        },
+        {
+          "name": "Уксус",
+          "nameEn": "Vinegar",
+          "emoji": "🫗",
+          "hasImage": true
+        }
+      ]
+    },
+    {
+      "name": "Замороженные продукты",
+      "nameEn": "Frozen",
+      "products": [
+        {
+          "name": "Вареники",
+          "nameEn": "Vareniki",
+          "emoji": "🥟",
+          "hasImage": false
+        },
+        {
+          "name": "Замороженные овощи",
+          "nameEn": "Frozen Vegetables",
+          "emoji": "🥦",
+          "hasImage": true
+        },
+        {
+          "name": "Замороженные ягоды",
+          "nameEn": "Packed Frozen Berries",
+          "emoji": "🫐",
+          "hasImage": true
+        },
+        {
+          "name": "Пельмени",
+          "nameEn": "Dumplings",
+          "emoji": "🥟",
+          "hasImage": false
+        },
+        {
+          "name": "Пицца замороженная",
+          "nameEn": "Frozen Pizza",
+          "emoji": "🍕",
+          "hasImage": false
+        }
+      ]
+    },
+    {
+      "name": "Рыба и морепродукты",
+      "nameEn": "Fish & Seafood",
+      "products": [
+        {
+          "name": "Анчоусы",
+          "nameEn": "Anchovies",
+          "emoji": "🐟",
+          "hasImage": true
+        },
+        {
+          "name": "Икра",
+          "nameEn": "Caviar",
+          "emoji": "🥚",
+          "hasImage": true
+        },
+        {
+          "name": "Кальмар",
+          "nameEn": "Squid",
+          "emoji": "🦑",
+          "hasImage": false
+        },
+        {
+          "name": "Карп",
+          "nameEn": "Carp",
+          "emoji": "🐟",
+          "hasImage": false
+        },
+        {
+          "name": "Краб",
+          "nameEn": "Crab",
+          "emoji": "🦀",
+          "hasImage": false
+        },
+        {
+          "name": "Креветки",
+          "nameEn": "Shrimp",
+          "emoji": "🍤",
+          "hasImage": false
+        },
+        {
+          "name": "Лосось",
+          "nameEn": "Salmon",
+          "emoji": "🐟",
+          "hasImage": true
+        },
+        {
+          "name": "Мидии",
+          "nameEn": "Mussels",
+          "emoji": "🦪",
+          "hasImage": false
+        },
+        {
+          "name": "Морские гребешки",
+          "nameEn": "Scallops",
+          "emoji": "📦",
+          "hasImage": true
+        },
+        {
+          "name": "Морской окунь",
+          "nameEn": "Sea bass",
+          "emoji": "🐟",
+          "hasImage": true
+        },
+        {
+          "name": "Осьминог",
+          "nameEn": "Octopus",
+          "emoji": "🐙",
+          "hasImage": false
+        },
+        {
+          "name": "Палтус",
+          "nameEn": "Halibut",
+          "emoji": "🐟",
+          "hasImage": true
+        },
+        {
+          "name": "Рыба",
+          "nameEn": "Fish",
+          "emoji": "🐟",
+          "hasImage": false
+        },
+        {
+          "name": "Сельдь",
+          "nameEn": "Herring",
+          "emoji": "🐟",
+          "hasImage": true
+        },
+        {
+          "name": "Треска",
+          "nameEn": "Cod",
+          "emoji": "🐟",
+          "hasImage": true
+        },
+        {
+          "name": "Тунец",
+          "nameEn": "Tuna",
+          "emoji": "🐟",
+          "hasImage": true
+        }
+      ]
+    },
+    {
+      "name": "Детское питание",
+      "nameEn": "Baby Food",
+      "products": [
+        {
+          "name": "Детская каша",
+          "nameEn": "Baby Cereal",
+          "emoji": "🥣",
+          "hasImage": false
+        },
+        {
+          "name": "Детская смесь",
+          "nameEn": "Baby Formula",
+          "emoji": "🍼",
+          "hasImage": false
+        },
+        {
+          "name": "Детский йогурт",
+          "nameEn": "Yogurt for kids",
+          "emoji": "",
+          "hasImage": true
+        },
+        {
+          "name": "Детский сок",
+          "nameEn": "Juice for kids",
+          "emoji": "🧃",
+          "hasImage": true
+        },
+        {
+          "name": "Детское печенье",
+          "nameEn": "Baby Cookies",
+          "emoji": "🍪",
+          "hasImage": false
+        },
+        {
+          "name": "Детское пюре",
+          "nameEn": "Baby Puree",
+          "emoji": "🥫",
+          "hasImage": true
+        }
+      ]
+    },
+    {
+      "name": "Корм для животных",
+      "nameEn": "Pet Food",
+      "products": [
+        {
+          "name": "Корм для кошек",
+          "nameEn": "Cat Food",
+          "emoji": "🐱",
+          "hasImage": false
+        },
+        {
+          "name": "Корм для собак",
+          "nameEn": "Dog Food",
+          "emoji": "🐶",
+          "hasImage": false
+        },
+        {
+          "name": "Лакомства для кошек",
+          "nameEn": "Cat Treats",
+          "emoji": "🐱",
+          "hasImage": false
+        },
+        {
+          "name": "Лакомства для собак",
+          "nameEn": "Dog Treats",
+          "emoji": "🐶",
+          "hasImage": false
+        },
+        {
+          "name": "Наполнитель для туалета",
+          "nameEn": "Cat Litter",
+          "emoji": "🐾",
+          "hasImage": true
+        }
+      ]
+    }
+  ]
+}
