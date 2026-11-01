@@ -89,6 +89,18 @@ describe('normalizeEmojiImage', () => {
     expect(alphaAt(128, 128)).toBe(255);
   });
 
+  it('keeps a pure white surface framed by pale grey shading even when clearing gaps', async () => {
+    const input = await svg(
+      300,
+      300,
+      '<circle cx="150" cy="150" r="90" fill="#c8c8c8"/><circle cx="150" cy="150" r="70" fill="#ffffff"/>'
+    );
+
+    const { alphaAt } = await decode(await normalizeEmojiImage(input, { clearEnclosedGaps: true }));
+
+    expect(alphaAt(128, 128)).toBe(255);
+  });
+
   it('keeps a white label on coloured packaging by default', async () => {
     for (const label of ['#ffffff', '#fafafa']) {
       const input = await svg(
