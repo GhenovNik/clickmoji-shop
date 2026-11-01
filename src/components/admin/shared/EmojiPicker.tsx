@@ -2,6 +2,8 @@
 
 import Image from 'next/image';
 import { useState } from 'react';
+import { useLocale, useTranslations } from 'next-intl';
+import { localizedName } from '@/lib/catalog-name';
 import {
   groupLibraryItems,
   type LibraryItem,
@@ -35,6 +37,8 @@ export default function EmojiPicker({
   onGenerateImage,
   onSelectLibraryImage,
 }: EmojiPickerProps) {
+  const t = useTranslations('admin');
+  const locale = useLocale();
   const [results, setResults] = useState<EmojiResult[]>([]);
   const [searching, setSearching] = useState(false);
   const [generating, setGenerating] = useState(false);
@@ -55,7 +59,7 @@ export default function EmojiPicker({
     } catch (error) {
       console.error('Error searching emoji library:', error);
       setLibraryItems([]);
-      setLibraryError('Не удалось загрузить библиотеку');
+      setLibraryError(t('emojiPicker.libraryLoadFailed'));
     } finally {
       setLibraryLoading(false);
     }
@@ -73,7 +77,7 @@ export default function EmojiPicker({
 
   const searchEmoji = async () => {
     if (!productName) {
-      alert('Введите название для поиска emoji');
+      alert(t('emojiPicker.enterNameToSearch'));
       return;
     }
 
@@ -84,7 +88,7 @@ export default function EmojiPicker({
       setResults(data.results || []);
     } catch (error) {
       console.error('Error searching emoji:', error);
-      alert('Ошибка при поиске emoji');
+      alert(t('emojiPicker.searchFailed'));
     } finally {
       setSearching(false);
     }
@@ -93,7 +97,7 @@ export default function EmojiPicker({
   const generateAI = async () => {
     const nameToUse = productNameEn || productName;
     if (!nameToUse) {
-      alert('Введите название для генерации иконки');
+      alert(t('emojiPicker.enterNameToGenerate'));
       return;
     }
 
@@ -114,19 +118,19 @@ export default function EmojiPicker({
       const generateData = await generateRes.json();
 
       if (!generateRes.ok || !generateData.imageUrl) {
-        alert(generateData.error || 'Ошибка при генерации иконки');
+        alert(generateData.error || t('emojiPicker.generateFailed'));
         return;
       }
 
       onGenerateImage?.(generateData.imageUrl);
       alert(
         generateData.libraryRecorded === false
-          ? '⚠️ AI иконка сгенерирована, но не попала в библиотеку. Нажмите «Сохранить», чтобы не потерять её.'
-          : '✅ AI иконка сгенерирована и сохранена в библиотеку. Привяжется к товару после «Сохранить».'
+          ? t('emojiPicker.generatedNotInLibrary')
+          : t('emojiPicker.generated')
       );
     } catch (error) {
       console.error('Error generating AI emoji:', error);
-      alert('Ошибка при генерации иконки');
+      alert(t('emojiPicker.generateFailed'));
     } finally {
       setGenerating(false);
     }
@@ -135,7 +139,7 @@ export default function EmojiPicker({
   return (
     <div className="md:col-span-2">
       <label className="block text-sm font-medium text-gray-700 mb-1">
-        Emoji (по умолчанию) {isRequired && '*'}
+        {t('emojiPicker.label')} {isRequired && '*'}
       </label>
       <div className="flex flex-col gap-2">
         <input
@@ -143,7 +147,7 @@ export default function EmojiPicker({
           value={value}
           onChange={(e) => onChange(e.target.value)}
           className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-2xl text-gray-900"
-          placeholder={isRequired ? '🍎' : '🍎 (опционально)'}
+          placeholder={isRequired ? '🍎' : t('emojiPicker.optionalPlaceholder')}
           required={isRequired}
         />
         <div className={`grid gap-2 ${onSelectLibraryImage ? 'grid-cols-3' : 'grid-cols-2'}`}>
@@ -153,7 +157,7 @@ export default function EmojiPicker({
             disabled={searching || !productName}
             className="px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-lg font-semibold transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-sm"
           >
-            {searching ? 'Поиск...' : '🔍 Подобрать'}
+            {searching ? t('emojiPicker.searching') : t('emojiPicker.suggest')}
           </button>
           {onGenerateImage && (
             <button
@@ -161,9 +165,9 @@ export default function EmojiPicker({
               onClick={generateAI}
               disabled={generating || (!productNameEn && !productName)}
               className="px-4 py-2 bg-gradient-to-r from-pink-600 to-purple-600 hover:from-pink-700 hover:to-purple-700 text-white rounded-lg font-semibold transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-sm"
-              title="Сгенерировать иконку с помощью AI"
+              title={t('emojiPicker.generateTitle')}
             >
-              {generating ? '⏳ Генерация...' : '🎨 AI'}
+              {generating ? t('emojiPicker.generating') : '🎨 AI'}
             </button>
           )}
           {onSelectLibraryImage && (
@@ -172,9 +176,9 @@ export default function EmojiPicker({
               onClick={toggleLibrary}
               aria-expanded={libraryOpen}
               className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-semibold transition-colors text-sm"
-              title="Выбрать готовую картинку из библиотеки"
+              title={t('emojiPicker.libraryTitle')}
             >
-              📚 Библиотека
+              {t('emojiPicker.library')}
             </button>
           )}
         </div>
@@ -193,7 +197,7 @@ export default function EmojiPicker({
                   void searchLibrary(libraryQuery);
                 }
               }}
-              placeholder="Название или тег"
+              placeholder={t('emojiPicker.libraryPlaceholder')}
               className="flex-1 px-3 py-2 border border-gray-300 rounded-lg text-sm text-gray-900"
             />
             <button
@@ -201,13 +205,15 @@ export default function EmojiPicker({
               onClick={() => void searchLibrary(libraryQuery)}
               className="px-3 py-2 bg-white border border-gray-300 rounded-lg text-sm text-gray-700 hover:border-emerald-500"
             >
-              Найти
+              {t('emojiPicker.find')}
             </button>
           </div>
-          {libraryLoading && <p className="mt-2 text-sm text-gray-500">Поиск…</p>}
+          {libraryLoading && (
+            <p className="mt-2 text-sm text-gray-500">{t('emojiPicker.librarySearching')}</p>
+          )}
           {libraryError && <p className="mt-2 text-sm text-red-600">{libraryError}</p>}
           {!libraryLoading && !libraryError && libraryItems.length === 0 && (
-            <p className="mt-2 text-sm text-gray-500">В библиотеке ничего не найдено</p>
+            <p className="mt-2 text-sm text-gray-500">{t('emojiPicker.libraryEmpty')}</p>
           )}
           {libraryItems.length > 0 && (
             <div className="mt-2 grid grid-cols-4 sm:grid-cols-6 gap-2 max-h-64 overflow-y-auto">
@@ -225,14 +231,14 @@ export default function EmojiPicker({
                   <span className="h-12 w-12 flex items-center justify-center overflow-hidden">
                     <Image
                       src={(item.imageUrl ?? item.imageUrlEn)!}
-                      alt={item.name}
+                      alt={localizedName(item, locale)}
                       width={48}
                       height={48}
                       className="h-12 w-12 object-contain"
                     />
                   </span>
                   <span className="w-full truncate text-[11px] text-gray-700">
-                    {item.name}
+                    {localizedName(item, locale)}
                     {item.imageUrlEn && (
                       <span className="ml-1 rounded bg-emerald-100 px-1 text-[9px] font-bold text-emerald-700">
                         EN

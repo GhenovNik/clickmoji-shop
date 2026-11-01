@@ -1,1 +1,45 @@
-{}
+{
+  "rateLimited": "Слишком много попыток. Попробуйте позже.",
+  "aiQuota": {
+    "unavailable": "AI временно недоступен. Попробуйте позже.",
+    "disabled": "AI-функции отключены для этой роли.",
+    "exhausted": "Дневной лимит AI-запросов исчерпан. Попробуйте завтра."
+  },
+  "auth": {
+    "emailAndPasswordRequired": "Email и пароль обязательны",
+    "invalidEmail": "Некорректный email",
+    "userExists": "Пользователь с таким email уже существует",
+    "verificationEmailFailed": "Не удалось отправить письмо подтверждения. Попробуйте позже.",
+    "userCreated": "Пользователь успешно создан",
+    "registrationFailed": "Ошибка при регистрации",
+    "verificationNotRequired": "Подтверждение email не требуется",
+    "emailRequired": "Email обязателен",
+    "emailSentIfExists": "Если адрес существует, письмо отправлено",
+    "emailSent": "Письмо отправлено",
+    "emailSendFailed": "Не удалось отправить письмо",
+    "resetFieldsRequired": "Email, token и пароль обязательны",
+    "resetLinkInvalid": "Ссылка для сброса недействительна.",
+    "passwordUpdated": "Пароль обновлен",
+    "resetFailed": "Не удалось сбросить пароль"
+  },
+  "lists": {
+    "defaultNames": {
+      "main": "Основной",
+      "week": "На неделю",
+      "weekend": "На выходные",
+      "holidays": "Праздники",
+      "party": "Для вечеринки",
+      "urgent": "Срочное",
+      "survival": "Чтобы выжить"
+    },
+    "itemsAdded": "Добавлено {count, plural, one {# товар} few {# товара} many {# товаров} other {# товара}}."
+  },
+  "products": {
+    "userNotFound": "Пользователь не найден",
+    "creationLimitReached": "Вы исчерпали лимит создания своих товаров ({limit}/{limit})."
+  },
+  "emoji": {
+    "emptyImage": "На картинке не найден предмет: она пустая или целиком белая",
+    "tooLarge": "Картинка слишком большая: не больше 4096 × 4096 пикселей"
+  }
+}

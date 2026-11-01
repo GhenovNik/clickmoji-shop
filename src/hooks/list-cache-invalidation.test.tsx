@@ -2,6 +2,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ReactNode } from 'react';
 import { act, fireEvent, render, renderHook, screen, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { NextIntlClientProvider } from 'next-intl';
+import { messages } from '@/i18n/messages';
 
 // After import, complete and restore the React Query cache must agree with the server: each
 // operation invalidates exactly the entities it changed, and nothing else.
@@ -34,7 +36,11 @@ let queryClient: QueryClient;
 let invalidated: string[];
 
 function wrapper({ children }: { children: ReactNode }) {
-  return <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
+  return (
+    <NextIntlClientProvider locale="ru" messages={messages.ru} timeZone="UTC">
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    </NextIntlClientProvider>
+  );
 }
 
 const keys = (...queryKeys: unknown[][]) => queryKeys.map((key) => JSON.stringify(key)).sort();

@@ -5,8 +5,10 @@ import { getProviders, signIn } from 'next-auth/react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { Eye, EyeOff } from 'lucide-react';
+import { useTranslations } from 'next-intl';
 
 function LoginForm() {
+  const t = useTranslations('auth');
   const router = useRouter();
   const searchParams = useSearchParams();
   const [error, setError] = useState('');
@@ -68,10 +70,10 @@ function LoginForm() {
 
       if (result?.error) {
         if (result.error === 'EmailNotVerified') {
-          setError('Email не подтвержден. Проверьте почту для активации аккаунта.');
+          setError(t('login.emailNotVerified'));
           setNeedsVerification(true);
         } else {
-          setError('Неверный email или пароль');
+          setError(t('login.invalidCredentials'));
         }
         setLoading(false);
         return;
@@ -80,14 +82,14 @@ function LoginForm() {
       router.push('/');
       router.refresh();
     } catch {
-      setError('Ошибка входа');
+      setError(t('login.failed'));
       setLoading(false);
     }
   }
 
   async function handleGoogleSignIn() {
     if (!googleEnabled) {
-      setError('Google-вход временно недоступен');
+      setError(t('login.googleUnavailable'));
       return;
     }
 
@@ -97,7 +99,7 @@ function LoginForm() {
 
   async function handleResend() {
     if (!email) {
-      setError('Введите email, чтобы отправить письмо');
+      setError(t('login.enterEmailToResend'));
       return;
     }
 
@@ -112,14 +114,14 @@ function LoginForm() {
 
       if (!res.ok) {
         setResendStatus('error');
-        setError('Не удалось отправить письмо');
+        setError(t('common.emailSendFailed'));
         return;
       }
 
       setResendStatus('sent');
     } catch {
       setResendStatus('error');
-      setError('Не удалось отправить письмо');
+      setError(t('common.emailSendFailed'));
     }
   }
 
@@ -128,31 +130,31 @@ function LoginForm() {
       <div className="w-full max-w-md">
         <div className="bg-white rounded-2xl shadow-xl p-8">
           <div className="text-center mb-8">
-            <h1 className="text-3xl font-bold text-gray-900">🛒 Вход</h1>
-            <p className="text-gray-600 mt-2">Войдите в Clickmoji Shop</p>
+            <h1 className="text-3xl font-bold text-gray-900">🛒 {t('login.title')}</h1>
+            <p className="text-gray-600 mt-2">{t('login.subtitle')}</p>
           </div>
 
           {registered === 'verify' && (
             <div className="bg-green-50 text-green-600 px-4 py-3 rounded-lg text-sm mb-4">
-              Регистрация успешна! Проверьте почту и подтвердите email.
+              {t('login.registeredVerify')}
             </div>
           )}
 
           {registered === 'auto' && (
             <div className="bg-green-50 text-green-600 px-4 py-3 rounded-lg text-sm mb-4">
-              Регистрация успешна! Можно войти с email и паролем.
+              {t('login.registeredAuto')}
             </div>
           )}
 
           {verified === 'true' && (
             <div className="bg-green-50 text-green-600 px-4 py-3 rounded-lg text-sm mb-4">
-              Email подтвержден! Теперь можно войти.
+              {t('login.verified')}
             </div>
           )}
 
           {verified === 'expired' && (
             <div className="bg-yellow-50 text-yellow-700 px-4 py-3 rounded-lg text-sm mb-4">
-              <div>Ссылка подтверждения истекла. Отправьте письмо еще раз.</div>
+              <div>{t('login.verificationExpired')}</div>
               <button
                 type="button"
                 onClick={handleResend}
@@ -160,54 +162,54 @@ function LoginForm() {
                 className="mt-2 text-blue-600 hover:text-blue-700 font-medium disabled:text-blue-300"
               >
                 {resendStatus === 'sent'
-                  ? 'Письмо отправлено'
+                  ? t('login.resendSent')
                   : resendStatus === 'sending'
-                    ? 'Отправляем...'
-                    : 'Отправить письмо еще раз'}
+                    ? t('common.sending')
+                    : t('login.resendAgain')}
               </button>
             </div>
           )}
 
           {verified === 'invalid' && (
             <div className="bg-red-50 text-red-600 px-4 py-3 rounded-lg text-sm mb-4">
-              Ссылка подтверждения недействительна.
+              {t('login.verificationInvalid')}
             </div>
           )}
 
           {verified === 'error' && (
             <div className="bg-red-50 text-red-600 px-4 py-3 rounded-lg text-sm mb-4">
-              Не удалось подтвердить email. Попробуйте еще раз.
+              {t('login.verificationError')}
             </div>
           )}
 
           {resetStatus === 'success' && (
             <div className="bg-green-50 text-green-600 px-4 py-3 rounded-lg text-sm mb-4">
-              Пароль обновлен. Войдите с новым паролем.
+              {t('login.resetSuccess')}
             </div>
           )}
 
           {resetStatus === 'expired' && (
             <div className="bg-yellow-50 text-yellow-700 px-4 py-3 rounded-lg text-sm mb-4">
-              Ссылка для сброса истекла. Запросите новую.
+              {t('common.resetLinkExpired')}
             </div>
           )}
 
           {resetStatus === 'invalid' && (
             <div className="bg-red-50 text-red-600 px-4 py-3 rounded-lg text-sm mb-4">
-              Ссылка для сброса недействительна.
+              {t('common.resetLinkInvalid')}
             </div>
           )}
 
           {resetStatus === 'error' && (
             <div className="bg-red-50 text-red-600 px-4 py-3 rounded-lg text-sm mb-4">
-              Не удалось сбросить пароль. Попробуйте еще раз.
+              {t('login.resetError')}
             </div>
           )}
 
           <form onSubmit={handleSubmit} className="space-y-4">
             <div>
               <label htmlFor="email" className="block text-sm font-medium text-gray-700 mb-1">
-                Email
+                {t('common.emailLabel')}
               </label>
               <input
                 type="email"
@@ -228,7 +230,7 @@ function LoginForm() {
 
             <div>
               <label htmlFor="password" className="block text-sm font-medium text-gray-700 mb-1">
-                Пароль
+                {t('common.passwordLabel')}
               </label>
               <div className="relative">
                 <input
@@ -237,13 +239,13 @@ function LoginForm() {
                   name="password"
                   required
                   className="w-full px-4 py-3 pr-12 rounded-lg border border-gray-300 focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all text-gray-900"
-                  placeholder="Ваш пароль"
+                  placeholder={t('login.passwordPlaceholder')}
                 />
                 <button
                   type="button"
                   onClick={() => setShowPassword((prev) => !prev)}
                   className="absolute inset-y-0 right-0 px-3 text-gray-500 hover:text-gray-700 transition-colors"
-                  aria-label={showPassword ? 'Скрыть пароль' : 'Показать пароль'}
+                  aria-label={showPassword ? t('common.hidePassword') : t('common.showPassword')}
                 >
                   {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
                 </button>
@@ -261,10 +263,10 @@ function LoginForm() {
                     className="mt-2 text-blue-600 hover:text-blue-700 font-medium disabled:text-blue-300"
                   >
                     {resendStatus === 'sent'
-                      ? 'Письмо отправлено'
+                      ? t('login.resendSent')
                       : resendStatus === 'sending'
-                        ? 'Отправляем...'
-                        : 'Отправить письмо еще раз'}
+                        ? t('common.sending')
+                        : t('login.resendAgain')}
                   </button>
                 )}
               </div>
@@ -275,7 +277,7 @@ function LoginForm() {
               disabled={loading}
               className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-blue-400 text-white py-3 rounded-lg font-semibold transition-colors shadow-lg hover:shadow-xl"
             >
-              {loading ? 'Вход...' : 'Войти'}
+              {loading ? t('login.submitting') : t('login.submit')}
             </button>
           </form>
 
@@ -283,7 +285,7 @@ function LoginForm() {
             <div className="mt-6">
               <div className="flex items-center gap-3 text-gray-400 text-sm">
                 <span className="h-px flex-1 bg-gray-200" />
-                <span>или</span>
+                <span>{t('login.or')}</span>
                 <span className="h-px flex-1 bg-gray-200" />
               </div>
               <button
@@ -291,20 +293,20 @@ function LoginForm() {
                 onClick={handleGoogleSignIn}
                 className="mt-4 w-full border border-gray-300 text-gray-900 py-3 rounded-lg font-semibold transition-colors hover:bg-gray-50"
               >
-                Войти через Google
+                {t('login.google')}
               </button>
             </div>
           )}
 
           <p className="text-center text-gray-600 mt-6">
-            Нет аккаунта?{' '}
+            {t('login.noAccount')}{' '}
             <Link href="/register" className="text-blue-600 hover:text-blue-700 font-medium">
-              Зарегистрироваться
+              {t('login.register')}
             </Link>
           </p>
           <p className="text-center text-gray-600 mt-2">
             <Link href="/forgot-password" className="text-blue-600 hover:text-blue-700 font-medium">
-              Забыли пароль?
+              {t('login.forgotPassword')}
             </Link>
           </p>
         </div>
@@ -313,15 +315,18 @@ function LoginForm() {
   );
 }
 
+function LoadingFallback() {
+  const t = useTranslations('auth');
+  return (
+    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 to-indigo-100">
+      <div className="text-xl text-gray-600">{t('common.loading')}</div>
+    </div>
+  );
+}
+
 export default function LoginPage() {
   return (
-    <Suspense
-      fallback={
-        <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 to-indigo-100">
-          <div className="text-xl text-gray-600">Загрузка...</div>
-        </div>
-      }
-    >
+    <Suspense fallback={<LoadingFallback />}>
       <LoginForm />
     </Suspense>
   );

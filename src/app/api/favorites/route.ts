@@ -22,6 +22,7 @@ export async function GET() {
               select: {
                 id: true,
                 name: true,
+                nameEn: true,
                 emoji: true,
               },
             },
@@ -88,6 +89,7 @@ export async function POST(request: Request) {
               select: {
                 id: true,
                 name: true,
+                nameEn: true,
                 emoji: true,
               },
             },

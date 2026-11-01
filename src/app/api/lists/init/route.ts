@@ -1,9 +1,12 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { requireUser } from '@/lib/auth-guards';
+import { getRequestLocale, getServerTranslator } from '@/lib/auth-security';
 
-// POST /api/lists/init - create starter lists when the account has none.
-export async function POST() {
+// POST /api/lists/init - create starter lists when the account has none, named in the
+// language of the request.
+export async function POST(request: Request) {
+  const t = getServerTranslator(getRequestLocale(request));
   try {
     const guard = await requireUser();
     if (guard instanceof Response) return guard;
@@ -22,10 +25,10 @@ export async function POST() {
 
     // Create the starter lists.
     const defaultLists = [
-      { name: 'На неделю', isActive: true },
-      { name: 'Для вечеринки', isActive: false },
-      { name: 'На выходные', isActive: false },
-      { name: 'Чтобы выжить', isActive: false },
+      { name: t('api.lists.defaultNames.week'), isActive: true },
+      { name: t('api.lists.defaultNames.party'), isActive: false },
+      { name: t('api.lists.defaultNames.weekend'), isActive: false },
+      { name: t('api.lists.defaultNames.survival'), isActive: false },
     ];
 
     await prisma.list.createMany({

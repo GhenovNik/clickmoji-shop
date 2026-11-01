@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, screen } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { renderWithIntl } from '@/test/intl';
 
 // The import modal renders exactly what POST /api/lists/import-text returns: fetch is wired to the
 // real route handler, which parses a real (faked) provider reply. A reply mixing a valid product
@@ -85,7 +86,7 @@ describe('import report from the real route', () => {
       { nameRu: 'Молоко', nameEn: 'Milk', categoryName: 'Dairy', emoji: '🥛' },
       { nameRu: { text: 'Сыр' }, nameEn: ['Cheese'], categoryName: 'Dairy', emoji: 7 },
     ]);
-    render(
+    renderWithIntl(
       <QueryClientProvider client={new QueryClient()}>
         <ImportListModal listId="list-1" isOpen onClose={vi.fn()} />
       </QueryClientProvider>

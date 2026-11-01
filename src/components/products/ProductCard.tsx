@@ -1,7 +1,10 @@
 ﻿'use client';
 
 import Image from 'next/image';
+import { useLocale, useTranslations } from 'next-intl';
 import type { Product } from '@/hooks/useProductSelection';
+import { localizedName } from '@/lib/catalog-name';
+import { productImageUrl } from '@/lib/product-image';
 import { productNameClassName } from './product-name';
 
 interface ProductCardProps {
@@ -25,6 +28,13 @@ export default function ProductCard({
   onVariantChange,
   onToggleFavorite,
 }: ProductCardProps) {
+  const t = useTranslations('catalog.shared');
+  const locale = useLocale();
+  const name = localizedName(product, locale);
+  // Hyphenation follows the language the name is actually shown in (English falls back to Russian).
+  const nameLang = locale === 'en' && product.nameEn?.trim() ? 'en' : 'ru';
+  const imageUrl = productImageUrl(product, locale);
+
   const handleFavoriteClick = (e: React.MouseEvent) => {
     e.stopPropagation();
     onToggleFavorite(product.id);
@@ -42,10 +52,10 @@ export default function ProductCard({
       >
         <div className="text-center">
           <div className="mx-auto mb-1 h-14 w-14 shrink-0 flex items-center justify-center overflow-hidden">
-            {product.isCustom && product.imageUrl ? (
+            {product.isCustom && imageUrl ? (
               <Image
-                src={product.imageUrl}
-                alt={product.name}
+                src={imageUrl}
+                alt={name}
                 width={56}
                 height={56}
                 className="h-14 w-14 object-contain"
@@ -55,8 +65,8 @@ export default function ProductCard({
             )}
           </div>
           <div className="h-[42px] flex items-center justify-center">
-            <p lang="ru" className={productNameClassName(product.name)}>
-              {product.name}
+            <p lang={nameLang} className={productNameClassName(name)}>
+              {name}
             </p>
           </div>
         </div>
@@ -69,11 +79,11 @@ export default function ProductCard({
             onChange={(event) => onVariantChange?.(product.id, event.target.value || null)}
             className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-900"
           >
-            <option value="">Без варианта</option>
+            <option value="">{t('noVariant')}</option>
             {product.variants.map((variant) => (
               <option key={variant.id} value={variant.id}>
                 {variant.emoji ? `${variant.emoji} ` : ''}
-                {variant.name}
+                {localizedName(variant, locale)}
               </option>
             ))}
           </select>
@@ -88,7 +98,7 @@ export default function ProductCard({
             flex items-center justify-center transition-all
             ${isFavorite ? 'bg-yellow-400 hover:bg-yellow-500 scale-110' : 'bg-white hover:bg-yellow-100'}
           `}
-          title={isFavorite ? 'Убрать из избранного' : 'Добавить в избранное'}
+          title={isFavorite ? t('removeFavorite') : t('addFavorite')}
         >
           <span className="text-xl">{isFavorite ? '⭐' : '☆'}</span>
         </button>

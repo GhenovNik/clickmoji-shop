@@ -1,8 +1,9 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
+import { localizedName } from '@/lib/catalog-name';
 import { requireUser } from '@/lib/auth-guards';
 import { visibleProductsWhere } from '@/lib/product-visibility';
-import { checkRateLimit, rateLimitResponse } from '@/lib/auth-security';
+import { checkRateLimit, getRequestLocale, rateLimitResponse } from '@/lib/auth-security';
 import { enforceAiQuota } from '@/lib/ai-quota';
 import {
   parseShoppingListText,
@@ -20,6 +21,7 @@ import {
 type CatalogProduct = CatalogProductPromptEntry & { categoryId: string };
 
 export async function POST(request: Request) {
+  const locale = getRequestLocale(request);
   try {
     const guard = await requireUser();
     if (guard instanceof Response) return guard;
@@ -49,7 +51,7 @@ export async function POST(request: Request) {
       windowMs: 60 * 60 * 1000, // 10 requests per hour
     });
     if (!userLimit.allowed) {
-      return rateLimitResponse(userLimit.resetAt);
+      return rateLimitResponse(userLimit.resetAt, locale);
     }
 
     // Verify list belongs to user
@@ -87,6 +89,12 @@ export async function POST(request: Request) {
     }
 
     const categoryNameOf = new Map(categories.map((category) => [category.id, category.name]));
+    // The report shows names in the language of the request.
+    const categoryById = new Map(categories.map((category) => [category.id, category]));
+    const reportCategory = (categoryId: string) => {
+      const category = categoryById.get(categoryId);
+      return category ? localizedName(category, locale) : '';
+    };
 
     // The model can only reuse products it was shown. Every visible product stays available for
     // server-side matching; the prompt gets a bounded, text-relevant subset.
@@ -106,7 +114,7 @@ export async function POST(request: Request) {
     const promptCatalog = selectCatalogForPrompt(catalog, text);
 
     // One unit of the shared daily AI budget, taken only when the provider is about to be called.
-    const quotaResponse = await enforceAiQuota(session.user);
+    const quotaResponse = await enforceAiQuota(session.user, locale);
     if (quotaResponse) return quotaResponse;
 
     const {
@@ -170,7 +178,7 @@ export async function POST(request: Request) {
         const note = mergeNotes(product.note, nameNote);
         const nameRu = cleanedName || product.nameRu.trim();
         const nameEn = product.nameEn.trim();
-        let dbProduct: { id: string; name: string; categoryId: string } | null =
+        let dbProduct: { id: string; name: string; nameEn: string; categoryId: string } | null =
           findCatalogMatch(product);
 
         // A category is needed only to create a missing product.
@@ -213,8 +221,8 @@ export async function POST(request: Request) {
           });
 
           results.created.push({
-            name: dbProduct.name,
-            category: category.name,
+            name: localizedName(dbProduct, locale),
+            category: localizedName(category, locale),
             note,
           });
         }
@@ -230,8 +238,8 @@ export async function POST(request: Request) {
         });
 
         results.added.push({
-          name: dbProduct.name,
-          category: categoryNameOf.get(dbProduct.categoryId) ?? '',
+          name: localizedName(dbProduct, locale),
+          category: reportCategory(dbProduct.categoryId),
           note,
         });
       } catch (error) {

@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useRef, useEffect } from 'react';
+import { useTranslations } from 'next-intl';
 import { cn } from '@/lib/utils';
 
 type ItemState = 'floating' | 'flying' | 'in-cart';
@@ -38,6 +39,7 @@ const INITIAL_EMOJIS: CartItem[] = [
 ];
 
 export default function InteractiveCart() {
+  const t = useTranslations('home.cart');
   const [items, setItems] = useState<CartItem[]>(INITIAL_EMOJIS);
   const cartRef = useRef<HTMLDivElement>(null);
   const [centerPos, setCenterPos] = useState({ top: '34px', left: '30px' });
@@ -81,7 +83,7 @@ export default function InteractiveCart() {
           inCartCount > 0 && !isFull && 'scale-105 rotate-0',
           isFull && 'scale-110 rotate-0'
         )}
-        title={isFull ? 'Очистить корзину' : ''}
+        title={isFull ? t('clear') : ''}
       >
         {/* Container for products in the cart. 
             It needs to be placed absolutely to visually overlap the top part of the cart emoji 
@@ -134,7 +136,7 @@ export default function InteractiveCart() {
                 transition: isFlying ? 'all 400ms cubic-bezier(0.25, 1, 0.5, 1)' : 'transform 0.2s',
                 animationDelay: item.delay,
               }}
-              title="Добавить в корзину!"
+              title={t('addToCart')}
             >
               {item.emoji}
             </div>

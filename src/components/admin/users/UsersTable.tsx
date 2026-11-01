@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { useFormatter, useLocale, useTranslations } from 'next-intl';
 import type { User } from '@/hooks/admin/useUsers';
 
 interface UsersTableProps {
@@ -10,6 +11,9 @@ interface UsersTableProps {
 }
 
 export default function UsersTable({ users, onEdit, onDelete }: UsersTableProps) {
+  const t = useTranslations('admin');
+  const locale = useLocale();
+  const format = useFormatter();
   const [sortField, setSortField] = useState<'name' | 'email' | 'role' | 'createdAt' | null>(null);
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc');
 
@@ -29,7 +33,7 @@ export default function UsersTable({ users, onEdit, onDelete }: UsersTableProps)
     if (sortField === 'name') {
       const aName = a.name || '';
       const bName = b.name || '';
-      comparison = aName.localeCompare(bName, 'ru');
+      comparison = aName.localeCompare(bName, locale);
     } else if (sortField === 'email') {
       comparison = a.email.localeCompare(b.email);
     } else if (sortField === 'role') {
@@ -65,7 +69,7 @@ export default function UsersTable({ users, onEdit, onDelete }: UsersTableProps)
                   onClick={() => handleSort('name')}
                 >
                   <div className="flex items-center gap-1">
-                    Имя
+                    {t('columns.userName')}
                     {sortField === 'name' && (
                       <span className="text-blue-600">{sortDirection === 'asc' ? '↑' : '↓'}</span>
                     )}
@@ -76,28 +80,28 @@ export default function UsersTable({ users, onEdit, onDelete }: UsersTableProps)
                   onClick={() => handleSort('role')}
                 >
                   <div className="flex items-center gap-1">
-                    Роль
+                    {t('columns.role')}
                     {sortField === 'role' && (
                       <span className="text-blue-600">{sortDirection === 'asc' ? '↑' : '↓'}</span>
                     )}
                   </div>
                 </th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Активность
+                  {t('columns.activity')}
                 </th>
                 <th
                   className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100 select-none"
                   onClick={() => handleSort('createdAt')}
                 >
                   <div className="flex items-center gap-1">
-                    Дата регистрации
+                    {t('columns.registeredAt')}
                     {sortField === 'createdAt' && (
                       <span className="text-blue-600">{sortDirection === 'asc' ? '↑' : '↓'}</span>
                     )}
                   </div>
                 </th>
                 <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Действия
+                  {t('columns.actions')}
                 </th>
               </tr>
             </thead>
@@ -118,17 +122,27 @@ export default function UsersTable({ users, onEdit, onDelete }: UsersTableProps)
                           : 'bg-green-100 text-green-800'
                       }`}
                     >
-                      {user.role === 'ADMIN' ? 'Администратор' : 'Пользователь'}
+                      {user.role === 'ADMIN' ? t('usersTable.roleAdmin') : t('usersTable.roleUser')}
                     </span>
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap">
-                    <div className="text-sm text-gray-900">Списков: {user._count.lists}</div>
-                    <div className="text-sm text-gray-600">Завершено: {user.completedSessions}</div>
-                    <div className="text-sm text-gray-500">Избранное: {user._count.favorites}</div>
+                    <div className="text-sm text-gray-900">
+                      {t('usersTable.listsCount', { count: user._count.lists })}
+                    </div>
+                    <div className="text-sm text-gray-600">
+                      {t('usersTable.completedCount', { count: user.completedSessions })}
+                    </div>
+                    <div className="text-sm text-gray-500">
+                      {t('usersTable.favoritesCount', { count: user._count.favorites })}
+                    </div>
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap">
                     <div className="text-sm text-gray-500">
-                      {new Date(user.createdAt).toLocaleDateString('ru-RU')}
+                      {format.dateTime(new Date(user.createdAt), {
+                        day: 'numeric',
+                        month: 'numeric',
+                        year: 'numeric',
+                      })}
                     </div>
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
@@ -136,13 +150,13 @@ export default function UsersTable({ users, onEdit, onDelete }: UsersTableProps)
                       onClick={() => onEdit(user)}
                       className="text-blue-600 hover:text-blue-900 mr-4"
                     >
-                      Редактировать
+                      {t('shared.edit')}
                     </button>
                     <button
                       onClick={() => onDelete(user.id)}
                       className="text-red-600 hover:text-red-900"
                     >
-                      Удалить
+                      {t('shared.delete')}
                     </button>
                   </td>
                 </tr>
@@ -168,27 +182,27 @@ export default function UsersTable({ users, onEdit, onDelete }: UsersTableProps)
                     : 'bg-green-100 text-green-800'
                 }`}
               >
-                {user.role === 'ADMIN' ? 'Админ' : 'USER'}
+                {user.role === 'ADMIN' ? t('usersTable.roleAdminShort') : 'USER'}
               </span>
             </div>
 
             <div className="grid grid-cols-2 gap-3 mb-3 text-sm">
               <div>
-                <p className="text-gray-500 text-xs">Списков</p>
+                <p className="text-gray-500 text-xs">{t('usersTable.lists')}</p>
                 <p className="font-medium text-gray-900">{user._count.lists}</p>
               </div>
               <div>
-                <p className="text-gray-500 text-xs">Завершено</p>
+                <p className="text-gray-500 text-xs">{t('usersTable.completed')}</p>
                 <p className="font-medium text-gray-900">{user.completedSessions}</p>
               </div>
               <div>
-                <p className="text-gray-500 text-xs">Избранное</p>
+                <p className="text-gray-500 text-xs">{t('usersTable.favorites')}</p>
                 <p className="font-medium text-gray-900">{user._count.favorites}</p>
               </div>
               <div>
-                <p className="text-gray-500 text-xs">Регистрация</p>
+                <p className="text-gray-500 text-xs">{t('usersTable.registered')}</p>
                 <p className="font-medium text-gray-900">
-                  {new Date(user.createdAt).toLocaleDateString('ru-RU', {
+                  {format.dateTime(new Date(user.createdAt), {
                     day: '2-digit',
                     month: '2-digit',
                     year: '2-digit',
@@ -202,13 +216,13 @@ export default function UsersTable({ users, onEdit, onDelete }: UsersTableProps)
                 onClick={() => onEdit(user)}
                 className="flex-1 bg-blue-50 text-blue-700 px-3 py-2 rounded-lg text-sm font-medium hover:bg-blue-100 transition-colors"
               >
-                Редактировать
+                {t('shared.edit')}
               </button>
               <button
                 onClick={() => onDelete(user.id)}
                 className="flex-1 bg-red-50 text-red-700 px-3 py-2 rounded-lg text-sm font-medium hover:bg-red-100 transition-colors"
               >
-                Удалить
+                {t('shared.delete')}
               </button>
             </div>
           </div>

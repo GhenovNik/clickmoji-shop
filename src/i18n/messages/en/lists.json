@@ -1,1 +1,82 @@
-{}
+{
+  "listsPage": {
+    "title": "My lists",
+    "subtitle": "Shopping made simple",
+    "newList": "New list"
+  },
+  "listCard": {
+    "itemCount": "{count, plural, one {# item} other {# items}}",
+    "deleteList": "Delete list"
+  },
+  "createModal": {
+    "title": "Create a new list",
+    "namePlaceholder": "List name",
+    "cancel": "Cancel",
+    "creating": "Creating...",
+    "create": "Create"
+  },
+  "listPage": {
+    "listFallback": "List",
+    "backToLists": "Back to lists",
+    "itemsLeft": "{count, plural, one {# item left to buy} other {# items left to buy}}",
+    "duplicateHint": "💡 You can add the same item several times with different notes",
+    "importFromText": "Import from text",
+    "toBuy": "To buy",
+    "purchased": "Purchased ({count})",
+    "completePurchase": "✓ Finish shopping",
+    "completeHint": "The list will be saved to your purchase history",
+    "addProducts": "+ Add items",
+    "clearAll": "Clear all",
+    "history": "Purchase history"
+  },
+  "emptyState": {
+    "backToLists": "Back to lists",
+    "title": "{listName} is empty",
+    "subtitle": "Add items from the categories",
+    "addProducts": "Add items",
+    "importFromText": "Import from text"
+  },
+  "importModal": {
+    "title": "Import a list",
+    "textLabel": "Paste your shopping list",
+    "textPlaceholder": "Format examples:\n\n- Milk 2L\n- White bread\n- Red apples 1kg\n\nor\n\n1. Tomatoes 500g\n2. Fresh cucumbers\n3. Mozzarella cheese\n\nor simply:\n\nMilk, bread, apples, tomatoes, cucumbers",
+    "emptyText": "Enter a shopping list",
+    "genericError": "Something went wrong",
+    "aiTitle": "AI will automatically:",
+    "aiRecognize": "Recognize items in any format",
+    "aiCategories": "Pick the categories",
+    "aiIcons": "Choose the icons",
+    "aiQuantities": "Extract quantities and notes",
+    "aiCreate": "Create new items that are not in the catalog",
+    "cancel": "Cancel",
+    "importing": "Importing...",
+    "import": "Import",
+    "doneTitle": "Import complete!",
+    "addedLabel": "Items added:",
+    "createdLabel": "New items created:",
+    "skippedLabel": "Skipped (already in the list):",
+    "failedLabel": "Errors:",
+    "createdTitle": "Created items:",
+    "skippedTitle": "Already in the list:",
+    "failedTitle": "Errors:",
+    "unrecognizedEntry": "Unrecognized entry",
+    "closingIn": "{seconds, plural, one {Closing in # second...} other {Closing in # seconds...}}"
+  },
+  "item": {
+    "notePlaceholder": "Note for this item...",
+    "noteSave": "OK"
+  },
+  "listsManagement": {
+    "createFailed": "Could not create the list",
+    "deleteFailed": "Could not delete the list",
+    "nameRequired": "Enter a list name",
+    "deleteConfirm": "Delete the list \"{listName}\"?"
+  },
+  "listItems": {
+    "clearConfirm": "Remove all items from the list?",
+    "completeFailed": "Could not finish the list"
+  },
+  "importMutation": {
+    "failed": "Could not import the list"
+  }
+}

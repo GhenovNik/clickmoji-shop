@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { requireAdmin } from '@/lib/auth-guards';
-import { checkRateLimit, rateLimitResponse } from '@/lib/auth-security';
+import { checkRateLimit, getRequestLocale, rateLimitResponse } from '@/lib/auth-security';
 import { enforceAiQuota } from '@/lib/ai-quota';
 import { processProductBatch, type ProcessedProduct } from '@/lib/services/ai-products';
 
@@ -27,7 +27,7 @@ export async function POST(request: Request) {
       windowMs: 60 * 60 * 1000,
     });
     if (!userLimit.allowed) {
-      return rateLimitResponse(userLimit.resetAt);
+      return rateLimitResponse(userLimit.resetAt, getRequestLocale(request));
     }
 
     // Check for API key
@@ -52,7 +52,7 @@ export async function POST(request: Request) {
     }
 
     // One unit of the administrator's daily AI budget for the batch analysis (one provider call).
-    const quotaResponse = await enforceAiQuota(session.user);
+    const quotaResponse = await enforceAiQuota(session.user, getRequestLocale(request));
     if (quotaResponse) return quotaResponse;
 
     const {

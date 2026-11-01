@@ -2,7 +2,12 @@ import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { requireUser } from '@/lib/auth-guards';
 import { visibleProductsWhere } from '@/lib/product-visibility';
-import { checkRateLimit, rateLimitResponse } from '@/lib/auth-security';
+import {
+  checkRateLimit,
+  getRequestLocale,
+  getServerTranslator,
+  rateLimitResponse,
+} from '@/lib/auth-security';
 import { enforceAiQuota } from '@/lib/ai-quota';
 import { analyzeSmartProduct } from '@/lib/services/ai-products';
 import { generateAndUploadEmojiAsset } from '@/lib/services/emoji-assets';
@@ -10,6 +15,8 @@ import { recordEmojiLibraryItem } from '@/lib/services/emoji-library';
 import { summarizeEmojiGenerationFailure } from '@/lib/services/emoji-errors';
 
 export async function POST(request: Request) {
+  const locale = getRequestLocale(request);
+  const t = getServerTranslator(locale);
   try {
     const guard = await requireUser();
     if (guard instanceof Response) return guard;
@@ -21,15 +28,13 @@ export async function POST(request: Request) {
     });
 
     if (!dbUser) {
-      return NextResponse.json({ error: 'Пользователь не найден' }, { status: 404 });
+      return NextResponse.json({ error: t('api.products.userNotFound') }, { status: 404 });
     }
 
     const GENERATION_LIMIT = 10;
     if (dbUser.role !== 'ADMIN' && dbUser.createdProductsCount >= GENERATION_LIMIT) {
       return NextResponse.json(
-        {
-          error: `Вы исчерпали лимит создания своих товаров (${GENERATION_LIMIT}/${GENERATION_LIMIT}).`,
-        },
+        { error: t('api.products.creationLimitReached', { limit: GENERATION_LIMIT }) },
         { status: 403 }
       );
     }
@@ -47,7 +52,7 @@ export async function POST(request: Request) {
       windowMs: 60 * 60 * 1000,
     });
     if (!userLimit.allowed) {
-      return rateLimitResponse(userLimit.resetAt);
+      return rateLimitResponse(userLimit.resetAt, locale);
     }
 
     // Check for API key
@@ -73,7 +78,7 @@ export async function POST(request: Request) {
     }
 
     // One unit of the shared daily AI budget for the text analysis.
-    const quotaResponse = await enforceAiQuota(dbUser);
+    const quotaResponse = await enforceAiQuota(dbUser, locale);
     if (quotaResponse) return quotaResponse;
 
     const {
@@ -143,7 +148,7 @@ export async function POST(request: Request) {
 
     // The image is a second paid call with its own unit; without one the product keeps the
     // Unicode emoji, like after a failed generation.
-    if (aiResult.needsCustomEmoji && !(await enforceAiQuota(dbUser))) {
+    if (aiResult.needsCustomEmoji && !(await enforceAiQuota(dbUser, locale))) {
       try {
         const emojiAsset = await generateAndUploadEmojiAsset({
           productName: aiResult.nameRu,

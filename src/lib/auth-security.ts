@@ -1,4 +1,7 @@
 import { NextResponse } from 'next/server';
+import { createTranslator } from 'next-intl';
+import { LOCALE_COOKIE, resolveLocale, type Locale } from '@/i18n/config';
+import { messages } from '@/i18n/messages';
 
 type RateLimitEntry = {
   count: number;
@@ -125,6 +128,25 @@ function checkRateLimitMemory({ key, limit, windowMs }: RateLimitOptions) {
   };
 }
 
+/**
+ * The language of an API request, resolved exactly like src/i18n/request.ts does for pages
+ * (NEXT_LOCALE cookie, then Accept-Language, then English), but from the Request itself so
+ * that route handlers stay testable without the Next.js request scope.
+ */
+export function getRequestLocale(request: Request): Locale {
+  const saved = (request.headers.get('cookie') ?? '')
+    .split(';')
+    .map((part) => part.trim())
+    .find((part) => part.startsWith(`${LOCALE_COOKIE}=`))
+    ?.slice(LOCALE_COOKIE.length + 1);
+  return resolveLocale(saved, request.headers.get('accept-language'));
+}
+
+/** A translator over every namespace for code that runs outside React (routes, emails). */
+export function getServerTranslator(locale: Locale) {
+  return createTranslator({ locale, messages: messages[locale], timeZone: 'UTC' });
+}
+
 export async function checkRateLimit(options: RateLimitOptions) {
   try {
     const distributed = await checkRateLimitUpstash(options);
@@ -138,10 +160,11 @@ export async function checkRateLimit(options: RateLimitOptions) {
   return checkRateLimitMemory(options);
 }
 
-export function rateLimitResponse(resetAt: number) {
+// Callers that do not pass a locale yet keep the Russian text they always got.
+export function rateLimitResponse(resetAt: number, locale: Locale = 'ru') {
   const retryAfter = Math.max(Math.ceil((resetAt - Date.now()) / 1000), 1);
   return NextResponse.json(
-    { error: 'Слишком много попыток. Попробуйте позже.' },
+    { error: getServerTranslator(locale)('api.rateLimited') },
     {
       status: 429,
       headers: {

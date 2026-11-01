@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { requireAdmin } from '@/lib/auth-guards';
 import bcrypt from 'bcryptjs';
+import { getRequestLocale } from '@/lib/auth-security';
 import { getPasswordValidationError } from '@/lib/validation/password';
 
 export async function PUT(request: Request, { params }: { params: Promise<{ userId: string }> }) {
@@ -48,7 +49,7 @@ export async function PUT(request: Request, { params }: { params: Promise<{ user
 
     // Hash a replacement password when one is provided.
     if (password) {
-      const passwordError = getPasswordValidationError(password);
+      const passwordError = getPasswordValidationError(password, getRequestLocale(request));
       if (passwordError) {
         return NextResponse.json({ error: passwordError }, { status: 400 });
       }

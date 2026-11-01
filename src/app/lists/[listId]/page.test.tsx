@@ -1,7 +1,8 @@
 import { Suspense } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { renderWithIntl } from '@/test/intl';
 
 // The page decides what an empty list offers. Import must be reachable there too, and a finished
 // import must turn the empty state into the list of imported items through the same cache path.
@@ -60,7 +61,7 @@ function renderPage() {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { staleTime: 5 * 60 * 1000, retry: false } },
   });
-  return render(
+  return renderWithIntl(
     <QueryClientProvider client={queryClient}>
       <Suspense fallback={<p>loading</p>}>
         <ShoppingListPage params={params} />

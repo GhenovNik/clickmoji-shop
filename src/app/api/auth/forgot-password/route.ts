@@ -5,12 +5,16 @@ import { sendPasswordResetEmail } from '@/lib/email';
 import {
   checkRateLimit,
   getClientIp,
+  getRequestLocale,
+  getServerTranslator,
   isValidEmail,
   normalizeEmail,
   rateLimitResponse,
 } from '@/lib/auth-security';
 
 export async function POST(request: Request) {
+  const locale = getRequestLocale(request);
+  const t = getServerTranslator(locale);
   try {
     const { email } = await request.json();
     const normalizedEmail = normalizeEmail(email || '');
@@ -22,7 +26,7 @@ export async function POST(request: Request) {
       windowMs: 60 * 60 * 1000,
     });
     if (!ipLimit.allowed) {
-      return rateLimitResponse(ipLimit.resetAt);
+      return rateLimitResponse(ipLimit.resetAt, locale);
     }
 
     const emailLimit = await checkRateLimit({
@@ -31,29 +35,29 @@ export async function POST(request: Request) {
       windowMs: 60 * 60 * 1000,
     });
     if (!emailLimit.allowed) {
-      return rateLimitResponse(emailLimit.resetAt);
+      return rateLimitResponse(emailLimit.resetAt, locale);
     }
 
     if (!normalizedEmail) {
-      return NextResponse.json({ error: 'Email обязателен' }, { status: 400 });
+      return NextResponse.json({ error: t('api.auth.emailRequired') }, { status: 400 });
     }
 
     if (!isValidEmail(normalizedEmail)) {
-      return NextResponse.json({ message: 'Если адрес существует, письмо отправлено' });
+      return NextResponse.json({ message: t('api.auth.emailSentIfExists') });
     }
 
     const user = await prisma.user.findUnique({ where: { email: normalizedEmail } });
 
     if (!user) {
-      return NextResponse.json({ message: 'Если адрес существует, письмо отправлено' });
+      return NextResponse.json({ message: t('api.auth.emailSentIfExists') });
     }
 
     const token = await createPasswordResetToken(normalizedEmail);
-    await sendPasswordResetEmail({ email: normalizedEmail, token });
+    await sendPasswordResetEmail({ email: normalizedEmail, token, locale });
 
-    return NextResponse.json({ message: 'Если адрес существует, письмо отправлено' });
+    return NextResponse.json({ message: t('api.auth.emailSentIfExists') });
   } catch (error) {
     console.error('Forgot password error:', error);
-    return NextResponse.json({ error: 'Не удалось отправить письмо' }, { status: 500 });
+    return NextResponse.json({ error: t('api.auth.emailSendFailed') }, { status: 500 });
   }
 }

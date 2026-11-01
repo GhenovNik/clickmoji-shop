@@ -2,6 +2,8 @@
 
 import Image from 'next/image';
 import { useState } from 'react';
+import { useLocale, useTranslations } from 'next-intl';
+import { localizedName } from '@/lib/catalog-name';
 
 interface Product {
   id: string;
@@ -15,6 +17,7 @@ interface Product {
   category: {
     id: string;
     name: string;
+    nameEn?: string | null;
     emoji: string;
     isCustom: boolean;
     imageUrl: string | null;
@@ -28,6 +31,8 @@ interface ProductsTableProps {
 }
 
 export default function ProductsTable({ products, onEdit, onDelete }: ProductsTableProps) {
+  const t = useTranslations('admin');
+  const locale = useLocale();
   const [sortField, setSortField] = useState<'name' | 'category' | null>(null);
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc');
 
@@ -47,7 +52,10 @@ export default function ProductsTable({ products, onEdit, onDelete }: ProductsTa
     if (sortField === 'name') {
       comparison = a.name.localeCompare(b.name, 'ru');
     } else if (sortField === 'category') {
-      comparison = a.category.name.localeCompare(b.category.name, 'ru');
+      comparison = localizedName(a.category, locale).localeCompare(
+        localizedName(b.category, locale),
+        locale
+      );
     }
 
     return sortDirection === 'asc' ? comparison : -comparison;
@@ -62,14 +70,14 @@ export default function ProductsTable({ products, onEdit, onDelete }: ProductsTa
             <thead className="bg-gray-50 border-b border-gray-200">
               <tr>
                 <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider whitespace-nowrap">
-                  Изображение
+                  {t('columns.image')}
                 </th>
                 <th
                   className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100 select-none"
                   onClick={() => handleSort('name')}
                 >
                   <div className="flex items-center gap-1">
-                    Название
+                    {t('columns.name')}
                     {sortField === 'name' && (
                       <span className="text-blue-600">{sortDirection === 'asc' ? '↑' : '↓'}</span>
                     )}
@@ -80,14 +88,14 @@ export default function ProductsTable({ products, onEdit, onDelete }: ProductsTa
                   onClick={() => handleSort('category')}
                 >
                   <div className="flex items-center gap-1">
-                    Категория
+                    {t('columns.category')}
                     {sortField === 'category' && (
                       <span className="text-blue-600">{sortDirection === 'asc' ? '↑' : '↓'}</span>
                     )}
                   </div>
                 </th>
                 <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider whitespace-nowrap">
-                  Действия
+                  {t('columns.actions')}
                 </th>
               </tr>
             </thead>
@@ -123,7 +131,7 @@ export default function ProductsTable({ products, onEdit, onDelete }: ProductsTa
                       {product.category.isCustom && product.category.imageUrl ? (
                         <Image
                           src={product.category.imageUrl}
-                          alt={product.category.name}
+                          alt={localizedName(product.category, locale)}
                           width={24}
                           height={24}
                           className="w-6 h-6 object-contain"
@@ -132,7 +140,9 @@ export default function ProductsTable({ products, onEdit, onDelete }: ProductsTa
                       ) : (
                         <span>{product.category.emoji}</span>
                       )}
-                      <span className="wrap-break-word">{product.category.name}</span>
+                      <span className="wrap-break-word">
+                        {localizedName(product.category, locale)}
+                      </span>
                     </div>
                   </td>
                   <td className="px-4 py-4 text-right text-sm font-medium align-top whitespace-nowrap">
@@ -141,13 +151,13 @@ export default function ProductsTable({ products, onEdit, onDelete }: ProductsTa
                         onClick={() => onEdit(product)}
                         className="text-blue-600 hover:text-blue-900"
                       >
-                        Редактировать
+                        {t('shared.edit')}
                       </button>
                       <button
                         onClick={() => onDelete(product.id)}
                         className="text-red-600 hover:text-red-900"
                       >
-                        Удалить
+                        {t('shared.delete')}
                       </button>
                     </div>
                   </td>
@@ -190,7 +200,7 @@ export default function ProductsTable({ products, onEdit, onDelete }: ProductsTa
                   {product.category.isCustom && product.category.imageUrl ? (
                     <Image
                       src={product.category.imageUrl}
-                      alt={product.category.name}
+                      alt={localizedName(product.category, locale)}
                       width={20}
                       height={20}
                       className="w-5 h-5 object-contain"
@@ -199,7 +209,7 @@ export default function ProductsTable({ products, onEdit, onDelete }: ProductsTa
                   ) : (
                     <span>{product.category.emoji}</span>
                   )}
-                  <span>{product.category.name}</span>
+                  <span>{localizedName(product.category, locale)}</span>
                 </div>
               </div>
             </div>
@@ -208,13 +218,13 @@ export default function ProductsTable({ products, onEdit, onDelete }: ProductsTa
                 onClick={() => onEdit(product)}
                 className="flex-1 bg-blue-50 text-blue-700 px-3 py-2 rounded-lg text-sm font-medium hover:bg-blue-100 transition-colors"
               >
-                Редактировать
+                {t('shared.edit')}
               </button>
               <button
                 onClick={() => onDelete(product.id)}
                 className="flex-1 bg-red-50 text-red-700 px-3 py-2 rounded-lg text-sm font-medium hover:bg-red-100 transition-colors"
               >
-                Удалить
+                {t('shared.delete')}
               </button>
             </div>
           </div>

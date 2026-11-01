@@ -1,1 +1,190 @@
-{}
+{
+  "shared": {
+    "backToAdmin": "← Back to admin panel",
+    "add": "+ Add",
+    "cancel": "Cancel",
+    "edit": "Edit",
+    "change": "Edit",
+    "delete": "Delete",
+    "close": "Close",
+    "loading": "Loading...",
+    "saveChanges": "Save changes",
+    "nameRu": "Name (RU)",
+    "nameEn": "Name (EN)"
+  },
+  "columns": {
+    "icon": "Icon",
+    "image": "Image",
+    "name": "Name",
+    "category": "Category",
+    "order": "Order",
+    "products": "Products",
+    "actions": "Actions",
+    "userName": "Name",
+    "role": "Role",
+    "activity": "Activity",
+    "registeredAt": "Signed up"
+  },
+  "dashboard": {
+    "backHome": "← Home",
+    "title": "Admin panel",
+    "subtitle": "Manage categories, products and users",
+    "categoriesTitle": "Categories",
+    "categoriesDescription": "Manage product categories: add new ones and edit existing ones",
+    "productsTitle": "Products",
+    "productsDescription": "Add new products, edit them and upload custom images",
+    "usersTitle": "Users",
+    "usersDescription": "Manage users, assign roles and edit profiles"
+  },
+  "productsPage": {
+    "title": "Products",
+    "bulkImport": "📦 Bulk import",
+    "editProduct": "Edit product",
+    "newProduct": "New product",
+    "saveFailed": "Could not save the product",
+    "deleteFailed": "Could not delete the product"
+  },
+  "categoriesPage": {
+    "title": "Categories",
+    "editCategory": "Edit category",
+    "newCategory": "New category",
+    "saveFailed": "Could not save the category",
+    "deleteFailed": "Could not delete the category"
+  },
+  "usersPage": {
+    "title": "Users",
+    "total": "Total users: {count}"
+  },
+  "productForm": {
+    "readFileFailed": "Could not read the file",
+    "fileTooLarge": "The file is larger than {maxMb} MB",
+    "imageSaveFailed": "Could not save the image",
+    "imageUploadFailed": "Could not upload the image",
+    "generatedSaveFailed": "Could not save the generated icon",
+    "category": "Category",
+    "selectCategory": "Select a category",
+    "aiDescription": "Description for AI generation",
+    "aiDescriptionPlaceholder": "For example: a non-alcoholic energy drink in a metal can, silver and blue colours",
+    "aiDescriptionHint": "Only used in the prompt for the AI button and not saved to the database.",
+    "customImage": "Custom image",
+    "uploadImage": "Upload image",
+    "selectedFile": "Selected: {name}",
+    "currentImage": "Current image:",
+    "variants": "Variants",
+    "addVariant": "+ Add variant",
+    "noVariants": "No variants. Add some if the product needs options.",
+    "uploading": "Uploading...",
+    "create": "Create product",
+    "englishVersion": "English version (with labels):",
+    "removeEnglishVersion": "Remove the English version"
+  },
+  "bulkImport": {
+    "enterNames": "Enter product names (one per line)",
+    "noNames": "No product names found",
+    "done": "✅ Import finished!\nAdded: {added}\nFailed: {failed}",
+    "errorWithReason": "Error: {error}",
+    "importFailed": "Could not import the products",
+    "importError": "Error while importing products",
+    "title": "📦 Add products in bulk",
+    "description": "Enter product names (one per line). AI will translate them into Russian and English, sort them into categories and pick an emoji.",
+    "namesLabel": "Product names (one per line):",
+    "placeholder": "avocado\nhummus\ntofu\ncilantro\nbasil",
+    "count": "Products: {count}",
+    "howItWorks": "ℹ️ How it works:",
+    "stepTranslate": "• AI translates the names into Russian and English",
+    "stepCategories": "• Sorts them into the existing categories automatically",
+    "stepEmoji": "• Picks a Unicode emoji (🍎, 🥕) where possible",
+    "stepFallback": "• If no emoji is found, 📦 is used",
+    "processing": "⏳ Processing...",
+    "import": "🚀 Import"
+  },
+  "emojiPicker": {
+    "libraryLoadFailed": "Could not load the library",
+    "enterNameToSearch": "Enter a name to search for an emoji",
+    "searchFailed": "Emoji search failed",
+    "enterNameToGenerate": "Enter a name to generate an icon",
+    "generateFailed": "Icon generation failed",
+    "generated": "✅ AI icon generated and saved to the library. It is linked to the product when you click \"Save\".",
+    "label": "Emoji (default)",
+    "optionalPlaceholder": "🍎 (optional)",
+    "searching": "Searching...",
+    "suggest": "🔍 Suggest",
+    "generateTitle": "Generate an icon with AI",
+    "generating": "⏳ Generating...",
+    "libraryTitle": "Pick a ready-made picture from the library",
+    "library": "📚 Library",
+    "libraryPlaceholder": "Name or tag",
+    "find": "Search",
+    "librarySearching": "Searching…",
+    "libraryEmpty": "Nothing found in the library",
+    "generatedNotInLibrary": "⚠️ AI icon generated but not saved to the library. Click \"Save\" so it is not lost."
+  },
+  "usersTable": {
+    "roleAdmin": "Administrator",
+    "roleUser": "User",
+    "roleAdminShort": "Admin",
+    "listsCount": "Lists: {count}",
+    "completedCount": "Completed: {count}",
+    "favoritesCount": "Favorites: {count}",
+    "lists": "Lists",
+    "completed": "Completed",
+    "favorites": "Favorites",
+    "registered": "Joined"
+  },
+  "userForm": {
+    "editUser": "Edit user",
+    "newUser": "New user",
+    "name": "Name",
+    "password": "Password",
+    "passwordKeepPlaceholder": "Leave empty to keep the current one",
+    "passwordHint": "Fill in only to change the password",
+    "role": "Role",
+    "roleUser": "User",
+    "roleAdmin": "Administrator",
+    "create": "Create user"
+  },
+  "categoryForm": {
+    "fileUploadFailed": "Could not upload the file",
+    "generatedSaveFailed": "Could not save the generated icon",
+    "order": "Order",
+    "recommendedOrder": "Suggested: {order}",
+    "aiIcon": "AI-generated icon",
+    "aiIconHint": "Used instead of the emoji",
+    "uploadOwn": "Or upload your own image",
+    "fileOnSave": "The file is uploaded when you save",
+    "uploading": "⏳ Uploading...",
+    "create": "Create category"
+  },
+  "categoriesTable": {
+    "manageProducts": "Products",
+    "order": "Order: {order}",
+    "productsCount": "Products: {count}"
+  },
+  "productMoveModal": {
+    "selectAtLeastOne": "Select at least one product",
+    "selectTarget": "Select a target category",
+    "moved": "✅ Products moved!",
+    "moveFailed": "Could not move the products",
+    "title": "{emoji} Manage products: {name}",
+    "total": "Total products: {count}",
+    "selectToMove": "Select products to move:",
+    "selected": "✓ Selected",
+    "empty": "This category has no products",
+    "moveTo": "Move {count, plural, one {# product} other {# products}} to:",
+    "selectCategoryOption": "-- Select a category --",
+    "moving": "⏳ Moving...",
+    "move": "✓ Move ({count})"
+  },
+  "useUsers": {
+    "createFailed": "Could not create the user",
+    "updateFailed": "Could not update the user",
+    "deleteFailed": "Could not delete the user",
+    "confirmDelete": "Delete this user? This cannot be undone."
+  },
+  "useProducts": {
+    "confirmDelete": "Are you sure?"
+  },
+  "useCategories": {
+    "confirmDelete": "Delete the category? All its products will be deleted too."
+  }
+}

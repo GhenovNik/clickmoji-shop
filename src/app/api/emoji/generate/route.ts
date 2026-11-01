@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { requireAdmin } from '@/lib/auth-guards';
-import { checkRateLimit, rateLimitResponse } from '@/lib/auth-security';
+import { checkRateLimit, getRequestLocale, rateLimitResponse } from '@/lib/auth-security';
 import { enforceAiQuota } from '@/lib/ai-quota';
 import { generateEmojiImage, uploadEmojiImage } from '@/lib/services/emoji-assets';
 import { recordEmojiLibraryItem } from '@/lib/services/emoji-library';
@@ -32,11 +32,11 @@ export async function POST(request: Request) {
       windowMs: 60 * 60 * 1000,
     });
     if (!userLimit.allowed) {
-      return rateLimitResponse(userLimit.resetAt);
+      return rateLimitResponse(userLimit.resetAt, getRequestLocale(request));
     }
 
     // One unit of the administrator's daily AI budget for the image.
-    const quotaResponse = await enforceAiQuota(session.user);
+    const quotaResponse = await enforceAiQuota(session.user, getRequestLocale(request));
     if (quotaResponse) return quotaResponse;
 
     // Image generation is the only provider call of this route, so it is the only place where a

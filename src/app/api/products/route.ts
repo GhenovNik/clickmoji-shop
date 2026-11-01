@@ -22,6 +22,7 @@ export async function GET(request: Request) {
             select: {
               id: true,
               name: true,
+              nameEn: true,
               emoji: true,
               isCustom: true,
               imageUrl: true,
@@ -46,6 +47,7 @@ export async function GET(request: Request) {
           select: {
             id: true,
             name: true,
+            nameEn: true,
             emoji: true,
             isCustom: true,
             imageUrl: true,

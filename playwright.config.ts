@@ -12,6 +12,8 @@ export default defineConfig({
   use: {
     baseURL: 'http://localhost:3000',
     trace: 'on-first-retry',
+    // The specs assert the Russian UI; English is covered in tests/e2e/language.spec.ts.
+    locale: 'ru-RU',
   },
 
   projects: [

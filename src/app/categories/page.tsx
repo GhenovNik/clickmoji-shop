@@ -6,10 +6,12 @@ import Link from 'next/link';
 import Image from 'next/image';
 import { useSession } from 'next-auth/react';
 import { useSearchParams } from 'next/navigation';
+import { useLocale, useTranslations } from 'next-intl';
 import { useLists } from '@/store/lists';
 import ProductSearch from '@/components/ProductSearch';
 import { CategoryCardSkeleton } from '@/components/ui/Skeleton';
 import { queryKeys } from '@/lib/query-keys';
+import { localizedName } from '@/lib/catalog-name';
 
 type Category = {
   id: string;
@@ -34,6 +36,8 @@ function CategoriesPageContent() {
   const { data: session } = useSession();
   const searchParams = useSearchParams();
   const { setActiveList } = useLists();
+  const t = useTranslations('catalog');
+  const locale = useLocale();
 
   // Set active list from URL parameter
   useEffect(() => {
@@ -53,8 +57,8 @@ function CategoriesPageContent() {
     ? [
         {
           id: 'favorites',
-          name: 'Избранное',
-          nameEn: 'Favorites',
+          name: t('categories.favorites'),
+          nameEn: t('categories.favorites'),
           emoji: '⭐',
           isCustom: false,
           imageUrl: null,
@@ -69,8 +73,8 @@ function CategoriesPageContent() {
       <div className="max-w-4xl mx-auto">
         {/* Header */}
         <div className="text-center mb-8">
-          <h1 className="text-4xl font-bold mb-2 text-gray-900">📁 Выберите категорию</h1>
-          <p className="text-gray-700 mb-6">Выберите категорию товаров для вашего списка</p>
+          <h1 className="text-4xl font-bold mb-2 text-gray-900">📁 {t('categories.title')}</h1>
+          <p className="text-gray-700 mb-6">{t('categories.subtitle')}</p>
 
           {/* Search */}
           <ProductSearch />
@@ -86,6 +90,7 @@ function CategoriesPageContent() {
             : displayCategories.map((category) => {
                 const listIdParam = searchParams.get('listId');
                 const listQuery = listIdParam ? `?listId=${listIdParam}` : '';
+                const categoryName = localizedName(category, locale);
                 return (
                   <Link
                     key={category.id}
@@ -102,7 +107,7 @@ function CategoriesPageContent() {
                         {category.isCustom && category.imageUrl ? (
                           <Image
                             src={category.imageUrl}
-                            alt={category.name}
+                            alt={categoryName}
                             width={96}
                             height={96}
                             className="max-h-24 max-w-24 object-contain"
@@ -114,11 +119,11 @@ function CategoriesPageContent() {
 
                       <div className="mt-auto -translate-y-1">
                         <h3 className="h-10 mb-0 text-base font-semibold leading-[1.1] text-gray-900 flex items-center justify-center">
-                          {category.name}
+                          {categoryName}
                         </h3>
                         {category._count && (
                           <p className="text-sm text-gray-600 h-5 flex items-center justify-center">
-                            {category._count.products} товаров
+                            {t('shared.productCount', { count: category._count.products })}
                           </p>
                         )}
                       </div>
@@ -131,7 +136,7 @@ function CategoriesPageContent() {
         {/* Navigation */}
         <div className="hidden sm:flex items-center justify-center gap-6 mt-8">
           <Link href="/history" className="text-blue-600 hover:text-blue-800 underline">
-            История покупок
+            {t('categories.historyLink')}
           </Link>
         </div>
       </div>
@@ -140,11 +145,13 @@ function CategoriesPageContent() {
 }
 
 export default function CategoriesPage() {
+  const t = useTranslations('common');
+
   return (
     <Suspense
       fallback={
         <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 p-6 flex items-center justify-center">
-          <div className="text-2xl">Загрузка...</div>
+          <div className="text-2xl">{t('loading')}</div>
         </div>
       }
     >

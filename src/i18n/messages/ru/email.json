@@ -1,1 +1,18 @@
-{}
+{
+  "fallbackLink": "Если кнопка не работает, откройте ссылку: {url}",
+  "verification": {
+    "subject": "Подтвердите email в Clickmoji Shop",
+    "text": "Подтвердите email по ссылке: {url}",
+    "heading": "Добро пожаловать в Clickmoji Shop",
+    "intro": "Подтвердите email, чтобы войти в аккаунт.",
+    "button": "Подтвердить email"
+  },
+  "passwordReset": {
+    "subject": "Сброс пароля в Clickmoji Shop",
+    "text": "Ссылка для сброса пароля: {url}",
+    "heading": "Сброс пароля",
+    "intro": "Вы запросили смену пароля в Clickmoji Shop.",
+    "button": "Сменить пароль",
+    "expiry": "Ссылка действует 1 час."
+  }
+}

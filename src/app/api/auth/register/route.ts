@@ -7,12 +7,16 @@ import { getPasswordValidationError } from '@/lib/validation/password';
 import {
   checkRateLimit,
   getClientIp,
+  getRequestLocale,
+  getServerTranslator,
   isValidEmail,
   normalizeEmail,
   rateLimitResponse,
 } from '@/lib/auth-security';
 
 export async function POST(request: Request) {
+  const locale = getRequestLocale(request);
+  const t = getServerTranslator(locale);
   try {
     const { email, password, name } = await request.json();
     const normalizedEmail = normalizeEmail(email || '');
@@ -24,7 +28,7 @@ export async function POST(request: Request) {
       windowMs: 60 * 60 * 1000,
     });
     if (!ipLimit.allowed) {
-      return rateLimitResponse(ipLimit.resetAt);
+      return rateLimitResponse(ipLimit.resetAt, locale);
     }
 
     const emailLimit = await checkRateLimit({
@@ -33,18 +37,18 @@ export async function POST(request: Request) {
       windowMs: 60 * 60 * 1000,
     });
     if (!emailLimit.allowed) {
-      return rateLimitResponse(emailLimit.resetAt);
+      return rateLimitResponse(emailLimit.resetAt, locale);
     }
 
     if (!normalizedEmail || !password) {
-      return NextResponse.json({ error: 'Email и пароль обязательны' }, { status: 400 });
+      return NextResponse.json({ error: t('api.auth.emailAndPasswordRequired') }, { status: 400 });
     }
 
     if (!isValidEmail(normalizedEmail)) {
-      return NextResponse.json({ error: 'Некорректный email' }, { status: 400 });
+      return NextResponse.json({ error: t('api.auth.invalidEmail') }, { status: 400 });
     }
 
-    const passwordError = getPasswordValidationError(password);
+    const passwordError = getPasswordValidationError(password, locale);
     if (passwordError) {
       return NextResponse.json({ error: passwordError }, { status: 400 });
     }
@@ -55,10 +59,7 @@ export async function POST(request: Request) {
     });
 
     if (existingUser) {
-      return NextResponse.json(
-        { error: 'Пользователь с таким email уже существует' },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: t('api.auth.userExists') }, { status: 400 });
     }
 
     // Hash the password before persistence.
@@ -80,7 +81,7 @@ export async function POST(request: Request) {
     if (requiresEmailVerification) {
       try {
         const token = await createEmailVerificationToken(normalizedEmail);
-        await sendVerificationEmail({ email: normalizedEmail, token });
+        await sendVerificationEmail({ email: normalizedEmail, token, locale });
         emailSent = true;
       } catch (emailError) {
         console.error('Verification email error:', emailError);
@@ -93,20 +94,17 @@ export async function POST(request: Request) {
           where: { id: user.id },
         });
 
-        return NextResponse.json(
-          { error: 'Не удалось отправить письмо подтверждения. Попробуйте позже.' },
-          { status: 503 }
-        );
+        return NextResponse.json({ error: t('api.auth.verificationEmailFailed') }, { status: 503 });
       }
     }
 
     // Create starter shopping lists for the new account.
     const defaultLists = [
-      { name: 'Основной', isActive: true },
-      { name: 'На выходные', isActive: false },
-      { name: 'Праздники', isActive: false },
-      { name: 'Для вечеринки', isActive: false },
-      { name: 'Срочное', isActive: false },
+      { name: t('api.lists.defaultNames.main'), isActive: true },
+      { name: t('api.lists.defaultNames.weekend'), isActive: false },
+      { name: t('api.lists.defaultNames.holidays'), isActive: false },
+      { name: t('api.lists.defaultNames.party'), isActive: false },
+      { name: t('api.lists.defaultNames.urgent'), isActive: false },
     ];
 
     await prisma.list.createMany({
@@ -118,7 +116,7 @@ export async function POST(request: Request) {
 
     return NextResponse.json(
       {
-        message: 'Пользователь успешно создан',
+        message: t('api.auth.userCreated'),
         emailSent,
         requiresEmailVerification,
         user: {
@@ -131,6 +129,6 @@ export async function POST(request: Request) {
     );
   } catch (error) {
     console.error('Registration error:', error);
-    return NextResponse.json({ error: 'Ошибка при регистрации' }, { status: 500 });
+    return NextResponse.json({ error: t('api.auth.registrationFailed') }, { status: 500 });
   }
 }

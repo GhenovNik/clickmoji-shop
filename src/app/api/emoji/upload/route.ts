@@ -1,6 +1,11 @@
 import { NextResponse } from 'next/server';
 import { requireAdmin } from '@/lib/auth-guards';
-import { checkRateLimit, rateLimitResponse } from '@/lib/auth-security';
+import {
+  checkRateLimit,
+  getRequestLocale,
+  getServerTranslator,
+  rateLimitResponse,
+} from '@/lib/auth-security';
 import { uploadEmojiBase64Image } from '@/lib/services/emoji-assets';
 import {
   EmojiImageTooLargeError,
@@ -16,6 +21,7 @@ function librarySource(value: unknown): EmojiLibrarySource {
 }
 
 export async function POST(request: Request) {
+  const locale = getRequestLocale(request);
   try {
     const guard = await requireAdmin();
     if (guard instanceof Response) return guard;
@@ -36,7 +42,7 @@ export async function POST(request: Request) {
       windowMs: 60 * 60 * 1000,
     });
     if (!userLimit.allowed) {
-      return rateLimitResponse(userLimit.resetAt);
+      return rateLimitResponse(userLimit.resetAt, locale);
     }
 
     const { imageUrl, fileName } = await uploadEmojiBase64Image({ base64, productName });
@@ -55,13 +61,13 @@ export async function POST(request: Request) {
   } catch (error) {
     if (error instanceof EmojiImageTooLargeError) {
       return NextResponse.json(
-        { error: 'Картинка слишком большая: не больше 4096 × 4096 пикселей' },
+        { error: getServerTranslator(locale)('api.emoji.tooLarge') },
         { status: 413 }
       );
     }
     if (error instanceof EmptyEmojiImageError) {
       return NextResponse.json(
-        { error: 'На картинке не найден предмет: она пустая или целиком белая' },
+        { error: getServerTranslator(locale)('api.emoji.emptyImage') },
         { status: 422 }
       );
     }

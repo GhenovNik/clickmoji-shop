@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { requireAdmin } from '@/lib/auth-guards';
 import bcrypt from 'bcryptjs';
+import { getRequestLocale } from '@/lib/auth-security';
 import { getPasswordValidationError } from '@/lib/validation/password';
 
 export async function GET() {
@@ -62,7 +63,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Email and password are required' }, { status: 400 });
     }
 
-    const passwordError = getPasswordValidationError(password);
+    const passwordError = getPasswordValidationError(password, getRequestLocale(request));
     if (passwordError) {
       return NextResponse.json({ error: passwordError }, { status: 400 });
     }

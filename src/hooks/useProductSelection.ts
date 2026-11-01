@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useSession } from 'next-auth/react';
 import { useRouter } from 'next/navigation';
+import { useTranslations } from 'next-intl';
 import { listsQueryKey, useActiveList } from './useListsQuery';
 import { queryKeys } from '@/lib/query-keys';
 
@@ -14,10 +15,12 @@ export type Product = {
   emoji: string;
   isCustom: boolean;
   imageUrl: string | null;
+  imageUrlEn?: string | null;
   variants?: { id: string; name: string; nameEn: string; emoji: string }[];
   category: {
     id: string;
     name: string;
+    nameEn?: string | null;
     emoji: string;
     isCustom: boolean;
     imageUrl: string | null;
@@ -73,6 +76,7 @@ export function useProductSelection(categoryId: string) {
   const { data: session } = useSession();
   const { activeListId } = useActiveList();
   const queryClient = useQueryClient();
+  const t = useTranslations('catalog.shared');
 
   const [selectedProducts, setSelectedProducts] = useState<Set<string>>(new Set());
   const [selectedVariants, setSelectedVariants] = useState<Record<string, string | null>>({});
@@ -144,7 +148,7 @@ export function useProductSelection(categoryId: string) {
 
   const toggleFavorite = async (productId: string) => {
     if (!session?.user) {
-      alert('Войдите чтобы добавить товары в избранное');
+      alert(t('signInForFavorites'));
       return;
     }
 
@@ -168,7 +172,7 @@ export function useProductSelection(categoryId: string) {
     }
 
     if (!activeListId) {
-      alert('Сначала выберите список');
+      alert(t('selectListFirst'));
       return;
     }
 
@@ -194,7 +198,7 @@ export function useProductSelection(categoryId: string) {
       }
     } catch (error) {
       console.error('Error adding items to list:', error);
-      alert('Ошибка при добавлении товаров');
+      alert(t('addProductsFailed'));
     } finally {
       setAdding(false);
     }

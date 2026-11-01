@@ -1,1 +1,45 @@
-{}
+{
+  "rateLimited": "Too many attempts. Please try again later.",
+  "aiQuota": {
+    "unavailable": "AI is temporarily unavailable. Please try again later.",
+    "disabled": "AI features are turned off for this role.",
+    "exhausted": "The daily AI request limit is used up. Please try again tomorrow."
+  },
+  "auth": {
+    "emailAndPasswordRequired": "Email and password are required",
+    "invalidEmail": "Invalid email",
+    "userExists": "A user with this email already exists",
+    "verificationEmailFailed": "Could not send the confirmation email. Please try again later.",
+    "userCreated": "User created",
+    "registrationFailed": "Registration failed",
+    "verificationNotRequired": "Email confirmation is not required",
+    "emailRequired": "Email is required",
+    "emailSentIfExists": "If the address exists, the email has been sent",
+    "emailSent": "Email sent",
+    "emailSendFailed": "Could not send the email",
+    "resetFieldsRequired": "Email, token and password are required",
+    "resetLinkInvalid": "The reset link is invalid.",
+    "passwordUpdated": "Password updated",
+    "resetFailed": "Could not reset the password"
+  },
+  "lists": {
+    "defaultNames": {
+      "main": "Main",
+      "week": "This week",
+      "weekend": "Weekend",
+      "holidays": "Holidays",
+      "party": "Party",
+      "urgent": "Urgent",
+      "survival": "Survival kit"
+    },
+    "itemsAdded": "Added {count, plural, one {# item} other {# items}}."
+  },
+  "products": {
+    "userNotFound": "User not found",
+    "creationLimitReached": "You have used up your custom product limit ({limit}/{limit})."
+  },
+  "emoji": {
+    "emptyImage": "No object found in the picture: it is empty or entirely white",
+    "tooLarge": "The picture is too large: at most 4096 × 4096 pixels"
+  }
+}

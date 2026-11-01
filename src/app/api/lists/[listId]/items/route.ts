@@ -3,6 +3,7 @@ import { prisma } from '@/lib/prisma';
 import { requireUser } from '@/lib/auth-guards';
 import { visibleProductsWhere } from '@/lib/product-visibility';
 import { lockOwnedList } from '@/lib/list-lock';
+import { getRequestLocale, getServerTranslator } from '@/lib/auth-security';
 
 // Upper bound for one request; the largest category has far fewer products than this.
 const MAX_ITEMS_PER_BATCH = 100;
@@ -122,7 +123,9 @@ export async function POST(request: Request, { params }: { params: Promise<{ lis
 
     return NextResponse.json({
       createdItems,
-      message: `Добавлено ${createdItems.length} товаров.`,
+      message: getServerTranslator(getRequestLocale(request))('api.lists.itemsAdded', {
+        count: createdItems.length,
+      }),
     });
   } catch (error) {
     console.error('Error adding items to list:', error);

@@ -1,1 +1,23 @@
-{}
+{
+  "hero": {
+    "title": "Shopping with <brand>ClickMoji</brand>",
+    "subtitle": "Visual shopping lists instead of boring text. Fill your cart quickly and easily, with emoji you can see at a glance!"
+  },
+  "actions": {
+    "openCatalog": "Open catalog",
+    "myLists": "My lists",
+    "history": "Purchase history"
+  },
+  "features": {
+    "smartListsTitle": "Smart lists",
+    "smartListsText": "Build lists in a couple of taps and shop faster",
+    "favoritesTitle": "Favorites",
+    "favoritesText": "Your usual items always at hand in a section of their own",
+    "historyTitle": "History",
+    "historyText": "Keep past shopping trips so you can repeat them easily"
+  },
+  "cart": {
+    "clear": "Empty the cart",
+    "addToCart": "Add to cart!"
+  }
+}
