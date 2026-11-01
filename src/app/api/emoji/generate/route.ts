@@ -2,7 +2,8 @@ import { NextResponse } from 'next/server';
 import { requireAdmin } from '@/lib/auth-guards';
 import { checkRateLimit, rateLimitResponse } from '@/lib/auth-security';
 import { enforceAiQuota } from '@/lib/ai-quota';
-import { generateEmojiImage } from '@/lib/services/emoji-assets';
+import { generateEmojiImage, uploadEmojiImage } from '@/lib/services/emoji-assets';
+import { recordEmojiLibraryItem } from '@/lib/services/emoji-library';
 import {
   EmojiProviderUnavailableError,
   IMAGE_PROVIDER_UNAVAILABLE_CODE,
@@ -19,7 +20,7 @@ export async function POST(request: Request) {
     if (guard instanceof Response) return guard;
     const { session } = guard;
 
-    const { productName, description } = await request.json();
+    const { productName, description, name, nameEn } = await request.json();
 
     if (!productName) {
       return NextResponse.json({ error: 'Product name is required' }, { status: 400 });
@@ -56,12 +57,30 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Failed to generate emoji' }, { status: 500 });
     }
 
-    // Return a preview without persisting it to UploadThing.
-    const base64Image = `data:image/png;base64,${generated.imageBuffer.toString('base64')}`;
+    // A paid picture is kept at once: normalized, stored and recorded in the library, so closing
+    // the form or generating again never loses it. The form only links the returned URL.
+    const { imageUrl } = await uploadEmojiImage({
+      imageBuffer: generated.imageBuffer,
+      productName,
+    });
+    const libraryEntry = {
+      imageUrl,
+      name: String(name || productName),
+      nameEn: typeof nameEn === 'string' ? nameEn : null,
+      source: 'generated' as const,
+    };
+    // One retry; if the library still cannot be written the picture is returned anyway, and the
+    // response says so instead of claiming it is in the library.
+    const libraryRecorded = Boolean(
+      (await recordEmojiLibraryItem(libraryEntry)) ?? (await recordEmojiLibraryItem(libraryEntry))
+    );
 
     return NextResponse.json({
-      base64: base64Image,
-      message: 'Image generated successfully. Will be uploaded when product is saved.',
+      imageUrl,
+      libraryRecorded,
+      message: libraryRecorded
+        ? 'Image generated and saved to the emoji library.'
+        : 'Image generated but not saved to the emoji library: save the product to keep it.',
       provider: generated.provider,
       model: generated.model,
       promptVersion: generated.promptVersion,

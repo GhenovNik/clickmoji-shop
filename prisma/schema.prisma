@@ -94,6 +94,8 @@ model Product {
   emoji       String   // unicode emoji или URL кастомной картинки
   isCustom    Boolean  @default(false)
   imageUrl    String?  // для кастомных emoji
+  // English variant of a picture with text on it; the app shows it when the UI is English.
+  imageUrlEn  String?
 
   categoryId  String
   category    Category @relation(fields: [categoryId], references: [id], onDelete: Cascade)
@@ -112,6 +114,32 @@ model Product {
   @@index([categoryId])
   @@index([name])
   @@map("products")
+}
+
+// Normalized emoji picture kept on its own, with or without a product: batch imports, AI
+// generations and admin uploads land here, and a product or category uses one by its URL.
+// A stored file listed here is never deleted by product, category or cleanup code.
+model EmojiLibraryItem {
+  id        String   @id @default(cuid())
+  name      String
+  nameEn    String?
+  tags      String[] @default([])
+  imageUrl  String   @unique
+  // generated | upload | batch
+  source    String
+  // Stable origin, e.g. "batch-007#3"; re-importing the same cell updates instead of duplicating.
+  sourceRef String?  @unique
+  // null: no text, fits every language; "ru" / "en": text on the packaging in that language.
+  locale    String?
+  // Language variants of one picture share a key, e.g. "batch-007#3".
+  groupKey  String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([name])
+  @@index([groupKey])
+  @@map("emoji_library_items")
 }
 
 // Разновидность продукта (например: белый хлеб, багет)

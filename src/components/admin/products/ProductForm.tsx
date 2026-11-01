@@ -2,7 +2,6 @@
 
 import Image from 'next/image';
 import { useState, useRef, useEffect } from 'react';
-import { useUploadThing } from '@/lib/uploadthing';
 import EmojiPicker from '../shared/EmojiPicker';
 
 interface Product {
@@ -12,6 +11,7 @@ interface Product {
   emoji: string;
   isCustom: boolean;
   imageUrl: string | null;
+  imageUrlEn?: string | null;
   categoryId: string;
   variants?: ProductVariant[];
 }
@@ -45,8 +45,21 @@ export type FormData = {
   categoryId: string;
   isCustom: boolean;
   imageUrl: string;
+  // English version of a labelled picture; null when the picture has no text.
+  imageUrlEn: string | null;
   variants?: ProductVariant[];
 };
+
+const MAX_UPLOAD_BYTES = 3 * 1024 * 1024;
+
+function readAsDataUrl(file: File) {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => reject(reader.error ?? new Error('Не удалось прочитать файл'));
+    reader.readAsDataURL(file);
+  });
+}
 
 export default function ProductForm({ product, categories, onSubmit, onCancel }: ProductFormProps) {
   const [formData, setFormData] = useState<FormData>({
@@ -56,6 +69,7 @@ export default function ProductForm({ product, categories, onSubmit, onCancel }:
     categoryId: product?.categoryId || '',
     isCustom: product?.isCustom || false,
     imageUrl: product?.imageUrl || '',
+    imageUrlEn: product?.imageUrlEn || null,
     variants: product?.variants || [],
   });
 
@@ -64,8 +78,6 @@ export default function ProductForm({ product, categories, onSubmit, onCancel }:
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const [generationDescription, setGenerationDescription] = useState('');
   const dropdownRef = useRef<HTMLDivElement>(null);
-
-  const { startUpload } = useUploadThing('productImage');
 
   // Close dropdown when clicking outside
   useEffect(() => {
@@ -79,9 +91,35 @@ export default function ProductForm({ product, categories, onSubmit, onCancel }:
   }, []);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files[0]) {
-      setSelectedFile(e.target.files[0]);
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (file.size > MAX_UPLOAD_BYTES) {
+      alert('Файл больше 3 МБ');
+      e.target.value = '';
+      return;
     }
+    setSelectedFile(file);
+  };
+
+  // Every picture goes through /api/emoji/upload: the server normalizes it to the shared emoji
+  // look and keeps it in the emoji library.
+  const uploadToLibrary = async (base64: string, source: 'upload' | 'generated') => {
+    const uploadRes = await fetch('/api/emoji/upload', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        base64,
+        productName: formData.nameEn || formData.name,
+        name: formData.name,
+        nameEn: formData.nameEn,
+        source,
+      }),
+    });
+    const uploadData = await uploadRes.json();
+    if (!uploadRes.ok || !uploadData.imageUrl) {
+      throw new Error(uploadData.error || 'Ошибка при сохранении изображения');
+    }
+    return uploadData.imageUrl as string;
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -92,13 +130,10 @@ export default function ProductForm({ product, categories, onSubmit, onCancel }:
     if (selectedFile) {
       setUploading(true);
       try {
-        const uploadResult = await startUpload([selectedFile]);
-        if (uploadResult && uploadResult[0]) {
-          imageUrl = uploadResult[0].url;
-        }
+        imageUrl = await uploadToLibrary(await readAsDataUrl(selectedFile), 'upload');
       } catch (error) {
         console.error('Error uploading image:', error);
-        alert('Ошибка при загрузке изображения');
+        alert(error instanceof Error ? error.message : 'Ошибка при загрузке изображения');
         setUploading(false);
         return;
       }
@@ -108,22 +143,7 @@ export default function ProductForm({ product, categories, onSubmit, onCancel }:
     if (!selectedFile && formData.isCustom && imageUrl && imageUrl.startsWith('data:image/')) {
       setUploading(true);
       try {
-        const uploadRes = await fetch('/api/emoji/upload', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            base64: imageUrl,
-            productName: formData.nameEn || formData.name,
-          }),
-        });
-
-        const uploadData = await uploadRes.json();
-
-        if (!uploadRes.ok || !uploadData.imageUrl) {
-          throw new Error(uploadData.error || 'Ошибка при сохранении сгенерированной иконки');
-        }
-
-        imageUrl = uploadData.imageUrl;
+        imageUrl = await uploadToLibrary(imageUrl, 'generated');
       } catch (error) {
         console.error('Error uploading generated image:', error);
         alert('Ошибка при сохранении сгенерированной иконки');
@@ -260,6 +280,15 @@ export default function ProductForm({ product, categories, onSubmit, onCancel }:
           productDescription={generationDescription}
           isRequired={!formData.isCustom}
           onGenerateImage={(url) => setFormData({ ...formData, imageUrl: url, isCustom: true })}
+          onSelectLibraryImage={({ imageUrl, imageUrlEn }) => {
+            // An English-only library picture fills the English field and keeps the main one.
+            if (!imageUrl) {
+              setFormData({ ...formData, imageUrlEn });
+              return;
+            }
+            setSelectedFile(null);
+            setFormData({ ...formData, imageUrl, imageUrlEn, isCustom: true });
+          }}
         />
       </div>
 
@@ -315,6 +344,28 @@ export default function ProductForm({ product, categories, onSubmit, onCancel }:
                   className="w-16 h-16 object-contain mt-1"
                   unoptimized
                 />
+              </div>
+            )}
+            {formData.imageUrlEn && (
+              <div className="mt-2">
+                <p className="text-sm text-gray-600">Английская версия (с надписями):</p>
+                <div className="flex items-center gap-3">
+                  <Image
+                    src={formData.imageUrlEn}
+                    alt="English version"
+                    width={64}
+                    height={64}
+                    className="w-16 h-16 object-contain mt-1"
+                    unoptimized
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setFormData({ ...formData, imageUrlEn: null })}
+                    className="text-sm text-red-600 hover:text-red-800"
+                  >
+                    Убрать английскую версию
+                  </button>
+                </div>
               </div>
             )}
           </div>

@@ -6,6 +6,7 @@ import { checkRateLimit, rateLimitResponse } from '@/lib/auth-security';
 import { enforceAiQuota } from '@/lib/ai-quota';
 import { analyzeSmartProduct } from '@/lib/services/ai-products';
 import { generateAndUploadEmojiAsset } from '@/lib/services/emoji-assets';
+import { recordEmojiLibraryItem } from '@/lib/services/emoji-library';
 import { summarizeEmojiGenerationFailure } from '@/lib/services/emoji-errors';
 
 export async function POST(request: Request) {
@@ -149,6 +150,15 @@ export async function POST(request: Request) {
         });
         customEmojiUrl = emojiAsset.imageUrl;
         isCustom = true;
+        // Only catalogue pictures go to the library; a user's personal product stays private.
+        if (dbUser.role === 'ADMIN') {
+          await recordEmojiLibraryItem({
+            imageUrl: emojiAsset.imageUrl,
+            name: aiResult.nameRu,
+            nameEn: aiResult.nameEn,
+            source: 'generated',
+          });
+        }
         finalEmoji = aiResult.emoji || '🎨';
       } catch (error) {
         // FR-10: the log carries allowlisted fields only, never the SDK message, body or cause.

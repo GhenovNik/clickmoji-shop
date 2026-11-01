@@ -32,6 +32,7 @@ interface ProductInput {
   categoryId: string;
   isCustom: boolean;
   imageUrl: string;
+  imageUrlEn?: string | null;
   variants?: Array<Partial<ProductVariant>>;
 }
 

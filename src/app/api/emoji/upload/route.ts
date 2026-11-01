@@ -2,6 +2,18 @@ import { NextResponse } from 'next/server';
 import { requireAdmin } from '@/lib/auth-guards';
 import { checkRateLimit, rateLimitResponse } from '@/lib/auth-security';
 import { uploadEmojiBase64Image } from '@/lib/services/emoji-assets';
+import {
+  EmojiImageTooLargeError,
+  EmptyEmojiImageError,
+} from '@/lib/services/emoji-image-normalize';
+import { recordEmojiLibraryItem, type EmojiLibrarySource } from '@/lib/services/emoji-library';
+
+// Vercel caps a request body at 4.5 MB; a 3 MiB picture is about 4 MB as base64.
+const MAX_BASE64_LENGTH = Math.ceil((3 * 1024 * 1024 * 4) / 3) + 64;
+
+function librarySource(value: unknown): EmojiLibrarySource {
+  return value === 'generated' ? 'generated' : 'upload';
+}
 
 export async function POST(request: Request) {
   try {
@@ -9,10 +21,13 @@ export async function POST(request: Request) {
     if (guard instanceof Response) return guard;
     const { session } = guard;
 
-    const { base64, productName } = await request.json();
+    const { base64, productName, name, nameEn, source } = await request.json();
 
-    if (!base64) {
+    if (!base64 || typeof base64 !== 'string') {
       return NextResponse.json({ error: 'Base64 image is required' }, { status: 400 });
+    }
+    if (base64.length > MAX_BASE64_LENGTH) {
+      return NextResponse.json({ error: 'Image is larger than 3 MB' }, { status: 413 });
     }
 
     const userLimit = await checkRateLimit({
@@ -26,11 +41,30 @@ export async function POST(request: Request) {
 
     const { imageUrl, fileName } = await uploadEmojiBase64Image({ base64, productName });
 
+    await recordEmojiLibraryItem({
+      imageUrl,
+      name: String(name || productName || 'emoji'),
+      nameEn: typeof nameEn === 'string' ? nameEn : null,
+      source: librarySource(source),
+    });
+
     return NextResponse.json({
       imageUrl,
       fileName,
     });
   } catch (error) {
+    if (error instanceof EmojiImageTooLargeError) {
+      return NextResponse.json(
+        { error: 'Картинка слишком большая: не больше 4096 × 4096 пикселей' },
+        { status: 413 }
+      );
+    }
+    if (error instanceof EmptyEmojiImageError) {
+      return NextResponse.json(
+        { error: 'На картинке не найден предмет: она пустая или целиком белая' },
+        { status: 422 }
+      );
+    }
     console.error('Error uploading emoji:', error);
     return NextResponse.json({ error: 'Failed to upload emoji' }, { status: 500 });
   }

@@ -93,12 +93,12 @@ All endpoints are implemented as Next.js Route Handlers under `src/app/api`.
 
 - Auth: admin
 - Body: `name?`, `nameEn?`, `emoji?`, `order?`, `isCustom?`, `imageUrl?`
-- Notes: handles order swap; deletes old UploadThing image when replaced
+- Notes: handles order swap; a replaced image stays in UploadThing; leftovers are removed by `npm run db:files`, which must run with the app stopped (with writers running it can delete a file attached during the run; a safe protocol is AGE-1472)
 
 ### `DELETE /api/categories/:categoryId`
 
 - Auth: admin
-- Notes: cascades products, deletes UploadThing image if present
+- Notes: cascades products; the image stays in UploadThing; leftovers are removed by `npm run db:files`, which must run with the app stopped (with writers running it can delete a file attached during the run; a safe protocol is AGE-1472)
 
 ## Products
 
@@ -118,11 +118,12 @@ All endpoints are implemented as Next.js Route Handlers under `src/app/api`.
 
 - Auth: admin
 - Body: `name?`, `nameEn?`, `emoji?`, `categoryId?`, `isCustom?`, `imageUrl?`, `variants?`
-- Notes: upserts/deletes variants; keeps variants that are already used in items; deletes old UploadThing image when replaced
+- Notes: upserts/deletes variants; keeps variants that are already used in items; accepts `imageUrlEn?`; a replaced image stays in UploadThing; leftovers are removed by `npm run db:files`, which must run with the app stopped (with writers running it can delete a file attached during the run; a safe protocol is AGE-1472)
 
 ### `DELETE /api/products/:productId`
 
 - Auth: admin
+- Notes: the product's images stay in UploadThing; leftovers are removed by `npm run db:files`, which must run with the app stopped (with writers running it can delete a file attached during the run; a safe protocol is AGE-1472)
 
 ### `POST /api/products/bulk-import`
 
@@ -293,6 +294,9 @@ All endpoints are implemented as Next.js Route Handlers under `src/app/api`.
 
 - Auth: admin
 - Body: `imageUrl`
+- Notes: refuses with 409 while the library, a product (either picture) or a category shows the
+  file. The check and the delete are not atomic: a concurrent request attaching the same URL can
+  still race it (AGE-1472).
 
 ## UploadThing
 

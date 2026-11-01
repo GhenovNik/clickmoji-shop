@@ -1,21 +1,11 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { requireAdmin } from '@/lib/auth-guards';
-import { UTApi } from 'uploadthing/server';
 
-const utapi = new UTApi();
-
-// Extract file key from UploadThing URL
-function getFileKeyFromUrl(url: string | null): string | null {
-  if (!url) return null;
-  try {
-    const urlObj = new URL(url);
-    const pathParts = urlObj.pathname.split('/');
-    return pathParts[pathParts.length - 1] || null;
-  } catch {
-    return null;
-  }
-}
+// Replaced or deleted pictures are not removed from UploadThing here: between checking that
+// nothing shows a file and deleting it, another request could attach the same URL again. A
+// leftover file is cheap. `npm run db:files` removes leftovers, only with the app stopped; a
+// protocol safe with writers running is AGE-1472.
 
 export async function PUT(
   request: Request,
@@ -28,25 +18,6 @@ export async function PUT(
     const { categoryId } = await params;
     const body = await request.json();
     const { name, nameEn, emoji, order, isCustom, imageUrl } = body;
-
-    // If imageUrl is being changed, delete old file from UploadThing
-    if (imageUrl !== undefined) {
-      const currentCategory = await prisma.category.findUnique({
-        where: { id: categoryId },
-        select: { imageUrl: true },
-      });
-
-      if (currentCategory?.imageUrl && currentCategory.imageUrl !== imageUrl) {
-        const oldFileKey = getFileKeyFromUrl(currentCategory.imageUrl);
-        if (oldFileKey) {
-          try {
-            await utapi.deleteFiles(oldFileKey);
-          } catch (error) {
-            console.error('Failed to delete old image from UploadThing:', error);
-          }
-        }
-      }
-    }
 
     // Resolve position conflicts before updating the unique order field.
     if (order !== undefined) {
@@ -117,28 +88,10 @@ export async function DELETE(
 
     const { categoryId } = await params;
 
-    // Get category to check if it has an image to delete
-    const category = await prisma.category.findUnique({
-      where: { id: categoryId },
-      select: { imageUrl: true, name: true },
-    });
-
     // Delete category from database (cascade will delete products)
     await prisma.category.delete({
       where: { id: categoryId },
     });
-
-    // Delete image from UploadThing if exists
-    if (category?.imageUrl) {
-      const fileKey = getFileKeyFromUrl(category.imageUrl);
-      if (fileKey) {
-        try {
-          await utapi.deleteFiles(fileKey);
-        } catch (error) {
-          console.error('Failed to delete image from UploadThing:', error);
-        }
-      }
-    }
 
     return NextResponse.json({ success: true });
   } catch (error) {

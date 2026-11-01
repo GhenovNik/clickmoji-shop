@@ -104,10 +104,16 @@ function floodBackground(rgb: Buffer, width: number, height: number, clearGaps: 
 }
 
 // Gaps the edge fill cannot reach (between herb stems, inside a bunch of tomatoes), on request:
-// only regions almost exactly the background colour and not a speck; shaded whites of the object
-// itself (coconut flesh) differ from the field by more than this.
+// only regions almost exactly the background colour, not a speck, and framed mostly by colourful
+// or dark pixels. Shaded whites of the object (coconut flesh) differ from the field by more than
+// the threshold; a white surface (mozzarella, feta) is framed by its own pale grey shading.
 const HOLE_THRESHOLD = 18;
 const HOLE_MIN_SHARE = 0.0005;
+const HOLE_FRAME_SATURATION = 40;
+const HOLE_FRAME_DARK = 150;
+const HOLE_FRAME_SHARE = 0.6;
+// The frame is sampled a few pixels past the gap edge, beyond the anti-aliased blend.
+const HOLE_FRAME_DEPTH = 3;
 
 function clearEnclosedHoles(
   rgb: Buffer,
@@ -133,6 +139,14 @@ function clearEnclosedHoles(
       Math.abs(rgb[index * 3 + 2] - b) <=
     HOLE_THRESHOLD;
 
+  const framesGap = (index: number) => {
+    const red = rgb[index * 3];
+    const green = rgb[index * 3 + 1];
+    const blue = rgb[index * 3 + 2];
+    const max = Math.max(red, green, blue);
+    return max - Math.min(red, green, blue) >= HOLE_FRAME_SATURATION || max <= HOLE_FRAME_DARK;
+  };
+
   const minArea = Math.max(16, Math.round(width * height * HOLE_MIN_SHARE));
   const seen = new Uint8Array(background.length);
   const component: number[] = [];
@@ -140,6 +154,8 @@ function clearEnclosedHoles(
   for (let start = 0; start < background.length; start++) {
     if (background[start] || seen[start] || !nearField(start)) continue;
     component.length = 0;
+    let frame = 0;
+    let colourfulFrame = 0;
     let top = 0;
     stack[top++] = start;
     seen[start] = 1;
@@ -155,12 +171,27 @@ function clearEnclosedHoles(
       ];
       for (const next of neighbours) {
         if (next < 0 || next >= background.length || seen[next] || background[next]) continue;
-        if (!nearField(next)) continue;
+        if (!nearField(next)) {
+          frame++;
+          const step = next - index;
+          const nextX = next % width;
+          const depthX =
+            step === 1 ? nextX + HOLE_FRAME_DEPTH : step === -1 ? nextX - HOLE_FRAME_DEPTH : nextX;
+          const deeper = next + step * HOLE_FRAME_DEPTH;
+          const sample =
+            depthX >= 0 && depthX < width && deeper >= 0 && deeper < background.length
+              ? deeper
+              : next;
+          if (framesGap(next) || framesGap(sample)) colourfulFrame++;
+          continue;
+        }
         seen[next] = 1;
         stack[top++] = next;
       }
     }
-    if (component.length >= minArea) for (const index of component) background[index] = 1;
+    if (component.length >= minArea && colourfulFrame >= frame * HOLE_FRAME_SHARE) {
+      for (const index of component) background[index] = 1;
+    }
   }
 }
 
