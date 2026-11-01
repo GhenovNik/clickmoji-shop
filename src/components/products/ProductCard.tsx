@@ -2,6 +2,7 @@
 
 import Image from 'next/image';
 import type { Product } from '@/hooks/useProductSelection';
+import { productNameClassName } from './product-name';
 
 interface ProductCardProps {
   product: Product;
@@ -40,7 +41,7 @@ export default function ProductCard({
         `}
       >
         <div className="text-center">
-          <div className="mx-auto mb-1 h-14 w-14 flex items-center justify-center">
+          <div className="mx-auto mb-1 h-14 w-14 shrink-0 flex items-center justify-center overflow-hidden">
             {product.isCustom && product.imageUrl ? (
               <Image
                 src={product.imageUrl}
@@ -53,9 +54,11 @@ export default function ProductCard({
               <span className="text-4xl leading-none">{product.emoji}</span>
             )}
           </div>
-          <p className="h-8 overflow-hidden text-sm leading-[1.1] font-medium text-gray-900 flex items-center justify-center">
-            {product.name}
-          </p>
+          <div className="h-[42px] flex items-center justify-center">
+            <p lang="ru" className={productNameClassName(product.name)}>
+              {product.name}
+            </p>
+          </div>
         </div>
       </button>
 

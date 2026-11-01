@@ -2,6 +2,7 @@
 
 import Image from 'next/image';
 import type { FavoriteProduct } from '@/hooks/useFavorites';
+import { productNameClassName } from '@/components/products/product-name';
 
 interface FavoriteCardProps {
   favorite: FavoriteProduct;
@@ -31,18 +32,22 @@ export default function FavoriteCard({
         `}
       >
         <div className="text-center">
-          {favorite.product.isCustom && favorite.product.imageUrl ? (
-            <Image
-              src={favorite.product.imageUrl}
-              alt={favorite.product.name}
-              width={64}
-              height={64}
-              className="w-16 h-16 object-contain mx-auto mb-2"
-            />
-          ) : (
-            <div className="text-4xl mb-2">{favorite.product.emoji}</div>
-          )}
-          <p className="text-sm font-medium text-gray-900">{favorite.product.name}</p>
+          <div className="mx-auto mb-2 h-16 w-16 flex items-center justify-center overflow-hidden">
+            {favorite.product.isCustom && favorite.product.imageUrl ? (
+              <Image
+                src={favorite.product.imageUrl}
+                alt={favorite.product.name}
+                width={64}
+                height={64}
+                className="h-16 w-16 object-contain"
+              />
+            ) : (
+              <span className="text-4xl leading-none">{favorite.product.emoji}</span>
+            )}
+          </div>
+          <p lang="ru" className={productNameClassName(favorite.product.name)}>
+            {favorite.product.name}
+          </p>
         </div>
       </button>
 
