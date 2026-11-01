@@ -20,6 +20,19 @@ function getFileKeyFromUrl(url: string | null): string | null {
   }
 }
 
+// Removes a replaced or orphaned picture from UploadThing unless the library or another item
+// still shows it. A failed delete never fails the request: the database change matters more.
+async function discardIfUnused(imageUrl: string | null | undefined, productId?: string) {
+  if (!imageUrl || (await isStoredImageInUse(imageUrl, { productId }))) return;
+  const fileKey = getFileKeyFromUrl(imageUrl);
+  if (!fileKey) return;
+  try {
+    await utapi.deleteFiles(fileKey);
+  } catch (error) {
+    console.error('Failed to delete image from UploadThing:', error);
+  }
+}
+
 export async function PUT(
   request: Request,
   { params }: { params: Promise<{ productId: string }> }
@@ -30,29 +43,19 @@ export async function PUT(
 
     const { productId } = await params;
     const body = await request.json();
-    const { name, nameEn, emoji, categoryId, isCustom, imageUrl, variants } = body;
+    const { name, nameEn, emoji, categoryId, isCustom, imageUrl, imageUrlEn, variants } = body;
 
-    // If imageUrl is being changed, delete old file from UploadThing
-    if (imageUrl !== undefined) {
+    // A replaced picture (main or English) is removed from UploadThing when nothing else shows it.
+    if (imageUrl !== undefined || imageUrlEn !== undefined) {
       const currentProduct = await prisma.product.findUnique({
         where: { id: productId },
-        select: { imageUrl: true },
+        select: { imageUrl: true, imageUrlEn: true },
       });
-
-      if (
-        currentProduct?.imageUrl &&
-        currentProduct.imageUrl !== imageUrl &&
-        !(await isStoredImageInUse(currentProduct.imageUrl, { productId }))
-      ) {
-        const oldFileKey = getFileKeyFromUrl(currentProduct.imageUrl);
-        if (oldFileKey) {
-          try {
-            await utapi.deleteFiles(oldFileKey);
-          } catch (error) {
-            console.error('Failed to delete old image from UploadThing:', error);
-            // Continue anyway - DB update is more important
-          }
-        }
+      if (imageUrl !== undefined && currentProduct?.imageUrl !== imageUrl) {
+        await discardIfUnused(currentProduct?.imageUrl, productId);
+      }
+      if (imageUrlEn !== undefined && currentProduct?.imageUrlEn !== imageUrlEn) {
+        await discardIfUnused(currentProduct?.imageUrlEn, productId);
       }
     }
 
@@ -66,6 +69,7 @@ export async function PUT(
           ...(categoryId && { categoryId }),
           ...(isCustom !== undefined && { isCustom }),
           ...(imageUrl !== undefined && { imageUrl }),
+          ...(imageUrlEn !== undefined && { imageUrlEn: imageUrlEn || null }),
         },
       });
 
@@ -145,7 +149,7 @@ export async function DELETE(
     // Get product to check if it has an image to delete
     const product = await prisma.product.findUnique({
       where: { id: productId },
-      select: { imageUrl: true, name: true },
+      select: { imageUrl: true, imageUrlEn: true, name: true },
     });
 
     // Delete product from database
@@ -153,18 +157,8 @@ export async function DELETE(
       where: { id: productId },
     });
 
-    // Delete the image from UploadThing unless the library or another item still shows it.
-    if (product?.imageUrl && !(await isStoredImageInUse(product.imageUrl))) {
-      const fileKey = getFileKeyFromUrl(product.imageUrl);
-      if (fileKey) {
-        try {
-          await utapi.deleteFiles(fileKey);
-        } catch (error) {
-          console.error('Failed to delete image from UploadThing:', error);
-          // Don't fail the request - product is already deleted
-        }
-      }
-    }
+    await discardIfUnused(product?.imageUrl);
+    await discardIfUnused(product?.imageUrlEn);
 
     return NextResponse.json({ success: true });
   } catch (error) {

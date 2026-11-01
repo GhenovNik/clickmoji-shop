@@ -2,7 +2,10 @@ import { NextResponse } from 'next/server';
 import { requireAdmin } from '@/lib/auth-guards';
 import { checkRateLimit, rateLimitResponse } from '@/lib/auth-security';
 import { uploadEmojiBase64Image } from '@/lib/services/emoji-assets';
-import { EmptyEmojiImageError } from '@/lib/services/emoji-image-normalize';
+import {
+  EmojiImageTooLargeError,
+  EmptyEmojiImageError,
+} from '@/lib/services/emoji-image-normalize';
 import { recordEmojiLibraryItem, type EmojiLibrarySource } from '@/lib/services/emoji-library';
 
 // Vercel caps a request body at 4.5 MB; a 3 MiB picture is about 4 MB as base64.
@@ -50,6 +53,12 @@ export async function POST(request: Request) {
       fileName,
     });
   } catch (error) {
+    if (error instanceof EmojiImageTooLargeError) {
+      return NextResponse.json(
+        { error: 'Картинка слишком большая: не больше 4096 × 4096 пикселей' },
+        { status: 413 }
+      );
+    }
     if (error instanceof EmptyEmojiImageError) {
       return NextResponse.json(
         { error: 'На картинке не найден предмет: она пустая или целиком белая' },

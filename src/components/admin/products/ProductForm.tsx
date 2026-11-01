@@ -11,6 +11,7 @@ interface Product {
   emoji: string;
   isCustom: boolean;
   imageUrl: string | null;
+  imageUrlEn?: string | null;
   categoryId: string;
   variants?: ProductVariant[];
 }
@@ -44,6 +45,8 @@ export type FormData = {
   categoryId: string;
   isCustom: boolean;
   imageUrl: string;
+  // English version of a labelled picture; null when the picture has no text.
+  imageUrlEn: string | null;
   variants?: ProductVariant[];
 };
 
@@ -66,6 +69,7 @@ export default function ProductForm({ product, categories, onSubmit, onCancel }:
     categoryId: product?.categoryId || '',
     isCustom: product?.isCustom || false,
     imageUrl: product?.imageUrl || '',
+    imageUrlEn: product?.imageUrlEn || null,
     variants: product?.variants || [],
   });
 
@@ -276,9 +280,9 @@ export default function ProductForm({ product, categories, onSubmit, onCancel }:
           productDescription={generationDescription}
           isRequired={!formData.isCustom}
           onGenerateImage={(url) => setFormData({ ...formData, imageUrl: url, isCustom: true })}
-          onSelectLibraryImage={(url) => {
+          onSelectLibraryImage={({ imageUrl, imageUrlEn }) => {
             setSelectedFile(null);
-            setFormData({ ...formData, imageUrl: url, isCustom: true });
+            setFormData({ ...formData, imageUrl, imageUrlEn, isCustom: true });
           }}
         />
       </div>
@@ -335,6 +339,28 @@ export default function ProductForm({ product, categories, onSubmit, onCancel }:
                   className="w-16 h-16 object-contain mt-1"
                   unoptimized
                 />
+              </div>
+            )}
+            {formData.imageUrlEn && (
+              <div className="mt-2">
+                <p className="text-sm text-gray-600">Английская версия (с надписями):</p>
+                <div className="flex items-center gap-3">
+                  <Image
+                    src={formData.imageUrlEn}
+                    alt="English version"
+                    width={64}
+                    height={64}
+                    className="w-16 h-16 object-contain mt-1"
+                    unoptimized
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setFormData({ ...formData, imageUrlEn: null })}
+                    className="text-sm text-red-600 hover:text-red-800"
+                  >
+                    Убрать английскую версию
+                  </button>
+                </div>
               </div>
             )}
           </div>

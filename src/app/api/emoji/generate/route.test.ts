@@ -17,6 +17,7 @@ const doubles = vi.hoisted(() => ({
   uploadEmojiImage: vi.fn(async () => {
     throw new Error('upload must not run');
   }),
+  recordEmojiLibraryItem: vi.fn(async () => null),
   checkRateLimit: vi.fn(async () => ({
     allowed: true as boolean,
     remaining: 19,
@@ -69,6 +70,10 @@ vi.mock('@/lib/services/emoji-assets', () => ({
   generateAndUploadEmojiAsset: doubles.uploadEmojiImage,
 }));
 
+vi.mock('@/lib/services/emoji-library', () => ({
+  recordEmojiLibraryItem: doubles.recordEmojiLibraryItem,
+}));
+
 vi.mock('@/lib/auth-guards', () => ({
   requireAdmin: doubles.requireAdmin,
   requireUser: doubles.requireAdmin,
@@ -94,6 +99,7 @@ beforeEach(() => {
   doubles.sdkCalls.length = 0;
   doubles.generateEmojiImage.mockReset();
   doubles.uploadEmojiImage.mockReset();
+  doubles.recordEmojiLibraryItem.mockReset();
   doubles.checkRateLimit.mockReset();
   doubles.requireAdmin.mockReset();
   doubles.generateEmojiImage.mockRejectedValue(new Error(marker));
@@ -186,5 +192,39 @@ describe('AC-16 an unavailable provider is reported as 503', () => {
     await POST(generateRequest());
 
     expect(doubles.sdkCalls).toHaveLength(0);
+  });
+});
+
+describe('POST /api/emoji/generate keeps every paid picture', () => {
+  it('stores the generated picture in the library at once and returns its URL', async () => {
+    doubles.generateEmojiImage.mockResolvedValue({
+      imageBuffer: Buffer.from('png'),
+      provider: 'gemini',
+      model: 'model',
+      promptVersion: 'v',
+      cacheKey: 'k',
+    } as never);
+    doubles.uploadEmojiImage.mockResolvedValue({
+      imageUrl: 'https://utfs.io/f/generated.webp',
+      fileName: 'ai-emoji-milk.webp',
+    } as never);
+
+    const response = await POST(
+      new Request('http://localhost:3000/api/emoji/generate', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ productName: 'Milk', name: 'Молоко', nameEn: 'Milk' }),
+      })
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ imageUrl: 'https://utfs.io/f/generated.webp' });
+    expect(doubles.uploadEmojiImage).toHaveBeenCalledTimes(1);
+    expect(doubles.recordEmojiLibraryItem).toHaveBeenCalledWith({
+      imageUrl: 'https://utfs.io/f/generated.webp',
+      name: 'Молоко',
+      nameEn: 'Milk',
+      source: 'generated',
+    });
   });
 });

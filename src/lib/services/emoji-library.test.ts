@@ -33,13 +33,20 @@ describe('isStoredImageInUse', () => {
   it('is free to delete when nothing else shows the file', async () => {
     expect(await isStoredImageInUse(URL_A, { productId: 'p1' })).toBe(false);
     expect(db.productCount).toHaveBeenCalledWith({
-      where: { imageUrl: URL_A, id: { not: 'p1' } },
+      where: { OR: [{ imageUrl: URL_A }, { imageUrlEn: URL_A }], id: { not: 'p1' } },
     });
   });
 
   it('keeps a file that is in the library', async () => {
     db.libraryCount.mockResolvedValue(1);
     expect(await isStoredImageInUse(URL_A, { productId: 'p1' })).toBe(true);
+  });
+
+  it('keeps a file that is only the English picture of a product', async () => {
+    db.productCount.mockImplementation(async ({ where }) =>
+      where.OR.some((condition: { imageUrlEn?: string }) => condition.imageUrlEn === URL_A) ? 1 : 0
+    );
+    expect(await isStoredImageInUse(URL_A)).toBe(true);
   });
 
   it('keeps a file another product or category shows', async () => {

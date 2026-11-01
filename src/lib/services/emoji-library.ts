@@ -81,8 +81,12 @@ export async function isStoredImageInUse(
   try {
     const [library, products, categories] = await Promise.all([
       prisma.emojiLibraryItem.count({ where: { imageUrl } }),
+      // Either picture of a product keeps the file: the English one may be the only reference.
       prisma.product.count({
-        where: { imageUrl, ...(except.productId && { id: { not: except.productId } }) },
+        where: {
+          OR: [{ imageUrl }, { imageUrlEn: imageUrl }],
+          ...(except.productId && { id: { not: except.productId } }),
+        },
       }),
       prisma.category.count({
         where: { imageUrl, ...(except.categoryId && { id: { not: except.categoryId } }) },

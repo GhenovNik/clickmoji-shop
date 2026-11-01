@@ -45,7 +45,9 @@ export type ProductPlan =
   | { kind: 'link'; productId: string; productName: string }
   | { kind: 'create'; categoryId: string; categoryEmoji: string }
   | { kind: 'no-category' }
-  | { kind: 'superseded'; by: string };
+  | { kind: 'superseded'; by: string }
+  // Several catalogue products share the name: nothing is linked, the operator decides.
+  | { kind: 'ambiguous'; productNames: string[] };
 
 export type CellPlan = {
   ref: string;
@@ -134,16 +136,19 @@ export async function readBatchImages(
     const ruSource = single?.ru ? read(single.ru) : sheet[cell.cell - 1];
     if (!ruSource) continue;
     const enSource = english && single?.en ? read(single.en) : sheetEn[cell.cell - 1];
+    // Text-free pictures carry no label by their prompt, so an enclosed white region there is a
+    // gap between parts of the object; on labelled pictures it may be the label and stays.
+    const options = { clearEnclosedGaps: !english };
     result.set(cell.cell, {
-      ru: await normalizeEmojiImage(ruSource),
-      en: enSource ? await normalizeEmojiImage(enSource) : undefined,
+      ru: await normalizeEmojiImage(ruSource, options),
+      en: enSource ? await normalizeEmojiImage(enSource, options) : undefined,
     });
   }
   return result;
 }
 
 type CatalogIndex = {
-  products: Map<string, { id: string; name: string }>;
+  products: Map<string, { id: string; name: string }[]>;
   categories: Map<string, { id: string; emoji: string }>;
 };
 
@@ -152,15 +157,24 @@ export async function loadCatalogIndex(prisma: PrismaClient): Promise<CatalogInd
     prisma.product.findMany({ where: { isGlobal: true }, select: { id: true, name: true } }),
     prisma.category.findMany({ select: { id: true, name: true, emoji: true } }),
   ]);
+  const byName = new Map<string, { id: string; name: string }[]>();
+  for (const product of products) {
+    const key = normalizeCatalogName(product.name);
+    byName.set(key, [...(byName.get(key) ?? []), product]);
+  }
   return {
-    products: new Map(products.map((p) => [normalizeCatalogName(p.name), p])),
+    products: byName,
     categories: new Map(categories.map((c) => [normalizeCatalogName(c.name), c])),
   };
 }
 
 export function planProduct(cell: ManifestCell, index: CatalogIndex): ProductPlan {
   if (cell.supersededBy) return { kind: 'superseded', by: cell.supersededBy };
-  const product = index.products.get(normalizeCatalogName(cell.name));
+  const matches = index.products.get(normalizeCatalogName(cell.name)) ?? [];
+  if (matches.length > 1) {
+    return { kind: 'ambiguous', productNames: matches.map((product) => product.name) };
+  }
+  const [product] = matches;
   if (product) return { kind: 'link', productId: product.id, productName: product.name };
   const category = index.categories.get(normalizeCatalogName(cell.category));
   return category
@@ -177,12 +191,14 @@ export async function storedPictures(prisma: PrismaClient, refs: string[]) {
 }
 
 export type Uploader = (image: Buffer, name: string) => Promise<string>;
+// Removes a file uploaded in this run whose library record could not be written.
+export type Discarder = (imageUrl: string) => Promise<void>;
 
 export type AppliedCell = {
   ref: string;
   name: string;
   uploaded: number;
-  product: 'linked' | 'created' | 'library-only' | 'superseded';
+  product: 'linked' | 'created' | 'library-only' | 'superseded' | 'ambiguous';
   productName?: string;
 };
 
@@ -191,7 +207,8 @@ export type AppliedCell = {
 export async function applyCell(
   prisma: PrismaClient,
   plan: CellPlan,
-  upload: Uploader
+  upload: Uploader,
+  discard?: Discarder
 ): Promise<AppliedCell> {
   const { cell, ref, images } = plan;
   const textBatch = plan.batchKind === 'text';
@@ -204,7 +221,8 @@ export async function applyCell(
     existing?: string
   ) => {
     const imageUrl = existing ?? (await upload(image, locale === 'en' ? cell.nameEn : cell.name));
-    if (!existing) uploaded++;
+    const fresh = !existing;
+    if (fresh) uploaded++;
     const data = {
       imageUrl,
       name: cell.name,
@@ -214,11 +232,18 @@ export async function applyCell(
       locale,
       groupKey: ref,
     };
-    await prisma.emojiLibraryItem.upsert({
-      where: { sourceRef },
-      create: { sourceRef, ...data },
-      update: data,
-    });
+    try {
+      await prisma.emojiLibraryItem.upsert({
+        where: { sourceRef },
+        create: { sourceRef, ...data },
+        update: data,
+      });
+    } catch (error) {
+      // Without its library record a fresh upload would be orphaned and uploaded again on the
+      // next run, so it is removed before the error goes on.
+      if (fresh && discard) await discard(imageUrl).catch(() => undefined);
+      throw error;
+    }
     return imageUrl;
   };
 
@@ -255,6 +280,9 @@ export async function applyCell(
       },
     });
     return { ref, name: cell.name, uploaded, product: 'created' };
+  }
+  if (plan.product.kind === 'ambiguous') {
+    return { ref, name: cell.name, uploaded, product: 'ambiguous' };
   }
   if (plan.product.kind === 'superseded') {
     return { ref, name: cell.name, uploaded, product: 'superseded' };

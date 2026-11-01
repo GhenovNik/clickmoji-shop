@@ -49,8 +49,8 @@ async function cleanupOrphanedFiles() {
   // Library pictures are kept even when no product or category shows them yet.
   const [products, categories, libraryItems] = await Promise.all([
     prisma.product.findMany({
-      where: { imageUrl: { not: null } },
-      select: { imageUrl: true },
+      where: { OR: [{ imageUrl: { not: null } }, { imageUrlEn: { not: null } }] },
+      select: { imageUrl: true, imageUrlEn: true },
     }),
     prisma.category.findMany({
       where: { imageUrl: { not: null } },
@@ -62,8 +62,10 @@ async function cleanupOrphanedFiles() {
   const usedFileKeys = new Set<string>();
 
   products.forEach((product) => {
-    const fileKey = getFileKeyFromUrl(product.imageUrl);
-    if (fileKey) usedFileKeys.add(fileKey);
+    for (const url of [product.imageUrl, product.imageUrlEn]) {
+      const fileKey = getFileKeyFromUrl(url);
+      if (fileKey) usedFileKeys.add(fileKey);
+    }
   });
 
   categories.forEach((category) => {
@@ -124,9 +126,10 @@ async function cleanupUnusedImages(isDryRun: boolean) {
     select: { imageUrl: true },
   });
 
+  // Every stored picture of a product counts, whatever its isCustom flag says.
   const products = await prisma.product.findMany({
-    where: { isCustom: true, imageUrl: { not: null } },
-    select: { imageUrl: true },
+    where: { OR: [{ imageUrl: { not: null } }, { imageUrlEn: { not: null } }] },
+    select: { imageUrl: true, imageUrlEn: true },
   });
 
   // Library pictures are kept even when no product or category shows them yet.
@@ -139,6 +142,7 @@ async function cleanupUnusedImages(isDryRun: boolean) {
   });
   products.forEach((prod) => {
     if (prod.imageUrl) usedUrls.add(prod.imageUrl);
+    if (prod.imageUrlEn) usedUrls.add(prod.imageUrlEn);
   });
 
   console.log(`✅ Found ${usedUrls.size} images in use`);

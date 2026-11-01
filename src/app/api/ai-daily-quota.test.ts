@@ -35,6 +35,12 @@ vi.mock('@/lib/services/ai-products', () => ({
 vi.mock('@/lib/services/emoji-assets', () => ({
   generateAndUploadEmojiAsset: doubles.generateAndUploadEmojiAsset,
   generateEmojiImage: doubles.generateEmojiImage,
+  // The generate route stores every paid picture in the library right away.
+  uploadEmojiImage: async () => ({ imageUrl: 'https://utfs.io/f/generated.webp', fileName: 'x' }),
+}));
+
+vi.mock('@/lib/services/emoji-library', () => ({
+  recordEmojiLibraryItem: async () => null,
 }));
 
 vi.mock('@/lib/prisma', () => ({

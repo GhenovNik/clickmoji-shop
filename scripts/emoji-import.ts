@@ -130,7 +130,9 @@ async function main() {
               ? `создать товар в «${cell.category}»`
               : product.kind === 'superseded'
                 ? `только в библиотеку: картинка товара — из ${product.by}`
-                : `только в библиотеку: нет категории «${cell.category}»`;
+                : product.kind === 'ambiguous'
+                  ? `только в библиотеку: несколько товаров с этим названием (${product.productNames.join(', ')}) — выберите в админке`
+                  : `только в библиотеку: нет категории «${cell.category}»`;
       rows.push({
         ref,
         name: cell.name,
@@ -161,11 +163,18 @@ async function main() {
 
   if (apply && prisma) {
     const { uploadNormalizedEmojiImage } = await import('../src/lib/services/emoji-assets');
+    const { UTApi } = await import('uploadthing/server');
+    const utapi = new UTApi();
     const upload = async (image: Buffer, name: string) =>
-      (await uploadNormalizedEmojiImage({ imageBuffer: image, productName: name })).imageUrl;
+      (await uploadNormalizedEmojiImage({ imageBuffer: image, productName: name, utapi })).imageUrl;
+    // A fresh upload whose library record failed is removed, so the next run starts clean.
+    const discard = async (imageUrl: string) => {
+      const key = new URL(imageUrl).pathname.split('/').pop();
+      if (key) await utapi.deleteFiles(key);
+    };
     let uploaded = 0;
     for (const plan of plans) {
-      const result = await applyCell(prisma, plan, upload);
+      const result = await applyCell(prisma, plan, upload, discard);
       uploaded += result.uploaded;
       const target =
         result.product === 'linked'
@@ -174,7 +183,9 @@ async function main() {
             ? '→ новый товар'
             : result.product === 'superseded'
               ? '→ только библиотека (перерисован в текстовой пачке)'
-              : '→ только библиотека';
+              : result.product === 'ambiguous'
+                ? '→ только библиотека (неоднозначное название, выберите товар в админке)'
+                : '→ только библиотека';
       console.log(
         `${result.ref} ${result.name} ${target}${result.uploaded ? '' : ' (без загрузки)'}`
       );

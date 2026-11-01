@@ -2,7 +2,8 @@ import { NextResponse } from 'next/server';
 import { requireAdmin } from '@/lib/auth-guards';
 import { checkRateLimit, rateLimitResponse } from '@/lib/auth-security';
 import { enforceAiQuota } from '@/lib/ai-quota';
-import { generateEmojiImage } from '@/lib/services/emoji-assets';
+import { generateEmojiImage, uploadEmojiImage } from '@/lib/services/emoji-assets';
+import { recordEmojiLibraryItem } from '@/lib/services/emoji-library';
 import {
   EmojiProviderUnavailableError,
   IMAGE_PROVIDER_UNAVAILABLE_CODE,
@@ -19,7 +20,7 @@ export async function POST(request: Request) {
     if (guard instanceof Response) return guard;
     const { session } = guard;
 
-    const { productName, description } = await request.json();
+    const { productName, description, name, nameEn } = await request.json();
 
     if (!productName) {
       return NextResponse.json({ error: 'Product name is required' }, { status: 400 });
@@ -57,11 +58,22 @@ export async function POST(request: Request) {
     }
 
     // Return a preview without persisting it to UploadThing.
-    const base64Image = `data:image/png;base64,${generated.imageBuffer.toString('base64')}`;
+    // A paid picture is kept at once: normalized, stored and recorded in the library, so closing
+    // the form or generating again never loses it. The form only links the returned URL.
+    const { imageUrl } = await uploadEmojiImage({
+      imageBuffer: generated.imageBuffer,
+      productName,
+    });
+    await recordEmojiLibraryItem({
+      imageUrl,
+      name: String(name || productName),
+      nameEn: typeof nameEn === 'string' ? nameEn : null,
+      source: 'generated',
+    });
 
     return NextResponse.json({
-      base64: base64Image,
-      message: 'Image generated successfully. Will be uploaded when product is saved.',
+      imageUrl,
+      message: 'Image generated and saved to the emoji library.',
       provider: generated.provider,
       model: generated.model,
       promptVersion: generated.promptVersion,

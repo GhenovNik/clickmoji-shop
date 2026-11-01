@@ -87,7 +87,14 @@ describe('sliceSheet', () => {
 describe('planProduct', () => {
   const index = {
     products: new Map([
-      [normalizeCatalogName('Сгущённое молоко'), { id: 'p1', name: 'Сгущенное молоко' }],
+      [normalizeCatalogName('Сгущённое молоко'), [{ id: 'p1', name: 'Сгущенное молоко' }]],
+      [
+        normalizeCatalogName('Чай'),
+        [
+          { id: 'a', name: 'Чай' },
+          { id: 'b', name: ' чай ' },
+        ],
+      ],
     ]),
     categories: new Map([[normalizeCatalogName('Молочные продукты'), { id: 'c1', emoji: '🥛' }]]),
   };
@@ -111,6 +118,13 @@ describe('planProduct', () => {
   it('keeps the picture in the library only when the category is unknown', () => {
     expect(planProduct({ ...KEFIR, category: 'Нет такой' }, index)).toEqual({
       kind: 'no-category',
+    });
+  });
+
+  it('links nothing when several catalogue products share the name', () => {
+    expect(planProduct({ ...KEFIR, name: 'Чай' }, index)).toEqual({
+      kind: 'ambiguous',
+      productNames: ['Чай', ' чай '],
     });
   });
 
@@ -204,6 +218,51 @@ describe('applyCell', () => {
       isCustom: true,
       imageUrl: 'https://utfs.io/f/ru.webp',
     });
+  });
+
+  it('removes a fresh upload whose library record failed, so a re-run does not orphan it', async () => {
+    const prisma = fakePrisma();
+    prisma.emojiLibraryItem.upsert.mockRejectedValueOnce(new Error('db down'));
+    const upload = vi.fn(async () => 'https://utfs.io/f/fresh.webp');
+    const discard = vi.fn(async () => undefined);
+
+    await expect(
+      applyCell(prisma as unknown as PrismaClient, plan(), upload, discard)
+    ).rejects.toThrow('db down');
+
+    expect(discard).toHaveBeenCalledWith('https://utfs.io/f/fresh.webp');
+    expect(prisma.product.create).not.toHaveBeenCalled();
+  });
+
+  it('never removes a picture that was already stored before this run', async () => {
+    const prisma = fakePrisma();
+    prisma.emojiLibraryItem.upsert.mockRejectedValueOnce(new Error('db down'));
+    const discard = vi.fn(async () => undefined);
+
+    await expect(
+      applyCell(
+        prisma as unknown as PrismaClient,
+        plan({ stored: { ru: 'https://utfs.io/f/old.webp' } }),
+        vi.fn(),
+        discard
+      )
+    ).rejects.toThrow('db down');
+
+    expect(discard).not.toHaveBeenCalled();
+  });
+
+  it('leaves the product alone when the name is ambiguous', async () => {
+    const prisma = fakePrisma();
+
+    const result = await applyCell(
+      prisma as unknown as PrismaClient,
+      plan({ product: { kind: 'ambiguous', productNames: ['Чай', ' чай '] } }),
+      vi.fn(async () => 'https://utfs.io/f/x.webp')
+    );
+
+    expect(result.product).toBe('ambiguous');
+    expect(prisma.product.update).not.toHaveBeenCalled();
+    expect(prisma.product.create).not.toHaveBeenCalled();
   });
 
   it('keeps a cell redrawn in a text batch in the library only', async () => {

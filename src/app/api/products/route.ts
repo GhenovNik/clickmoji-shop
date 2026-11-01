@@ -70,7 +70,7 @@ export async function POST(request: Request) {
     if (guard instanceof Response) return guard;
 
     const body = await request.json();
-    const { name, nameEn, emoji, categoryId, isCustom, imageUrl, variants } = body;
+    const { name, nameEn, emoji, categoryId, isCustom, imageUrl, imageUrlEn, variants } = body;
 
     // An emoji is required unless a custom image is supplied.
     if (!name || !nameEn || !categoryId) {
@@ -95,6 +95,7 @@ export async function POST(request: Request) {
         categoryId,
         isCustom: isCustom || false,
         imageUrl: imageUrl || null,
+        imageUrlEn: imageUrlEn || null,
         variants: Array.isArray(variants)
           ? {
               create: variants

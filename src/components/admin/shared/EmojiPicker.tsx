@@ -2,6 +2,11 @@
 
 import Image from 'next/image';
 import { useState } from 'react';
+import {
+  groupLibraryItems,
+  type LibraryItem,
+  type LibraryPicture,
+} from '@/lib/emoji-library-picture';
 
 interface EmojiPickerProps {
   value: string;
@@ -11,15 +16,7 @@ interface EmojiPickerProps {
   productDescription?: string;
   isRequired?: boolean;
   onGenerateImage?: (imageUrl: string) => void;
-  onSelectLibraryImage?: (imageUrl: string) => void;
-}
-
-interface LibraryItem {
-  id: string;
-  name: string;
-  nameEn: string | null;
-  tags: string[];
-  imageUrl: string;
+  onSelectLibraryImage?: (picture: Pick<LibraryPicture, 'imageUrl' | 'imageUrlEn'>) => void;
 }
 
 interface EmojiResult {
@@ -43,7 +40,7 @@ export default function EmojiPicker({
   const [generating, setGenerating] = useState(false);
   const [libraryOpen, setLibraryOpen] = useState(false);
   const [libraryQuery, setLibraryQuery] = useState('');
-  const [libraryItems, setLibraryItems] = useState<LibraryItem[]>([]);
+  const [libraryItems, setLibraryItems] = useState<LibraryPicture[]>([]);
   const [libraryLoading, setLibraryLoading] = useState(false);
   const [libraryError, setLibraryError] = useState('');
 
@@ -54,7 +51,7 @@ export default function EmojiPicker({
       const res = await fetch(`/api/emoji/library?q=${encodeURIComponent(query)}`);
       const data = await res.json();
       if (!res.ok) throw new Error(data.error);
-      setLibraryItems(data.items || []);
+      setLibraryItems(groupLibraryItems((data.items || []) as LibraryItem[]));
     } catch (error) {
       console.error('Error searching emoji library:', error);
       setLibraryItems([]);
@@ -102,25 +99,29 @@ export default function EmojiPicker({
 
     setGenerating(true);
     try {
-      // Step 1: Generate a base64 preview without persisting it.
+      // The server stores the generated picture in the emoji library at once and returns its URL.
       const generateRes = await fetch('/api/emoji/generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           productName: nameToUse,
+          name: productName || undefined,
+          nameEn: productNameEn || undefined,
           description: productDescription?.trim() || undefined,
         }),
       });
 
       const generateData = await generateRes.json();
 
-      if (!generateRes.ok || !generateData.base64) {
+      if (!generateRes.ok || !generateData.imageUrl) {
         alert(generateData.error || 'Ошибка при генерации иконки');
         return;
       }
 
-      onGenerateImage?.(generateData.base64);
-      alert('✅ AI иконка сгенерирована (предпросмотр). Сохранится после нажатия "Сохранить".');
+      onGenerateImage?.(generateData.imageUrl);
+      alert(
+        '✅ AI иконка сгенерирована и сохранена в библиотеку. Привяжется к товару после «Сохранить».'
+      );
     } catch (error) {
       console.error('Error generating AI emoji:', error);
       alert('Ошибка при генерации иконки');
@@ -210,10 +211,10 @@ export default function EmojiPicker({
             <div className="mt-2 grid grid-cols-4 sm:grid-cols-6 gap-2 max-h-64 overflow-y-auto">
               {libraryItems.map((item) => (
                 <button
-                  key={item.id}
+                  key={item.key}
                   type="button"
                   onClick={() => {
-                    onSelectLibraryImage(item.imageUrl);
+                    onSelectLibraryImage({ imageUrl: item.imageUrl, imageUrlEn: item.imageUrlEn });
                     setLibraryOpen(false);
                   }}
                   className="flex flex-col items-center gap-1 p-1 bg-white rounded-lg border border-gray-200 hover:border-emerald-500"
@@ -228,7 +229,14 @@ export default function EmojiPicker({
                       className="h-12 w-12 object-contain"
                     />
                   </span>
-                  <span className="w-full truncate text-[11px] text-gray-700">{item.name}</span>
+                  <span className="w-full truncate text-[11px] text-gray-700">
+                    {item.name}
+                    {item.imageUrlEn && (
+                      <span className="ml-1 rounded bg-emerald-100 px-1 text-[9px] font-bold text-emerald-700">
+                        EN
+                      </span>
+                    )}
+                  </span>
                 </button>
               ))}
             </div>
