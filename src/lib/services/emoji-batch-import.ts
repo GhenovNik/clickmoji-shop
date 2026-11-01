@@ -1,0 +1,236 @@
+import { existsSync, readdirSync } from 'node:fs';
+import { join } from 'node:path';
+import type { PrismaClient } from '@prisma/client';
+import sharp from 'sharp';
+import { normalizeEmojiImage } from '@/lib/services/emoji-image-normalize';
+
+// Batch import (AGE-1465 item 2): the operator's Gemini sheets (3 columns, cells left to right,
+// top to bottom) plus docs/emoji-batches/manifest.json → normalized emoji in the library and on
+// catalogue products. Every cell has a stable reference ("batch-007#3"), so a second run reuses
+// what is stored instead of uploading again.
+
+export type ManifestCell = {
+  cell: number;
+  category: string;
+  name: string;
+  nameEn: string;
+  hint?: string;
+  action: 'create' | 'update-image';
+};
+
+export type ManifestBatch = { batch: string; file: string; fileEn?: string; cells: ManifestCell[] };
+
+export type BatchFiles = {
+  sheet?: string;
+  sheetEn?: string;
+  // Single re-generated cells: batch-007-3.png and batch-007-3-en.png.
+  cells: Map<number, { ru?: string; en?: string }>;
+};
+
+export type CellImages = { ru: Buffer; en?: Buffer };
+
+export type ProductPlan =
+  | { kind: 'link'; productId: string; productName: string }
+  | { kind: 'create'; categoryId: string; categoryEmoji: string }
+  | { kind: 'no-category' };
+
+export type CellPlan = {
+  ref: string;
+  batch: string;
+  cell: ManifestCell;
+  images: CellImages;
+  stored: { ru?: string; en?: string };
+  product: ProductPlan;
+};
+
+const IMAGE_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.webp'];
+const COLUMNS = 3;
+
+export function cellRef(batch: string, cell: number) {
+  return `${batch}#${cell}`;
+}
+
+export function normalizeCatalogName(value: string) {
+  return value.toLowerCase().replace(/ё/g, 'е').replace(/\s+/g, ' ').trim();
+}
+
+export function findBatchFiles(dir: string, batch: string): BatchFiles {
+  const files: BatchFiles = { cells: new Map() };
+  if (!existsSync(dir)) return files;
+
+  for (const name of readdirSync(dir)) {
+    const lower = name.toLowerCase();
+    const extension = IMAGE_EXTENSIONS.find((ext) => lower.endsWith(ext));
+    if (!extension || !lower.startsWith(`${batch}`)) continue;
+    const stem = lower.slice(0, -extension.length);
+    const path = join(dir, name);
+
+    if (stem === batch) files.sheet = path;
+    else if (stem === `${batch}-en`) files.sheetEn = path;
+    else {
+      const match = stem.slice(batch.length).match(/^-(\d+)(-en)?$/);
+      if (!match) continue;
+      const cell = Number(match[1]);
+      const entry = files.cells.get(cell) ?? {};
+      if (match[2]) entry.en = path;
+      else entry.ru = path;
+      files.cells.set(cell, entry);
+    }
+  }
+  return files;
+}
+
+// Cuts a sheet into `count` cells: three columns, as many rows as the cells need.
+export async function sliceSheet(sheet: Buffer, count: number) {
+  const { width = 0, height = 0 } = await sharp(sheet).metadata();
+  const rows = Math.ceil(count / COLUMNS);
+  const cells: Buffer[] = [];
+  for (let i = 0; i < count; i++) {
+    const row = Math.floor(i / COLUMNS);
+    const column = i % COLUMNS;
+    const left = Math.round((column * width) / COLUMNS);
+    const top = Math.round((row * height) / rows);
+    const right = Math.round(((column + 1) * width) / COLUMNS);
+    const bottom = Math.round(((row + 1) * height) / rows);
+    cells.push(
+      await sharp(sheet)
+        .extract({ left, top, width: right - left, height: bottom - top })
+        .png()
+        .toBuffer()
+    );
+  }
+  return cells;
+}
+
+// Normalized pictures per cell; a single cell file replaces that cell of the sheet.
+export async function readBatchImages(
+  batch: ManifestBatch,
+  files: BatchFiles,
+  read: (path: string) => Buffer
+) {
+  const count = batch.cells.length;
+  const sheet = files.sheet ? await sliceSheet(read(files.sheet), count) : [];
+  const sheetEn = files.sheetEn ? await sliceSheet(read(files.sheetEn), count) : [];
+  const result = new Map<number, CellImages>();
+
+  for (const cell of batch.cells) {
+    const single = files.cells.get(cell.cell);
+    const ruSource = single?.ru ? read(single.ru) : sheet[cell.cell - 1];
+    if (!ruSource) continue;
+    const enSource = single?.en ? read(single.en) : sheetEn[cell.cell - 1];
+    result.set(cell.cell, {
+      ru: await normalizeEmojiImage(ruSource),
+      en: enSource ? await normalizeEmojiImage(enSource) : undefined,
+    });
+  }
+  return result;
+}
+
+type CatalogIndex = {
+  products: Map<string, { id: string; name: string }>;
+  categories: Map<string, { id: string; emoji: string }>;
+};
+
+export async function loadCatalogIndex(prisma: PrismaClient): Promise<CatalogIndex> {
+  const [products, categories] = await Promise.all([
+    prisma.product.findMany({ where: { isGlobal: true }, select: { id: true, name: true } }),
+    prisma.category.findMany({ select: { id: true, name: true, emoji: true } }),
+  ]);
+  return {
+    products: new Map(products.map((p) => [normalizeCatalogName(p.name), p])),
+    categories: new Map(categories.map((c) => [normalizeCatalogName(c.name), c])),
+  };
+}
+
+export function planProduct(cell: ManifestCell, index: CatalogIndex): ProductPlan {
+  const product = index.products.get(normalizeCatalogName(cell.name));
+  if (product) return { kind: 'link', productId: product.id, productName: product.name };
+  const category = index.categories.get(normalizeCatalogName(cell.category));
+  return category
+    ? { kind: 'create', categoryId: category.id, categoryEmoji: category.emoji }
+    : { kind: 'no-category' };
+}
+
+export async function storedPictures(prisma: PrismaClient, refs: string[]) {
+  const items = await prisma.emojiLibraryItem.findMany({
+    where: { sourceRef: { in: refs.flatMap((ref) => [ref, `${ref}:en`]) } },
+    select: { sourceRef: true, imageUrl: true },
+  });
+  return new Map(items.map((item) => [item.sourceRef ?? '', item.imageUrl]));
+}
+
+export type Uploader = (image: Buffer, name: string) => Promise<string>;
+
+export type AppliedCell = {
+  ref: string;
+  name: string;
+  uploaded: number;
+  product: 'linked' | 'created' | 'library-only';
+  productName?: string;
+};
+
+// Writes one cell. Pictures already stored under the cell reference are reused, so a re-run
+// uploads nothing and only re-links the product.
+export async function applyCell(
+  prisma: PrismaClient,
+  plan: CellPlan,
+  upload: Uploader
+): Promise<AppliedCell> {
+  const { cell, ref, images } = plan;
+  const hasEnglish = Boolean(images.en);
+  let uploaded = 0;
+
+  const store = async (
+    locale: 'ru' | 'en' | null,
+    image: Buffer,
+    sourceRef: string,
+    existing?: string
+  ) => {
+    const imageUrl = existing ?? (await upload(image, locale === 'en' ? cell.nameEn : cell.name));
+    if (!existing) uploaded++;
+    const data = {
+      imageUrl,
+      name: cell.name,
+      nameEn: cell.nameEn,
+      tags: [normalizeCatalogName(cell.category)],
+      source: 'batch',
+      locale,
+      groupKey: ref,
+    };
+    await prisma.emojiLibraryItem.upsert({
+      where: { sourceRef },
+      create: { sourceRef, ...data },
+      update: data,
+    });
+    return imageUrl;
+  };
+
+  const imageUrl = await store(hasEnglish ? 'ru' : null, images.ru, ref, plan.stored.ru);
+  const imageUrlEn = images.en ? await store('en', images.en, `${ref}:en`, plan.stored.en) : null;
+
+  const picture = { isCustom: true, imageUrl, imageUrlEn };
+  if (plan.product.kind === 'link') {
+    await prisma.product.update({ where: { id: plan.product.productId }, data: picture });
+    return {
+      ref,
+      name: cell.name,
+      uploaded,
+      product: 'linked',
+      productName: plan.product.productName,
+    };
+  }
+  if (plan.product.kind === 'create') {
+    await prisma.product.create({
+      data: {
+        name: cell.name,
+        nameEn: cell.nameEn,
+        emoji: plan.product.categoryEmoji,
+        categoryId: plan.product.categoryId,
+        isGlobal: true,
+        ...picture,
+      },
+    });
+    return { ref, name: cell.name, uploaded, product: 'created' };
+  }
+  return { ref, name: cell.name, uploaded, product: 'library-only' };
+}

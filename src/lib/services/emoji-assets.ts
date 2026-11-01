@@ -60,15 +60,14 @@ export async function generateEmojiImage({
   };
 }
 
-export async function uploadEmojiImage({
+// Stores a picture that is already normalized (a WebP from normalizeEmojiImage).
+export async function uploadNormalizedEmojiImage({
   imageBuffer,
   productName,
   utapi = new UTApi(),
 }: UploadEmojiImageOptions) {
-  // Every stored emoji is normalized: no white field, the same margins, a fixed 256 WebP.
-  const normalized = await normalizeEmojiImage(imageBuffer);
   const fileName = emojiFileName(productName);
-  const file = new File([new Uint8Array(normalized)], fileName, { type: NORMALIZED_EMOJI_MIME });
+  const file = new File([new Uint8Array(imageBuffer)], fileName, { type: NORMALIZED_EMOJI_MIME });
   const uploadResult = await utapi.uploadFiles(file);
 
   if (!uploadResult || uploadResult.error) {
@@ -84,6 +83,16 @@ export async function uploadEmojiImage({
     imageUrl,
     fileName,
   };
+}
+
+export async function uploadEmojiImage({
+  imageBuffer,
+  productName,
+  utapi,
+}: UploadEmojiImageOptions) {
+  // Every stored emoji is normalized: no white field, the same margins, a fixed 256 WebP.
+  const normalized = await normalizeEmojiImage(imageBuffer);
+  return uploadNormalizedEmojiImage({ imageBuffer: normalized, productName, utapi });
 }
 
 export function base64ToImageBuffer(base64: string) {
