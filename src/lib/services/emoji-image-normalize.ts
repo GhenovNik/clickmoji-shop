@@ -23,9 +23,11 @@ const ALPHA_CUTOFF = 20;
 // size, so the masks below never hold more than WORK_SIZE² pixels.
 export const MAX_INPUT_PIXELS = 4096 * 4096;
 const WORK_SIZE = 1024;
-// A source counts as already transparent when this share of it is see-through.
-const SOURCE_ALPHA_MIN_SHARE = 0.01;
-const OPAQUE = 250;
+// A source's own alpha is trusted as the object mask when its border is mostly clear: the
+// background around the object is transparent. A thin transparent frame counts; an image that is
+// evenly semi-transparent everywhere does not, since its alpha separates nothing.
+const CLEAR_ALPHA = 32;
+const SOURCE_ALPHA_BORDER_SHARE = 0.5;
 
 export class EmptyEmojiImageError extends Error {
   constructor() {
@@ -229,12 +231,24 @@ export async function normalizeEmojiImage(input: Buffer, options: NormalizeEmoji
   const { width, height } = info;
   const pixels = width * height;
 
-  let seeThrough = 0;
-  for (let i = 0; i < pixels; i++) if (source[i * 4 + 3] < OPAQUE) seeThrough++;
+  let border = 0;
+  let clearBorder = 0;
+  const countBorder = (index: number) => {
+    border++;
+    if (source[index * 4 + 3] < CLEAR_ALPHA) clearBorder++;
+  };
+  for (let x = 0; x < width; x++) {
+    countBorder(x);
+    if (height > 1) countBorder((height - 1) * width + x);
+  }
+  for (let y = 1; y < height - 1; y++) {
+    countBorder(y * width);
+    if (width > 1) countBorder(y * width + width - 1);
+  }
 
   const rgb = Buffer.alloc(pixels * 3);
   let alpha: Buffer;
-  if (seeThrough >= pixels * SOURCE_ALPHA_MIN_SHARE) {
+  if (clearBorder >= border * SOURCE_ALPHA_BORDER_SHARE) {
     // The source already separates the object from the background: trust its alpha, so a white
     // object on a transparent background stays an object.
     alpha = Buffer.alloc(pixels);

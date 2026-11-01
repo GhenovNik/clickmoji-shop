@@ -160,6 +160,38 @@ describe('normalizeEmojiImage', () => {
     expect(box.right - box.left).toBeGreaterThan(205);
   });
 
+  it('keeps a white object inside a thin transparent frame', async () => {
+    const input = await svg(
+      1000,
+      1000,
+      '<rect x="1" y="1" width="998" height="998" fill="#ffffff"/>',
+      'none'
+    );
+
+    const { alphaAt } = await decode(await normalizeEmojiImage(input));
+
+    expect(alphaAt(128, 128)).toBe(255);
+  });
+
+  it('rejects an evenly semi-transparent white canvas as empty', async () => {
+    for (const alpha of [0.97, 0.5]) {
+      const input = await sharp({
+        create: {
+          width: 256,
+          height: 256,
+          channels: 4,
+          background: { r: 255, g: 255, b: 255, alpha },
+        },
+      })
+        .png()
+        .toBuffer();
+
+      await expect(normalizeEmojiImage(input), String(alpha)).rejects.toBeInstanceOf(
+        EmptyEmojiImageError
+      );
+    }
+  });
+
   it('rejects a fully transparent picture', async () => {
     const input = await sharp({
       create: { width: 64, height: 64, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 0 } },
