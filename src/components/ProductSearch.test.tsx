@@ -3,6 +3,7 @@ import type { ReactNode } from 'react';
 import { fireEvent, screen } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { renderWithIntl } from '@/test/intl';
+import { queryKeys } from '@/lib/query-keys';
 
 // Search results show the product, its category and its variants in the active language.
 
@@ -101,5 +102,19 @@ describe('product search', () => {
 
     expect(await screen.findByText('Ничего не найдено')).toBeTruthy();
     expect(screen.getByRole('button', { name: /Создать через AI/ })).toBeTruthy();
+  });
+
+  it('asks for and caches results per interface language', async () => {
+    mockSearch([]);
+    renderSearch('en');
+
+    fireEvent.change(screen.getByPlaceholderText(/search/i), { target: { value: 'milk' } });
+    await screen.findByText(/nothing found/i);
+
+    const searchUrls = (fetch as unknown as ReturnType<typeof vi.fn>).mock.calls
+      .map(([url]) => String(url))
+      .filter((url) => url.startsWith('/api/search'));
+    expect(searchUrls.at(-1)).toBe('/api/search?q=milk&locale=en');
+    expect(queryKeys.searchQuery('milk', 'en')).not.toEqual(queryKeys.searchQuery('milk', 'ru'));
   });
 });

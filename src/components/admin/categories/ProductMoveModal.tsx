@@ -4,6 +4,7 @@ import Image from 'next/image';
 import { useState } from 'react';
 import { useLocale, useTranslations } from 'next-intl';
 import { localizedName } from '@/lib/catalog-name';
+import { productImageUrl } from '@/lib/product-image';
 
 interface Product {
   id: string;
@@ -12,6 +13,7 @@ interface Product {
   emoji: string;
   isCustom: boolean;
   imageUrl: string | null;
+  imageUrlEn?: string | null;
   categoryId: string;
 }
 
@@ -120,9 +122,9 @@ export default function ProductMoveModal({
                   }`}
                 >
                   <div className="text-center">
-                    {product.isCustom && product.imageUrl ? (
+                    {product.isCustom && productImageUrl(product, locale) ? (
                       <Image
-                        src={product.imageUrl}
+                        src={productImageUrl(product, locale)!}
                         alt={localizedName(product, locale)}
                         width={48}
                         height={48}

@@ -40,7 +40,8 @@
 - Pictures with text on the packaging have an English version in `products.imageUrlEn`;
   `productImageUrl(product, locale)` (`src/lib/product-image.ts`) uses it in English and keeps the
   main picture otherwise. Text-free pictures are shared by both languages.
-- History snapshots copy the English names and picture next to the Russian ones.
+- History snapshots copy the English names and picture next to the Russian ones. Snapshots taken
+  before this change keep only their Russian copy: they are not filled from today's catalogue.
 - Search (`src/lib/services/product-search.ts`) finds products by either language and ranks
   matches in the interface language first.
 - AI tools keep the shopper's own word in its language (Russian in `nameRu`, English in

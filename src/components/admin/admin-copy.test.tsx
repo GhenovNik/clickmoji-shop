@@ -99,6 +99,37 @@ describe('ProductMoveModal', () => {
   });
 });
 
+describe('ProductMoveModal pictures', () => {
+  const labelled = {
+    ...apple,
+    isCustom: true,
+    imageUrl: 'https://utfs.io/f/apple-ru.webp',
+    imageUrlEn: 'https://utfs.io/f/apple-en.webp',
+  };
+
+  function pictureSrc(locale: 'ru' | 'en') {
+    renderWithIntl(
+      <ProductMoveModal
+        category={fruit}
+        products={[labelled]}
+        allCategories={[fruit, dairy]}
+        onClose={vi.fn()}
+        onMoveComplete={vi.fn()}
+      />,
+      { locale }
+    );
+    return decodeURIComponent(document.querySelector('img')?.getAttribute('src') ?? '');
+  }
+
+  it('shows the English picture of a labelled product in English', () => {
+    expect(pictureSrc('en')).toContain('apple-en.webp');
+  });
+
+  it('keeps the main picture in Russian', () => {
+    expect(pictureSrc('ru')).toContain('apple-ru.webp');
+  });
+});
+
 describe('EmojiPicker', () => {
   it('labels the library tab in English', () => {
     renderWithIntl(

@@ -30,9 +30,12 @@ type SearchProduct = {
   };
 };
 
-const searchProductsAPI = async (query: string): Promise<SearchProduct[]> => {
+const searchProductsAPI = async (query: string, locale: string): Promise<SearchProduct[]> => {
   if (!query.trim()) return [];
-  const res = await fetch(`/api/search?q=${encodeURIComponent(query)}`);
+  // The language is sent explicitly, so a response always matches the key it is cached under.
+  const res = await fetch(
+    `/api/search?q=${encodeURIComponent(query)}&locale=${encodeURIComponent(locale)}`
+  );
   if (!res.ok) throw new Error('Search failed');
   return res.json();
 };
@@ -91,8 +94,8 @@ export default function ProductSearch() {
 
   // Search query
   const { data: results = [], isLoading } = useQuery({
-    queryKey: queryKeys.searchQuery(debouncedQuery),
-    queryFn: () => searchProductsAPI(debouncedQuery),
+    queryKey: queryKeys.searchQuery(debouncedQuery, locale),
+    queryFn: () => searchProductsAPI(debouncedQuery, locale),
     enabled: debouncedQuery.trim().length > 0,
   });
 

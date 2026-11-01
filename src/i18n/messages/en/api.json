@@ -41,5 +41,20 @@
   "emoji": {
     "emptyImage": "No object found in the picture: it is empty or entirely white",
     "tooLarge": "The picture is too large: at most 4096 × 4096 pixels"
+  },
+  "import": {
+    "textRequired": "Enter the list text",
+    "textTooLong": "The text is too long: at most {max} characters",
+    "listIdRequired": "No list given",
+    "listNotFound": "List not found",
+    "aiNotConfigured": "AI is not configured. Please contact the administrator.",
+    "noCategories": "There are no categories. Please contact the administrator.",
+    "noProductsFound": "No products found in the text",
+    "importFailed": "Could not import the list",
+    "unrecognizedEntry": "The AI returned an entry it could not recognise",
+    "unknownProductReference": "Reference to an unknown product",
+    "categoryNotFound": "Category \"{category}\" not found",
+    "entryFailed": "Could not add the item",
+    "summary": "Import completed: {added} added, {created} created, {skipped} skipped, {failed} failed"
   }
 }

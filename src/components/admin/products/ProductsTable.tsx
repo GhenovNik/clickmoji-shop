@@ -4,6 +4,7 @@ import Image from 'next/image';
 import { useState } from 'react';
 import { useLocale, useTranslations } from 'next-intl';
 import { localizedName } from '@/lib/catalog-name';
+import { productImageUrl } from '@/lib/product-image';
 
 interface Product {
   id: string;
@@ -12,6 +13,7 @@ interface Product {
   emoji: string;
   isCustom: boolean;
   imageUrl: string | null;
+  imageUrlEn?: string | null;
   categoryId: string;
   variants?: { id: string; name: string; nameEn: string; emoji: string }[];
   category: {
@@ -107,9 +109,9 @@ export default function ProductsTable({ products, onEdit, onDelete }: ProductsTa
                   className="hover:bg-gray-50 transition-all"
                 >
                   <td className="px-4 py-4 align-top whitespace-nowrap">
-                    {product.isCustom && product.imageUrl ? (
+                    {product.isCustom && productImageUrl(product, locale) ? (
                       <Image
-                        src={product.imageUrl}
+                        src={productImageUrl(product, locale)!}
                         alt={product.name}
                         width={48}
                         height={48}
@@ -178,9 +180,9 @@ export default function ProductsTable({ products, onEdit, onDelete }: ProductsTa
           >
             <div className="flex items-start gap-4 mb-3">
               <div className="shrink-0">
-                {product.isCustom && product.imageUrl ? (
+                {product.isCustom && productImageUrl(product, locale) ? (
                   <Image
-                    src={product.imageUrl}
+                    src={productImageUrl(product, locale)!}
                     alt={product.name}
                     width={64}
                     height={64}

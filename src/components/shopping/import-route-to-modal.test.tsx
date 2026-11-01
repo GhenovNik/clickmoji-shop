@@ -74,8 +74,15 @@ beforeEach(() => {
   vi.spyOn(console, 'error').mockImplementation(() => undefined);
   vi.stubGlobal(
     'fetch',
+    // The browser sends the language cookie with every request, so the route answers in the
+    // language the modal is rendered in.
     vi.fn((url: string, init?: RequestInit) =>
-      route.POST(new Request(`http://localhost${url}`, init as RequestInit))
+      route.POST(
+        new Request(`http://localhost${url}`, {
+          ...(init as RequestInit),
+          headers: { ...(init?.headers as Record<string, string>), cookie: 'NEXT_LOCALE=ru' },
+        })
+      )
     )
   );
 });
@@ -100,7 +107,7 @@ describe('import report from the real route', () => {
     expect(await screen.findByText('Импорт завершён!')).toBeTruthy();
     expect(state.items.map((item) => item.productId)).toEqual(['milk']);
     expect(
-      screen.getByText(/Нераспознанная позиция: Unrecognized entry in the AI response/)
+      screen.getByText(/Нераспознанная позиция: ИИ вернул нераспознанную строку/)
     ).toBeTruthy();
   });
 });
