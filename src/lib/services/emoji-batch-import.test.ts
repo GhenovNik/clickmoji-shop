@@ -95,6 +95,26 @@ describe('readBatchImages gap clearing', () => {
 });
 
 describe('sliceSheet', () => {
+  it('takes a short batch from the top row of a square sheet and ignores extra rows', async () => {
+    // Three icons on top and an extra row at the bottom, as in a downloaded file that carried a row
+    // of another batch although Gemini itself showed only the three icons.
+    const sheet = await sharp(
+      Buffer.from(
+        '<svg xmlns="http://www.w3.org/2000/svg" width="90" height="90"><rect width="100%" height="100%" fill="#fff"/><rect x="0" y="0" width="30" height="30" fill="#f00"/><rect x="30" y="0" width="30" height="30" fill="#0f0"/><rect x="60" y="0" width="30" height="30" fill="#00f"/><rect x="0" y="60" width="90" height="30" fill="#000"/></svg>'
+      )
+    )
+      .png()
+      .toBuffer();
+
+    const cells = await sliceSheet(sheet, 3);
+
+    expect(cells).toHaveLength(3);
+    for (const cell of cells) {
+      const { height } = await sharp(cell).metadata();
+      expect(height).toBe(30);
+    }
+  });
+
   it('cuts three columns left to right, top to bottom', async () => {
     const colours = ['#f00', '#0f0', '#00f', '#ff0', '#0ff', '#f0f', '#000', '#888', '#fff'];
     const rects = colours

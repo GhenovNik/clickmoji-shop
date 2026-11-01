@@ -149,8 +149,11 @@ function cells(items: Candidate[], label: (item: Candidate) => string) {
     .join('\n');
 }
 
-function gridOf(items: Candidate[]) {
-  return items.length === BATCH_SIZE ? '3×3 grid' : `3-column grid, ${items.length} icons`;
+// A short batch is still drawn as a 3 × 3 sheet: the import cuts every square sheet into 3 × 3
+// cells, so the icons fill the first cells and the rest of the sheet must stay empty.
+function emptyCells(items: Candidate[]) {
+  if (items.length >= BATCH_SIZE) return '';
+  return `\nOnly cells 1–${items.length} hold an icon. Every other cell stays completely empty white: do not repeat, copy or add any icon there.`;
 }
 
 const STYLE = `Style: Apple iOS emoji style — exactly like the emoji set on an iPhone (match the attached samples if any). Soft volume, smooth rounded shapes, subtle gradients, gentle highlights. One consistent emoji set.
@@ -159,9 +162,9 @@ Every icon is centered in its own cell with generous white space around it; no i
 
 // A text-free picture serves every language.
 export function universalPrompt(items: Candidate[]) {
-  return `Create ONE square image: a ${gridOf(items)} of separate product emoji on a pure white background (#FFFFFF).
+  return `Create ONE square image: a 3×3 grid of separate product emoji on a pure white background (#FFFFFF).
 
-${STYLE}
+${STYLE}${emptyCells(items)}
 NO text at all: no letters, words, numbers or logos anywhere, not even on packaging.
 
 Cells, left to right, top to bottom:
@@ -169,9 +172,9 @@ ${cells(items, (item) => `«${item.name}»`)}`;
 }
 
 export function textPrompt(items: Candidate[]) {
-  return `Create ONE square image: a ${gridOf(items)} of separate product emoji on a pure white background (#FFFFFF).
+  return `Create ONE square image: a 3×3 grid of separate product emoji on a pure white background (#FFFFFF).
 
-${STYLE}
+${STYLE}${emptyCells(items)}
 Each product is shown in its typical packaging with ONE short label in Russian, exactly the quoted word(s) below, large, spelled correctly. No other text, no brand names.
 
 Cells, left to right, top to bottom (label in quotes):

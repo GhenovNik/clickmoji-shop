@@ -98,10 +98,15 @@ export function findBatchFiles(dir: string, batch: string): BatchFiles {
   return files;
 }
 
-// Cuts a sheet into `count` cells: three columns, as many rows as the cells need.
+// Cuts a sheet into `count` cells: three columns of square cells, left to right, top to bottom.
+// The row count follows the sheet's shape, not the cell count: a square sheet is always 3 × 3, so
+// a short batch takes its cells from the top and anything drawn below them is ignored.
 export async function sliceSheet(sheet: Buffer, count: number) {
   const { width = 0, height = 0 } = await sharp(sheet).metadata();
-  const rows = Math.ceil(count / COLUMNS);
+  const rows = Math.max(
+    Math.ceil(count / COLUMNS),
+    Math.round((height * COLUMNS) / Math.max(width, 1))
+  );
   const cells: Buffer[] = [];
   for (let i = 0; i < count; i++) {
     const row = Math.floor(i / COLUMNS);
