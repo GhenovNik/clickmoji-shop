@@ -62,7 +62,7 @@ function FavoritesPageContent() {
             <p className="text-sm text-gray-500">{t('favoritesPage.emptyHint')}</p>
           </div>
         ) : (
-          <div className="grid grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
+          <div className="grid grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3 md:gap-4">
             {favorites.map((favorite) => (
               <FavoriteCard
                 key={favorite.id}

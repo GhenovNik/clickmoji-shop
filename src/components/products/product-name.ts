@@ -1,7 +1,7 @@
-// A grid card is about 80px wide on a phone: a long word (Brussels sprouts in Russian) or a long
-// name (dishwasher tablets) does not fit two lines of text-sm, so such names get a smaller size
-// and a third line, and words break with a hyphen instead of being clipped.
-const LONG_WORD = 10;
+// A grid card leaves about 76px for the name on a phone: a word of ten letters (Bulgarian pepper in
+// Russian) or a long name (dishwasher tablets) does not fit two lines of text-sm, so such names get
+// a smaller size and a third line, and words break with a hyphen instead of being clipped.
+const LONG_WORD = 9;
 const LONG_NAME = 16;
 
 export function productNameClassName(name: string) {

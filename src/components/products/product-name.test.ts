@@ -10,6 +10,10 @@ describe('productNameClassName', () => {
     expect(productNameClassName('Брюссельская капуста')).toContain('text-xs line-clamp-3');
   });
 
+  it('shrinks a name with a ten-letter word, which needs three lines at text-sm', () => {
+    expect(productNameClassName('Болгарский перец')).toContain('text-xs line-clamp-3');
+  });
+
   it('shrinks a long multi-word name', () => {
     expect(productNameClassName('Средство для мытья посуды')).toContain('text-xs line-clamp-3');
   });
