@@ -46,11 +46,11 @@ describe('groupLibraryItems', () => {
     expect(groupLibraryItems([item({ id: 'a' }), item({ id: 'b' })])).toHaveLength(2);
   });
 
-  it('uses a lone English version as the main picture rather than dropping it', () => {
+  it('never offers a lone English version as the main picture', () => {
     const [picture] = groupLibraryItems([
       item({ id: 'en', locale: 'en', groupKey: 'g', imageUrl: 'https://utfs.io/f/en.webp' }),
     ]);
 
-    expect(picture).toMatchObject({ imageUrl: 'https://utfs.io/f/en.webp', imageUrlEn: null });
+    expect(picture).toMatchObject({ imageUrl: null, imageUrlEn: 'https://utfs.io/f/en.webp' });
   });
 });

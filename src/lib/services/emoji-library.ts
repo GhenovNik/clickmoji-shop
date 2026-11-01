@@ -45,9 +45,22 @@ export async function recordEmojiLibraryItem(input: EmojiLibraryInput) {
   }
 }
 
+const LIBRARY_ITEM_SELECT = {
+  id: true,
+  name: true,
+  nameEn: true,
+  tags: true,
+  imageUrl: true,
+  source: true,
+  locale: true,
+  groupKey: true,
+} as const;
+
+// Matching pictures plus the other language of every matched pair, so the result limit never
+// splits a Russian picture from its English version.
 export async function searchEmojiLibrary(query: string, limit = SEARCH_LIMIT) {
   const q = query.trim();
-  return prisma.emojiLibraryItem.findMany({
+  const matches = await prisma.emojiLibraryItem.findMany({
     where: q
       ? {
           OR: [
@@ -59,17 +72,16 @@ export async function searchEmojiLibrary(query: string, limit = SEARCH_LIMIT) {
       : undefined,
     orderBy: { createdAt: 'desc' },
     take: Math.min(Math.max(limit, 1), SEARCH_LIMIT),
-    select: {
-      id: true,
-      name: true,
-      nameEn: true,
-      tags: true,
-      imageUrl: true,
-      source: true,
-      locale: true,
-      groupKey: true,
-    },
+    select: LIBRARY_ITEM_SELECT,
   });
+
+  const groupKeys = [...new Set(matches.map((item) => item.groupKey).filter(Boolean))] as string[];
+  if (groupKeys.length === 0) return matches;
+  const siblings = await prisma.emojiLibraryItem.findMany({
+    where: { groupKey: { in: groupKeys }, id: { notIn: matches.map((item) => item.id) } },
+    select: LIBRARY_ITEM_SELECT,
+  });
+  return [...matches, ...siblings];
 }
 
 // A stored file may be deleted only when nothing else shows it: no library entry and no other

@@ -50,6 +50,7 @@
         "name": "Петрушка",
         "nameEn": "Parsley",
         "hint": "a bunch of flat-leaf parsley",
+        "gaps": true,
         "category": "Овощи",
         "action": "create"
       },
@@ -58,6 +59,7 @@
         "name": "Укроп",
         "nameEn": "Dill",
         "hint": "a bunch of feathery dill",
+        "gaps": true,
         "category": "Овощи",
         "action": "create"
       },
@@ -66,6 +68,7 @@
         "name": "Кинза",
         "nameEn": "Cilantro",
         "hint": "a bunch of cilantro",
+        "gaps": true,
         "category": "Овощи",
         "action": "create"
       },
@@ -89,6 +92,7 @@
         "name": "Розмарин",
         "nameEn": "Rosemary",
         "hint": "two sprigs of rosemary",
+        "gaps": true,
         "category": "Овощи",
         "action": "create"
       },
@@ -148,6 +152,7 @@
         "name": "Помидоры черри",
         "nameEn": "Cherry tomatoes",
         "hint": "a sprig of cherry tomatoes",
+        "gaps": true,
         "category": "Овощи",
         "action": "create"
       }
@@ -162,6 +167,7 @@
         "cell": 1,
         "name": "Ростки маша",
         "nameEn": "Bean sprouts",
+        "gaps": true,
         "category": "Овощи",
         "action": "create"
       },
@@ -240,6 +246,7 @@
         "name": "Смородина",
         "nameEn": "Currants",
         "hint": "a cluster of blackcurrants",
+        "gaps": true,
         "category": "Фрукты",
         "action": "create"
       },
@@ -269,6 +276,7 @@
         "name": "Облепиха",
         "nameEn": "Sea buckthorn",
         "hint": "a branch of orange sea buckthorn berries",
+        "gaps": true,
         "category": "Фрукты",
         "action": "create"
       },
@@ -499,6 +507,7 @@
         "cell": 4,
         "name": "Пончик",
         "nameEn": "Donut",
+        "gaps": true,
         "category": "Хлеб и выпечка",
         "action": "create"
       },
@@ -514,6 +523,7 @@
         "name": "Сушки",
         "nameEn": "Sushki",
         "hint": "a few small crunchy bread rings",
+        "gaps": true,
         "category": "Хлеб и выпечка",
         "action": "create"
       },

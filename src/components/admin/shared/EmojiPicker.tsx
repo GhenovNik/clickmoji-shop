@@ -120,7 +120,9 @@ export default function EmojiPicker({
 
       onGenerateImage?.(generateData.imageUrl);
       alert(
-        '✅ AI иконка сгенерирована и сохранена в библиотеку. Привяжется к товару после «Сохранить».'
+        generateData.libraryRecorded === false
+          ? '⚠️ AI иконка сгенерирована, но не попала в библиотеку. Нажмите «Сохранить», чтобы не потерять её.'
+          : '✅ AI иконка сгенерирована и сохранена в библиотеку. Привяжется к товару после «Сохранить».'
       );
     } catch (error) {
       console.error('Error generating AI emoji:', error);
@@ -222,7 +224,7 @@ export default function EmojiPicker({
                 >
                   <span className="h-12 w-12 flex items-center justify-center overflow-hidden">
                     <Image
-                      src={item.imageUrl}
+                      src={(item.imageUrl ?? item.imageUrlEn)!}
                       alt={item.name}
                       width={48}
                       height={48}

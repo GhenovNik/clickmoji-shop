@@ -19,6 +19,9 @@ export type Candidate = {
   hint?: string;
   // Shown with a label on the packaging: drawn once in Russian and once in English.
   text?: boolean;
+  // Enclosed white regions of the picture were checked to be gaps (herb stems, a bunch, a donut
+  // hole): the import may clear them. Never set on labelled products.
+  gaps?: boolean;
   action: 'create' | 'update-image';
 };
 

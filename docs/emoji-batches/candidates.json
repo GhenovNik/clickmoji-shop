@@ -1,5 +1,5 @@
 {
-  "note": "Hand-curated list of common grocery and household items (US grocery categories plus Russian staples), modelled on the Open Food Facts and USDA FoodData Central category trees, minus what the catalog snapshot already has, synonyms included. `redo` lists existing products that have no picture and only the 📦 fallback. `text: true` marks products shown with a label on the packaging: they go to text batches with a Russian and an English version; the rest get one text-free picture.",
+  "note": "Hand-curated list of common grocery and household items (US grocery categories plus Russian staples), modelled on the Open Food Facts and USDA FoodData Central category trees, minus what the catalog snapshot already has, synonyms included. `redo` lists existing products that have no picture and only the 📦 fallback. `text: true` marks products shown with a label on the packaging: they go to text batches with a Russian and an English version; the rest get one text-free picture. `gaps: true` marks text-free pictures whose enclosed white regions were checked to be gaps between parts of the object (herb stems, a bunch, a donut hole); only those cells get gap clearing on import.",
   "redo": [
     {
       "category": "Овощи",
@@ -38,17 +38,20 @@
         {
           "name": "Петрушка",
           "nameEn": "Parsley",
-          "hint": "a bunch of flat-leaf parsley"
+          "hint": "a bunch of flat-leaf parsley",
+          "gaps": true
         },
         {
           "name": "Укроп",
           "nameEn": "Dill",
-          "hint": "a bunch of feathery dill"
+          "hint": "a bunch of feathery dill",
+          "gaps": true
         },
         {
           "name": "Кинза",
           "nameEn": "Cilantro",
-          "hint": "a bunch of cilantro"
+          "hint": "a bunch of cilantro",
+          "gaps": true
         },
         {
           "name": "Мята",
@@ -58,7 +61,8 @@
         {
           "name": "Розмарин",
           "nameEn": "Rosemary",
-          "hint": "two sprigs of rosemary"
+          "hint": "two sprigs of rosemary",
+          "gaps": true
         },
         {
           "name": "Артишок",
@@ -93,11 +97,13 @@
         {
           "name": "Помидоры черри",
           "nameEn": "Cherry tomatoes",
-          "hint": "a sprig of cherry tomatoes"
+          "hint": "a sprig of cherry tomatoes",
+          "gaps": true
         },
         {
           "name": "Ростки маша",
-          "nameEn": "Bean sprouts"
+          "nameEn": "Bean sprouts",
+          "gaps": true
         },
         {
           "name": "Халапеньо",
@@ -143,7 +149,8 @@
         {
           "name": "Смородина",
           "nameEn": "Currants",
-          "hint": "a cluster of blackcurrants"
+          "hint": "a cluster of blackcurrants",
+          "gaps": true
         },
         {
           "name": "Крыжовник",
@@ -160,7 +167,8 @@
         {
           "name": "Облепиха",
           "nameEn": "Sea buckthorn",
-          "hint": "a branch of orange sea buckthorn berries"
+          "hint": "a branch of orange sea buckthorn berries",
+          "gaps": true
         },
         {
           "name": "Помело",
@@ -294,7 +302,8 @@
         },
         {
           "name": "Пончик",
-          "nameEn": "Donut"
+          "nameEn": "Donut",
+          "gaps": true
         },
         {
           "name": "Маффин",
@@ -303,7 +312,8 @@
         {
           "name": "Сушки",
           "nameEn": "Sushki",
-          "hint": "a few small crunchy bread rings"
+          "hint": "a few small crunchy bread rings",
+          "gaps": true
         },
         {
           "name": "Пирог",

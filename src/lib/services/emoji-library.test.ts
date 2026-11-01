@@ -114,6 +114,20 @@ describe('searchEmojiLibrary', () => {
     });
   });
 
+  it('adds the other language of every matched pair', async () => {
+    db.findMany
+      .mockResolvedValueOnce([{ id: 'en', groupKey: 'text-001#2', locale: 'en' }])
+      .mockResolvedValueOnce([{ id: 'ru', groupKey: 'text-001#2', locale: 'ru' }]);
+
+    const items = await searchEmojiLibrary('kefir');
+
+    expect(items.map((item) => item.id)).toEqual(['en', 'ru']);
+    expect(db.findMany.mock.calls[1][0].where).toEqual({
+      groupKey: { in: ['text-001#2'] },
+      id: { notIn: ['en'] },
+    });
+  });
+
   it('lists the newest pictures for an empty query, capped', async () => {
     db.findMany.mockResolvedValue([]);
     await searchEmojiLibrary('', 1000);

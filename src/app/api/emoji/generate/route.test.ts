@@ -227,4 +227,30 @@ describe('POST /api/emoji/generate keeps every paid picture', () => {
       source: 'generated',
     });
   });
+
+  it('says so when the library cannot be written, after one retry', async () => {
+    doubles.generateEmojiImage.mockResolvedValue({
+      imageBuffer: Buffer.from('png'),
+      provider: 'gemini',
+      model: 'model',
+      promptVersion: 'v',
+      cacheKey: 'k',
+    } as never);
+    doubles.uploadEmojiImage.mockResolvedValue({
+      imageUrl: 'https://utfs.io/f/generated.webp',
+      fileName: 'ai-emoji-milk.webp',
+    } as never);
+    doubles.recordEmojiLibraryItem.mockResolvedValue(null);
+
+    const response = await POST(generateRequest());
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body).toMatchObject({
+      imageUrl: 'https://utfs.io/f/generated.webp',
+      libraryRecorded: false,
+    });
+    expect(body.message).not.toContain('saved to the emoji library.');
+    expect(doubles.recordEmojiLibraryItem).toHaveBeenCalledTimes(2);
+  });
 });

@@ -281,6 +281,11 @@ export default function ProductForm({ product, categories, onSubmit, onCancel }:
           isRequired={!formData.isCustom}
           onGenerateImage={(url) => setFormData({ ...formData, imageUrl: url, isCustom: true })}
           onSelectLibraryImage={({ imageUrl, imageUrlEn }) => {
+            // An English-only library picture fills the English field and keeps the main one.
+            if (!imageUrl) {
+              setFormData({ ...formData, imageUrlEn });
+              return;
+            }
             setSelectedFile(null);
             setFormData({ ...formData, imageUrl, imageUrlEn, isCustom: true });
           }}

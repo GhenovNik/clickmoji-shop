@@ -6,6 +6,7 @@ import type { PrismaClient } from '@prisma/client';
 import sharp from 'sharp';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+  readBatchImages,
   applyCell,
   findBatchFiles,
   normalizeCatalogName,
@@ -53,6 +54,43 @@ describe('findBatchFiles', () => {
       en: join(dir, 'batch-005-3-en.webp'),
     });
     expect(files.cells.size).toBe(1);
+  });
+});
+
+describe('readBatchImages gap clearing', () => {
+  // A green ring around a pure white centre, the left third of a 3-column sheet.
+  async function ringSheet() {
+    return sharp(
+      Buffer.from(
+        '<svg xmlns="http://www.w3.org/2000/svg" width="300" height="100"><rect width="100%" height="100%" fill="#fff"/><circle cx="50" cy="50" r="40" fill="#43a047"/><circle cx="50" cy="50" r="15" fill="#fff"/></svg>'
+      )
+    )
+      .png()
+      .toBuffer();
+  }
+
+  async function centreAlpha(cell: Partial<ManifestCell>, kind: 'universal' | 'text') {
+    const sheet = await ringSheet();
+    const images = await readBatchImages(
+      { batch: 'batch-099', kind, file: 'x.png', cells: [{ ...KEFIR, cell: 1, ...cell }] },
+      { sheet: 'sheet', cells: new Map() },
+      () => sheet
+    );
+    const { data, info } = await sharp(images.get(1)!.ru)
+      .ensureAlpha()
+      .raw()
+      .toBuffer({ resolveWithObject: true });
+    return data[(128 * info.width + 128) * 4 + 3];
+  }
+
+  it('clears an enclosed gap only for a cell whose gaps were checked', async () => {
+    expect(await centreAlpha({ gaps: true }, 'universal')).toBe(0);
+    expect(await centreAlpha({}, 'universal')).toBe(255);
+  });
+
+  it('never clears gaps on a labelled product, even in a text-free batch', async () => {
+    expect(await centreAlpha({ gaps: true, text: true }, 'universal')).toBe(255);
+    expect(await centreAlpha({ gaps: true }, 'text')).toBe(255);
   });
 });
 

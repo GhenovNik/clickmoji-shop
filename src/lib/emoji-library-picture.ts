@@ -15,7 +15,8 @@ export type LibraryPicture = {
   name: string;
   nameEn: string | null;
   tags: string[];
-  imageUrl: string;
+  // null when only the English version exists: picking it fills only the English picture.
+  imageUrl: string | null;
   imageUrlEn: string | null;
 };
 
@@ -30,14 +31,16 @@ export function groupLibraryItems(items: LibraryItem[]): LibraryPicture[] {
 
   return [...groups.entries()].map(([key, members]) => {
     const english = members.find((item) => item.locale === 'en');
-    const main = members.find((item) => item.locale !== 'en') ?? english!;
+    const main = members.find((item) => item.locale !== 'en');
+    const shown = (main ?? english)!;
     return {
       key,
-      name: main.name,
-      nameEn: main.nameEn,
-      tags: main.tags,
-      imageUrl: main.imageUrl,
-      imageUrlEn: english && english !== main ? english.imageUrl : null,
+      name: shown.name,
+      nameEn: shown.nameEn,
+      tags: shown.tags,
+      // An English label is never offered as the main (Russian or text-free) picture.
+      imageUrl: main?.imageUrl ?? null,
+      imageUrlEn: english?.imageUrl ?? null,
     };
   });
 }

@@ -30,28 +30,16 @@ export async function PUT(
     const body = await request.json();
     const { name, nameEn, emoji, order, isCustom, imageUrl } = body;
 
-    // If imageUrl is being changed, delete old file from UploadThing
-    if (imageUrl !== undefined) {
-      const currentCategory = await prisma.category.findUnique({
-        where: { id: categoryId },
-        select: { imageUrl: true },
-      });
-
-      if (
-        currentCategory?.imageUrl &&
-        currentCategory.imageUrl !== imageUrl &&
-        !(await isStoredImageInUse(currentCategory.imageUrl, { categoryId }))
-      ) {
-        const oldFileKey = getFileKeyFromUrl(currentCategory.imageUrl);
-        if (oldFileKey) {
-          try {
-            await utapi.deleteFiles(oldFileKey);
-          } catch (error) {
-            console.error('Failed to delete old image from UploadThing:', error);
-          }
-        }
-      }
-    }
+    // The picture the update replaces; it is removed only once the update has committed.
+    const previousImageUrl =
+      imageUrl !== undefined
+        ? (
+            await prisma.category.findUnique({
+              where: { id: categoryId },
+              select: { imageUrl: true },
+            })
+          )?.imageUrl
+        : null;
 
     // Resolve position conflicts before updating the unique order field.
     if (order !== undefined) {
@@ -104,6 +92,21 @@ export async function PUT(
         ...(imageUrl !== undefined && { imageUrl }),
       },
     });
+
+    if (
+      previousImageUrl &&
+      previousImageUrl !== imageUrl &&
+      !(await isStoredImageInUse(previousImageUrl))
+    ) {
+      const oldFileKey = getFileKeyFromUrl(previousImageUrl);
+      if (oldFileKey) {
+        try {
+          await utapi.deleteFiles(oldFileKey);
+        } catch (error) {
+          console.error('Failed to delete old image from UploadThing:', error);
+        }
+      }
+    }
 
     return NextResponse.json(category);
   } catch (error) {

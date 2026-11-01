@@ -57,23 +57,30 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Failed to generate emoji' }, { status: 500 });
     }
 
-    // Return a preview without persisting it to UploadThing.
     // A paid picture is kept at once: normalized, stored and recorded in the library, so closing
     // the form or generating again never loses it. The form only links the returned URL.
     const { imageUrl } = await uploadEmojiImage({
       imageBuffer: generated.imageBuffer,
       productName,
     });
-    await recordEmojiLibraryItem({
+    const libraryEntry = {
       imageUrl,
       name: String(name || productName),
       nameEn: typeof nameEn === 'string' ? nameEn : null,
-      source: 'generated',
-    });
+      source: 'generated' as const,
+    };
+    // One retry; if the library still cannot be written the picture is returned anyway, and the
+    // response says so instead of claiming it is in the library.
+    const libraryRecorded = Boolean(
+      (await recordEmojiLibraryItem(libraryEntry)) ?? (await recordEmojiLibraryItem(libraryEntry))
+    );
 
     return NextResponse.json({
       imageUrl,
-      message: 'Image generated and saved to the emoji library.',
+      libraryRecorded,
+      message: libraryRecorded
+        ? 'Image generated and saved to the emoji library.'
+        : 'Image generated but not saved to the emoji library: save the product to keep it.',
       provider: generated.provider,
       model: generated.model,
       promptVersion: generated.promptVersion,

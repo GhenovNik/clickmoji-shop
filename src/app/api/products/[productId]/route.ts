@@ -20,10 +20,11 @@ function getFileKeyFromUrl(url: string | null): string | null {
   }
 }
 
-// Removes a replaced or orphaned picture from UploadThing unless the library or another item
-// still shows it. A failed delete never fails the request: the database change matters more.
-async function discardIfUnused(imageUrl: string | null | undefined, productId?: string) {
-  if (!imageUrl || (await isStoredImageInUse(imageUrl, { productId }))) return;
+// Removes a replaced or orphaned picture from UploadThing unless something still shows it.
+// Called only after the database change is committed, and without excluding the product: its
+// other picture field may point at the same file. A failed delete never fails the request.
+async function discardIfUnused(imageUrl: string | null | undefined) {
+  if (!imageUrl || (await isStoredImageInUse(imageUrl))) return;
   const fileKey = getFileKeyFromUrl(imageUrl);
   if (!fileKey) return;
   try {
@@ -45,19 +46,14 @@ export async function PUT(
     const body = await request.json();
     const { name, nameEn, emoji, categoryId, isCustom, imageUrl, imageUrlEn, variants } = body;
 
-    // A replaced picture (main or English) is removed from UploadThing when nothing else shows it.
-    if (imageUrl !== undefined || imageUrlEn !== undefined) {
-      const currentProduct = await prisma.product.findUnique({
-        where: { id: productId },
-        select: { imageUrl: true, imageUrlEn: true },
-      });
-      if (imageUrl !== undefined && currentProduct?.imageUrl !== imageUrl) {
-        await discardIfUnused(currentProduct?.imageUrl, productId);
-      }
-      if (imageUrlEn !== undefined && currentProduct?.imageUrlEn !== imageUrlEn) {
-        await discardIfUnused(currentProduct?.imageUrlEn, productId);
-      }
-    }
+    // Pictures the update replaces; they are removed only once the update has committed.
+    const previous =
+      imageUrl !== undefined || imageUrlEn !== undefined
+        ? await prisma.product.findUnique({
+            where: { id: productId },
+            select: { imageUrl: true, imageUrlEn: true },
+          })
+        : null;
 
     const product = await prisma.$transaction(async (tx) => {
       const updatedProduct = await tx.product.update({
@@ -128,6 +124,13 @@ export async function PUT(
 
       return updatedWithRelations ?? updatedProduct;
     });
+
+    if (imageUrl !== undefined && previous?.imageUrl !== imageUrl) {
+      await discardIfUnused(previous?.imageUrl);
+    }
+    if (imageUrlEn !== undefined && previous?.imageUrlEn !== imageUrlEn) {
+      await discardIfUnused(previous?.imageUrlEn);
+    }
 
     return NextResponse.json(product);
   } catch (error) {

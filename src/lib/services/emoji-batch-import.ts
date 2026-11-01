@@ -16,6 +16,8 @@ export type ManifestCell = {
   nameEn: string;
   hint?: string;
   text?: boolean;
+  // Enclosed white regions were checked to be gaps between parts of the object.
+  gaps?: boolean;
   action: 'create' | 'update-image';
   // The product's picture now comes from this text-batch cell; this one stays in the library.
   supersededBy?: string;
@@ -136,9 +138,9 @@ export async function readBatchImages(
     const ruSource = single?.ru ? read(single.ru) : sheet[cell.cell - 1];
     if (!ruSource) continue;
     const enSource = english && single?.en ? read(single.en) : sheetEn[cell.cell - 1];
-    // Text-free pictures carry no label by their prompt, so an enclosed white region there is a
-    // gap between parts of the object; on labelled pictures it may be the label and stays.
-    const options = { clearEnclosedGaps: !english };
+    // Gap clearing removes enclosed white regions; it runs only for cells whose gaps were checked
+    // and never for a labelled product, whose white region may be its label.
+    const options = { clearEnclosedGaps: Boolean(cell.gaps) && !cell.text && !english };
     result.set(cell.cell, {
       ru: await normalizeEmojiImage(ruSource, options),
       en: enSource ? await normalizeEmojiImage(enSource, options) : undefined,
