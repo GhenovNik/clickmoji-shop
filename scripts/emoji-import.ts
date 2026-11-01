@@ -16,7 +16,7 @@ import {
 } from '../src/lib/services/emoji-batch-import';
 
 // Imports the operator's emoji sheets (AGE-1465 item 2).
-//   npx tsx scripts/emoji-import.ts [--dir <folder>] [--batch 001,002] [--out <folder>]
+//   npx tsx scripts/emoji-import.ts [--dir <folder>] [--batch 001,002,text-001] [--out <folder>]
 //   DATABASE_URL=... npx tsx scripts/emoji-import.ts ...            preview against the catalogue
 //   DATABASE_URL=... UPLOADTHING_TOKEN=... npx tsx scripts/emoji-import.ts --apply ...
 // Without --apply nothing is written: the normalized pictures and preview.html go to --out.
@@ -76,7 +76,7 @@ async function main() {
   const out = resolve(expandHome(argument('--out') ?? join(dir, 'preview')));
   const only = argument('--batch')
     ?.split(',')
-    .map((id) => (id.startsWith('batch-') ? id : `batch-${id.padStart(3, '0')}`));
+    .map((id) => (/^(batch|text)-/.test(id) ? id : `batch-${id.padStart(3, '0')}`));
   const apply = process.argv.includes('--apply');
 
   if (apply && (!process.env.DATABASE_URL || !process.env.UPLOADTHING_TOKEN)) {
@@ -118,15 +118,19 @@ async function main() {
       if (enFile && picture.en) writeFileSync(join(out, enFile), picture.en);
 
       const product = index ? planProduct(cell, index) : null;
-      const action = !product
-        ? cell.action === 'create'
-          ? 'создать товар (по манифесту; каталог не проверялся)'
-          : 'картинка для существующего товара (по манифесту)'
-        : product.kind === 'link'
-          ? `привязать к товару «${product.productName}»`
-          : product.kind === 'create'
-            ? `создать товар в «${cell.category}»`
-            : `только в библиотеку: нет категории «${cell.category}»`;
+      const action = cell.supersededBy
+        ? `только в библиотеку: картинка товара — из ${cell.supersededBy}`
+        : !product
+          ? cell.action === 'create'
+            ? 'создать товар (по манифесту; каталог не проверялся)'
+            : 'картинка для существующего товара (по манифесту)'
+          : product.kind === 'link'
+            ? `привязать к товару «${product.productName}»`
+            : product.kind === 'create'
+              ? `создать товар в «${cell.category}»`
+              : product.kind === 'superseded'
+                ? `только в библиотеку: картинка товара — из ${product.by}`
+                : `только в библиотеку: нет категории «${cell.category}»`;
       rows.push({
         ref,
         name: cell.name,
@@ -141,6 +145,7 @@ async function main() {
         plans.push({
           ref,
           batch: batch.batch,
+          batchKind: batch.kind ?? 'universal',
           cell,
           images: picture,
           stored: { ru: stored.get(ref), en: stored.get(`${ref}:en`) },
@@ -167,7 +172,9 @@ async function main() {
           ? `→ ${result.productName}`
           : result.product === 'created'
             ? '→ новый товар'
-            : '→ только библиотека';
+            : result.product === 'superseded'
+              ? '→ только библиотека (перерисован в текстовой пачке)'
+              : '→ только библиотека';
       console.log(
         `${result.ref} ${result.name} ${target}${result.uploaded ? '' : ' (без загрузки)'}`
       );

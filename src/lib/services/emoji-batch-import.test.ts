@@ -113,6 +113,13 @@ describe('planProduct', () => {
       kind: 'no-category',
     });
   });
+
+  it('does not link a cell whose picture is redrawn in a text batch', () => {
+    expect(planProduct({ ...KEFIR, supersededBy: 'text-001#2' }, index)).toEqual({
+      kind: 'superseded',
+      by: 'text-001#2',
+    });
+  });
 });
 
 describe('applyCell', () => {
@@ -126,6 +133,7 @@ describe('applyCell', () => {
   const plan = (overrides: Partial<CellPlan> = {}): CellPlan => ({
     ref: 'batch-005#3',
     batch: 'batch-005',
+    batchKind: 'text',
     cell: KEFIR,
     images: { ru: Buffer.from('ru'), en: Buffer.from('en') },
     stored: {},
@@ -162,18 +170,60 @@ describe('applyCell', () => {
     });
   });
 
-  it('marks a picture without an English sheet as text-free', async () => {
+  it('records a text-free batch picture for every language and clears a stale English one', async () => {
     const prisma = fakePrisma();
     const upload = vi.fn(async () => 'https://utfs.io/f/x.webp');
 
     await applyCell(
       prisma as unknown as PrismaClient,
-      plan({ images: { ru: Buffer.from('ru') } }),
+      plan({ batchKind: 'universal', images: { ru: Buffer.from('ru'), en: Buffer.from('en') } }),
       upload
     );
 
+    expect(upload).toHaveBeenCalledTimes(1);
     expect(prisma.emojiLibraryItem.upsert).toHaveBeenCalledTimes(1);
     expect(prisma.emojiLibraryItem.upsert.mock.calls[0][0].create.locale).toBeNull();
+    expect(prisma.product.create.mock.calls[0][0].data.imageUrlEn).toBeNull();
+  });
+
+  it('keeps a stored English picture when only the Russian label sheet is imported', async () => {
+    const prisma = fakePrisma();
+    const upload = vi.fn(async () => 'https://utfs.io/f/ru.webp');
+
+    await applyCell(
+      prisma as unknown as PrismaClient,
+      plan({
+        images: { ru: Buffer.from('ru') },
+        product: { kind: 'link', productId: 'p1', productName: 'Кефир' },
+      }),
+      upload
+    );
+
+    expect(prisma.emojiLibraryItem.upsert.mock.calls[0][0].create.locale).toBe('ru');
+    expect(prisma.product.update.mock.calls[0][0].data).toEqual({
+      isCustom: true,
+      imageUrl: 'https://utfs.io/f/ru.webp',
+    });
+  });
+
+  it('keeps a cell redrawn in a text batch in the library only', async () => {
+    const prisma = fakePrisma();
+    const upload = vi.fn(async () => 'https://utfs.io/f/old.webp');
+
+    const result = await applyCell(
+      prisma as unknown as PrismaClient,
+      plan({
+        batchKind: 'universal',
+        images: { ru: Buffer.from('ru') },
+        product: { kind: 'superseded', by: 'text-001#2' },
+      }),
+      upload
+    );
+
+    expect(result.product).toBe('superseded');
+    expect(prisma.emojiLibraryItem.upsert).toHaveBeenCalledTimes(1);
+    expect(prisma.product.update).not.toHaveBeenCalled();
+    expect(prisma.product.create).not.toHaveBeenCalled();
   });
 
   it('reuses stored pictures on a re-run and only re-links the product', async () => {

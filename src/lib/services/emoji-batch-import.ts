@@ -15,10 +15,22 @@ export type ManifestCell = {
   name: string;
   nameEn: string;
   hint?: string;
+  text?: boolean;
   action: 'create' | 'update-image';
+  // The product's picture now comes from this text-batch cell; this one stays in the library.
+  supersededBy?: string;
 };
 
-export type ManifestBatch = { batch: string; file: string; fileEn?: string; cells: ManifestCell[] };
+// universal: one text-free picture for every language; text: a Russian and an English sheet.
+export type BatchKind = 'universal' | 'text';
+
+export type ManifestBatch = {
+  batch: string;
+  kind?: BatchKind;
+  file: string;
+  fileEn?: string;
+  cells: ManifestCell[];
+};
 
 export type BatchFiles = {
   sheet?: string;
@@ -32,11 +44,13 @@ export type CellImages = { ru: Buffer; en?: Buffer };
 export type ProductPlan =
   | { kind: 'link'; productId: string; productName: string }
   | { kind: 'create'; categoryId: string; categoryEmoji: string }
-  | { kind: 'no-category' };
+  | { kind: 'no-category' }
+  | { kind: 'superseded'; by: string };
 
 export type CellPlan = {
   ref: string;
   batch: string;
+  batchKind: BatchKind;
   cell: ManifestCell;
   images: CellImages;
   stored: { ru?: string; en?: string };
@@ -109,15 +123,17 @@ export async function readBatchImages(
   read: (path: string) => Buffer
 ) {
   const count = batch.cells.length;
+  // A text-free batch has one picture for every language: an English file is ignored.
+  const english = batch.kind === 'text';
   const sheet = files.sheet ? await sliceSheet(read(files.sheet), count) : [];
-  const sheetEn = files.sheetEn ? await sliceSheet(read(files.sheetEn), count) : [];
+  const sheetEn = english && files.sheetEn ? await sliceSheet(read(files.sheetEn), count) : [];
   const result = new Map<number, CellImages>();
 
   for (const cell of batch.cells) {
     const single = files.cells.get(cell.cell);
     const ruSource = single?.ru ? read(single.ru) : sheet[cell.cell - 1];
     if (!ruSource) continue;
-    const enSource = single?.en ? read(single.en) : sheetEn[cell.cell - 1];
+    const enSource = english && single?.en ? read(single.en) : sheetEn[cell.cell - 1];
     result.set(cell.cell, {
       ru: await normalizeEmojiImage(ruSource),
       en: enSource ? await normalizeEmojiImage(enSource) : undefined,
@@ -143,6 +159,7 @@ export async function loadCatalogIndex(prisma: PrismaClient): Promise<CatalogInd
 }
 
 export function planProduct(cell: ManifestCell, index: CatalogIndex): ProductPlan {
+  if (cell.supersededBy) return { kind: 'superseded', by: cell.supersededBy };
   const product = index.products.get(normalizeCatalogName(cell.name));
   if (product) return { kind: 'link', productId: product.id, productName: product.name };
   const category = index.categories.get(normalizeCatalogName(cell.category));
@@ -165,7 +182,7 @@ export type AppliedCell = {
   ref: string;
   name: string;
   uploaded: number;
-  product: 'linked' | 'created' | 'library-only';
+  product: 'linked' | 'created' | 'library-only' | 'superseded';
   productName?: string;
 };
 
@@ -177,7 +194,7 @@ export async function applyCell(
   upload: Uploader
 ): Promise<AppliedCell> {
   const { cell, ref, images } = plan;
-  const hasEnglish = Boolean(images.en);
+  const textBatch = plan.batchKind === 'text';
   let uploaded = 0;
 
   const store = async (
@@ -205,10 +222,17 @@ export async function applyCell(
     return imageUrl;
   };
 
-  const imageUrl = await store(hasEnglish ? 'ru' : null, images.ru, ref, plan.stored.ru);
-  const imageUrlEn = images.en ? await store('en', images.en, `${ref}:en`, plan.stored.en) : null;
+  const imageUrl = await store(textBatch ? 'ru' : null, images.ru, ref, plan.stored.ru);
+  const imageUrlEn =
+    textBatch && images.en ? await store('en', images.en, `${ref}:en`, plan.stored.en) : null;
 
-  const picture = { isCustom: true, imageUrl, imageUrlEn };
+  // A text-free picture serves both languages, so it clears a stale English one. A Russian
+  // label imported before its English sheet leaves an English picture already stored alone.
+  const picture = {
+    isCustom: true,
+    imageUrl,
+    ...(imageUrlEn || !textBatch ? { imageUrlEn } : {}),
+  };
   if (plan.product.kind === 'link') {
     await prisma.product.update({ where: { id: plan.product.productId }, data: picture });
     return {
@@ -231,6 +255,9 @@ export async function applyCell(
       },
     });
     return { ref, name: cell.name, uploaded, product: 'created' };
+  }
+  if (plan.product.kind === 'superseded') {
+    return { ref, name: cell.name, uploaded, product: 'superseded' };
   }
   return { ref, name: cell.name, uploaded, product: 'library-only' };
 }

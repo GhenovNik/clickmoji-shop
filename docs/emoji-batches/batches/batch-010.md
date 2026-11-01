@@ -1,19 +1,18 @@
-# batch-010
+# batch-010 — без надписей (одна версия на оба языка)
 
-Новый чат в Gemini → вставить промпт → сохранить картинку как `batch-010.png`. Если на картинке
-есть надписи — в том же чате отправить английский промпт и сохранить ответ как `batch-010-en.png`.
+Новый чат в Gemini → вставить промпт → сохранить картинку как `batch-010.png`.
 
-| Ячейка | Товар             | English       | Категория        | Действие |
-| ------ | ----------------- | ------------- | ---------------- | -------- |
-| 1      | Киноа             | Quinoa        | Крупы и макароны | новый    |
-| 2      | Манка             | Semolina      | Крупы и макароны | новый    |
-| 3      | Кукурузные хлопья | Corn flakes   | Крупы и макароны | новый    |
-| 4      | Мюсли             | Granola       | Крупы и макароны | новый    |
-| 5      | Сахар             | Sugar         | Крупы и макароны | новый    |
-| 6      | Крахмал           | Starch        | Крупы и макароны | новый    |
-| 7      | Дрожжи            | Yeast         | Крупы и макароны | новый    |
-| 8      | Разрыхлитель      | Baking powder | Крупы и макароны | новый    |
-| 9      | Соль              | Salt          | Масла и соусы    | новый    |
+| Ячейка | Товар         | English         | Категория              | Действие |
+| ------ | ------------- | --------------- | ---------------------- | -------- |
+| 1      | Зефир         | Zefir           | Сладости               | новый    |
+| 2      | Пряники       | Pryaniki        | Сладости               | новый    |
+| 3      | Леденец       | Lollipop        | Сладости               | новый    |
+| 4      | Мёд           | Honey           | Сладости               | новый    |
+| 5      | Попкорн       | Popcorn         | Сладости               | новый    |
+| 6      | Суши          | Sushi           | Консервы и готовая еда | новый    |
+| 7      | Сэндвич       | Sandwich        | Консервы и готовая еда | новый    |
+| 8      | Наггетсы      | Chicken nuggets | Замороженные продукты  | новый    |
+| 9      | Картофель фри | French fries    | Замороженные продукты  | новый    |
 
 ## Промпт
 
@@ -21,18 +20,12 @@
 Create ONE square image: a 3×3 grid of separate product emoji on a pure white background (#FFFFFF).
 
 Style: Apple iOS emoji style — exactly like the emoji set on an iPhone (match the attached samples if any). Soft volume, smooth rounded shapes, subtle gradients, gentle highlights. One consistent emoji set.
-NOT photorealistic. NO shadows or drop shadows. NO grid lines, cell borders, frames or dividers. NO captions or labels under the icons. Text only where it is printed on the product's own packaging, short and spelled correctly in Russian.
+NOT photorealistic, NOT a cartoon sticker: no thick dark outlines. NO shadows or drop shadows. NO grid lines, cell borders, frames or dividers. NO captions under the icons.
 Every icon is centered in its own cell with generous white space around it; no icon touches or crosses its cell edge.
+NO text at all: no letters, words, numbers or logos anywhere, not even on packaging.
 
 Cells, left to right, top to bottom:
-Row 1: 1) «Киноа» — quinoa; 2) «Манка» — a pack of fine semolina; 3) «Кукурузные хлопья» — corn flakes
-Row 2: 4) «Мюсли» — granola; 5) «Сахар» — sugar; 6) «Крахмал» — starch
-Row 3: 7) «Дрожжи» — yeast; 8) «Разрыхлитель» — baking powder; 9) «Соль» — salt
-```
-
-## Английская версия (только если есть надписи, в том же чате)
-
-```text
-Make exactly the same image: the same drawings, layout, colours and white background. Change ONLY the text printed on the packaging, translating it into short correct English. Icons without text stay exactly as they are. Do not add any new text.
-Cell names for reference: 1) «Киноа» → "Quinoa"; 2) «Манка» → "Semolina"; 3) «Кукурузные хлопья» → "Corn flakes"; 4) «Мюсли» → "Granola"; 5) «Сахар» → "Sugar"; 6) «Крахмал» → "Starch"; 7) «Дрожжи» → "Yeast"; 8) «Разрыхлитель» → "Baking powder"; 9) «Соль» → "Salt"
+Row 1: 1) «Зефир» — two pastel zefir marshmallows; 2) «Пряники» — glazed round gingerbread cookies; 3) «Леденец» — lollipop
+Row 2: 4) «Мёд» — honey; 5) «Попкорн» — popcorn; 6) «Суши» — sushi
+Row 3: 7) «Сэндвич» — sandwich; 8) «Наггетсы» — chicken nuggets; 9) «Картофель фри» — french fries
 ```
