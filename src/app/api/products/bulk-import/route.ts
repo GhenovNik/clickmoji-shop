@@ -1,7 +1,9 @@
 import { NextResponse } from 'next/server';
+import { apiText } from '@/lib/api-messages';
+import { localizedName } from '@/lib/catalog-name';
 import { prisma } from '@/lib/prisma';
 import { requireAdmin } from '@/lib/auth-guards';
-import { checkRateLimit, rateLimitResponse } from '@/lib/auth-security';
+import { checkRateLimit, getRequestLocale, rateLimitResponse } from '@/lib/auth-security';
 import { enforceAiQuota } from '@/lib/ai-quota';
 import { processProductBatch, type ProcessedProduct } from '@/lib/services/ai-products';
 
@@ -16,7 +18,7 @@ export async function POST(request: Request) {
 
     if (!productNames || !Array.isArray(productNames) || productNames.length === 0) {
       return NextResponse.json(
-        { error: 'productNames must be a non-empty array' },
+        { error: await apiText(request, 'productNamesRequired') },
         { status: 400 }
       );
     }
@@ -27,14 +29,14 @@ export async function POST(request: Request) {
       windowMs: 60 * 60 * 1000,
     });
     if (!userLimit.allowed) {
-      return rateLimitResponse(userLimit.resetAt);
+      return rateLimitResponse(userLimit.resetAt, getRequestLocale(request));
     }
 
     // Check for API key
     const apiKey = process.env.GOOGLE_GENAI_API_KEY || process.env.GEMINI_API_KEY;
     if (!apiKey) {
       return NextResponse.json(
-        { error: 'GOOGLE_GENAI_API_KEY or GEMINI_API_KEY not configured' },
+        { error: await apiText(request, 'aiNotConfigured') },
         { status: 500 }
       );
     }
@@ -46,13 +48,13 @@ export async function POST(request: Request) {
 
     if (categories.length === 0) {
       return NextResponse.json(
-        { error: 'No categories found. Please create categories first.' },
+        { error: await apiText(request, 'noCategoriesCreateFirst') },
         { status: 400 }
       );
     }
 
     // One unit of the administrator's daily AI budget for the batch analysis (one provider call).
-    const quotaResponse = await enforceAiQuota(session.user);
+    const quotaResponse = await enforceAiQuota(session.user, getRequestLocale(request));
     if (quotaResponse) return quotaResponse;
 
     const {
@@ -86,7 +88,9 @@ export async function POST(request: Request) {
       if (!category) {
         results.failed.push({
           product,
-          reason: `Category "${product.categoryName}" not found`,
+          reason: await apiText(request, 'importCategoryNotFound', {
+            category: product.categoryName,
+          }),
         });
         continue;
       }
@@ -102,7 +106,7 @@ export async function POST(request: Request) {
         results.skipped.push({
           name: product.nameRu,
           nameEn: product.nameEn,
-          reason: 'Product already exists',
+          reason: await apiText(request, 'importProductExists'),
         });
         continue;
       }
@@ -124,24 +128,34 @@ export async function POST(request: Request) {
           name: createdProduct.name,
           nameEn: createdProduct.nameEn,
           emoji: createdProduct.emoji,
-          category: category.name,
+          // The report is read in the interface language, like the import-text report.
+          category: localizedName(category, getRequestLocale(request)),
         });
       } catch (error) {
+        // The raw error stays in the server log; the report gets a translated reason.
+        console.error('Error importing a product:', error);
         results.failed.push({
           product,
-          reason: error instanceof Error ? error.message : 'Unknown error',
+          reason: await apiText(request, 'importEntryFailed'),
         });
       }
     }
 
     return NextResponse.json({
-      message: `Imported ${results.success.length} products, ${results.skipped.length} skipped (duplicates), ${results.failed.length} failed`,
+      message: await apiText(request, 'bulkImportSummary', {
+        success: results.success.length,
+        skipped: results.skipped.length,
+        failed: results.failed.length,
+      }),
       promptVersion,
       model,
       results,
     });
   } catch (error) {
     console.error('Error in bulk import:', error);
-    return NextResponse.json({ error: 'Failed to import products' }, { status: 500 });
+    return NextResponse.json(
+      { error: await apiText(request, 'importProductsFailed') },
+      { status: 500 }
+    );
   }
 }

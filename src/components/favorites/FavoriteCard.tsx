@@ -1,8 +1,11 @@
 'use client';
 
 import Image from 'next/image';
+import { useLocale, useTranslations } from 'next-intl';
 import type { FavoriteProduct } from '@/hooks/useFavorites';
 import { productNameClassName } from '@/components/products/product-name';
+import { localizedName } from '@/lib/catalog-name';
+import { productImageUrl } from '@/lib/product-image';
 
 interface FavoriteCardProps {
   favorite: FavoriteProduct;
@@ -17,6 +20,14 @@ export default function FavoriteCard({
   onToggle,
   onRemove,
 }: FavoriteCardProps) {
+  const t = useTranslations('catalog.shared');
+  const locale = useLocale();
+  const { product } = favorite;
+  const name = localizedName(product, locale);
+  // Hyphenation follows the language the name is actually shown in (English falls back to Russian).
+  const nameLang = locale === 'en' && product.nameEn?.trim() ? 'en' : 'ru';
+  const imageUrl = productImageUrl(product, locale);
+
   const handleRemoveClick = (e: React.MouseEvent) => {
     e.stopPropagation();
     onRemove(favorite.product.id);
@@ -33,10 +44,10 @@ export default function FavoriteCard({
       >
         <div className="text-center">
           <div className="mx-auto mb-2 h-16 w-16 flex items-center justify-center overflow-hidden">
-            {favorite.product.isCustom && favorite.product.imageUrl ? (
+            {product.isCustom && imageUrl ? (
               <Image
-                src={favorite.product.imageUrl}
-                alt={favorite.product.name}
+                src={imageUrl}
+                alt={name}
                 width={64}
                 height={64}
                 className="h-16 w-16 object-contain"
@@ -45,8 +56,8 @@ export default function FavoriteCard({
               <span className="text-4xl leading-none">{favorite.product.emoji}</span>
             )}
           </div>
-          <p lang="ru" className={productNameClassName(favorite.product.name)}>
-            {favorite.product.name}
+          <p lang={nameLang} className={productNameClassName(name)}>
+            {name}
           </p>
         </div>
       </button>
@@ -54,7 +65,7 @@ export default function FavoriteCard({
       <button
         onClick={handleRemoveClick}
         className="absolute -top-2 -right-2 w-8 h-8 rounded-full shadow-lg bg-red-500 hover:bg-red-600 text-white flex items-center justify-center transition-all"
-        title="Убрать из избранного"
+        title={t('removeFavorite')}
       >
         <span className="text-lg">✕</span>
       </button>

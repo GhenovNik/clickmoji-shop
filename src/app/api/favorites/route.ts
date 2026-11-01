@@ -1,10 +1,11 @@
 import { NextResponse } from 'next/server';
+import { apiText } from '@/lib/api-messages';
 import { prisma } from '@/lib/prisma';
 import { requireUser } from '@/lib/auth-guards';
 import { visibleProductsWhere } from '@/lib/product-visibility';
 
 // GET /api/favorites - list the current user's favorite products.
-export async function GET() {
+export async function GET(request?: Request) {
   try {
     const guard = await requireUser();
     if (guard instanceof Response) return guard;
@@ -22,6 +23,7 @@ export async function GET() {
               select: {
                 id: true,
                 name: true,
+                nameEn: true,
                 emoji: true,
               },
             },
@@ -36,7 +38,10 @@ export async function GET() {
     return NextResponse.json(favorites);
   } catch (error) {
     console.error('Error fetching favorites:', error);
-    return NextResponse.json({ error: 'Failed to fetch favorites' }, { status: 500 });
+    return NextResponse.json(
+      { error: await apiText(request, 'fetchFavoritesFailed') },
+      { status: 500 }
+    );
   }
 }
 
@@ -50,7 +55,10 @@ export async function POST(request: Request) {
     const { productId } = await request.json();
 
     if (!productId) {
-      return NextResponse.json({ error: 'Product ID is required' }, { status: 400 });
+      return NextResponse.json(
+        { error: await apiText(request, 'productIdRequired') },
+        { status: 400 }
+      );
     }
 
     // Reject products that no longer exist or are another user's private product.
@@ -60,7 +68,10 @@ export async function POST(request: Request) {
     });
 
     if (!product) {
-      return NextResponse.json({ error: 'Product not found' }, { status: 404 });
+      return NextResponse.json(
+        { error: await apiText(request, 'productNotFound') },
+        { status: 404 }
+      );
     }
 
     // Add the favorite or increment its usage counter.
@@ -88,6 +99,7 @@ export async function POST(request: Request) {
               select: {
                 id: true,
                 name: true,
+                nameEn: true,
                 emoji: true,
               },
             },
@@ -99,7 +111,10 @@ export async function POST(request: Request) {
     return NextResponse.json(favorite);
   } catch (error) {
     console.error('Error adding to favorites:', error);
-    return NextResponse.json({ error: 'Failed to add to favorites' }, { status: 500 });
+    return NextResponse.json(
+      { error: await apiText(request, 'addFavoriteFailed') },
+      { status: 500 }
+    );
   }
 }
 
@@ -114,7 +129,10 @@ export async function DELETE(request: Request) {
     const productId = searchParams.get('productId');
 
     if (!productId) {
-      return NextResponse.json({ error: 'Product ID is required' }, { status: 400 });
+      return NextResponse.json(
+        { error: await apiText(request, 'productIdRequired') },
+        { status: 400 }
+      );
     }
 
     await prisma.favorite.delete({
@@ -129,6 +147,9 @@ export async function DELETE(request: Request) {
     return NextResponse.json({ success: true });
   } catch (error) {
     console.error('Error removing from favorites:', error);
-    return NextResponse.json({ error: 'Failed to remove from favorites' }, { status: 500 });
+    return NextResponse.json(
+      { error: await apiText(request, 'removeFavoriteFailed') },
+      { status: 500 }
+    );
   }
 }

@@ -2,7 +2,10 @@
 
 import { useState } from 'react';
 import Image from 'next/image';
+import { useLocale, useTranslations } from 'next-intl';
 import type { Item } from '@/hooks/useShoppingListItems';
+import { localizedName } from '@/lib/catalog-name';
+import { productImageUrl } from '@/lib/product-image';
 import { cn } from '@/lib/utils';
 import { MoreHorizontal, X, MessageSquarePlus, Check } from 'lucide-react';
 
@@ -21,6 +24,10 @@ export default function ShoppingListItem({
 }: ShoppingListItemProps) {
   const [isEditingNote, setIsEditingNote] = useState(false);
   const [noteValue, setNoteValue] = useState(item.note || '');
+  const t = useTranslations('lists');
+  const locale = useLocale();
+  const productName = localizedName(item.product, locale);
+  const imageUrl = productImageUrl(item.product, locale);
 
   return (
     <div
@@ -38,10 +45,10 @@ export default function ShoppingListItem({
             item.isPurchased && 'scale-90'
           )}
         >
-          {item.product.isCustom && item.product.imageUrl ? (
+          {item.product.isCustom && imageUrl ? (
             <Image
-              src={item.product.imageUrl}
-              alt={item.product.name}
+              src={imageUrl}
+              alt={productName}
               width={48}
               height={48}
               className="w-12 h-12 object-contain"
@@ -59,11 +66,11 @@ export default function ShoppingListItem({
                 item.isPurchased ? 'line-through text-muted-foreground' : 'text-foreground'
               )}
             >
-              {item.product.name}
+              {productName}
             </p>
             {item.variant?.name && (
               <span className="text-[10px] bg-secondary/10 text-secondary-foreground px-1.5 py-0.5 rounded-full font-bold">
-                {item.variant.name}
+                {localizedName(item.variant, locale)}
               </span>
             )}
           </div>
@@ -137,7 +144,7 @@ export default function ShoppingListItem({
                 setIsEditingNote(false);
               }
             }}
-            placeholder="Заметка к товару..."
+            placeholder={t('item.notePlaceholder')}
             className="flex-1 px-4 py-2 text-sm bg-muted border-none rounded-xl focus:ring-2 focus:ring-primary outline-none"
             autoFocus
           />
@@ -148,7 +155,7 @@ export default function ShoppingListItem({
               setIsEditingNote(false);
             }}
           >
-            Ок
+            {t('item.noteSave')}
           </button>
         </div>
       )}

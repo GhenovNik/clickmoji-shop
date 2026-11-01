@@ -5,15 +5,19 @@ import { isEmailVerificationRequired, sendVerificationEmail } from '@/lib/email'
 import {
   checkRateLimit,
   getClientIp,
+  getRequestLocale,
+  getServerTranslator,
   isValidEmail,
   normalizeEmail,
   rateLimitResponse,
 } from '@/lib/auth-security';
 
 export async function POST(request: Request) {
+  const locale = getRequestLocale(request);
+  const t = getServerTranslator(locale);
   try {
     if (!isEmailVerificationRequired()) {
-      return NextResponse.json({ message: 'Подтверждение email не требуется' });
+      return NextResponse.json({ message: t('api.auth.verificationNotRequired') });
     }
 
     const { email } = await request.json();
@@ -26,7 +30,7 @@ export async function POST(request: Request) {
       windowMs: 60 * 60 * 1000,
     });
     if (!ipLimit.allowed) {
-      return rateLimitResponse(ipLimit.resetAt);
+      return rateLimitResponse(ipLimit.resetAt, locale);
     }
 
     const emailLimit = await checkRateLimit({
@@ -35,29 +39,29 @@ export async function POST(request: Request) {
       windowMs: 60 * 60 * 1000,
     });
     if (!emailLimit.allowed) {
-      return rateLimitResponse(emailLimit.resetAt);
+      return rateLimitResponse(emailLimit.resetAt, locale);
     }
 
     if (!normalizedEmail) {
-      return NextResponse.json({ error: 'Email обязателен' }, { status: 400 });
+      return NextResponse.json({ error: t('api.auth.emailRequired') }, { status: 400 });
     }
 
     if (!isValidEmail(normalizedEmail)) {
-      return NextResponse.json({ message: 'Если адрес существует, письмо отправлено' });
+      return NextResponse.json({ message: t('api.auth.emailSentIfExists') });
     }
 
     const user = await prisma.user.findUnique({ where: { email: normalizedEmail } });
 
     if (!user || user.emailVerified) {
-      return NextResponse.json({ message: 'Если адрес существует, письмо отправлено' });
+      return NextResponse.json({ message: t('api.auth.emailSentIfExists') });
     }
 
     const token = await createEmailVerificationToken(normalizedEmail);
-    await sendVerificationEmail({ email: normalizedEmail, token });
+    await sendVerificationEmail({ email: normalizedEmail, token, locale });
 
-    return NextResponse.json({ message: 'Письмо отправлено' });
+    return NextResponse.json({ message: t('api.auth.emailSent') });
   } catch (error) {
     console.error('Resend verification error:', error);
-    return NextResponse.json({ error: 'Не удалось отправить письмо' }, { status: 500 });
+    return NextResponse.json({ error: t('api.auth.emailSendFailed') }, { status: 500 });
   }
 }

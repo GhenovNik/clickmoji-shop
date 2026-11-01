@@ -1,6 +1,7 @@
 'use client';
 
 import { useMutation, useQueryClient, type QueryClient } from '@tanstack/react-query';
+import { useTranslations } from 'next-intl';
 import { changedBy } from '@/lib/query-keys';
 
 // Mutations that change more than one cached entity. Each invalidates the keys listed for it in
@@ -24,6 +25,7 @@ function invalidate(queryClient: QueryClient, keys: ReadonlyArray<readonly unkno
 
 export function useImportListText() {
   const queryClient = useQueryClient();
+  const t = useTranslations('lists');
 
   return useMutation({
     mutationFn: async ({ listId, text }: { listId: string; text: string }) => {
@@ -34,7 +36,7 @@ export function useImportListText() {
       });
       const data = await res.json();
       if (!res.ok) {
-        throw new Error(data.error || 'Ошибка при импорте списка');
+        throw new Error(data.error || t('importMutation.failed'));
       }
       return data as { results: ImportResults };
     },

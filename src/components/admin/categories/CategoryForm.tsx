@@ -2,6 +2,7 @@
 
 import Image from 'next/image';
 import { useEffect, useState } from 'react';
+import { useTranslations } from 'next-intl';
 import { useUploadThing } from '@/lib/uploadthing';
 import EmojiPicker from '../shared/EmojiPicker';
 
@@ -37,6 +38,7 @@ export default function CategoryForm({
   onSubmit,
   onCancel,
 }: CategoryFormProps) {
+  const t = useTranslations('admin');
   const [formData, setFormData] = useState<FormData>({
     name: category?.name || '',
     nameEn: category?.nameEn || '',
@@ -83,7 +85,7 @@ export default function CategoryForm({
         }
       } catch (uploadError) {
         console.error('Upload error:', uploadError);
-        alert('Ошибка при загрузке файла');
+        alert(t('categoryForm.fileUploadFailed'));
         setUploading(false);
         return;
       } finally {
@@ -111,13 +113,13 @@ export default function CategoryForm({
         const uploadData = await uploadRes.json();
 
         if (!uploadRes.ok || !uploadData.imageUrl) {
-          throw new Error(uploadData.error || 'Ошибка при сохранении сгенерированной иконки');
+          throw new Error(uploadData.error || t('categoryForm.generatedSaveFailed'));
         }
 
         uploadedImageUrl = uploadData.imageUrl;
       } catch (error) {
         console.error('Error uploading generated image:', error);
-        alert('Ошибка при сохранении сгенерированной иконки');
+        alert(t('categoryForm.generatedSaveFailed'));
         setUploading(false);
         return;
       } finally {
@@ -132,7 +134,9 @@ export default function CategoryForm({
     <form onSubmit={handleSubmit} className="space-y-4 overflow-x-hidden">
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1">Название (RU) *</label>
+          <label className="block text-sm font-medium text-gray-700 mb-1">
+            {t('shared.nameRu')} *
+          </label>
           <input
             type="text"
             value={formData.name}
@@ -143,7 +147,9 @@ export default function CategoryForm({
         </div>
 
         <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1">Название (EN) *</label>
+          <label className="block text-sm font-medium text-gray-700 mb-1">
+            {t('shared.nameEn')} *
+          </label>
           <input
             type="text"
             value={formData.nameEn}
@@ -163,7 +169,9 @@ export default function CategoryForm({
         />
 
         <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1">Порядок *</label>
+          <label className="block text-sm font-medium text-gray-700 mb-1">
+            {t('categoryForm.order')} *
+          </label>
           <input
             type="number"
             value={formData.order}
@@ -175,7 +183,9 @@ export default function CategoryForm({
             required
             min="1"
           />
-          <p className="text-xs text-gray-500 mt-1">Рекомендуемый: {nextOrder}</p>
+          <p className="text-xs text-gray-500 mt-1">
+            {t('categoryForm.recommendedOrder', { order: nextOrder })}
+          </p>
         </div>
       </div>
 
@@ -192,8 +202,8 @@ export default function CategoryForm({
               unoptimized
             />
             <div className="flex-1">
-              <p className="text-sm font-medium text-purple-900">AI-сгенерированная иконка</p>
-              <p className="text-xs text-purple-600 mt-1">Будет использована вместо emoji</p>
+              <p className="text-sm font-medium text-purple-900">{t('categoryForm.aiIcon')}</p>
+              <p className="text-xs text-purple-600 mt-1">{t('categoryForm.aiIconHint')}</p>
             </div>
             <button
               type="button"
@@ -202,7 +212,7 @@ export default function CategoryForm({
               }}
               className="text-red-600 hover:text-red-700 text-sm font-medium"
             >
-              Удалить
+              {t('shared.delete')}
             </button>
           </div>
         </div>
@@ -211,7 +221,7 @@ export default function CategoryForm({
       {/* File Upload */}
       <div>
         <label className="block text-sm font-medium text-gray-700 mb-2">
-          Или загрузить собственное изображение
+          {t('categoryForm.uploadOwn')}
         </label>
         <input
           type="file"
@@ -232,14 +242,14 @@ export default function CategoryForm({
               />
               <div className="flex-1">
                 <p className="text-sm font-medium text-gray-900">{selectedFile.name}</p>
-                <p className="text-xs text-gray-500 mt-1">Файл будет загружен при сохранении</p>
+                <p className="text-xs text-gray-500 mt-1">{t('categoryForm.fileOnSave')}</p>
               </div>
               <button
                 type="button"
                 onClick={() => setSelectedFile(null)}
                 className="text-red-600 hover:text-red-700 text-sm font-medium"
               >
-                Удалить
+                {t('shared.delete')}
               </button>
             </div>
           </div>
@@ -252,7 +262,11 @@ export default function CategoryForm({
           disabled={uploading}
           className="flex-1 bg-green-600 hover:bg-green-700 text-white px-6 py-2 rounded-lg font-semibold transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
         >
-          {uploading ? '⏳ Загрузка...' : category ? 'Сохранить изменения' : 'Создать категорию'}
+          {uploading
+            ? t('categoryForm.uploading')
+            : category
+              ? t('shared.saveChanges')
+              : t('categoryForm.create')}
         </button>
         {category && (
           <button
@@ -260,7 +274,7 @@ export default function CategoryForm({
             onClick={onCancel}
             className="flex-1 sm:flex-none bg-gray-500 hover:bg-gray-600 text-white px-6 py-2 rounded-lg font-semibold transition-colors"
           >
-            Отмена
+            {t('shared.cancel')}
           </button>
         )}
       </div>

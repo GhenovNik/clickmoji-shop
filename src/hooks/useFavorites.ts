@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useSession } from 'next-auth/react';
 import { useRouter } from 'next/navigation';
+import { useTranslations } from 'next-intl';
 import { listsQueryKey, useActiveList } from './useListsQuery';
 import { queryKeys } from '@/lib/query-keys';
 
@@ -17,9 +18,11 @@ export type FavoriteProduct = {
     emoji: string;
     isCustom: boolean;
     imageUrl: string | null;
+    imageUrlEn?: string | null;
     category: {
       id: string;
       name: string;
+      nameEn?: string | null;
       emoji: string;
       isCustom: boolean;
       imageUrl: string | null;
@@ -57,6 +60,7 @@ export function useFavorites() {
   const { data: session } = useSession();
   const { activeListId } = useActiveList();
   const queryClient = useQueryClient();
+  const t = useTranslations('catalog.shared');
 
   const [selectedProducts, setSelectedProducts] = useState<Set<string>>(new Set());
   const [adding, setAdding] = useState(false);
@@ -123,7 +127,7 @@ export function useFavorites() {
 
   const addToList = async () => {
     if (!activeListId) {
-      alert('Сначала выберите список');
+      alert(t('selectListFirst'));
       return;
     }
 
@@ -148,7 +152,7 @@ export function useFavorites() {
       }
     } catch (error) {
       console.error('Error adding items to list:', error);
-      alert('Ошибка при добавлении товаров');
+      alert(t('addProductsFailed'));
     } finally {
       setAdding(false);
     }

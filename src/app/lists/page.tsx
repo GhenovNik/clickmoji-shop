@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { useSession } from 'next-auth/react';
 import Link from 'next/link';
+import { useTranslations } from 'next-intl';
 import { useListsManagement } from '@/hooks/useListsManagement';
 import ListCard from '@/components/lists/ListCard';
 import CreateListModal from '@/components/lists/CreateListModal';
@@ -11,6 +12,7 @@ export default function ListsPage() {
   const { data: session } = useSession();
   const { lists, loading, createList, deleteList } = useListsManagement();
   const [showCreateModal, setShowCreateModal] = useState(false);
+  const t = useTranslations('lists');
 
   if (loading || !session?.user) {
     return (
@@ -24,9 +26,9 @@ export default function ListsPage() {
     <div className="pb-8">
       <div className="mb-7">
         <h1 className="text-3xl sm:text-4xl font-semibold mb-2 text-slate-900 tracking-tight">
-          Мои списки
+          {t('listsPage.title')}
         </h1>
-        <p className="text-slate-600 font-normal">Управляйте своими покупками просто</p>
+        <p className="text-slate-600 font-normal">{t('listsPage.subtitle')}</p>
       </div>
 
       <div className="grid grid-cols-2 xs:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
@@ -41,7 +43,9 @@ export default function ListsPage() {
           <div className="w-12 h-12 rounded-full bg-primary/10 flex items-center justify-center group-hover:bg-primary group-hover:text-white transition-colors">
             <span className="text-2xl font-bold">+</span>
           </div>
-          <span className="font-medium text-sm text-slate-800 text-center">Новый список</span>
+          <span className="font-medium text-sm text-slate-800 text-center">
+            {t('listsPage.newList')}
+          </span>
         </button>
       </div>
 

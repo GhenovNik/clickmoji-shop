@@ -2,7 +2,12 @@ import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { requireUser } from '@/lib/auth-guards';
 import { visibleProductsWhere } from '@/lib/product-visibility';
-import { checkRateLimit, rateLimitResponse } from '@/lib/auth-security';
+import {
+  checkRateLimit,
+  getRequestLocale,
+  getServerTranslator,
+  rateLimitResponse,
+} from '@/lib/auth-security';
 import { enforceAiQuota } from '@/lib/ai-quota';
 import { analyzeSmartProduct } from '@/lib/services/ai-products';
 import { generateAndUploadEmojiAsset } from '@/lib/services/emoji-assets';
@@ -10,6 +15,8 @@ import { recordEmojiLibraryItem } from '@/lib/services/emoji-library';
 import { summarizeEmojiGenerationFailure } from '@/lib/services/emoji-errors';
 
 export async function POST(request: Request) {
+  const locale = getRequestLocale(request);
+  const t = getServerTranslator(locale);
   try {
     const guard = await requireUser();
     if (guard instanceof Response) return guard;
@@ -21,15 +28,13 @@ export async function POST(request: Request) {
     });
 
     if (!dbUser) {
-      return NextResponse.json({ error: 'Пользователь не найден' }, { status: 404 });
+      return NextResponse.json({ error: t('api.products.userNotFound') }, { status: 404 });
     }
 
     const GENERATION_LIMIT = 10;
     if (dbUser.role !== 'ADMIN' && dbUser.createdProductsCount >= GENERATION_LIMIT) {
       return NextResponse.json(
-        {
-          error: `Вы исчерпали лимит создания своих товаров (${GENERATION_LIMIT}/${GENERATION_LIMIT}).`,
-        },
+        { error: t('api.products.creationLimitReached', { limit: GENERATION_LIMIT }) },
         { status: 403 }
       );
     }
@@ -38,7 +43,7 @@ export async function POST(request: Request) {
     const { productName, categoryId } = body;
 
     if (!productName) {
-      return NextResponse.json({ error: 'Product name is required' }, { status: 400 });
+      return NextResponse.json({ error: t('api.products.nameRequired') }, { status: 400 });
     }
 
     const userLimit = await checkRateLimit({
@@ -47,16 +52,13 @@ export async function POST(request: Request) {
       windowMs: 60 * 60 * 1000,
     });
     if (!userLimit.allowed) {
-      return rateLimitResponse(userLimit.resetAt);
+      return rateLimitResponse(userLimit.resetAt, locale);
     }
 
     // Check for API key
     const apiKey = process.env.GOOGLE_GENAI_API_KEY || process.env.GEMINI_API_KEY;
     if (!apiKey) {
-      return NextResponse.json(
-        { error: 'AI service not configured. Please contact administrator.' },
-        { status: 500 }
-      );
+      return NextResponse.json({ error: t('api.products.aiNotConfigured') }, { status: 500 });
     }
 
     // Fetch existing categories
@@ -66,14 +68,11 @@ export async function POST(request: Request) {
     });
 
     if (categories.length === 0) {
-      return NextResponse.json(
-        { error: 'No categories found. Please contact administrator.' },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: t('api.products.noCategories') }, { status: 400 });
     }
 
     // One unit of the shared daily AI budget for the text analysis.
-    const quotaResponse = await enforceAiQuota(dbUser);
+    const quotaResponse = await enforceAiQuota(dbUser, locale);
     if (quotaResponse) return quotaResponse;
 
     const {
@@ -98,7 +97,7 @@ export async function POST(request: Request) {
     if (!category) {
       return NextResponse.json(
         {
-          error: `Category "${aiResult.categoryName}" not found`,
+          error: t('api.products.categoryNotFound', { category: aiResult.categoryName }),
           aiSuggestion: aiResult,
         },
         { status: 400 }
@@ -132,7 +131,7 @@ export async function POST(request: Request) {
         product: existingProduct,
         promptVersion,
         model,
-        message: 'Product already exists',
+        message: t('api.products.alreadyExists'),
       });
     }
 
@@ -143,7 +142,7 @@ export async function POST(request: Request) {
 
     // The image is a second paid call with its own unit; without one the product keeps the
     // Unicode emoji, like after a failed generation.
-    if (aiResult.needsCustomEmoji && !(await enforceAiQuota(dbUser))) {
+    if (aiResult.needsCustomEmoji && !(await enforceAiQuota(dbUser, locale))) {
       try {
         const emojiAsset = await generateAndUploadEmojiAsset({
           productName: aiResult.nameRu,
@@ -200,13 +199,13 @@ export async function POST(request: Request) {
       customEmojiGenerated: isCustom,
       promptVersion,
       model,
-      message: 'Product created successfully',
+      message: t('api.products.created'),
     });
   } catch (error) {
     // Not an image-generation failure: the generation above is caught and swallowed, so nothing of a
     // provider reaches this log. A Prisma, text analysis or request parsing failure is logged with
     // its class and message again, as before.
     console.error('Error in smart product creation:', error);
-    return NextResponse.json({ error: 'Failed to create product' }, { status: 500 });
+    return NextResponse.json({ error: t('api.products.createFailed') }, { status: 500 });
   }
 }

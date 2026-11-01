@@ -1,7 +1,7 @@
 import { GoogleGenAI } from '@google/genai';
 import { resolveGoogleTextModel } from '@/lib/services/google-text-model';
 
-export const AI_PRODUCTS_PROMPT_VERSION = 'ai-products-v2';
+export const AI_PRODUCTS_PROMPT_VERSION = 'ai-products-v3';
 
 export type ProductCategory = {
   id: string;
@@ -225,7 +225,7 @@ ${categoryId ? `Suggested category ID: ${categoryId}` : ''}
 
 Tasks:
 1. Set nameRu to the shopper's own name, cleaned only: remove quantities, units and punctuation and capitalise the first letter. If the name is Russian, keep the Russian word(s) — never translate Russian to English and back. If it is not Russian, give its Russian name.
-2. Set nameEn to the English product name; this field only.
+2. Set nameEn to the English product name; this field only. If the name is English, keep the shopper's English word(s), cleaned the same way — never translate English to Russian and back.
 3. Assign it to the MOST appropriate category from the available list; food and drinks never belong to a pharmacy category.
 4. Suggest the closest single Unicode emoji by meaning (сметана, сливки, кефир -> 🥛; специи -> 🧂); never use the 📦 placeholder, return "" only if no emoji exists.
 5. Determine if a custom AI-generated emoji would be better (needsCustomEmoji: true/false)
@@ -270,7 +270,7 @@ ${categoriesPrompt(categories)}
 
 Rules:
 1. nameRu is the shopper's own name, cleaned only: remove quantities, units and punctuation and capitalise the first letter. If the name is Russian, keep the Russian word(s) — never translate Russian to English and back. If it is not Russian, give its Russian name.
-2. nameEn is the English product name; this field only.
+2. nameEn is the English product name; this field only. If the name is English, keep the shopper's English word(s), cleaned the same way — never translate English to Russian and back.
 3. Assign each product to the MOST appropriate category from the list above; food and drinks never belong to a pharmacy category.
 4. Suggest the closest single Unicode emoji by meaning (сметана, сливки, кефир -> 🥛; специи -> 🧂); never use the 📦 placeholder. If NO suitable emoji exists, use an empty string ""
 5. Be precise with categories - use exact names from the list
@@ -319,14 +319,14 @@ Tasks:
    Never invent an id and never rename or translate a catalog product.
 3. Otherwise return a new product proposal:
    - nameRu: the shopper's own word(s), cleaned only — remove quantities, units and punctuation and capitalise the first letter. If the input is Russian, keep the Russian word(s): never translate them to English and back. If the input is not Russian, give its Russian name.
-   - nameEn: the English product name; this field only.
+   - nameEn: the English product name; this field only. If the input is English, keep the shopper's English word(s), cleaned the same way — never translate English to Russian and back.
    - categoryName: the exact English category name from the list above; food and drinks never belong to a pharmacy category.
    - emoji: the closest single Unicode emoji by meaning (сметана, сливки, кефир -> 🥛; специи -> 🧂). Never use the 📦 placeholder; return "" only if no emoji exists.
    - note: every quantity or attribute removed from the name ("20%", "2 шт", "1 л", "2L"), not part of nameRu.
 
 Rules:
 - Use exact category names from the list
-- Do not translate, rename or "correct" a name that is already Russian
+- Do not translate, rename or "correct" the shopper's own word in either language
 - Skip empty lines or non-product text
 - Combine duplicate products
 

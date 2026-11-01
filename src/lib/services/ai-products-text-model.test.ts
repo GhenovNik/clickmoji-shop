@@ -125,6 +125,7 @@ describe('text services pass the resolved model to the SDK', () => {
 
     expect(prompt).not.toMatch(/translate the product name to russian/i);
     expect(prompt).toContain('never translate Russian to English and back');
+    expect(prompt).toContain('never translate English to Russian and back');
     expect(prompt).toContain('Dairy (Молочное) — milk, cream, sour cream');
   });
 
@@ -136,6 +137,7 @@ describe('text services pass the resolved model to the SDK', () => {
 
     expect(prompt).not.toMatch(/translate each product/i);
     expect(prompt).toContain('never translate Russian to English and back');
+    expect(prompt).toContain('never translate English to Russian and back');
     expect(prompt).toContain('Dairy (Молочное) — milk, cream, sour cream');
   });
 

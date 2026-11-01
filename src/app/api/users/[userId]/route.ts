@@ -1,7 +1,9 @@
 import { NextResponse } from 'next/server';
+import { apiText } from '@/lib/api-messages';
 import { prisma } from '@/lib/prisma';
 import { requireAdmin } from '@/lib/auth-guards';
 import bcrypt from 'bcryptjs';
+import { getRequestLocale } from '@/lib/auth-security';
 import { getPasswordValidationError } from '@/lib/validation/password';
 
 export async function PUT(request: Request, { params }: { params: Promise<{ userId: string }> }) {
@@ -33,10 +35,7 @@ export async function PUT(request: Request, { params }: { params: Promise<{ user
       });
 
       if (existingUser) {
-        return NextResponse.json(
-          { error: 'Email is already taken by another user' },
-          { status: 400 }
-        );
+        return NextResponse.json({ error: await apiText(request, 'emailTaken') }, { status: 400 });
       }
 
       updateData.email = email;
@@ -48,7 +47,7 @@ export async function PUT(request: Request, { params }: { params: Promise<{ user
 
     // Hash a replacement password when one is provided.
     if (password) {
-      const passwordError = getPasswordValidationError(password);
+      const passwordError = getPasswordValidationError(password, getRequestLocale(request));
       if (passwordError) {
         return NextResponse.json({ error: passwordError }, { status: 400 });
       }
@@ -73,7 +72,10 @@ export async function PUT(request: Request, { params }: { params: Promise<{ user
     return NextResponse.json(user);
   } catch (error) {
     console.error('Error updating user:', error);
-    return NextResponse.json({ error: 'Failed to update user' }, { status: 500 });
+    return NextResponse.json(
+      { error: await apiText(request, 'updateUserFailed') },
+      { status: 500 }
+    );
   }
 }
 
@@ -90,7 +92,10 @@ export async function DELETE(
 
     // Prevent administrators from deleting their own account.
     if (session.user.id === userId) {
-      return NextResponse.json({ error: 'You cannot delete your own account' }, { status: 400 });
+      return NextResponse.json(
+        { error: await apiText(request, 'cannotDeleteSelf') },
+        { status: 400 }
+      );
     }
 
     await prisma.user.delete({
@@ -100,6 +105,9 @@ export async function DELETE(
     return NextResponse.json({ success: true });
   } catch (error) {
     console.error('Error deleting user:', error);
-    return NextResponse.json({ error: 'Failed to delete user' }, { status: 500 });
+    return NextResponse.json(
+      { error: await apiText(request, 'deleteUserFailed') },
+      { status: 500 }
+    );
   }
 }

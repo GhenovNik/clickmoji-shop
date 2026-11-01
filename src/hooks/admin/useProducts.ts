@@ -1,4 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useTranslations } from 'next-intl';
 
 export interface Product {
   id: string;
@@ -84,6 +85,7 @@ const deleteProductAPI = async (id: string) => {
 // React Query Hook
 export function useProducts() {
   const queryClient = useQueryClient();
+  const t = useTranslations('admin');
 
   // Query for fetching products
   const {
@@ -131,7 +133,7 @@ export function useProducts() {
   };
 
   const deleteProduct = async (id: string) => {
-    if (!confirm('Вы уверены?')) {
+    if (!confirm(t('useProducts.confirmDelete'))) {
       return false;
     }
     await deleteMutation.mutateAsync(id);

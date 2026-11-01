@@ -1,9 +1,13 @@
 import { NextResponse } from 'next/server';
+import { apiText } from '@/lib/api-messages';
 import { prisma } from '@/lib/prisma';
 import { requireUser } from '@/lib/auth-guards';
+import { getRequestLocale, getServerTranslator } from '@/lib/auth-security';
 
-// POST /api/lists/init - create starter lists when the account has none.
-export async function POST() {
+// POST /api/lists/init - create starter lists when the account has none, named in the
+// language of the request.
+export async function POST(request: Request) {
+  const t = getServerTranslator(getRequestLocale(request));
   try {
     const guard = await requireUser();
     if (guard instanceof Response) return guard;
@@ -17,15 +21,15 @@ export async function POST() {
     });
 
     if (existingLists.length > 0) {
-      return NextResponse.json({ message: 'Lists already exist' });
+      return NextResponse.json({ message: await apiText(request, 'listsAlreadyExist') });
     }
 
     // Create the starter lists.
     const defaultLists = [
-      { name: 'На неделю', isActive: true },
-      { name: 'Для вечеринки', isActive: false },
-      { name: 'На выходные', isActive: false },
-      { name: 'Чтобы выжить', isActive: false },
+      { name: t('api.lists.defaultNames.week'), isActive: true },
+      { name: t('api.lists.defaultNames.party'), isActive: false },
+      { name: t('api.lists.defaultNames.weekend'), isActive: false },
+      { name: t('api.lists.defaultNames.survival'), isActive: false },
     ];
 
     await prisma.list.createMany({
@@ -54,6 +58,6 @@ export async function POST() {
     return NextResponse.json(lists);
   } catch (error) {
     console.error('Error initializing lists:', error);
-    return NextResponse.json({ error: 'Failed to initialize lists' }, { status: 500 });
+    return NextResponse.json({ error: await apiText(request, 'initListsFailed') }, { status: 500 });
   }
 }

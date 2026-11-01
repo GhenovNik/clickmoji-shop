@@ -1,5 +1,7 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
+import { getServerTranslator } from '@/lib/auth-security';
+import type { Locale } from '@/i18n/config';
 
 // Daily budget of paid AI calls per user, kept in PostgreSQL so that every server instance
 // shares it. The hourly `checkRateLimit` limits stay in front of it; without Upstash they are
@@ -76,29 +78,31 @@ export async function reserveAiCall({
  * making it: 403 when paid AI is off for the role, 429 when today's budget is used up, 503 when the
  * budget cannot be checked (database error, migration not applied). A route that has already made
  * a paid call may treat a non-null result as "skip the optional next call" instead (smart-create's
- * image), see docs/ai.md.
+ * image), see docs/ai.md. The error text is in `locale`; callers that do not pass one yet keep
+ * the Russian text they always got.
  */
-export async function enforceAiQuota(user: { id: string; role: Role }): Promise<Response | null> {
+export async function enforceAiQuota(
+  user: { id: string; role: Role },
+  locale: Locale = 'ru'
+): Promise<Response | null> {
+  const t = getServerTranslator(locale);
   let decision: AiQuotaDecision;
   try {
     decision = await reserveAiCall({ userId: user.id, role: user.role });
   } catch (error) {
     console.error('AI quota check failed, refusing the paid call:', error);
-    return NextResponse.json(
-      { error: 'AI временно недоступен. Попробуйте позже.' },
-      { status: 503 }
-    );
+    return NextResponse.json({ error: t('api.aiQuota.unavailable') }, { status: 503 });
   }
 
   if (decision.allowed) return null;
 
   if (decision.limit === 0) {
-    return NextResponse.json({ error: 'AI-функции отключены для этой роли.' }, { status: 403 });
+    return NextResponse.json({ error: t('api.aiQuota.disabled') }, { status: 403 });
   }
 
   const retryAfter = Math.max(Math.ceil((decision.resetAt - Date.now()) / 1000), 1);
   return NextResponse.json(
-    { error: 'Дневной лимит AI-запросов исчерпан. Попробуйте завтра.' },
+    { error: t('api.aiQuota.exhausted') },
     { status: 429, headers: { 'Retry-After': String(retryAfter) } }
   );
 }

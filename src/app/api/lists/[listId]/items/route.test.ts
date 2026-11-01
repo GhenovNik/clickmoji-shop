@@ -35,11 +35,11 @@ const VARIANTS = [
   })),
 ];
 
-function addItems(items: unknown, listId = 'list-b') {
+function addItems(items: unknown, listId = 'list-b', locale = 'ru') {
   return POST(
     new Request(`http://localhost/api/lists/${listId}/items`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', cookie: `NEXT_LOCALE=${locale}` },
       body: JSON.stringify({ items }),
     }),
     { params: Promise.resolve({ listId }) }
@@ -83,7 +83,8 @@ describe('POST /api/lists/[listId]/items is all-or-nothing', () => {
     ]);
 
     expect(response.status).toBe(400);
-    expect(await response.json()).toEqual({ error: 'Variant does not belong to product' });
+    // The request carries the Russian interface cookie, so the error is Russian.
+    expect(await response.json()).toEqual({ error: 'Вариант не относится к этому товару' });
     expect(holder.db.state.items).toEqual([]);
   });
 
@@ -118,7 +119,7 @@ describe('POST /api/lists/[listId]/items is all-or-nothing', () => {
 
     expect(response.status).toBe(200);
     const body = await response.json();
-    expect(body.message).toBe('Добавлено 3 товаров.');
+    expect(body.message).toBe('Добавлено 3 товара.');
     expect(
       body.createdItems.map((item: { productId: string; variantId: string | null }) => [
         item.productId,
@@ -132,6 +133,21 @@ describe('POST /api/lists/[listId]/items is all-or-nothing', () => {
     expect(body.createdItems[0].product.category.name).toBe('Молочное');
     expect(body.createdItems[0].note).toBe('2 л');
     expect(holder.db.state.items).toHaveLength(3);
+  });
+
+  it('reports the added count in the language of the request', async () => {
+    const one = await addItems([{ productId: 'milk' }], 'list-b', 'en');
+    expect((await one.json()).message).toBe('Added 1 item.');
+
+    const five = await addItems(
+      Array.from({ length: 5 }, () => ({ productId: 'bread' })),
+      'list-b',
+      'en'
+    );
+    expect((await five.json()).message).toBe('Added 5 items.');
+
+    const ruFive = await addItems(Array.from({ length: 5 }, () => ({ productId: 'bread' })));
+    expect((await ruFive.json()).message).toBe('Добавлено 5 товаров.');
   });
 
   it("returns 404 for another user's list without writing", async () => {

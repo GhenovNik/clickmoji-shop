@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { renderWithIntl } from '@/test/intl';
 
 // What the shopper sees after "import list from text": the open list (React Query, staleTime five
 // minutes as in QueryProvider) must show the imported items once the server has added them,
@@ -65,7 +66,7 @@ describe('import list from text, as the shopper sees it', () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { staleTime: 5 * 60 * 1000, retry: false } },
     });
-    render(
+    renderWithIntl(
       <QueryClientProvider client={queryClient}>
         <ListWithImport />
       </QueryClientProvider>
@@ -99,7 +100,7 @@ describe('import result report', () => {
       )
     );
     vi.spyOn(console, 'error').mockImplementation(() => undefined);
-    render(
+    renderWithIntl(
       <QueryClientProvider client={new QueryClient()}>
         <ImportListModal listId="list-1" isOpen onClose={vi.fn()} />
       </QueryClientProvider>

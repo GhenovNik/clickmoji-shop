@@ -1,8 +1,14 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
+import { localizedName } from '@/lib/catalog-name';
 import { requireUser } from '@/lib/auth-guards';
 import { visibleProductsWhere } from '@/lib/product-visibility';
-import { checkRateLimit, rateLimitResponse } from '@/lib/auth-security';
+import {
+  checkRateLimit,
+  getRequestLocale,
+  getServerTranslator,
+  rateLimitResponse,
+} from '@/lib/auth-security';
 import { enforceAiQuota } from '@/lib/ai-quota';
 import {
   parseShoppingListText,
@@ -20,6 +26,9 @@ import {
 type CatalogProduct = CatalogProductPromptEntry & { categoryId: string };
 
 export async function POST(request: Request) {
+  const locale = getRequestLocale(request);
+  // Every message the import window shows is in the request's language.
+  const t = getServerTranslator(locale);
   try {
     const guard = await requireUser();
     if (guard instanceof Response) return guard;
@@ -29,18 +38,18 @@ export async function POST(request: Request) {
     const { text, listId } = body;
 
     if (!text || typeof text !== 'string') {
-      return NextResponse.json({ error: 'Text is required' }, { status: 400 });
+      return NextResponse.json({ error: t('api.import.textRequired') }, { status: 400 });
     }
 
     if (text.length > 2000) {
       return NextResponse.json(
-        { error: 'Text is too long (maximum 2000 characters)' },
+        { error: t('api.import.textTooLong', { max: 2000 }) },
         { status: 400 }
       );
     }
 
     if (!listId) {
-      return NextResponse.json({ error: 'List ID is required' }, { status: 400 });
+      return NextResponse.json({ error: t('api.import.listIdRequired') }, { status: 400 });
     }
 
     const userLimit = await checkRateLimit({
@@ -49,7 +58,7 @@ export async function POST(request: Request) {
       windowMs: 60 * 60 * 1000, // 10 requests per hour
     });
     if (!userLimit.allowed) {
-      return rateLimitResponse(userLimit.resetAt);
+      return rateLimitResponse(userLimit.resetAt, locale);
     }
 
     // Verify list belongs to user
@@ -61,16 +70,13 @@ export async function POST(request: Request) {
     });
 
     if (!list) {
-      return NextResponse.json({ error: 'List not found' }, { status: 404 });
+      return NextResponse.json({ error: t('api.import.listNotFound') }, { status: 404 });
     }
 
     // Check for API key
     const apiKey = process.env.GOOGLE_GENAI_API_KEY || process.env.GEMINI_API_KEY;
     if (!apiKey) {
-      return NextResponse.json(
-        { error: 'AI service not configured. Please contact administrator.' },
-        { status: 500 }
-      );
+      return NextResponse.json({ error: t('api.import.aiNotConfigured') }, { status: 500 });
     }
 
     // Fetch existing categories
@@ -80,13 +86,16 @@ export async function POST(request: Request) {
     });
 
     if (categories.length === 0) {
-      return NextResponse.json(
-        { error: 'No categories found. Please contact administrator.' },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: t('api.import.noCategories') }, { status: 400 });
     }
 
     const categoryNameOf = new Map(categories.map((category) => [category.id, category.name]));
+    // The report shows names in the language of the request.
+    const categoryById = new Map(categories.map((category) => [category.id, category]));
+    const reportCategory = (categoryId: string) => {
+      const category = categoryById.get(categoryId);
+      return category ? localizedName(category, locale) : '';
+    };
 
     // The model can only reuse products it was shown. Every visible product stays available for
     // server-side matching; the prompt gets a bounded, text-relevant subset.
@@ -106,7 +115,7 @@ export async function POST(request: Request) {
     const promptCatalog = selectCatalogForPrompt(catalog, text);
 
     // One unit of the shared daily AI budget, taken only when the provider is about to be called.
-    const quotaResponse = await enforceAiQuota(session.user);
+    const quotaResponse = await enforceAiQuota(session.user, locale);
     if (quotaResponse) return quotaResponse;
 
     const {
@@ -123,7 +132,7 @@ export async function POST(request: Request) {
 
     if (!Array.isArray(parsedProducts) || parsedProducts.length === 0) {
       return NextResponse.json(
-        { error: 'No products found in text', parsedData: parsedProducts },
+        { error: t('api.import.noProductsFound'), parsedData: parsedProducts },
         { status: 400 }
       );
     }
@@ -137,7 +146,7 @@ export async function POST(request: Request) {
     };
 
     for (const entry of invalidEntries) {
-      results.failed.push(failedEntry(entry, 'Unrecognized entry in the AI response'));
+      results.failed.push(failedEntry(entry, t('api.import.unrecognizedEntry')));
     }
 
     // Ids the model was shown are trusted only when they belong to the catalog in its prompt;
@@ -170,7 +179,7 @@ export async function POST(request: Request) {
         const note = mergeNotes(product.note, nameNote);
         const nameRu = cleanedName || product.nameRu.trim();
         const nameEn = product.nameEn.trim();
-        let dbProduct: { id: string; name: string; categoryId: string } | null =
+        let dbProduct: { id: string; name: string; nameEn: string; categoryId: string } | null =
           findCatalogMatch(product);
 
         // A category is needed only to create a missing product.
@@ -180,8 +189,8 @@ export async function POST(request: Request) {
               failedEntry(
                 product,
                 product.existingProductId
-                  ? 'Unknown product reference'
-                  : 'Unrecognized entry in the AI response'
+                  ? t('api.import.unknownProductReference')
+                  : t('api.import.unrecognizedEntry')
               )
             );
             continue;
@@ -191,7 +200,10 @@ export async function POST(request: Request) {
 
           if (!category) {
             results.failed.push(
-              failedEntry(product, `Category "${product.categoryName}" not found`)
+              failedEntry(
+                product,
+                t('api.import.categoryNotFound', { category: product.categoryName })
+              )
             );
             continue;
           }
@@ -213,8 +225,8 @@ export async function POST(request: Request) {
           });
 
           results.created.push({
-            name: dbProduct.name,
-            category: category.name,
+            name: localizedName(dbProduct, locale),
+            category: localizedName(category, locale),
             note,
           });
         }
@@ -230,26 +242,31 @@ export async function POST(request: Request) {
         });
 
         results.added.push({
-          name: dbProduct.name,
-          category: categoryNameOf.get(dbProduct.categoryId) ?? '',
+          name: localizedName(dbProduct, locale),
+          category: reportCategory(dbProduct.categoryId),
           note,
         });
       } catch (error) {
-        results.failed.push(
-          failedEntry(product, error instanceof Error ? error.message : 'Unknown error')
-        );
+        // The raw error stays in the server log; the shopper gets a translated reason.
+        console.error('Error importing a list entry:', error);
+        results.failed.push(failedEntry(product, t('api.import.entryFailed')));
       }
     }
 
     return NextResponse.json({
-      message: `Import completed: ${results.added.length} items added, ${results.created.length} products created, ${results.skipped.length} skipped, ${results.failed.length} failed`,
+      message: t('api.import.summary', {
+        added: results.added.length,
+        created: results.created.length,
+        skipped: results.skipped.length,
+        failed: results.failed.length,
+      }),
       promptVersion,
       model,
       results,
     });
   } catch (error) {
     console.error('Error importing list:', error);
-    return NextResponse.json({ error: 'Failed to import list' }, { status: 500 });
+    return NextResponse.json({ error: t('api.import.importFailed') }, { status: 500 });
   }
 }
 

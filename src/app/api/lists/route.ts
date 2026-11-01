@@ -1,10 +1,11 @@
 import { NextResponse } from 'next/server';
+import { apiText } from '@/lib/api-messages';
 import { prisma } from '@/lib/prisma';
 import { requireUser } from '@/lib/auth-guards';
 import { visibleItemsWhere } from '@/lib/product-visibility';
 
 // GET /api/lists - list the current user's shopping lists.
-export async function GET() {
+export async function GET(request?: Request) {
   try {
     const guard = await requireUser();
     if (guard instanceof Response) return guard;
@@ -29,7 +30,10 @@ export async function GET() {
     return NextResponse.json(lists);
   } catch (error) {
     console.error('Error fetching lists:', error);
-    return NextResponse.json({ error: 'Failed to fetch lists' }, { status: 500 });
+    return NextResponse.json(
+      { error: await apiText(request, 'fetchListsFailed') },
+      { status: 500 }
+    );
   }
 }
 
@@ -43,7 +47,10 @@ export async function POST(request: Request) {
     const { name, isActive } = await request.json();
 
     if (!name || name.trim() === '') {
-      return NextResponse.json({ error: 'List name is required' }, { status: 400 });
+      return NextResponse.json(
+        { error: await apiText(request, 'listNameRequired') },
+        { status: 400 }
+      );
     }
 
     const list = await prisma.$transaction(async (tx) => {
@@ -78,6 +85,9 @@ export async function POST(request: Request) {
     return NextResponse.json(list);
   } catch (error) {
     console.error('Error creating list:', error);
-    return NextResponse.json({ error: 'Failed to create list' }, { status: 500 });
+    return NextResponse.json(
+      { error: await apiText(request, 'createListFailed') },
+      { status: 500 }
+    );
   }
 }

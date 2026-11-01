@@ -2,6 +2,7 @@
 
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useRouter } from 'next/navigation';
+import { useTranslations } from 'next-intl';
 import { queryKeys } from '@/lib/query-keys';
 import { useCompleteList } from '@/hooks/useListMutations';
 
@@ -12,11 +13,14 @@ export type Item = {
   product: {
     id: string;
     name: string;
+    nameEn?: string | null;
     emoji: string;
     isCustom: boolean;
     imageUrl: string | null;
+    imageUrlEn?: string | null;
     category: {
       name: string;
+      nameEn?: string | null;
       emoji: string;
       order: number;
     };
@@ -92,6 +96,7 @@ const removeItemAPI = async ({ listId, itemId }: { listId: string; itemId: strin
 export function useShoppingListItems(listId: string) {
   const router = useRouter();
   const queryClient = useQueryClient();
+  const t = useTranslations('lists');
 
   // Query for fetching list
   const {
@@ -214,7 +219,7 @@ export function useShoppingListItems(listId: string) {
   };
 
   const clearAll = async () => {
-    if (!confirm('Удалить все товары из списка?')) return;
+    if (!confirm(t('listItems.clearConfirm'))) return;
     for (const item of items) {
       await removeItem(item.id);
     }
@@ -229,7 +234,7 @@ export function useShoppingListItems(listId: string) {
       router.push('/history');
     } catch (error) {
       console.error('Error completing list:', error);
-      alert('Не удалось завершить список');
+      alert(t('listItems.completeFailed'));
     }
   };
 

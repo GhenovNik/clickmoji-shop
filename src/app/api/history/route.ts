@@ -1,10 +1,11 @@
 import { NextResponse } from 'next/server';
+import { apiText } from '@/lib/api-messages';
 import { prisma } from '@/lib/prisma';
 import { requireUser } from '@/lib/auth-guards';
 import { visibleProductsWhere } from '@/lib/product-visibility';
 import { lockOwnedList } from '@/lib/list-lock';
 
-export async function GET() {
+export async function GET(request?: Request) {
   try {
     const guard = await requireUser();
     if (guard instanceof Response) return guard;
@@ -48,7 +49,10 @@ export async function GET() {
     );
   } catch (error) {
     console.error('Error fetching history:', error);
-    return NextResponse.json({ error: 'Failed to fetch history' }, { status: 500 });
+    return NextResponse.json(
+      { error: await apiText(request, 'fetchHistoryFailed') },
+      { status: 500 }
+    );
   }
 }
 
@@ -66,7 +70,10 @@ export async function POST(request: Request) {
     const { listId } = body;
 
     if (!listId) {
-      return NextResponse.json({ error: 'List ID is required' }, { status: 400 });
+      return NextResponse.json(
+        { error: await apiText(request, 'listIdRequired') },
+        { status: 400 }
+      );
     }
 
     // Reading the snapshot and removing the items is one transaction that holds the list lock
@@ -120,11 +127,15 @@ export async function POST(request: Request) {
               productId: item.productId,
               variantId: item.variantId,
               productName: item.product.name,
+              productNameEn: item.product.nameEn || null,
               productEmoji: item.product.emoji,
               productImageUrl: item.product.imageUrl,
+              productImageUrlEn: item.product.imageUrlEn,
               categoryName: item.product.category.name,
+              categoryNameEn: item.product.category.nameEn || null,
               isCustom: item.product.isCustom,
               variantName: item.variant?.name || null,
+              variantNameEn: item.variant?.nameEn || null,
               variantEmoji: item.variant?.emoji || null,
               note: item.note || null,
               isPurchased: item.isPurchased,
@@ -143,16 +154,19 @@ export async function POST(request: Request) {
     });
 
     if (result.status === 'not-found') {
-      return NextResponse.json({ error: 'List not found' }, { status: 404 });
+      return NextResponse.json({ error: await apiText(request, 'listNotFound') }, { status: 404 });
     }
 
     if (result.status === 'empty') {
-      return NextResponse.json({ error: 'List is empty' }, { status: 400 });
+      return NextResponse.json({ error: await apiText(request, 'listEmpty') }, { status: 400 });
     }
 
     return NextResponse.json(result.history);
   } catch (error) {
     console.error('Error completing list:', error);
-    return NextResponse.json({ error: 'Failed to complete list' }, { status: 500 });
+    return NextResponse.json(
+      { error: await apiText(request, 'completeListFailed') },
+      { status: 500 }
+    );
   }
 }

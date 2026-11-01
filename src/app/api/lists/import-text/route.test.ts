@@ -189,7 +189,7 @@ describe('POST /api/lists/import-text with products that exist in the catalog', 
     expect(result.body.results.failed).toEqual([
       {
         product: { nameRu: '???', nameEn: 'Unrecognized item' },
-        reason: 'Unrecognized entry in the AI response',
+        reason: 'The AI returned an entry it could not recognise',
       },
     ]);
   });
@@ -205,7 +205,7 @@ describe('POST /api/lists/import-text with products that exist in the catalog', 
     expect(result.addedProductIds).toEqual(['milk']);
     const unrecognized = {
       product: { nameRu: 'Нераспознанная позиция', nameEn: 'Unrecognized item' },
-      reason: 'Unrecognized entry in the AI response',
+      reason: 'The AI returned an entry it could not recognise',
     };
     expect(result.body.results.failed).toEqual([unrecognized, unrecognized]);
   });
@@ -361,8 +361,36 @@ describe('import failure paths', () => {
     expect(result.body.results.failed).toEqual([
       {
         product: { nameRu: 'Сметана', nameEn: 'Sour cream' },
-        reason: 'insert refused',
+        // The raw database error stays in the server log.
+        reason: 'Could not add the item',
       },
     ]);
+  });
+});
+
+describe('import messages follow the request language', () => {
+  async function tooLong(headers: Record<string, string>) {
+    const response = await POST(
+      new Request('http://localhost/api/lists/import-text', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', ...headers },
+        body: JSON.stringify({ text: 'x'.repeat(2001), listId: 'list-b' }),
+      })
+    );
+    return { status: response.status, body: await response.json() };
+  }
+
+  it('answers in Russian for the Russian interface', async () => {
+    expect(await tooLong({ cookie: 'NEXT_LOCALE=ru' })).toEqual({
+      status: 400,
+      body: { error: 'Текст слишком длинный: не больше 2000 символов' },
+    });
+  });
+
+  it('answers in English for the English interface', async () => {
+    expect(await tooLong({ cookie: 'NEXT_LOCALE=en' })).toEqual({
+      status: 400,
+      body: { error: 'The text is too long: at most 2000 characters' },
+    });
   });
 });

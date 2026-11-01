@@ -1,4 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useLocale, useTranslations } from 'next-intl';
+import type { Locale } from '@/i18n/config';
 import { getPasswordValidationError } from '@/lib/validation/password';
 
 export interface User {
@@ -30,8 +32,9 @@ const fetchUsersAPI = async (): Promise<User[]> => {
   return res.json();
 };
 
-const createUserAPI = async (formData: UserFormData) => {
-  const passwordError = getPasswordValidationError(formData.password);
+// Fallback messages come from the hook, which knows the active language.
+const createUserAPI = async (formData: UserFormData, fallbackError: string, locale: Locale) => {
+  const passwordError = getPasswordValidationError(formData.password, locale);
   if (passwordError) {
     throw new Error(passwordError);
   }
@@ -49,13 +52,18 @@ const createUserAPI = async (formData: UserFormData) => {
 
   if (!res.ok) {
     const errorData = await res.json();
-    throw new Error(errorData.error || 'Ошибка при создании пользователя');
+    throw new Error(errorData.error || fallbackError);
   }
 
   return res.json();
 };
 
-const updateUserAPI = async (userId: string, formData: UserFormData) => {
+const updateUserAPI = async (
+  userId: string,
+  formData: UserFormData,
+  fallbackError: string,
+  locale: Locale
+) => {
   const body: {
     email: string;
     name: string | null;
@@ -68,7 +76,7 @@ const updateUserAPI = async (userId: string, formData: UserFormData) => {
   };
 
   if (formData.password) {
-    const passwordError = getPasswordValidationError(formData.password);
+    const passwordError = getPasswordValidationError(formData.password, locale);
     if (passwordError) {
       throw new Error(passwordError);
     }
@@ -83,20 +91,20 @@ const updateUserAPI = async (userId: string, formData: UserFormData) => {
 
   if (!res.ok) {
     const errorData = await res.json();
-    throw new Error(errorData.error || 'Ошибка при обновлении пользователя');
+    throw new Error(errorData.error || fallbackError);
   }
 
   return res.json();
 };
 
-const deleteUserAPI = async (userId: string) => {
+const deleteUserAPI = async (userId: string, fallbackError: string) => {
   const res = await fetch(`/api/users/${userId}`, {
     method: 'DELETE',
   });
 
   if (!res.ok) {
     const errorData = await res.json();
-    throw new Error(errorData.error || 'Ошибка при удалении пользователя');
+    throw new Error(errorData.error || fallbackError);
   }
 
   return res.json();
@@ -105,6 +113,8 @@ const deleteUserAPI = async (userId: string) => {
 // React Query Hook
 export function useUsers() {
   const queryClient = useQueryClient();
+  const t = useTranslations('admin');
+  const locale = useLocale();
 
   // Query for fetching users
   const {
@@ -118,7 +128,8 @@ export function useUsers() {
 
   // Mutation for creating user
   const createMutation = useMutation({
-    mutationFn: createUserAPI,
+    mutationFn: (formData: UserFormData) =>
+      createUserAPI(formData, t('useUsers.createFailed'), locale),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['users'] });
     },
@@ -130,7 +141,7 @@ export function useUsers() {
   // Mutation for updating user
   const updateMutation = useMutation({
     mutationFn: ({ userId, formData }: { userId: string; formData: UserFormData }) =>
-      updateUserAPI(userId, formData),
+      updateUserAPI(userId, formData, t('useUsers.updateFailed'), locale),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['users'] });
     },
@@ -141,7 +152,7 @@ export function useUsers() {
 
   // Mutation for deleting user
   const deleteMutation = useMutation({
-    mutationFn: deleteUserAPI,
+    mutationFn: (userId: string) => deleteUserAPI(userId, t('useUsers.deleteFailed')),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['users'] });
     },
@@ -168,9 +179,7 @@ export function useUsers() {
   };
 
   const deleteUser = async (userId: string) => {
-    if (
-      !confirm('Вы уверены, что хотите удалить этого пользователя? Это действие нельзя отменить.')
-    ) {
+    if (!confirm(t('useUsers.confirmDelete'))) {
       return false;
     }
 

@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { apiText } from '@/lib/api-messages';
 import { requireAdmin } from '@/lib/auth-guards';
 import { UTApi } from 'uploadthing/server';
 import { isStoredImageInUse } from '@/lib/services/emoji-library';
@@ -16,11 +17,14 @@ export async function DELETE(request: Request) {
     const { imageUrl } = await request.json();
 
     if (!imageUrl) {
-      return NextResponse.json({ error: 'Image URL is required' }, { status: 400 });
+      return NextResponse.json(
+        { error: await apiText(request, 'imageUrlRequired') },
+        { status: 400 }
+      );
     }
 
     if (await isStoredImageInUse(imageUrl)) {
-      return NextResponse.json({ error: 'Image is still in use' }, { status: 409 });
+      return NextResponse.json({ error: await apiText(request, 'imageInUse') }, { status: 409 });
     }
 
     // Extract file key from UploadThing URL
@@ -29,14 +33,20 @@ export async function DELETE(request: Request) {
 
     if (!fileKey) {
       console.warn('Could not extract file key from URL:', imageUrl);
-      return NextResponse.json({ error: 'Invalid image URL format' }, { status: 400 });
+      return NextResponse.json(
+        { error: await apiText(request, 'invalidImageUrl') },
+        { status: 400 }
+      );
     }
 
     await utapi.deleteFiles(fileKey);
 
-    return NextResponse.json({ message: 'Image deleted successfully' });
+    return NextResponse.json({ message: await apiText(request, 'imageDeleted') });
   } catch (error) {
     console.error('Error deleting emoji:', error);
-    return NextResponse.json({ error: 'Failed to delete image' }, { status: 500 });
+    return NextResponse.json(
+      { error: await apiText(request, 'deleteImageFailed') },
+      { status: 500 }
+    );
   }
 }

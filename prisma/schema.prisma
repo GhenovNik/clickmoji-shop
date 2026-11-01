@@ -210,12 +210,17 @@ model ListHistoryItem {
   variantId      String?
 
   productName    String
+  // English copies taken at the same time, for the English UI; null falls back to Russian.
+  productNameEn  String?
   productEmoji   String
   productImageUrl String?
+  productImageUrlEn String?
   categoryName   String
+  categoryNameEn String?
   isCustom       Boolean @default(false)
 
   variantName    String?
+  variantNameEn  String?
   variantEmoji   String?
 
   note           String?

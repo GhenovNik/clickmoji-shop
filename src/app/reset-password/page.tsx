@@ -3,9 +3,15 @@
 import { Suspense, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
-import { getPasswordValidationError } from '@/lib/validation/password';
+import { useTranslations } from 'next-intl';
+import {
+  getPasswordIssue,
+  PASSWORD_MESSAGE_VALUES,
+  PASSWORD_MIN_LENGTH,
+} from '@/lib/validation/password';
 
 function ResetPasswordForm() {
+  const t = useTranslations('auth');
   const router = useRouter();
   const searchParams = useSearchParams();
   const email = searchParams.get('email');
@@ -16,10 +22,10 @@ function ResetPasswordForm() {
   if (!email || !token) {
     return (
       <div className="bg-yellow-50 text-yellow-700 px-4 py-3 rounded-lg text-sm">
-        Ссылка для сброса недействительна.
+        {t('common.resetLinkInvalid')}
         <div className="mt-2">
           <Link href="/forgot-password" className="text-blue-600 hover:text-blue-700 font-medium">
-            Запросить новую ссылку
+            {t('resetPassword.requestNewLink')}
           </Link>
         </div>
       </div>
@@ -36,14 +42,14 @@ function ResetPasswordForm() {
     const confirmPassword = formData.get('confirmPassword') as string;
 
     if (password !== confirmPassword) {
-      setError('Пароли не совпадают');
+      setError(t('common.passwordsMismatch'));
       setLoading(false);
       return;
     }
 
-    const passwordError = getPasswordValidationError(password);
-    if (passwordError) {
-      setError(passwordError);
+    const passwordIssue = getPasswordIssue(password);
+    if (passwordIssue) {
+      setError(t(`password.${passwordIssue}`, PASSWORD_MESSAGE_VALUES));
       setLoading(false);
       return;
     }
@@ -59,11 +65,11 @@ function ResetPasswordForm() {
 
       if (!res.ok) {
         if (data.error === 'expired') {
-          setError('Ссылка для сброса истекла. Запросите новую.');
+          setError(t('common.resetLinkExpired'));
         } else if (data.error === 'invalid') {
-          setError('Ссылка для сброса недействительна.');
+          setError(t('common.resetLinkInvalid'));
         } else {
-          setError(data.error || 'Не удалось сбросить пароль');
+          setError(data.error || t('resetPassword.failed'));
         }
         setLoading(false);
         return;
@@ -71,7 +77,7 @@ function ResetPasswordForm() {
 
       router.push('/login?reset=success');
     } catch {
-      setError('Не удалось сбросить пароль');
+      setError(t('resetPassword.failed'));
       setLoading(false);
     }
   }
@@ -80,7 +86,7 @@ function ResetPasswordForm() {
     <form onSubmit={handleSubmit} className="space-y-4">
       <div>
         <label htmlFor="password" className="block text-sm font-medium text-gray-700 mb-1">
-          Новый пароль
+          {t('resetPassword.newPasswordLabel')}
         </label>
         <input
           type="password"
@@ -88,13 +94,13 @@ function ResetPasswordForm() {
           name="password"
           required
           className="w-full px-4 py-3 rounded-lg border border-gray-300 focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all text-gray-900"
-          placeholder="Минимум 8 символов"
+          placeholder={t('common.passwordMinPlaceholder', { min: PASSWORD_MIN_LENGTH })}
         />
       </div>
 
       <div>
         <label htmlFor="confirmPassword" className="block text-sm font-medium text-gray-700 mb-1">
-          Подтвердите пароль
+          {t('common.confirmPasswordLabel')}
         </label>
         <input
           type="password"
@@ -102,7 +108,7 @@ function ResetPasswordForm() {
           name="confirmPassword"
           required
           className="w-full px-4 py-3 rounded-lg border border-gray-300 focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all text-gray-900"
-          placeholder="Повторите пароль"
+          placeholder={t('common.confirmPasswordPlaceholder')}
         />
       </div>
 
@@ -113,33 +119,37 @@ function ResetPasswordForm() {
         disabled={loading}
         className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-blue-400 text-white py-3 rounded-lg font-semibold transition-colors shadow-lg hover:shadow-xl"
       >
-        {loading ? 'Сохраняем...' : 'Сменить пароль'}
+        {loading ? t('resetPassword.submitting') : t('resetPassword.submit')}
       </button>
 
       <p className="text-center text-gray-600">
         <Link href="/login" className="text-blue-600 hover:text-blue-700 font-medium">
-          Вернуться ко входу
+          {t('common.backToLogin')}
         </Link>
       </p>
     </form>
   );
 }
 
-export default function ResetPasswordPage() {
+function LoadingFallback() {
+  const t = useTranslations('auth');
   return (
-    <Suspense
-      fallback={
-        <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 to-indigo-100">
-          <div className="text-xl text-gray-600">Загрузка...</div>
-        </div>
-      }
-    >
+    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 to-indigo-100">
+      <div className="text-xl text-gray-600">{t('common.loading')}</div>
+    </div>
+  );
+}
+
+export default function ResetPasswordPage() {
+  const t = useTranslations('auth');
+  return (
+    <Suspense fallback={<LoadingFallback />}>
       <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 to-indigo-100 px-4">
         <div className="w-full max-w-md">
           <div className="bg-white rounded-2xl shadow-xl p-8">
             <div className="text-center mb-8">
-              <h1 className="text-3xl font-bold text-gray-900">🔐 Новый пароль</h1>
-              <p className="text-gray-600 mt-2">Введите новый пароль для аккаунта</p>
+              <h1 className="text-3xl font-bold text-gray-900">🔐 {t('resetPassword.title')}</h1>
+              <p className="text-gray-600 mt-2">{t('resetPassword.subtitle')}</p>
             </div>
             <ResetPasswordForm />
           </div>

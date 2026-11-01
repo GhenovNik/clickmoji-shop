@@ -1,8 +1,10 @@
 import { NextResponse } from 'next/server';
+import { apiText } from '@/lib/api-messages';
 import { prisma } from '@/lib/prisma';
 import { requireUser } from '@/lib/auth-guards';
 import { visibleProductsWhere } from '@/lib/product-visibility';
 import { lockOwnedList } from '@/lib/list-lock';
+import { getRequestLocale, getServerTranslator } from '@/lib/auth-security';
 
 // Upper bound for one request; the largest category has far fewer products than this.
 const MAX_ITEMS_PER_BATCH = 100;
@@ -38,25 +40,28 @@ export async function POST(request: Request, { params }: { params: Promise<{ lis
     });
 
     if (!list) {
-      return NextResponse.json({ error: 'List not found' }, { status: 404 });
+      return NextResponse.json({ error: await apiText(request, 'listNotFound') }, { status: 404 });
     }
 
     const { items } = await request.json();
 
     if (!items || !Array.isArray(items) || items.length === 0) {
-      return NextResponse.json({ error: 'Items array is required' }, { status: 400 });
+      return NextResponse.json({ error: await apiText(request, 'itemsRequired') }, { status: 400 });
     }
 
     if (items.length > MAX_ITEMS_PER_BATCH) {
       return NextResponse.json(
-        { error: `Too many items (maximum ${MAX_ITEMS_PER_BATCH} per request)` },
+        { error: await apiText(request, 'tooManyItems', { max: MAX_ITEMS_PER_BATCH }) },
         { status: 400 }
       );
     }
 
     const newItems = items.map(parseItem);
     if (newItems.some((item) => item === null)) {
-      return NextResponse.json({ error: 'Each item needs a productId string' }, { status: 400 });
+      return NextResponse.json(
+        { error: await apiText(request, 'itemProductIdRequired') },
+        { status: 400 }
+      );
     }
     const batch = newItems as NewItem[];
 
@@ -85,13 +90,16 @@ export async function POST(request: Request, { params }: { params: Promise<{ lis
       if (!visibleIds.has(item.productId)) {
         console.error('❌ Product not found:', item.productId);
         return NextResponse.json(
-          { error: `Product with ID ${item.productId} not found` },
+          { error: await apiText(request, 'productNotFound') },
           { status: 404 }
         );
       }
 
       if (item.variantId && variantProduct.get(item.variantId) !== item.productId) {
-        return NextResponse.json({ error: 'Variant does not belong to product' }, { status: 400 });
+        return NextResponse.json(
+          { error: await apiText(request, 'variantMismatch') },
+          { status: 400 }
+        );
       }
     }
 
@@ -117,15 +125,17 @@ export async function POST(request: Request, { params }: { params: Promise<{ lis
     });
 
     if (!createdItems) {
-      return NextResponse.json({ error: 'List not found' }, { status: 404 });
+      return NextResponse.json({ error: await apiText(request, 'listNotFound') }, { status: 404 });
     }
 
     return NextResponse.json({
       createdItems,
-      message: `Добавлено ${createdItems.length} товаров.`,
+      message: getServerTranslator(getRequestLocale(request))('api.lists.itemsAdded', {
+        count: createdItems.length,
+      }),
     });
   } catch (error) {
     console.error('Error adding items to list:', error);
-    return NextResponse.json({ error: 'Failed to add items' }, { status: 500 });
+    return NextResponse.json({ error: await apiText(request, 'addItemsFailed') }, { status: 500 });
   }
 }

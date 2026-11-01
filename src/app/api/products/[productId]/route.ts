@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { apiText } from '@/lib/api-messages';
 import { prisma } from '@/lib/prisma';
 import { requireAdmin } from '@/lib/auth-guards';
 
@@ -92,7 +93,10 @@ export async function PUT(
     return NextResponse.json(product);
   } catch (error) {
     console.error('Error updating product:', error);
-    return NextResponse.json({ error: 'Failed to update product' }, { status: 500 });
+    return NextResponse.json(
+      { error: await apiText(request, 'updateProductFailed') },
+      { status: 500 }
+    );
   }
 }
 
@@ -113,6 +117,9 @@ export async function DELETE(
     return NextResponse.json({ success: true });
   } catch (error) {
     console.error('Error deleting product:', error);
-    return NextResponse.json({ error: 'Failed to delete product' }, { status: 500 });
+    return NextResponse.json(
+      { error: await apiText(request, 'deleteProductFailed') },
+      { status: 500 }
+    );
   }
 }

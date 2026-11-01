@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { apiText } from '@/lib/api-messages';
 import { prisma } from '@/lib/prisma';
 import { requireUser } from '@/lib/auth-guards';
 import { visibleProductsWhere } from '@/lib/product-visibility';
@@ -22,7 +23,10 @@ export async function POST(
     });
 
     if (!history) {
-      return NextResponse.json({ error: 'History not found' }, { status: 404 });
+      return NextResponse.json(
+        { error: await apiText(request, 'historyNotFound') },
+        { status: 404 }
+      );
     }
 
     const productIds = history.items
@@ -88,6 +92,9 @@ export async function POST(
     });
   } catch (error) {
     console.error('Error restoring history:', error);
-    return NextResponse.json({ error: 'Failed to restore history' }, { status: 500 });
+    return NextResponse.json(
+      { error: await apiText(request, 'restoreHistoryFailed') },
+      { status: 500 }
+    );
   }
 }

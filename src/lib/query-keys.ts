@@ -9,7 +9,8 @@ export const queryKeys = {
   products: () => ['products'] as const,
   categoryProducts: (categoryId: string) => ['products', categoryId] as const,
   search: () => ['search'] as const,
-  searchQuery: (query: string) => ['search', query] as const,
+  // Search ranks by the interface language, so results are cached per language.
+  searchQuery: (query: string, locale: string) => ['search', query, locale] as const,
 };
 
 type QueryKey = readonly unknown[];

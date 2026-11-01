@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, screen } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { renderWithIntl } from '@/test/intl';
 
 // The import modal renders exactly what POST /api/lists/import-text returns: fetch is wired to the
 // real route handler, which parses a real (faked) provider reply. A reply mixing a valid product
@@ -73,8 +74,15 @@ beforeEach(() => {
   vi.spyOn(console, 'error').mockImplementation(() => undefined);
   vi.stubGlobal(
     'fetch',
+    // The browser sends the language cookie with every request, so the route answers in the
+    // language the modal is rendered in.
     vi.fn((url: string, init?: RequestInit) =>
-      route.POST(new Request(`http://localhost${url}`, init as RequestInit))
+      route.POST(
+        new Request(`http://localhost${url}`, {
+          ...(init as RequestInit),
+          headers: { ...(init?.headers as Record<string, string>), cookie: 'NEXT_LOCALE=ru' },
+        })
+      )
     )
   );
 });
@@ -85,7 +93,7 @@ describe('import report from the real route', () => {
       { nameRu: 'Молоко', nameEn: 'Milk', categoryName: 'Dairy', emoji: '🥛' },
       { nameRu: { text: 'Сыр' }, nameEn: ['Cheese'], categoryName: 'Dairy', emoji: 7 },
     ]);
-    render(
+    renderWithIntl(
       <QueryClientProvider client={new QueryClient()}>
         <ImportListModal listId="list-1" isOpen onClose={vi.fn()} />
       </QueryClientProvider>
@@ -99,7 +107,7 @@ describe('import report from the real route', () => {
     expect(await screen.findByText('Импорт завершён!')).toBeTruthy();
     expect(state.items.map((item) => item.productId)).toEqual(['milk']);
     expect(
-      screen.getByText(/Нераспознанная позиция: Unrecognized entry in the AI response/)
+      screen.getByText(/Нераспознанная позиция: ИИ вернул нераспознанную строку/)
     ).toBeTruthy();
   });
 });

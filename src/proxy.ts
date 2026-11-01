@@ -1,7 +1,12 @@
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
 import { getToken } from 'next-auth/jwt';
-import { checkRateLimit, getClientIp, rateLimitResponse } from '@/lib/auth-security';
+import {
+  checkRateLimit,
+  getClientIp,
+  getRequestLocale,
+  rateLimitResponse,
+} from '@/lib/auth-security';
 
 const publicRoutes = [
   '/',
@@ -47,7 +52,7 @@ export default async function proxy(request: NextRequest) {
     });
 
     if (!limit.allowed) {
-      return rateLimitResponse(limit.resetAt);
+      return rateLimitResponse(limit.resetAt, getRequestLocale(request));
     }
   }
 

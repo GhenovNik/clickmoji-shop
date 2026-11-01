@@ -2,6 +2,8 @@
 
 import Image from 'next/image';
 import { useState, useRef, useEffect } from 'react';
+import { useLocale, useTranslations } from 'next-intl';
+import { localizedName } from '@/lib/catalog-name';
 import EmojiPicker from '../shared/EmojiPicker';
 
 interface Product {
@@ -26,6 +28,7 @@ interface ProductVariant {
 interface Category {
   id: string;
   name: string;
+  nameEn?: string | null;
   emoji: string;
   isCustom: boolean;
   imageUrl: string | null;
@@ -50,18 +53,21 @@ export type FormData = {
   variants?: ProductVariant[];
 };
 
-const MAX_UPLOAD_BYTES = 3 * 1024 * 1024;
+const MAX_UPLOAD_MB = 3;
+const MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024;
 
-function readAsDataUrl(file: File) {
+function readAsDataUrl(file: File, failureMessage: string) {
   return new Promise<string>((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => resolve(String(reader.result));
-    reader.onerror = () => reject(reader.error ?? new Error('Не удалось прочитать файл'));
+    reader.onerror = () => reject(reader.error ?? new Error(failureMessage));
     reader.readAsDataURL(file);
   });
 }
 
 export default function ProductForm({ product, categories, onSubmit, onCancel }: ProductFormProps) {
+  const t = useTranslations('admin');
+  const locale = useLocale();
   const [formData, setFormData] = useState<FormData>({
     name: product?.name || '',
     nameEn: product?.nameEn || '',
@@ -94,7 +100,7 @@ export default function ProductForm({ product, categories, onSubmit, onCancel }:
     const file = e.target.files?.[0];
     if (!file) return;
     if (file.size > MAX_UPLOAD_BYTES) {
-      alert('Файл больше 3 МБ');
+      alert(t('productForm.fileTooLarge', { maxMb: MAX_UPLOAD_MB }));
       e.target.value = '';
       return;
     }
@@ -117,7 +123,7 @@ export default function ProductForm({ product, categories, onSubmit, onCancel }:
     });
     const uploadData = await uploadRes.json();
     if (!uploadRes.ok || !uploadData.imageUrl) {
-      throw new Error(uploadData.error || 'Ошибка при сохранении изображения');
+      throw new Error(uploadData.error || t('productForm.imageSaveFailed'));
     }
     return uploadData.imageUrl as string;
   };
@@ -130,10 +136,13 @@ export default function ProductForm({ product, categories, onSubmit, onCancel }:
     if (selectedFile) {
       setUploading(true);
       try {
-        imageUrl = await uploadToLibrary(await readAsDataUrl(selectedFile), 'upload');
+        imageUrl = await uploadToLibrary(
+          await readAsDataUrl(selectedFile, t('productForm.readFileFailed')),
+          'upload'
+        );
       } catch (error) {
         console.error('Error uploading image:', error);
-        alert(error instanceof Error ? error.message : 'Ошибка при загрузке изображения');
+        alert(error instanceof Error ? error.message : t('productForm.imageUploadFailed'));
         setUploading(false);
         return;
       }
@@ -146,7 +155,7 @@ export default function ProductForm({ product, categories, onSubmit, onCancel }:
         imageUrl = await uploadToLibrary(imageUrl, 'generated');
       } catch (error) {
         console.error('Error uploading generated image:', error);
-        alert('Ошибка при сохранении сгенерированной иконки');
+        alert(t('productForm.generatedSaveFailed'));
         setUploading(false);
         return;
       }
@@ -180,7 +189,9 @@ export default function ProductForm({ product, categories, onSubmit, onCancel }:
     <form onSubmit={handleSubmit} className="space-y-4 overflow-x-hidden">
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1">Название (RU) *</label>
+          <label className="block text-sm font-medium text-gray-700 mb-1">
+            {t('shared.nameRu')} *
+          </label>
           <input
             type="text"
             value={formData.name}
@@ -191,7 +202,9 @@ export default function ProductForm({ product, categories, onSubmit, onCancel }:
         </div>
 
         <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1">Название (EN) *</label>
+          <label className="block text-sm font-medium text-gray-700 mb-1">
+            {t('shared.nameEn')} *
+          </label>
           <input
             type="text"
             value={formData.nameEn}
@@ -202,7 +215,9 @@ export default function ProductForm({ product, categories, onSubmit, onCancel }:
         </div>
 
         <div ref={dropdownRef} className="relative">
-          <label className="block text-sm font-medium text-gray-700 mb-1">Категория *</label>
+          <label className="block text-sm font-medium text-gray-700 mb-1">
+            {t('productForm.category')} *
+          </label>
           <button
             type="button"
             onClick={() => setIsDropdownOpen(!isDropdownOpen)}
@@ -227,15 +242,15 @@ export default function ProductForm({ product, categories, onSubmit, onCancel }:
                         ) : (
                           <span className="text-xl">{selectedCat.emoji}</span>
                         )}
-                        <span>{selectedCat.name}</span>
+                        <span>{localizedName(selectedCat, locale)}</span>
                       </>
                     ) : (
-                      'Выберите категорию'
+                      t('productForm.selectCategory')
                     );
                   })()}
                 </>
               ) : (
-                'Выберите категорию'
+                t('productForm.selectCategory')
               )}
             </span>
             <span className="text-gray-400">{isDropdownOpen ? '▲' : '▼'}</span>
@@ -256,7 +271,7 @@ export default function ProductForm({ product, categories, onSubmit, onCancel }:
                   {cat.isCustom && cat.imageUrl ? (
                     <Image
                       src={cat.imageUrl}
-                      alt={cat.name}
+                      alt={localizedName(cat, locale)}
                       width={24}
                       height={24}
                       className="w-6 h-6 object-contain"
@@ -265,7 +280,7 @@ export default function ProductForm({ product, categories, onSubmit, onCancel }:
                   ) : (
                     <span className="text-xl">{cat.emoji}</span>
                   )}
-                  <span className="text-gray-900">{cat.name}</span>
+                  <span className="text-gray-900">{localizedName(cat, locale)}</span>
                 </button>
               ))}
             </div>
@@ -294,18 +309,16 @@ export default function ProductForm({ product, categories, onSubmit, onCancel }:
 
       <div>
         <label className="block text-sm font-medium text-gray-700 mb-1">
-          Описание для AI генерации
+          {t('productForm.aiDescription')}
         </label>
         <textarea
           value={generationDescription}
           onChange={(e) => setGenerationDescription(e.target.value)}
           rows={3}
-          placeholder="Например: безалкогольный энергетик в металлической банке, серебристо-синяя гамма"
+          placeholder={t('productForm.aiDescriptionPlaceholder')}
           className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-gray-900"
         />
-        <p className="mt-1 text-xs text-gray-500">
-          Используется только в prompt для кнопки AI и не сохраняется в базе.
-        </p>
+        <p className="mt-1 text-xs text-gray-500">{t('productForm.aiDescriptionHint')}</p>
       </div>
 
       <div className="border-t pt-4">
@@ -316,13 +329,13 @@ export default function ProductForm({ product, categories, onSubmit, onCancel }:
             onChange={(e) => setFormData({ ...formData, isCustom: e.target.checked })}
             className="w-4 h-4"
           />
-          <span className="text-sm font-medium text-gray-700">Кастомное изображение</span>
+          <span className="text-sm font-medium text-gray-700">{t('productForm.customImage')}</span>
         </label>
 
         {formData.isCustom && (
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
-              Загрузить изображение
+              {t('productForm.uploadImage')}
             </label>
             <input
               type="file"
@@ -331,11 +344,13 @@ export default function ProductForm({ product, categories, onSubmit, onCancel }:
               className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
             />
             {selectedFile && (
-              <p className="text-sm text-gray-600 mt-1">Выбран: {selectedFile.name}</p>
+              <p className="text-sm text-gray-600 mt-1">
+                {t('productForm.selectedFile', { name: selectedFile.name })}
+              </p>
             )}
             {formData.imageUrl && !selectedFile && (
               <div className="mt-2">
-                <p className="text-sm text-gray-600">Текущее изображение:</p>
+                <p className="text-sm text-gray-600">{t('productForm.currentImage')}</p>
                 <Image
                   src={formData.imageUrl}
                   alt="Current"
@@ -348,7 +363,7 @@ export default function ProductForm({ product, categories, onSubmit, onCancel }:
             )}
             {formData.imageUrlEn && (
               <div className="mt-2">
-                <p className="text-sm text-gray-600">Английская версия (с надписями):</p>
+                <p className="text-sm text-gray-600">{t('productForm.englishVersion')}</p>
                 <div className="flex items-center gap-3">
                   <Image
                     src={formData.imageUrlEn}
@@ -363,7 +378,7 @@ export default function ProductForm({ product, categories, onSubmit, onCancel }:
                     onClick={() => setFormData({ ...formData, imageUrlEn: null })}
                     className="text-sm text-red-600 hover:text-red-800"
                   >
-                    Убрать английскую версию
+                    {t('productForm.removeEnglishVersion')}
                   </button>
                 </div>
               </div>
@@ -374,32 +389,32 @@ export default function ProductForm({ product, categories, onSubmit, onCancel }:
 
       <div className="border-t pt-4">
         <div className="flex items-center justify-between mb-2">
-          <h3 className="text-sm font-medium text-gray-700">Варианты</h3>
+          <h3 className="text-sm font-medium text-gray-700">{t('productForm.variants')}</h3>
           <button
             type="button"
             onClick={addVariant}
             className="text-sm text-blue-600 hover:text-blue-800 font-medium"
           >
-            + Добавить вариант
+            {t('productForm.addVariant')}
           </button>
         </div>
 
         {(formData.variants || []).length === 0 ? (
-          <p className="text-sm text-gray-500">Нет вариантов. Добавьте, если нужны опции.</p>
+          <p className="text-sm text-gray-500">{t('productForm.noVariants')}</p>
         ) : (
           <div className="space-y-3">
             {(formData.variants || []).map((variant, index) => (
               <div key={variant.id || index} className="grid grid-cols-1 md:grid-cols-4 gap-3">
                 <input
                   type="text"
-                  placeholder="Название (RU)"
+                  placeholder={t('shared.nameRu')}
                   value={variant.name}
                   onChange={(e) => updateVariant(index, 'name', e.target.value)}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900"
                 />
                 <input
                   type="text"
-                  placeholder="Название (EN)"
+                  placeholder={t('shared.nameEn')}
                   value={variant.nameEn}
                   onChange={(e) => updateVariant(index, 'nameEn', e.target.value)}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900"
@@ -416,7 +431,7 @@ export default function ProductForm({ product, categories, onSubmit, onCancel }:
                   onClick={() => removeVariant(index)}
                   className="text-red-600 hover:text-red-800 text-sm font-medium"
                 >
-                  Удалить
+                  {t('shared.delete')}
                 </button>
               </div>
             ))}
@@ -430,7 +445,11 @@ export default function ProductForm({ product, categories, onSubmit, onCancel }:
           disabled={uploading}
           className="bg-green-600 hover:bg-green-700 text-white px-6 py-2 rounded-lg font-semibold transition-colors disabled:opacity-50"
         >
-          {uploading ? 'Загрузка...' : product ? 'Сохранить изменения' : 'Создать продукт'}
+          {uploading
+            ? t('productForm.uploading')
+            : product
+              ? t('shared.saveChanges')
+              : t('productForm.create')}
         </button>
         {product && (
           <button
@@ -438,7 +457,7 @@ export default function ProductForm({ product, categories, onSubmit, onCancel }:
             onClick={onCancel}
             className="bg-gray-500 hover:bg-gray-600 text-white px-6 py-2 rounded-lg font-semibold transition-colors"
           >
-            Отмена
+            {t('shared.cancel')}
           </button>
         )}
       </div>
