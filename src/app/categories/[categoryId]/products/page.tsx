@@ -38,11 +38,13 @@ function ProductsPageContent() {
     selectedProducts,
     selectedVariants,
     favoriteProducts,
+    favoriteVariants,
     loading,
     adding,
     toggleProduct,
-    setVariant,
+    selectVariant,
     toggleFavorite,
+    toggleVariantFavorite,
     addToList,
   } = useProductSelection(categoryId);
 
@@ -94,10 +96,12 @@ function ProductsPageContent() {
                   isSelected={selectedProducts.has(product.id)}
                   selectedVariantId={selectedVariants[product.id]}
                   isFavorite={favoriteProducts.has(product.id)}
+                  favoriteVariantIds={favoriteVariants}
                   showFavorite={isAuthenticated}
                   onToggle={toggleProduct}
-                  onVariantChange={setVariant}
+                  onSelectVariant={selectVariant}
                   onToggleFavorite={toggleFavorite}
+                  onToggleVariantFavorite={toggleVariantFavorite}
                 />
               ))}
         </div>

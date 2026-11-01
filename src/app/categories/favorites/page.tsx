@@ -9,6 +9,7 @@ import { useLists } from '@/store/lists';
 import { useFavorites } from '@/hooks/useFavorites';
 import FavoriteCard from '@/components/favorites/FavoriteCard';
 import ProductSelectionBar from '@/components/products/ProductSelectionBar';
+import { favoriteKey } from '@/lib/favorites';
 
 function FavoritesPageContent() {
   const { data: session } = useSession();
@@ -67,7 +68,7 @@ function FavoritesPageContent() {
               <FavoriteCard
                 key={favorite.id}
                 favorite={favorite}
-                isSelected={selectedProducts.has(favorite.product.id)}
+                isSelected={selectedProducts.has(favoriteKey(favorite))}
                 onToggle={toggleProduct}
                 onRemove={removeFromFavorites}
               />

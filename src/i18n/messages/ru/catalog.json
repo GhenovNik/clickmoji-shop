@@ -2,6 +2,8 @@
   "shared": {
     "productCount": "{count, plural, one {# товар} few {# товара} many {# товаров} other {# товара}}",
     "noVariant": "Без варианта",
+    "variantsButton": "Варианты · {count}",
+    "variantsTitle": "{name}: варианты",
     "addFavorite": "Добавить в избранное",
     "removeFavorite": "Убрать из избранного",
     "selectListFirst": "Сначала выберите список покупок",
