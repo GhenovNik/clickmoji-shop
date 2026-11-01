@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 // Product updates and deletes never remove picture files from UploadThing: a check followed by
 // a delete races with a request that attaches the same URL again. Leftover files are left to the
-// offline cleanup, which re-checks every reference.
+// offline cleanup, run with the app stopped (AGE-1472).
 
 type Pictures = { imageUrl: string | null; imageUrlEn: string | null };
 

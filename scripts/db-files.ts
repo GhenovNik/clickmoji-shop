@@ -1,6 +1,15 @@
 import { PrismaClient } from '@prisma/client';
 import { UTApi } from 'uploadthing/server';
 import { createPrismaPgAdapter } from '../src/lib/prisma-adapter';
+import { collectReferencedFileKeys } from '../src/lib/services/stored-image-references';
+
+// Deletes UploadThing files that nothing in the database points at. Run it only while the
+// application is stopped: the references are read once and the files are deleted afterwards, so a
+// picture attached by a running app in between would be deleted while in use. A safe protocol for
+// a running app (tombstones / maintenance gate) is Linear AGE-1472; until then this is not a safe
+// replacement for deleting files in the app.
+const STOPPED_APP_WARNING =
+  '⚠️  Run only with the app stopped: with writers running, a picture attached during this run can be deleted while in use (Linear AGE-1472).';
 
 const prisma = new PrismaClient({
   adapter: createPrismaPgAdapter(),
@@ -19,21 +28,13 @@ const usage = () => {
   console.log('');
   console.log('Flags:');
   console.log('  --dry-run  (only for cleanup-unused-images)');
+  console.log('');
+  console.log(STOPPED_APP_WARNING);
 };
-
-function getFileKeyFromUrl(url: string | null): string | null {
-  if (!url) return null;
-  try {
-    const urlObj = new URL(url);
-    const pathParts = urlObj.pathname.split('/');
-    return pathParts[pathParts.length - 1] || null;
-  } catch {
-    return null;
-  }
-}
 
 async function cleanupOrphanedFiles() {
   const utapi = new UTApi();
+  console.log(`${STOPPED_APP_WARNING}\n`);
   console.log('🧹 Starting orphaned files cleanup...\n');
 
   const { files } = await utapi.listFiles();
@@ -46,37 +47,7 @@ async function cleanupOrphanedFiles() {
   console.log(`📦 Found ${files.length} files in UploadThing\n`);
 
   console.log('🔍 Checking database for used images...');
-  // Library pictures are kept even when no product or category shows them yet.
-  const [products, categories, libraryItems] = await Promise.all([
-    prisma.product.findMany({
-      where: { OR: [{ imageUrl: { not: null } }, { imageUrlEn: { not: null } }] },
-      select: { imageUrl: true, imageUrlEn: true },
-    }),
-    prisma.category.findMany({
-      where: { imageUrl: { not: null } },
-      select: { imageUrl: true },
-    }),
-    prisma.emojiLibraryItem.findMany({ select: { imageUrl: true } }),
-  ]);
-
-  const usedFileKeys = new Set<string>();
-
-  products.forEach((product) => {
-    for (const url of [product.imageUrl, product.imageUrlEn]) {
-      const fileKey = getFileKeyFromUrl(url);
-      if (fileKey) usedFileKeys.add(fileKey);
-    }
-  });
-
-  categories.forEach((category) => {
-    const fileKey = getFileKeyFromUrl(category.imageUrl);
-    if (fileKey) usedFileKeys.add(fileKey);
-  });
-
-  libraryItems.forEach((item) => {
-    const fileKey = getFileKeyFromUrl(item.imageUrl);
-    if (fileKey) usedFileKeys.add(fileKey);
-  });
+  const { keys: usedFileKeys } = await collectReferencedFileKeys(prisma);
 
   console.log(`✅ Found ${usedFileKeys.size} files currently in use\n`);
 
@@ -116,47 +87,17 @@ async function cleanupUnusedImages(isDryRun: boolean) {
   if (isDryRun) {
     console.log('🔍 Running in DRY-RUN mode (no files will be deleted)\n');
   } else {
+    console.log(`${STOPPED_APP_WARNING}\n`);
     console.log('🧹 Starting cleanup of unused images...\n');
   }
 
   console.log('📊 Fetching used images from database...');
+  const { keys: usedFileKeys, counts } = await collectReferencedFileKeys(prisma);
 
-  const categories = await prisma.category.findMany({
-    where: { isCustom: true, imageUrl: { not: null } },
-    select: { imageUrl: true },
-  });
-
-  // Every stored picture of a product counts, whatever its isCustom flag says.
-  const products = await prisma.product.findMany({
-    where: { OR: [{ imageUrl: { not: null } }, { imageUrlEn: { not: null } }] },
-    select: { imageUrl: true, imageUrlEn: true },
-  });
-
-  // Library pictures are kept even when no product or category shows them yet.
-  const libraryItems = await prisma.emojiLibraryItem.findMany({ select: { imageUrl: true } });
-
-  const usedUrls = new Set<string>();
-  libraryItems.forEach((item) => usedUrls.add(item.imageUrl));
-  categories.forEach((cat) => {
-    if (cat.imageUrl) usedUrls.add(cat.imageUrl);
-  });
-  products.forEach((prod) => {
-    if (prod.imageUrl) usedUrls.add(prod.imageUrl);
-    if (prod.imageUrlEn) usedUrls.add(prod.imageUrlEn);
-  });
-
-  console.log(`✅ Found ${usedUrls.size} images in use`);
-  console.log(`   - Categories: ${categories.length}`);
-  console.log(`   - Products: ${products.length}`);
-  console.log(`   - Library: ${libraryItems.length}\n`);
-
-  const usedFileKeys = new Set<string>();
-  usedUrls.forEach((url) => {
-    const fileKey = url.split('/f/')[1];
-    if (fileKey) usedFileKeys.add(fileKey);
-  });
-
-  console.log(`🔑 Extracted ${usedFileKeys.size} file keys from URLs\n`);
+  console.log(`✅ Found ${usedFileKeys.size} files in use`);
+  console.log(`   - Categories with a picture: ${counts.categories}`);
+  console.log(`   - Products with a picture: ${counts.products}`);
+  console.log(`   - Library: ${counts.library}\n`);
 
   console.log('☁️  Fetching files from UploadThing...');
   const uploadThingFiles = await utapi.listFiles();

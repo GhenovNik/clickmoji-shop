@@ -4,8 +4,8 @@ import { requireAdmin } from '@/lib/auth-guards';
 
 // Replaced or deleted pictures are not removed from UploadThing here. Between checking that
 // nothing shows a file and deleting it, another request could attach the same URL again, leaving
-// a live product with a broken picture. A leftover file is cheap; the offline cleanup
-// (`npm run db:files`) re-checks every reference before it deletes anything.
+// a live product with a broken picture. A leftover file is cheap. `npm run db:files` removes
+// leftovers, only with the app stopped; a protocol safe with writers running is AGE-1472.
 
 export async function PUT(
   request: Request,

@@ -5,6 +5,9 @@ import { isStoredImageInUse } from '@/lib/services/emoji-library';
 
 const utapi = new UTApi();
 
+// An explicit admin delete, refused while anything shows the file. The check and the delete are
+// not atomic: a request attaching the same URL in between can still race it (Linear AGE-1472).
+
 export async function DELETE(request: Request) {
   try {
     const guard = await requireAdmin();
