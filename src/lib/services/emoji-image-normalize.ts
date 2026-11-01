@@ -26,8 +26,12 @@ const WORK_SIZE = 1024;
 // A source's own alpha is trusted as the object mask when its border is mostly clear: the
 // background around the object is transparent. A thin transparent frame counts; an image that is
 // evenly semi-transparent everywhere does not, since its alpha separates nothing.
+// The border is measured at the source's own resolution: scaling down would blend a thin clear
+// frame into the object. An object also needs some truly opaque pixels; a faint, uniformly
+// see-through canvas is empty.
 const CLEAR_ALPHA = 32;
 const SOURCE_ALPHA_BORDER_SHARE = 0.5;
+const SOLID_ALPHA = 128;
 
 export class EmptyEmojiImageError extends Error {
   constructor() {
@@ -225,17 +229,24 @@ async function decode(input: Buffer) {
   }
 }
 
-export async function normalizeEmojiImage(input: Buffer, options: NormalizeEmojiOptions = {}) {
-  const { size = NORMALIZED_EMOJI_SIZE, clearEnclosedGaps = false } = options;
-  const { data: source, info } = await decode(input);
+// Whether the source's border is mostly clear, read from its alpha at full resolution (bounded
+// by MAX_INPUT_PIXELS: one byte per pixel).
+async function hasClearBorder(input: Buffer) {
+  const { hasAlpha } = await sharp(input, { limitInputPixels: MAX_INPUT_PIXELS }).metadata();
+  if (!hasAlpha) return false;
+  const { data, info } = await sharp(input, { limitInputPixels: MAX_INPUT_PIXELS })
+    .rotate()
+    .ensureAlpha()
+    .extractChannel(3)
+    .raw()
+    .toBuffer({ resolveWithObject: true });
   const { width, height } = info;
-  const pixels = width * height;
 
   let border = 0;
   let clearBorder = 0;
   const countBorder = (index: number) => {
     border++;
-    if (source[index * 4 + 3] < CLEAR_ALPHA) clearBorder++;
+    if (data[index] < CLEAR_ALPHA) clearBorder++;
   };
   for (let x = 0; x < width; x++) {
     countBorder(x);
@@ -245,19 +256,30 @@ export async function normalizeEmojiImage(input: Buffer, options: NormalizeEmoji
     countBorder(y * width);
     if (width > 1) countBorder(y * width + width - 1);
   }
+  return clearBorder >= border * SOURCE_ALPHA_BORDER_SHARE;
+}
+
+export async function normalizeEmojiImage(input: Buffer, options: NormalizeEmojiOptions = {}) {
+  const { size = NORMALIZED_EMOJI_SIZE, clearEnclosedGaps = false } = options;
+  const { data: source, info } = await decode(input);
+  const { width, height } = info;
+  const pixels = width * height;
 
   const rgb = Buffer.alloc(pixels * 3);
   let alpha: Buffer;
-  if (clearBorder >= border * SOURCE_ALPHA_BORDER_SHARE) {
+  if (await hasClearBorder(input)) {
     // The source already separates the object from the background: trust its alpha, so a white
     // object on a transparent background stays an object.
     alpha = Buffer.alloc(pixels);
+    let solid = 0;
     for (let i = 0; i < pixels; i++) {
       rgb[i * 3] = source[i * 4];
       rgb[i * 3 + 1] = source[i * 4 + 1];
       rgb[i * 3 + 2] = source[i * 4 + 2];
       alpha[i] = source[i * 4 + 3];
+      if (alpha[i] >= SOLID_ALPHA) solid++;
     }
+    if (solid === 0) throw new EmptyEmojiImageError();
   } else {
     // An opaque picture on a white field: blend the few soft edges over white, then remove the
     // field from the edges inwards.

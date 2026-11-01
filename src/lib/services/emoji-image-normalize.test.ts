@@ -173,8 +173,23 @@ describe('normalizeEmojiImage', () => {
     expect(alphaAt(128, 128)).toBe(255);
   });
 
+  it('keeps a white object in a thin transparent frame on a large picture too', async () => {
+    for (const side of [2048, 4096]) {
+      const input = await svg(
+        side,
+        side,
+        `<rect x="1" y="1" width="${side - 2}" height="${side - 2}" fill="#ffffff"/>`,
+        'none'
+      );
+
+      const { alphaAt } = await decode(await normalizeEmojiImage(input));
+
+      expect(alphaAt(128, 128), String(side)).toBe(255);
+    }
+  });
+
   it('rejects an evenly semi-transparent white canvas as empty', async () => {
-    for (const alpha of [0.97, 0.5]) {
+    for (const alpha of [0.97, 0.5, 0.12, 0.1]) {
       const input = await sharp({
         create: {
           width: 256,
