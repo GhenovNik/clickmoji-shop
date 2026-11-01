@@ -1,6 +1,7 @@
 # batch-013
 
-Новый чат в Gemini → вставить промпт → сохранить картинку как `batch-013.png`.
+Новый чат в Gemini → вставить промпт → сохранить картинку как `batch-013.png`. Если на картинке
+есть надписи — в том же чате отправить английский промпт и сохранить ответ как `batch-013-en.png`.
 
 | Ячейка | Товар                     | English            | Категория              | Действие |
 | ------ | ------------------------- | ------------------ | ---------------------- | -------- |
@@ -27,4 +28,11 @@ Cells, left to right, top to bottom:
 Row 1: 1) «Мёд» — honey; 2) «Варенье» — jam; 3) «Шоколадная паста» — chocolate spread
 Row 2: 4) «Жевательная резинка» — chewing gum; 5) «Попкорн» — popcorn; 6) «Тушёнка» — canned stewed meat
 Row 3: 7) «Консервированная кукуруза» — canned corn; 8) «Консервированный горошек» — canned peas; 9) «Консервированная фасоль» — canned beans
+```
+
+## Английская версия (только если есть надписи, в том же чате)
+
+```text
+Make exactly the same image: the same drawings, layout, colours and white background. Change ONLY the text printed on the packaging, translating it into short correct English. Icons without text stay exactly as they are. Do not add any new text.
+Cell names for reference: 1) «Мёд» → "Honey"; 2) «Варенье» → "Jam"; 3) «Шоколадная паста» → "Chocolate spread"; 4) «Жевательная резинка» → "Chewing gum"; 5) «Попкорн» → "Popcorn"; 6) «Тушёнка» → "Canned stewed meat"; 7) «Консервированная кукуруза» → "Canned corn"; 8) «Консервированный горошек» → "Canned peas"; 9) «Консервированная фасоль» → "Canned beans"
 ```

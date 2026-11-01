@@ -1,3 +1,6 @@
+-- AlterTable
+ALTER TABLE "products" ADD COLUMN     "imageUrlEn" TEXT;
+
 -- CreateTable
 CREATE TABLE "emoji_library_items" (
     "id" TEXT NOT NULL,
@@ -7,6 +10,8 @@ CREATE TABLE "emoji_library_items" (
     "imageUrl" TEXT NOT NULL,
     "source" TEXT NOT NULL,
     "sourceRef" TEXT,
+    "locale" TEXT,
+    "groupKey" TEXT,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMP(3) NOT NULL,
 
@@ -21,3 +26,6 @@ CREATE UNIQUE INDEX "emoji_library_items_sourceRef_key" ON "emoji_library_items"
 
 -- CreateIndex
 CREATE INDEX "emoji_library_items_name_idx" ON "emoji_library_items"("name");
+
+-- CreateIndex
+CREATE INDEX "emoji_library_items_groupKey_idx" ON "emoji_library_items"("groupKey");

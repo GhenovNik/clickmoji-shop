@@ -1,6 +1,7 @@
 # batch-017
 
-Новый чат в Gemini → вставить промпт → сохранить картинку как `batch-017.png`.
+Новый чат в Gemini → вставить промпт → сохранить картинку как `batch-017.png`. Если на картинке
+есть надписи — в том же чате отправить английский промпт и сохранить ответ как `batch-017-en.png`.
 
 | Ячейка | Товар              | English       | Категория       | Действие |
 | ------ | ------------------ | ------------- | --------------- | -------- |
@@ -27,4 +28,11 @@ Cells, left to right, top to bottom:
 Row 1: 1) «Резиновые перчатки» — rubber gloves; 2) «Мешки для мусора» — trash bags; 3) «Бумажные полотенца» — paper towels
 Row 2: 4) «Салфетки» — napkins; 5) «Фольга» — aluminum foil; 6) «Пищевая плёнка» — plastic wrap
 Row 3: 7) «Пакеты с застёжкой» — zip bags; 8) «Пергамент» — baking paper; 9) «Спички» — matches
+```
+
+## Английская версия (только если есть надписи, в том же чате)
+
+```text
+Make exactly the same image: the same drawings, layout, colours and white background. Change ONLY the text printed on the packaging, translating it into short correct English. Icons without text stay exactly as they are. Do not add any new text.
+Cell names for reference: 1) «Резиновые перчатки» → "Rubber gloves"; 2) «Мешки для мусора» → "Trash bags"; 3) «Бумажные полотенца» → "Paper towels"; 4) «Салфетки» → "Napkins"; 5) «Фольга» → "Aluminum foil"; 6) «Пищевая плёнка» → "Plastic wrap"; 7) «Пакеты с застёжкой» → "Zip bags"; 8) «Пергамент» → "Baking paper"; 9) «Спички» → "Matches"
 ```

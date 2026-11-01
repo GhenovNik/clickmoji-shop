@@ -76,6 +76,8 @@ describe('recordEmojiLibraryItem', () => {
       tags: ['овощи'],
       source: 'batch',
       sourceRef: 'batch-001#1',
+      locale: null,
+      groupKey: null,
     };
     expect(db.upsert).toHaveBeenCalledWith({
       where: { imageUrl: URL_A },

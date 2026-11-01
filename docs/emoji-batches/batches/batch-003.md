@@ -1,6 +1,7 @@
 # batch-003
 
-Новый чат в Gemini → вставить промпт → сохранить картинку как `batch-003.png`.
+Новый чат в Gemini → вставить промпт → сохранить картинку как `batch-003.png`. Если на картинке
+есть надписи — в том же чате отправить английский промпт и сохранить ответ как `batch-003-en.png`.
 
 | Ячейка | Товар       | English      | Категория | Действие |
 | ------ | ----------- | ------------ | --------- | -------- |
@@ -27,4 +28,11 @@ Cells, left to right, top to bottom:
 Row 1: 1) «Ростки маша» — bean sprouts; 2) «Халапеньо» — jalapeño; 3) «Пастернак» — parsnip
 Row 2: 4) «Грейпфрут» — grapefruit; 5) «Лайм» — lime; 6) «Гранат» — pomegranate
 Row 3: 7) «Кокос» — coconut; 8) «Хурма» — persimmon; 9) «Папайя» — papaya
+```
+
+## Английская версия (только если есть надписи, в том же чате)
+
+```text
+Make exactly the same image: the same drawings, layout, colours and white background. Change ONLY the text printed on the packaging, translating it into short correct English. Icons without text stay exactly as they are. Do not add any new text.
+Cell names for reference: 1) «Ростки маша» → "Bean sprouts"; 2) «Халапеньо» → "Jalapeño"; 3) «Пастернак» → "Parsnip"; 4) «Грейпфрут» → "Grapefruit"; 5) «Лайм» → "Lime"; 6) «Гранат» → "Pomegranate"; 7) «Кокос» → "Coconut"; 8) «Хурма» → "Persimmon"; 9) «Папайя» → "Papaya"
 ```

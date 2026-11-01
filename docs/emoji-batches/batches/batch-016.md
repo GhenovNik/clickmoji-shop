@@ -1,6 +1,7 @@
 # batch-016
 
-Новый чат в Gemini → вставить промпт → сохранить картинку как `batch-016.png`.
+Новый чат в Gemini → вставить промпт → сохранить картинку как `batch-016.png`. Если на картинке
+есть надписи — в том же чате отправить английский промпт и сохранить ответ как `batch-016-en.png`.
 
 | Ячейка | Товар                     | English            | Категория     | Действие |
 | ------ | ------------------------- | ------------------ | ------------- | -------- |
@@ -27,4 +28,11 @@ Cells, left to right, top to bottom:
 Row 1: 1) «Водка» — vodka; 2) «Спортивный напиток» — sports drink; 3) «Средство для мытья посуды» — dish soap
 Row 2: 4) «Стиральный порошок» — laundry powder; 5) «Кондиционер для белья» — fabric softener; 6) «Отбеливатель» — bleach
 Row 3: 7) «Средство для стёкол» — glass cleaner; 8) «Освежитель воздуха» — air freshener; 9) «Таблетки для посудомойки» — dishwasher tablets
+```
+
+## Английская версия (только если есть надписи, в том же чате)
+
+```text
+Make exactly the same image: the same drawings, layout, colours and white background. Change ONLY the text printed on the packaging, translating it into short correct English. Icons without text stay exactly as they are. Do not add any new text.
+Cell names for reference: 1) «Водка» → "Vodka"; 2) «Спортивный напиток» → "Sports drink"; 3) «Средство для мытья посуды» → "Dish soap"; 4) «Стиральный порошок» → "Laundry powder"; 5) «Кондиционер для белья» → "Fabric softener"; 6) «Отбеливатель» → "Bleach"; 7) «Средство для стёкол» → "Glass cleaner"; 8) «Освежитель воздуха» → "Air freshener"; 9) «Таблетки для посудомойки» → "Dishwasher tablets"
 ```

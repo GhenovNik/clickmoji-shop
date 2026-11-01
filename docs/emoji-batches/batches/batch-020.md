@@ -1,6 +1,7 @@
 # batch-020
 
-Новый чат в Gemini → вставить промпт → сохранить картинку как `batch-020.png`.
+Новый чат в Gemini → вставить промпт → сохранить картинку как `batch-020.png`. Если на картинке
+есть надписи — в том же чате отправить английский промпт и сохранить ответ как `batch-020-en.png`.
 
 | Ячейка | Товар            | English          | Категория         | Действие |
 | ------ | ---------------- | ---------------- | ----------------- | -------- |
@@ -27,4 +28,11 @@ Cells, left to right, top to bottom:
 Row 1: 1) «Крем для рук» — hand cream; 2) «Ватные диски» — cotton pads; 3) «Ватные палочки» — cotton swabs
 Row 2: 4) «Лак для ногтей» — nail polish; 5) «Подгузники» — diapers; 6) «Детская вода» — baby water
 Row 3: 7) «Детский творожок» — kids' curd snack; 8) «Корм для рыбок» — fish food; 9) «Корм для птиц» — bird seed
+```
+
+## Английская версия (только если есть надписи, в том же чате)
+
+```text
+Make exactly the same image: the same drawings, layout, colours and white background. Change ONLY the text printed on the packaging, translating it into short correct English. Icons without text stay exactly as they are. Do not add any new text.
+Cell names for reference: 1) «Крем для рук» → "Hand cream"; 2) «Ватные диски» → "Cotton pads"; 3) «Ватные палочки» → "Cotton swabs"; 4) «Лак для ногтей» → "Nail polish"; 5) «Подгузники» → "Diapers"; 6) «Детская вода» → "Baby water"; 7) «Детский творожок» → "Kids' curd snack"; 8) «Корм для рыбок» → "Fish food"; 9) «Корм для птиц» → "Bird seed"
 ```

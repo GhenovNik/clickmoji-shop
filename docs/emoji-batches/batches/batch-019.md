@@ -1,6 +1,7 @@
 # batch-019
 
-Новый чат в Gemini → вставить промпт → сохранить картинку как `batch-019.png`.
+Новый чат в Gemini → вставить промпт → сохранить картинку как `batch-019.png`. Если на картинке
+есть надписи — в том же чате отправить английский промпт и сохранить ответ как `batch-019-en.png`.
 
 | Ячейка | Товар                  | English          | Категория | Действие |
 | ------ | ---------------------- | ---------------- | --------- | -------- |
@@ -27,4 +28,11 @@ Cells, left to right, top to bottom:
 Row 1: 1) «Ополаскиватель для рта» — mouthwash; 2) «Шампунь» — shampoo; 3) «Бальзам для волос» — hair conditioner
 Row 2: 4) «Гель для душа» — shower gel; 5) «Дезодорант» — deodorant; 6) «Пена для бритья» — shaving foam
 Row 3: 7) «Помада» — lipstick; 8) «Тушь для ресниц» — mascara; 9) «Солнцезащитный крем» — sunscreen
+```
+
+## Английская версия (только если есть надписи, в том же чате)
+
+```text
+Make exactly the same image: the same drawings, layout, colours and white background. Change ONLY the text printed on the packaging, translating it into short correct English. Icons without text stay exactly as they are. Do not add any new text.
+Cell names for reference: 1) «Ополаскиватель для рта» → "Mouthwash"; 2) «Шампунь» → "Shampoo"; 3) «Бальзам для волос» → "Hair conditioner"; 4) «Гель для душа» → "Shower gel"; 5) «Дезодорант» → "Deodorant"; 6) «Пена для бритья» → "Shaving foam"; 7) «Помада» → "Lipstick"; 8) «Тушь для ресниц» → "Mascara"; 9) «Солнцезащитный крем» → "Sunscreen"
 ```

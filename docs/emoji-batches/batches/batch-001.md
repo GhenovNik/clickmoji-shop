@@ -1,6 +1,7 @@
 # batch-001
 
-Новый чат в Gemini → вставить промпт → сохранить картинку как `batch-001.png`.
+Новый чат в Gemini → вставить промпт → сохранить картинку как `batch-001.png`. Если на картинке
+есть надписи — в том же чате отправить английский промпт и сохранить ответ как `batch-001-en.png`.
 
 | Ячейка | Товар            | English       | Категория          | Действие                   |
 | ------ | ---------------- | ------------- | ------------------ | -------------------------- |
@@ -27,4 +28,11 @@ Cells, left to right, top to bottom:
 Row 1: 1) «Кабачок» — a light-green zucchini, not a cucumber; 2) «Чечевица» — a small pile of orange lentils; 3) «Миндальное масло» — an open jar of almond butter with an almond beside it
 Row 2: 4) «Льняное семя» — a small pile of shiny brown flax seeds; 5) «Тыква» — pumpkin; 6) «Петрушка» — a bunch of flat-leaf parsley
 Row 3: 7) «Укроп» — a bunch of feathery dill; 8) «Кинза» — a bunch of cilantro; 9) «Мята» — a sprig of fresh mint
+```
+
+## Английская версия (только если есть надписи, в том же чате)
+
+```text
+Make exactly the same image: the same drawings, layout, colours and white background. Change ONLY the text printed on the packaging, translating it into short correct English. Icons without text stay exactly as they are. Do not add any new text.
+Cell names for reference: 1) «Кабачок» → "Zucchini"; 2) «Чечевица» → "Lentils"; 3) «Миндальное масло» → "Almond butter"; 4) «Льняное семя» → "Flaxseed"; 5) «Тыква» → "Pumpkin"; 6) «Петрушка» → "Parsley"; 7) «Укроп» → "Dill"; 8) «Кинза» → "Cilantro"; 9) «Мята» → "Mint"
 ```

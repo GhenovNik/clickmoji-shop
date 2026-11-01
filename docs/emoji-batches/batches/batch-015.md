@@ -1,6 +1,7 @@
 # batch-015
 
-Новый чат в Gemini → вставить промпт → сохранить картинку как `batch-015.png`.
+Новый чат в Gemini → вставить промпт → сохранить картинку как `batch-015.png`. Если на картинке
+есть надписи — в том же чате отправить английский промпт и сохранить ответ как `batch-015-en.png`.
 
 | Ячейка | Товар            | English       | Категория             | Действие |
 | ------ | ---------------- | ------------- | --------------------- | -------- |
@@ -27,4 +28,11 @@ Cells, left to right, top to bottom:
 Row 1: 1) «Лёд» — a bag of ice cubes; 2) «Квас» — a bottle of dark-amber kvass; 3) «Энергетик» — energy drink
 Row 2: 4) «Морс» — a jug of red berry drink; 5) «Лимонад» — lemonade; 6) «Какао» — cocoa
 Row 3: 7) «Холодный чай» — iced tea; 8) «Апельсиновый сок» — orange juice; 9) «Кокосовая вода» — coconut water
+```
+
+## Английская версия (только если есть надписи, в том же чате)
+
+```text
+Make exactly the same image: the same drawings, layout, colours and white background. Change ONLY the text printed on the packaging, translating it into short correct English. Icons without text stay exactly as they are. Do not add any new text.
+Cell names for reference: 1) «Лёд» → "Ice"; 2) «Квас» → "Kvass"; 3) «Энергетик» → "Energy drink"; 4) «Морс» → "Berry drink"; 5) «Лимонад» → "Lemonade"; 6) «Какао» → "Cocoa"; 7) «Холодный чай» → "Iced tea"; 8) «Апельсиновый сок» → "Orange juice"; 9) «Кокосовая вода» → "Coconut water"
 ```

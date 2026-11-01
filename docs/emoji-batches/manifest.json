@@ -2,6 +2,7 @@
   {
     "batch": "batch-001",
     "file": "batch-001.png",
+    "fileEn": "batch-001-en.png",
     "cells": [
       {
         "cell": 1,
@@ -79,6 +80,7 @@
   {
     "batch": "batch-002",
     "file": "batch-002.png",
+    "fileEn": "batch-002-en.png",
     "cells": [
       {
         "cell": 1,
@@ -152,6 +154,7 @@
   {
     "batch": "batch-003",
     "file": "batch-003.png",
+    "fileEn": "batch-003-en.png",
     "cells": [
       {
         "cell": 1,
@@ -221,6 +224,7 @@
   {
     "batch": "batch-004",
     "file": "batch-004.png",
+    "fileEn": "batch-004-en.png",
     "cells": [
       {
         "cell": 1,
@@ -292,6 +296,7 @@
   {
     "batch": "batch-005",
     "file": "batch-005.png",
+    "fileEn": "batch-005-en.png",
     "cells": [
       {
         "cell": 1,
@@ -368,6 +373,7 @@
   {
     "batch": "batch-006",
     "file": "batch-006.png",
+    "fileEn": "batch-006-en.png",
     "cells": [
       {
         "cell": 1,
@@ -444,6 +450,7 @@
   {
     "batch": "batch-007",
     "file": "batch-007.png",
+    "fileEn": "batch-007-en.png",
     "cells": [
       {
         "cell": 1,
@@ -514,6 +521,7 @@
   {
     "batch": "batch-008",
     "file": "batch-008.png",
+    "fileEn": "batch-008-en.png",
     "cells": [
       {
         "cell": 1,
@@ -584,6 +592,7 @@
   {
     "batch": "batch-009",
     "file": "batch-009.png",
+    "fileEn": "batch-009-en.png",
     "cells": [
       {
         "cell": 1,
@@ -653,6 +662,7 @@
   {
     "batch": "batch-010",
     "file": "batch-010.png",
+    "fileEn": "batch-010-en.png",
     "cells": [
       {
         "cell": 1,
@@ -723,6 +733,7 @@
   {
     "batch": "batch-011",
     "file": "batch-011.png",
+    "fileEn": "batch-011-en.png",
     "cells": [
       {
         "cell": 1,
@@ -794,6 +805,7 @@
   {
     "batch": "batch-012",
     "file": "batch-012.png",
+    "fileEn": "batch-012-en.png",
     "cells": [
       {
         "cell": 1,
@@ -866,6 +878,7 @@
   {
     "batch": "batch-013",
     "file": "batch-013.png",
+    "fileEn": "batch-013-en.png",
     "cells": [
       {
         "cell": 1,
@@ -935,6 +948,7 @@
   {
     "batch": "batch-014",
     "file": "batch-014.png",
+    "fileEn": "batch-014-en.png",
     "cells": [
       {
         "cell": 1,
@@ -1005,6 +1019,7 @@
   {
     "batch": "batch-015",
     "file": "batch-015.png",
+    "fileEn": "batch-015-en.png",
     "cells": [
       {
         "cell": 1,
@@ -1077,6 +1092,7 @@
   {
     "batch": "batch-016",
     "file": "batch-016.png",
+    "fileEn": "batch-016-en.png",
     "cells": [
       {
         "cell": 1,
@@ -1146,6 +1162,7 @@
   {
     "batch": "batch-017",
     "file": "batch-017.png",
+    "fileEn": "batch-017-en.png",
     "cells": [
       {
         "cell": 1,
@@ -1215,6 +1232,7 @@
   {
     "batch": "batch-018",
     "file": "batch-018.png",
+    "fileEn": "batch-018-en.png",
     "cells": [
       {
         "cell": 1,
@@ -1284,6 +1302,7 @@
   {
     "batch": "batch-019",
     "file": "batch-019.png",
+    "fileEn": "batch-019-en.png",
     "cells": [
       {
         "cell": 1,
@@ -1353,6 +1372,7 @@
   {
     "batch": "batch-020",
     "file": "batch-020.png",
+    "fileEn": "batch-020-en.png",
     "cells": [
       {
         "cell": 1,
@@ -1422,6 +1442,7 @@
   {
     "batch": "batch-021",
     "file": "batch-021.png",
+    "fileEn": "batch-021-en.png",
     "cells": [
       {
         "cell": 1,

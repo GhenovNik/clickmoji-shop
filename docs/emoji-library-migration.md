@@ -1,8 +1,9 @@
 # Миграция: библиотека emoji (AGE-1465)
 
-Миграция `prisma/migrations/20261101001719_add_emoji_library` только **добавляет** таблицу
-`emoji_library_items` и три индекса. Существующие таблицы и данные не меняются, откат —
-`DROP TABLE "emoji_library_items";`.
+Миграция `prisma/migrations/20261101004533_add_emoji_library` только **добавляет**: таблицу
+`emoji_library_items` с индексами и пустую колонку `products."imageUrlEn"` (английский вариант
+картинки с надписями). Существующие данные не меняются. Откат —
+`DROP TABLE "emoji_library_items"; ALTER TABLE "products" DROP COLUMN "imageUrlEn";`.
 
 Применяет оператор, **до слияния и деплоя** этого PR: код записывает в таблицу и спрашивает её
 перед удалением файлов. Если таблицы нет, приложение не ломается — загрузка проходит, запись в
@@ -25,7 +26,7 @@
    DATABASE_URL='<прямой URL>' npx prisma migrate deploy
    ```
 
-   Ожидается `Applying migration 20261101001719_add_emoji_library` и
+   Ожидается `Applying migration 20261101004533_add_emoji_library` и
    `All migrations have been successfully applied`.
 
 3. Проверить:

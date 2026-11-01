@@ -94,6 +94,8 @@ model Product {
   emoji       String   // unicode emoji или URL кастомной картинки
   isCustom    Boolean  @default(false)
   imageUrl    String?  // для кастомных emoji
+  // English variant of a picture with text on it; the app shows it when the UI is English.
+  imageUrlEn  String?
 
   categoryId  String
   category    Category @relation(fields: [categoryId], references: [id], onDelete: Cascade)
@@ -127,11 +129,16 @@ model EmojiLibraryItem {
   source    String
   // Stable origin, e.g. "batch-007#3"; re-importing the same cell updates instead of duplicating.
   sourceRef String?  @unique
+  // null: no text, fits every language; "ru" / "en": text on the packaging in that language.
+  locale    String?
+  // Language variants of one picture share a key, e.g. "batch-007#3".
+  groupKey  String?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@index([name])
+  @@index([groupKey])
   @@map("emoji_library_items")
 }
 

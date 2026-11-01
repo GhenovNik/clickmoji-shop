@@ -1,6 +1,7 @@
 # batch-007
 
-Новый чат в Gemini → вставить промпт → сохранить картинку как `batch-007.png`.
+Новый чат в Gemini → вставить промпт → сохранить картинку как `batch-007.png`. Если на картинке
+есть надписи — в том же чате отправить английский промпт и сохранить ответ как `batch-007-en.png`.
 
 | Ячейка | Товар                | English     | Категория              | Действие |
 | ------ | -------------------- | ----------- | ---------------------- | -------- |
@@ -27,4 +28,11 @@ Cells, left to right, top to bottom:
 Row 1: 1) «Тортилья» — tortillas; 2) «Булочки для бургеров» — burger buns; 3) «Хлебцы» — crispbread
 Row 2: 4) «Пончик» — donut; 5) «Маффин» — muffin; 6) «Сушки» — a few small crunchy bread rings
 Row 3: 7) «Пирог» — pie; 8) «Фарш» — ground meat; 9) «Индейка» — turkey
+```
+
+## Английская версия (только если есть надписи, в том же чате)
+
+```text
+Make exactly the same image: the same drawings, layout, colours and white background. Change ONLY the text printed on the packaging, translating it into short correct English. Icons without text stay exactly as they are. Do not add any new text.
+Cell names for reference: 1) «Тортилья» → "Tortillas"; 2) «Булочки для бургеров» → "Burger buns"; 3) «Хлебцы» → "Crispbread"; 4) «Пончик» → "Donut"; 5) «Маффин» → "Muffin"; 6) «Сушки» → "Sushki"; 7) «Пирог» → "Pie"; 8) «Фарш» → "Ground meat"; 9) «Индейка» → "Turkey"
 ```

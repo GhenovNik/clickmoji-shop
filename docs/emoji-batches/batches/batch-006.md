@@ -1,6 +1,7 @@
 # batch-006
 
-Новый чат в Gemini → вставить промпт → сохранить картинку как `batch-006.png`.
+Новый чат в Gemini → вставить промпт → сохранить картинку как `batch-006.png`. Если на картинке
+есть надписи — в том же чате отправить английский промпт и сохранить ответ как `batch-006-en.png`.
 
 | Ячейка | Товар            | English        | Категория         | Действие |
 | ------ | ---------------- | -------------- | ----------------- | -------- |
@@ -27,4 +28,11 @@ Cells, left to right, top to bottom:
 Row 1: 1) «Брынза» — a white block of feta; 2) «Творожный сыр» — a tub of cream cheese; 3) «Сгущённое молоко» — a tin of condensed milk
 Row 2: 4) «Греческий йогурт» — greek yogurt; 5) «Овсяное молоко» — a carton of oat milk; 6) «Топлёное масло» — a glass jar of golden ghee
 Row 3: 7) «Батон» — an oval Russian white loaf with diagonal cuts; 8) «Лаваш» — a folded thin flatbread; 9) «Пита» — pita bread
+```
+
+## Английская версия (только если есть надписи, в том же чате)
+
+```text
+Make exactly the same image: the same drawings, layout, colours and white background. Change ONLY the text printed on the packaging, translating it into short correct English. Icons without text stay exactly as they are. Do not add any new text.
+Cell names for reference: 1) «Брынза» → "Feta cheese"; 2) «Творожный сыр» → "Cream cheese"; 3) «Сгущённое молоко» → "Condensed milk"; 4) «Греческий йогурт» → "Greek yogurt"; 5) «Овсяное молоко» → "Oat milk"; 6) «Топлёное масло» → "Ghee"; 7) «Батон» → "White loaf"; 8) «Лаваш» → "Lavash"; 9) «Пита» → "Pita bread"
 ```

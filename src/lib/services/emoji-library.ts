@@ -9,6 +9,9 @@ export type EmojiLibraryInput = {
   tags?: string[];
   source: EmojiLibrarySource;
   sourceRef?: string | null;
+  // null: no text on the picture; 'ru' / 'en': packaging text in that language.
+  locale?: 'ru' | 'en' | null;
+  groupKey?: string | null;
 };
 
 const SEARCH_LIMIT = 48;
@@ -26,6 +29,8 @@ export async function recordEmojiLibraryItem(input: EmojiLibraryInput) {
     tags: normalizeTags(input.tags),
     source: input.source,
     sourceRef: input.sourceRef ?? null,
+    locale: input.locale ?? null,
+    groupKey: input.groupKey ?? null,
   };
 
   try {
@@ -54,7 +59,16 @@ export async function searchEmojiLibrary(query: string, limit = SEARCH_LIMIT) {
       : undefined,
     orderBy: { createdAt: 'desc' },
     take: Math.min(Math.max(limit, 1), SEARCH_LIMIT),
-    select: { id: true, name: true, nameEn: true, tags: true, imageUrl: true, source: true },
+    select: {
+      id: true,
+      name: true,
+      nameEn: true,
+      tags: true,
+      imageUrl: true,
+      source: true,
+      locale: true,
+      groupKey: true,
+    },
   });
 }
 

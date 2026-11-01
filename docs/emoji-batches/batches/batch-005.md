@@ -1,6 +1,7 @@
 # batch-005
 
-Новый чат в Gemini → вставить промпт → сохранить картинку как `batch-005.png`.
+Новый чат в Gemini → вставить промпт → сохранить картинку как `batch-005.png`. Если на картинке
+есть надписи — в том же чате отправить английский промпт и сохранить ответ как `batch-005-en.png`.
 
 | Ячейка | Товар               | English           | Категория         | Действие |
 | ------ | ------------------- | ----------------- | ----------------- | -------- |
@@ -27,4 +28,11 @@ Cells, left to right, top to bottom:
 Row 1: 1) «Питахайя» — dragon fruit; 2) «Фейхоа» — feijoa; 3) «Кефир» — a white carton of kefir
 Row 2: 4) «Ряженка» — a glass bottle of creamy beige baked milk; 5) «Сливки» — a small carton of cream; 6) «Моцарелла» — white mozzarella balls
 Row 3: 7) «Пармезан» — a wedge of hard parmesan; 8) «Плавленый сыр» — a round box of cheese wedges; 9) «Глазированный сырок» — a small chocolate-glazed curd bar
+```
+
+## Английская версия (только если есть надписи, в том же чате)
+
+```text
+Make exactly the same image: the same drawings, layout, colours and white background. Change ONLY the text printed on the packaging, translating it into short correct English. Icons without text stay exactly as they are. Do not add any new text.
+Cell names for reference: 1) «Питахайя» → "Dragon fruit"; 2) «Фейхоа» → "Feijoa"; 3) «Кефир» → "Kefir"; 4) «Ряженка» → "Ryazhenka"; 5) «Сливки» → "Heavy cream"; 6) «Моцарелла» → "Mozzarella"; 7) «Пармезан» → "Parmesan"; 8) «Плавленый сыр» → "Processed cheese"; 9) «Глазированный сырок» → "Glazed curd snack"
 ```

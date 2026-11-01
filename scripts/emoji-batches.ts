@@ -103,6 +103,14 @@ Cells, left to right, top to bottom:
 ${rows.join('\n')}`;
 }
 
+// Sent in the same chat right after the Russian sheet: Gemini edits its own picture, so the
+// drawings stay the same and only the packaging text changes.
+export function englishFollowUpPrompt(items: Candidate[]) {
+  const names = items.map((item, i) => `${i + 1}) «${item.name}» → "${item.nameEn}"`).join('; ');
+  return `Make exactly the same image: the same drawings, layout, colours and white background. Change ONLY the text printed on the packaging, translating it into short correct English. Icons without text stay exactly as they are. Do not add any new text.
+Cell names for reference: ${names}`;
+}
+
 function batchMarkdown(id: string, items: Candidate[]) {
   const table = items
     .map(
@@ -115,7 +123,8 @@ function batchMarkdown(id: string, items: Candidate[]) {
 
   return `# ${id}
 
-Новый чат в Gemini → вставить промпт → сохранить картинку как \`${id}.png\`.
+Новый чат в Gemini → вставить промпт → сохранить картинку как \`${id}.png\`. Если на картинке
+есть надписи — в том же чате отправить английский промпт и сохранить ответ как \`${id}-en.png\`.
 
 | Ячейка | Товар | English | Категория | Действие |
 |---|---|---|---|---|
@@ -125,6 +134,12 @@ ${table}
 
 \`\`\`text
 ${geminiPrompt(items)}
+\`\`\`
+
+## Английская версия (только если есть надписи, в том же чате)
+
+\`\`\`text
+${englishFollowUpPrompt(items)}
 \`\`\`
 `;
 }
@@ -144,6 +159,7 @@ function main() {
     return {
       batch: id,
       file: `${id}.png`,
+      fileEn: `${id}-en.png`,
       cells: items.map((item, i) => ({ cell: i + 1, ...item })),
     };
   });
