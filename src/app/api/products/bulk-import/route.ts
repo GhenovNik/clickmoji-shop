@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { apiText } from '@/lib/api-messages';
 import { prisma } from '@/lib/prisma';
 import { requireAdmin } from '@/lib/auth-guards';
 import { checkRateLimit, getRequestLocale, rateLimitResponse } from '@/lib/auth-security';
@@ -16,7 +17,7 @@ export async function POST(request: Request) {
 
     if (!productNames || !Array.isArray(productNames) || productNames.length === 0) {
       return NextResponse.json(
-        { error: 'productNames must be a non-empty array' },
+        { error: await apiText(request, 'productNamesRequired') },
         { status: 400 }
       );
     }
@@ -34,7 +35,7 @@ export async function POST(request: Request) {
     const apiKey = process.env.GOOGLE_GENAI_API_KEY || process.env.GEMINI_API_KEY;
     if (!apiKey) {
       return NextResponse.json(
-        { error: 'GOOGLE_GENAI_API_KEY or GEMINI_API_KEY not configured' },
+        { error: await apiText(request, 'aiNotConfigured') },
         { status: 500 }
       );
     }
@@ -46,7 +47,7 @@ export async function POST(request: Request) {
 
     if (categories.length === 0) {
       return NextResponse.json(
-        { error: 'No categories found. Please create categories first.' },
+        { error: await apiText(request, 'noCategoriesCreateFirst') },
         { status: 400 }
       );
     }
@@ -127,21 +128,30 @@ export async function POST(request: Request) {
           category: category.name,
         });
       } catch (error) {
+        // The raw error stays in the server log; the report gets a translated reason.
+        console.error('Error importing a product:', error);
         results.failed.push({
           product,
-          reason: error instanceof Error ? error.message : 'Unknown error',
+          reason: await apiText(request, 'importEntryFailed'),
         });
       }
     }
 
     return NextResponse.json({
-      message: `Imported ${results.success.length} products, ${results.skipped.length} skipped (duplicates), ${results.failed.length} failed`,
+      message: await apiText(request, 'bulkImportSummary', {
+        success: results.success.length,
+        skipped: results.skipped.length,
+        failed: results.failed.length,
+      }),
       promptVersion,
       model,
       results,
     });
   } catch (error) {
     console.error('Error in bulk import:', error);
-    return NextResponse.json({ error: 'Failed to import products' }, { status: 500 });
+    return NextResponse.json(
+      { error: await apiText(request, 'importProductsFailed') },
+      { status: 500 }
+    );
   }
 }

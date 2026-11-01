@@ -1,11 +1,12 @@
 import { NextResponse } from 'next/server';
+import { apiText } from '@/lib/api-messages';
 import { prisma } from '@/lib/prisma';
 import { requireAdmin } from '@/lib/auth-guards';
 import bcrypt from 'bcryptjs';
 import { getRequestLocale } from '@/lib/auth-security';
 import { getPasswordValidationError } from '@/lib/validation/password';
 
-export async function GET() {
+export async function GET(request?: Request) {
   try {
     const guard = await requireAdmin();
     if (guard instanceof Response) return guard;
@@ -47,7 +48,10 @@ export async function GET() {
     return NextResponse.json(usersWithStats);
   } catch (error) {
     console.error('Error fetching users:', error);
-    return NextResponse.json({ error: 'Failed to fetch users' }, { status: 500 });
+    return NextResponse.json(
+      { error: await apiText(request, 'fetchUsersFailed') },
+      { status: 500 }
+    );
   }
 }
 
@@ -60,7 +64,10 @@ export async function POST(request: Request) {
     const { email, name, password, role } = body;
 
     if (!email || !password) {
-      return NextResponse.json({ error: 'Email and password are required' }, { status: 400 });
+      return NextResponse.json(
+        { error: await apiText(request, 'emailPasswordRequired') },
+        { status: 400 }
+      );
     }
 
     const passwordError = getPasswordValidationError(password, getRequestLocale(request));
@@ -74,7 +81,7 @@ export async function POST(request: Request) {
     });
 
     if (existingUser) {
-      return NextResponse.json({ error: 'User with this email already exists' }, { status: 400 });
+      return NextResponse.json({ error: await apiText(request, 'userExists') }, { status: 400 });
     }
 
     // Hash the password before persistence.
@@ -101,6 +108,9 @@ export async function POST(request: Request) {
     return NextResponse.json(user);
   } catch (error) {
     console.error('Error creating user:', error);
-    return NextResponse.json({ error: 'Failed to create user' }, { status: 500 });
+    return NextResponse.json(
+      { error: await apiText(request, 'createUserFailed') },
+      { status: 500 }
+    );
   }
 }

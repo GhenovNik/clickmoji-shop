@@ -147,4 +147,22 @@ describe('EmojiPicker', () => {
     expect(screen.getByRole('button', { name: '🔍 Suggest' })).toBeTruthy();
     expect(screen.getByPlaceholderText('🍎 (optional)')).toBeTruthy();
   });
+
+  it('shows the translated generation error from the server', async () => {
+    const message =
+      'Генерация картинок сейчас недоступна (квота или ключ провайдера). Выберите обычный emoji.';
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response(JSON.stringify({ error: message }), { status: 503 }))
+    );
+    const alert = vi.spyOn(window, 'alert').mockImplementation(() => undefined);
+    renderWithIntl(
+      <EmojiPicker value="" onChange={vi.fn()} productName="Молоко" onGenerateImage={vi.fn()} />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /AI/ }));
+
+    await vi.waitFor(() => expect(alert).toHaveBeenCalledWith(message));
+    vi.unstubAllGlobals();
+  });
 });

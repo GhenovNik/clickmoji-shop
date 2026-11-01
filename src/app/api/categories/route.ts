@@ -1,8 +1,9 @@
 import { NextResponse } from 'next/server';
+import { apiText } from '@/lib/api-messages';
 import { prisma } from '@/lib/prisma';
 import { requireAdmin } from '@/lib/auth-guards';
 
-export async function GET() {
+export async function GET(request?: Request) {
   try {
     const categories = await prisma.category.findMany({
       orderBy: {
@@ -20,7 +21,10 @@ export async function GET() {
     return NextResponse.json(categories);
   } catch (error) {
     console.error('Error fetching categories:', error);
-    return NextResponse.json({ error: 'Failed to fetch categories' }, { status: 500 });
+    return NextResponse.json(
+      { error: await apiText(request, 'fetchCategoriesFailed') },
+      { status: 500 }
+    );
   }
 }
 
@@ -34,7 +38,7 @@ export async function POST(request: Request) {
 
     if (!name || !nameEn || order === undefined) {
       return NextResponse.json(
-        { error: 'Missing required fields: name, nameEn, order' },
+        { error: await apiText(request, 'categoryFieldsRequired') },
         { status: 400 }
       );
     }
@@ -42,7 +46,7 @@ export async function POST(request: Request) {
     // Either emoji or imageUrl must be provided
     if (!emoji && !imageUrl) {
       return NextResponse.json(
-        { error: 'Either emoji or custom image (imageUrl) is required' },
+        { error: await apiText(request, 'categoryImageRequired') },
         { status: 400 }
       );
     }
@@ -79,6 +83,9 @@ export async function POST(request: Request) {
     return NextResponse.json(category);
   } catch (error) {
     console.error('Error creating category:', error);
-    return NextResponse.json({ error: 'Failed to create category' }, { status: 500 });
+    return NextResponse.json(
+      { error: await apiText(request, 'createCategoryFailed') },
+      { status: 500 }
+    );
   }
 }

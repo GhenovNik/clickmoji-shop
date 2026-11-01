@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { apiText } from '@/lib/api-messages';
 import { requireAdmin } from '@/lib/auth-guards';
 import {
   checkRateLimit,
@@ -30,10 +31,16 @@ export async function POST(request: Request) {
     const { base64, productName, name, nameEn, source } = await request.json();
 
     if (!base64 || typeof base64 !== 'string') {
-      return NextResponse.json({ error: 'Base64 image is required' }, { status: 400 });
+      return NextResponse.json(
+        { error: await apiText(request, 'base64Required') },
+        { status: 400 }
+      );
     }
     if (base64.length > MAX_BASE64_LENGTH) {
-      return NextResponse.json({ error: 'Image is larger than 3 MB' }, { status: 413 });
+      return NextResponse.json(
+        { error: await apiText(request, 'imageTooLarge3mb') },
+        { status: 413 }
+      );
     }
 
     const userLimit = await checkRateLimit({
@@ -72,6 +79,9 @@ export async function POST(request: Request) {
       );
     }
     console.error('Error uploading emoji:', error);
-    return NextResponse.json({ error: 'Failed to upload emoji' }, { status: 500 });
+    return NextResponse.json(
+      { error: await apiText(request, 'uploadEmojiFailed') },
+      { status: 500 }
+    );
   }
 }

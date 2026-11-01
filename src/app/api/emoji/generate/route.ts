@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { apiText } from '@/lib/api-messages';
 import { requireAdmin } from '@/lib/auth-guards';
 import { checkRateLimit, getRequestLocale, rateLimitResponse } from '@/lib/auth-security';
 import { enforceAiQuota } from '@/lib/ai-quota';
@@ -10,9 +11,6 @@ import {
   summarizeEmojiGenerationFailure,
 } from '@/lib/services/emoji-errors';
 
-const PROVIDER_UNAVAILABLE_MESSAGE =
-  'AI image generation is unavailable right now (provider quota or API key). Pick a regular emoji instead.';
-
 export async function POST(request: Request) {
   try {
     // Authorization is enforced before any provider work starts.
@@ -23,7 +21,10 @@ export async function POST(request: Request) {
     const { productName, description, name, nameEn } = await request.json();
 
     if (!productName) {
-      return NextResponse.json({ error: 'Product name is required' }, { status: 400 });
+      return NextResponse.json(
+        { error: await apiText(request, 'productNameRequired') },
+        { status: 400 }
+      );
     }
 
     const userLimit = await checkRateLimit({
@@ -50,11 +51,17 @@ export async function POST(request: Request) {
       console.error('Error generating AI emoji:', summarizeEmojiGenerationFailure(error));
       if (error instanceof EmojiProviderUnavailableError) {
         return NextResponse.json(
-          { error: PROVIDER_UNAVAILABLE_MESSAGE, code: IMAGE_PROVIDER_UNAVAILABLE_CODE },
+          {
+            error: await apiText(request, 'imageProviderUnavailable'),
+            code: IMAGE_PROVIDER_UNAVAILABLE_CODE,
+          },
           { status: 503 }
         );
       }
-      return NextResponse.json({ error: 'Failed to generate emoji' }, { status: 500 });
+      return NextResponse.json(
+        { error: await apiText(request, 'generateEmojiFailed') },
+        { status: 500 }
+      );
     }
 
     // A paid picture is kept at once: normalized, stored and recorded in the library, so closing
@@ -91,6 +98,9 @@ export async function POST(request: Request) {
     // itself — a guard, a rate limit or an unparsable body — and it is logged with its class and
     // message: nothing of an image provider can reach this log.
     console.error('Error generating AI emoji:', error);
-    return NextResponse.json({ error: 'Failed to generate emoji' }, { status: 500 });
+    return NextResponse.json(
+      { error: await apiText(request, 'generateEmojiFailed') },
+      { status: 500 }
+    );
   }
 }

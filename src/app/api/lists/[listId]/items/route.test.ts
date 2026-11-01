@@ -83,7 +83,8 @@ describe('POST /api/lists/[listId]/items is all-or-nothing', () => {
     ]);
 
     expect(response.status).toBe(400);
-    expect(await response.json()).toEqual({ error: 'Variant does not belong to product' });
+    // The request carries the Russian interface cookie, so the error is Russian.
+    expect(await response.json()).toEqual({ error: 'Вариант не относится к этому товару' });
     expect(holder.db.state.items).toEqual([]);
   });
 

@@ -134,12 +134,17 @@ function checkRateLimitMemory({ key, limit, windowMs }: RateLimitOptions) {
  * that route handlers stay testable without the Next.js request scope.
  */
 export function getRequestLocale(request: Request): Locale {
-  const saved = (request.headers.get('cookie') ?? '')
+  return localeFromHeaders(request.headers);
+}
+
+/** The same resolution from request headers alone (cookie, then Accept-Language). */
+export function localeFromHeaders(headers: Pick<Headers, 'get'>): Locale {
+  const saved = (headers.get('cookie') ?? '')
     .split(';')
     .map((part) => part.trim())
     .find((part) => part.startsWith(`${LOCALE_COOKIE}=`))
     ?.slice(LOCALE_COOKIE.length + 1);
-  return resolveLocale(saved, request.headers.get('accept-language'));
+  return resolveLocale(saved, headers.get('accept-language'));
 }
 
 /** A translator over every namespace for code that runs outside React (routes, emails). */

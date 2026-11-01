@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { apiText } from '@/lib/api-messages';
 import Fuse from 'fuse.js';
 import enData from 'emojibase-data/en/data.json';
 import ruData from 'emojibase-data/ru/data.json';
@@ -45,7 +46,7 @@ export async function GET(request: Request) {
     const query = searchParams.get('q')?.trim();
 
     if (!query) {
-      return NextResponse.json({ error: 'Query parameter required' }, { status: 400 });
+      return NextResponse.json({ error: await apiText(request, 'queryRequired') }, { status: 400 });
     }
 
     const results = fuse.search(query.toLowerCase(), { limit: 5 }).map(({ item }) => ({
@@ -63,6 +64,9 @@ export async function GET(request: Request) {
     });
   } catch (error) {
     console.error('Error searching emoji:', error);
-    return NextResponse.json({ error: 'Failed to search emoji' }, { status: 500 });
+    return NextResponse.json(
+      { error: await apiText(request, 'searchEmojiFailed') },
+      { status: 500 }
+    );
   }
 }

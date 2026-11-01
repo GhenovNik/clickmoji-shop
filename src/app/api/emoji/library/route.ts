@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { apiText } from '@/lib/api-messages';
 import { requireAdmin } from '@/lib/auth-guards';
 import { searchEmojiLibrary } from '@/lib/services/emoji-library';
 
@@ -13,6 +14,9 @@ export async function GET(request: Request) {
     return NextResponse.json({ items });
   } catch (error) {
     console.error('Error searching emoji library:', error);
-    return NextResponse.json({ error: 'Failed to search emoji library' }, { status: 500 });
+    return NextResponse.json(
+      { error: await apiText(request, 'searchLibraryFailed') },
+      { status: 500 }
+    );
   }
 }

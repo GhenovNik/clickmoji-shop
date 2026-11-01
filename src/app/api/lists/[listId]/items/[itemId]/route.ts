@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { apiText } from '@/lib/api-messages';
 import { prisma } from '@/lib/prisma';
 import { requireUser } from '@/lib/auth-guards';
 import { visibleItemsWhere } from '@/lib/product-visibility';
@@ -55,17 +56,20 @@ export async function PUT(
     });
 
     if (result === 'list-not-found') {
-      return NextResponse.json({ error: 'List not found' }, { status: 404 });
+      return NextResponse.json({ error: await apiText(request, 'listNotFound') }, { status: 404 });
     }
 
     if (result === 'item-not-found') {
-      return NextResponse.json({ error: 'Item not found' }, { status: 404 });
+      return NextResponse.json({ error: await apiText(request, 'itemNotFound') }, { status: 404 });
     }
 
     return NextResponse.json(result);
   } catch (error) {
     console.error('Error updating item:', error);
-    return NextResponse.json({ error: 'Failed to update item' }, { status: 500 });
+    return NextResponse.json(
+      { error: await apiText(request, 'updateItemFailed') },
+      { status: 500 }
+    );
   }
 }
 
@@ -95,12 +99,15 @@ export async function DELETE(
     });
 
     if (!found) {
-      return NextResponse.json({ error: 'List not found' }, { status: 404 });
+      return NextResponse.json({ error: await apiText(request, 'listNotFound') }, { status: 404 });
     }
 
     return NextResponse.json({ success: true });
   } catch (error) {
     console.error('Error deleting item:', error);
-    return NextResponse.json({ error: 'Failed to delete item' }, { status: 500 });
+    return NextResponse.json(
+      { error: await apiText(request, 'deleteItemFailed') },
+      { status: 500 }
+    );
   }
 }

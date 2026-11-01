@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { apiText } from '@/lib/api-messages';
 import { prisma } from '@/lib/prisma';
 import { requireUser } from '@/lib/auth-guards';
 import { getRequestLocale, getServerTranslator } from '@/lib/auth-security';
@@ -20,7 +21,7 @@ export async function POST(request: Request) {
     });
 
     if (existingLists.length > 0) {
-      return NextResponse.json({ message: 'Lists already exist' });
+      return NextResponse.json({ message: await apiText(request, 'listsAlreadyExist') });
     }
 
     // Create the starter lists.
@@ -57,6 +58,6 @@ export async function POST(request: Request) {
     return NextResponse.json(lists);
   } catch (error) {
     console.error('Error initializing lists:', error);
-    return NextResponse.json({ error: 'Failed to initialize lists' }, { status: 500 });
+    return NextResponse.json({ error: await apiText(request, 'initListsFailed') }, { status: 500 });
   }
 }

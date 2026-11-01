@@ -254,3 +254,47 @@ describe('POST /api/emoji/generate keeps every paid picture', () => {
     expect(doubles.recordEmojiLibraryItem).toHaveBeenCalledTimes(2);
   });
 });
+
+describe('generate errors follow the request language', () => {
+  function request(cookie: string) {
+    return new Request('http://localhost:3000/api/emoji/generate', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', cookie },
+      body: JSON.stringify({ productName: 'Молоко' }),
+    });
+  }
+
+  it.each([
+    [
+      'NEXT_LOCALE=ru',
+      'Генерация картинок сейчас недоступна (квота или ключ провайдера). Выберите обычный emoji.',
+    ],
+    [
+      'NEXT_LOCALE=en',
+      'AI image generation is unavailable right now (provider quota or API key). Pick a regular emoji instead.',
+    ],
+  ])('reports an unavailable provider in the interface language (%s)', async (cookie, error) => {
+    doubles.generateEmojiImage.mockRejectedValue(
+      new EmojiProviderUnavailableError({ reason: 'quota', provider: 'gemini', model: 'm' })
+    );
+
+    const response = await POST(request(cookie));
+
+    expect(response.status).toBe(503);
+    expect(await response.json()).toEqual({ error, code: 'image_provider_unavailable' });
+  });
+
+  it.each([
+    ['NEXT_LOCALE=ru', 'Не удалось сгенерировать картинку'],
+    ['NEXT_LOCALE=en', 'Failed to generate emoji'],
+  ])('reports a general failure in the interface language (%s)', async (cookie, error) => {
+    doubles.generateEmojiImage.mockRejectedValue(new Error(marker));
+
+    const response = await POST(request(cookie));
+    const body = await response.json();
+
+    expect(response.status).toBe(500);
+    expect(body).toEqual({ error });
+    expect(JSON.stringify(body)).not.toContain(marker);
+  });
+});

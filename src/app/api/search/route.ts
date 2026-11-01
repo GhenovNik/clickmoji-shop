@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { apiText } from '@/lib/api-messages';
 import { auth } from '@/lib/auth';
 import { getRequestLocale } from '@/lib/auth-security';
 import { isLocale } from '@/i18n/config';
@@ -26,6 +27,9 @@ export async function GET(request: Request) {
     return NextResponse.json(products);
   } catch (error) {
     console.error('Error searching products:', error);
-    return NextResponse.json({ error: 'Failed to search products' }, { status: 500 });
+    return NextResponse.json(
+      { error: await apiText(request, 'searchProductsFailed') },
+      { status: 500 }
+    );
   }
 }
