@@ -7,6 +7,7 @@ const LONG_NAME = 16;
 export function productNameClassName(name: string) {
   const longestWord = Math.max(0, ...name.split(/\s+/).map((word) => word.length));
   const long = longestWord > LONG_WORD || name.length > LONG_NAME;
-  const size = long ? 'text-xs line-clamp-3' : 'text-sm line-clamp-2';
+  // From md the card is twice as wide, so both sizes step up one notch.
+  const size = long ? 'text-xs md:text-sm line-clamp-3' : 'text-sm md:text-base line-clamp-2';
   return `${size} hyphens-auto [overflow-wrap:anywhere] leading-[1.1] font-medium text-gray-900`;
 }

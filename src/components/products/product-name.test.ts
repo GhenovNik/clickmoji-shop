@@ -3,19 +3,23 @@ import { productNameClassName } from './product-name';
 
 describe('productNameClassName', () => {
   it('keeps short names at text-sm on two lines', () => {
-    expect(productNameClassName('Кабачок')).toContain('text-sm line-clamp-2');
+    expect(productNameClassName('Кабачок')).toContain('text-sm md:text-base line-clamp-2');
   });
 
   it('shrinks a name with a word too long for a phone card', () => {
-    expect(productNameClassName('Брюссельская капуста')).toContain('text-xs line-clamp-3');
+    expect(productNameClassName('Брюссельская капуста')).toContain(
+      'text-xs md:text-sm line-clamp-3'
+    );
   });
 
   it('shrinks a name with a ten-letter word, which needs three lines at text-sm', () => {
-    expect(productNameClassName('Болгарский перец')).toContain('text-xs line-clamp-3');
+    expect(productNameClassName('Болгарский перец')).toContain('text-xs md:text-sm line-clamp-3');
   });
 
   it('shrinks a long multi-word name', () => {
-    expect(productNameClassName('Средство для мытья посуды')).toContain('text-xs line-clamp-3');
+    expect(productNameClassName('Средство для мытья посуды')).toContain(
+      'text-xs md:text-sm line-clamp-3'
+    );
   });
 
   it('breaks words with a hyphen instead of clipping them', () => {
