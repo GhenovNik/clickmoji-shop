@@ -93,12 +93,12 @@ All endpoints are implemented as Next.js Route Handlers under `src/app/api`.
 
 - Auth: admin
 - Body: `name?`, `nameEn?`, `emoji?`, `order?`, `isCustom?`, `imageUrl?`
-- Notes: handles order swap; deletes old UploadThing image when replaced
+- Notes: handles order swap; a replaced image stays in UploadThing for the offline cleanup (`npm run db:files`), which re-checks references
 
 ### `DELETE /api/categories/:categoryId`
 
 - Auth: admin
-- Notes: cascades products, deletes UploadThing image if present
+- Notes: cascades products; the image stays in UploadThing for the offline cleanup
 
 ## Products
 
@@ -118,11 +118,12 @@ All endpoints are implemented as Next.js Route Handlers under `src/app/api`.
 
 - Auth: admin
 - Body: `name?`, `nameEn?`, `emoji?`, `categoryId?`, `isCustom?`, `imageUrl?`, `variants?`
-- Notes: upserts/deletes variants; keeps variants that are already used in items; deletes old UploadThing image when replaced
+- Notes: upserts/deletes variants; keeps variants that are already used in items; accepts `imageUrlEn?`; a replaced image stays in UploadThing for the offline cleanup (`npm run db:files`), which re-checks references
 
 ### `DELETE /api/products/:productId`
 
 - Auth: admin
+- Notes: the product's images stay in UploadThing for the offline cleanup
 
 ### `POST /api/products/bulk-import`
 
