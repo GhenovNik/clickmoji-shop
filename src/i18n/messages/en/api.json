@@ -36,7 +36,14 @@
   },
   "products": {
     "userNotFound": "User not found",
-    "creationLimitReached": "You have used up your custom product limit ({limit}/{limit})."
+    "creationLimitReached": "You have used up your custom product limit ({limit}/{limit}).",
+    "nameRequired": "Enter the product name",
+    "aiNotConfigured": "AI is not configured. Please contact the administrator.",
+    "noCategories": "There are no categories. Please contact the administrator.",
+    "categoryNotFound": "Category \"{category}\" not found",
+    "alreadyExists": "This product already exists",
+    "created": "Product created",
+    "createFailed": "Could not create the product"
   },
   "emoji": {
     "emptyImage": "No object found in the picture: it is empty or entirely white",

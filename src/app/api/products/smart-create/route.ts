@@ -43,7 +43,7 @@ export async function POST(request: Request) {
     const { productName, categoryId } = body;
 
     if (!productName) {
-      return NextResponse.json({ error: 'Product name is required' }, { status: 400 });
+      return NextResponse.json({ error: t('api.products.nameRequired') }, { status: 400 });
     }
 
     const userLimit = await checkRateLimit({
@@ -58,10 +58,7 @@ export async function POST(request: Request) {
     // Check for API key
     const apiKey = process.env.GOOGLE_GENAI_API_KEY || process.env.GEMINI_API_KEY;
     if (!apiKey) {
-      return NextResponse.json(
-        { error: 'AI service not configured. Please contact administrator.' },
-        { status: 500 }
-      );
+      return NextResponse.json({ error: t('api.products.aiNotConfigured') }, { status: 500 });
     }
 
     // Fetch existing categories
@@ -71,10 +68,7 @@ export async function POST(request: Request) {
     });
 
     if (categories.length === 0) {
-      return NextResponse.json(
-        { error: 'No categories found. Please contact administrator.' },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: t('api.products.noCategories') }, { status: 400 });
     }
 
     // One unit of the shared daily AI budget for the text analysis.
@@ -103,7 +97,7 @@ export async function POST(request: Request) {
     if (!category) {
       return NextResponse.json(
         {
-          error: `Category "${aiResult.categoryName}" not found`,
+          error: t('api.products.categoryNotFound', { category: aiResult.categoryName }),
           aiSuggestion: aiResult,
         },
         { status: 400 }
@@ -137,7 +131,7 @@ export async function POST(request: Request) {
         product: existingProduct,
         promptVersion,
         model,
-        message: 'Product already exists',
+        message: t('api.products.alreadyExists'),
       });
     }
 
@@ -205,13 +199,13 @@ export async function POST(request: Request) {
       customEmojiGenerated: isCustom,
       promptVersion,
       model,
-      message: 'Product created successfully',
+      message: t('api.products.created'),
     });
   } catch (error) {
     // Not an image-generation failure: the generation above is caught and swallowed, so nothing of a
     // provider reaches this log. A Prisma, text analysis or request parsing failure is logged with
     // its class and message again, as before.
     console.error('Error in smart product creation:', error);
-    return NextResponse.json({ error: 'Failed to create product' }, { status: 500 });
+    return NextResponse.json({ error: t('api.products.createFailed') }, { status: 500 });
   }
 }

@@ -36,7 +36,14 @@
   },
   "products": {
     "userNotFound": "Пользователь не найден",
-    "creationLimitReached": "Вы исчерпали лимит создания своих товаров ({limit}/{limit})."
+    "creationLimitReached": "Вы исчерпали лимит создания своих товаров ({limit}/{limit}).",
+    "nameRequired": "Введите название товара",
+    "aiNotConfigured": "ИИ не настроен. Обратитесь к администратору.",
+    "noCategories": "Нет категорий. Обратитесь к администратору.",
+    "categoryNotFound": "Категория «{category}» не найдена",
+    "alreadyExists": "Такой товар уже есть",
+    "created": "Товар создан",
+    "createFailed": "Не удалось создать товар"
   },
   "emoji": {
     "emptyImage": "На картинке не найден предмет: она пустая или целиком белая",
