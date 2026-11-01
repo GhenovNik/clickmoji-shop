@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { apiText } from '@/lib/api-messages';
+import { localizedName } from '@/lib/catalog-name';
 import { prisma } from '@/lib/prisma';
 import { requireAdmin } from '@/lib/auth-guards';
 import { checkRateLimit, getRequestLocale, rateLimitResponse } from '@/lib/auth-security';
@@ -87,7 +88,9 @@ export async function POST(request: Request) {
       if (!category) {
         results.failed.push({
           product,
-          reason: `Category "${product.categoryName}" not found`,
+          reason: await apiText(request, 'importCategoryNotFound', {
+            category: product.categoryName,
+          }),
         });
         continue;
       }
@@ -103,7 +106,7 @@ export async function POST(request: Request) {
         results.skipped.push({
           name: product.nameRu,
           nameEn: product.nameEn,
-          reason: 'Product already exists',
+          reason: await apiText(request, 'importProductExists'),
         });
         continue;
       }
@@ -125,7 +128,8 @@ export async function POST(request: Request) {
           name: createdProduct.name,
           nameEn: createdProduct.nameEn,
           emoji: createdProduct.emoji,
-          category: category.name,
+          // The report is read in the interface language, like the import-text report.
+          category: localizedName(category, getRequestLocale(request)),
         });
       } catch (error) {
         // The raw error stays in the server log; the report gets a translated reason.

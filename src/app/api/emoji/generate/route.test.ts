@@ -298,3 +298,44 @@ describe('generate errors follow the request language', () => {
     expect(JSON.stringify(body)).not.toContain(marker);
   });
 });
+
+describe('generate success message follows the request language', () => {
+  it.each([
+    ['NEXT_LOCALE=ru', true, 'Картинка сгенерирована и сохранена в библиотеку эмодзи.'],
+    [
+      'NEXT_LOCALE=ru',
+      false,
+      'Картинка сгенерирована, но не сохранена в библиотеку эмодзи: сохраните товар, чтобы она не потерялась.',
+    ],
+    ['NEXT_LOCALE=en', true, 'Image generated and saved to the emoji library.'],
+    [
+      'NEXT_LOCALE=en',
+      false,
+      'Image generated but not saved to the emoji library: save the product to keep it.',
+    ],
+  ])('%s, libraryRecorded %s', async (cookie, recorded, message) => {
+    doubles.generateEmojiImage.mockResolvedValue({
+      imageBuffer: Buffer.from('png'),
+      provider: 'gemini',
+      model: 'model',
+      promptVersion: 'v',
+      cacheKey: 'k',
+    } as never);
+    doubles.uploadEmojiImage.mockResolvedValue({
+      imageUrl: 'https://utfs.io/f/generated.webp',
+      fileName: 'ai-emoji-milk.webp',
+    } as never);
+    doubles.recordEmojiLibraryItem.mockResolvedValue((recorded ? { id: 'lib-1' } : null) as never);
+
+    const response = await POST(
+      new Request('http://localhost:3000/api/emoji/generate', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', cookie },
+        body: JSON.stringify({ productName: 'Молоко' }),
+      })
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ libraryRecorded: recorded, message });
+  });
+});

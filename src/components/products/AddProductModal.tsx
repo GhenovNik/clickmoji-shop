@@ -77,9 +77,8 @@ export default function AddProductModal({
         } else {
           message += ` ${data.product.emoji}`;
         }
-        if (data.aiSuggestion?.reasoning) {
-          message += `\n\n${data.aiSuggestion.reasoning}`;
-        }
+        // The model's own `reasoning` is free English text whatever the interface language, so it
+        // stays a diagnostic field of the response and is not shown to the shopper.
         alert(message);
       }
 

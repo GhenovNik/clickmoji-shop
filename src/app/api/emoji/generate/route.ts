@@ -85,9 +85,10 @@ export async function POST(request: Request) {
     return NextResponse.json({
       imageUrl,
       libraryRecorded,
-      message: libraryRecorded
-        ? 'Image generated and saved to the emoji library.'
-        : 'Image generated but not saved to the emoji library: save the product to keep it.',
+      message: await apiText(
+        request,
+        libraryRecorded ? 'emojiGeneratedSaved' : 'emojiGeneratedNotSaved'
+      ),
       provider: generated.provider,
       model: generated.model,
       promptVersion: generated.promptVersion,
