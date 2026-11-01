@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { requireAdmin } from '@/lib/auth-guards';
 import { UTApi } from 'uploadthing/server';
+import { isStoredImageInUse } from '@/lib/services/emoji-library';
 
 const utapi = new UTApi();
 
@@ -36,7 +37,11 @@ export async function PUT(
         select: { imageUrl: true },
       });
 
-      if (currentCategory?.imageUrl && currentCategory.imageUrl !== imageUrl) {
+      if (
+        currentCategory?.imageUrl &&
+        currentCategory.imageUrl !== imageUrl &&
+        !(await isStoredImageInUse(currentCategory.imageUrl, { categoryId }))
+      ) {
         const oldFileKey = getFileKeyFromUrl(currentCategory.imageUrl);
         if (oldFileKey) {
           try {
@@ -128,8 +133,8 @@ export async function DELETE(
       where: { id: categoryId },
     });
 
-    // Delete image from UploadThing if exists
-    if (category?.imageUrl) {
+    // Delete the image from UploadThing unless the library or another item still shows it.
+    if (category?.imageUrl && !(await isStoredImageInUse(category.imageUrl))) {
       const fileKey = getFileKeyFromUrl(category.imageUrl);
       if (fileKey) {
         try {

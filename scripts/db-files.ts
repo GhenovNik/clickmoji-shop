@@ -46,7 +46,8 @@ async function cleanupOrphanedFiles() {
   console.log(`📦 Found ${files.length} files in UploadThing\n`);
 
   console.log('🔍 Checking database for used images...');
-  const [products, categories] = await Promise.all([
+  // Library pictures are kept even when no product or category shows them yet.
+  const [products, categories, libraryItems] = await Promise.all([
     prisma.product.findMany({
       where: { imageUrl: { not: null } },
       select: { imageUrl: true },
@@ -55,6 +56,7 @@ async function cleanupOrphanedFiles() {
       where: { imageUrl: { not: null } },
       select: { imageUrl: true },
     }),
+    prisma.emojiLibraryItem.findMany({ select: { imageUrl: true } }),
   ]);
 
   const usedFileKeys = new Set<string>();
@@ -66,6 +68,11 @@ async function cleanupOrphanedFiles() {
 
   categories.forEach((category) => {
     const fileKey = getFileKeyFromUrl(category.imageUrl);
+    if (fileKey) usedFileKeys.add(fileKey);
+  });
+
+  libraryItems.forEach((item) => {
+    const fileKey = getFileKeyFromUrl(item.imageUrl);
     if (fileKey) usedFileKeys.add(fileKey);
   });
 
@@ -122,7 +129,11 @@ async function cleanupUnusedImages(isDryRun: boolean) {
     select: { imageUrl: true },
   });
 
+  // Library pictures are kept even when no product or category shows them yet.
+  const libraryItems = await prisma.emojiLibraryItem.findMany({ select: { imageUrl: true } });
+
   const usedUrls = new Set<string>();
+  libraryItems.forEach((item) => usedUrls.add(item.imageUrl));
   categories.forEach((cat) => {
     if (cat.imageUrl) usedUrls.add(cat.imageUrl);
   });
@@ -132,7 +143,8 @@ async function cleanupUnusedImages(isDryRun: boolean) {
 
   console.log(`✅ Found ${usedUrls.size} images in use`);
   console.log(`   - Categories: ${categories.length}`);
-  console.log(`   - Products: ${products.length}\n`);
+  console.log(`   - Products: ${products.length}`);
+  console.log(`   - Library: ${libraryItems.length}\n`);
 
   const usedFileKeys = new Set<string>();
   usedUrls.forEach((url) => {

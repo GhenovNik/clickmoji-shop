@@ -114,6 +114,27 @@ model Product {
   @@map("products")
 }
 
+// Normalized emoji picture kept on its own, with or without a product: batch imports, AI
+// generations and admin uploads land here, and a product or category uses one by its URL.
+// A stored file listed here is never deleted by product, category or cleanup code.
+model EmojiLibraryItem {
+  id        String   @id @default(cuid())
+  name      String
+  nameEn    String?
+  tags      String[] @default([])
+  imageUrl  String   @unique
+  // generated | upload | batch
+  source    String
+  // Stable origin, e.g. "batch-007#3"; re-importing the same cell updates instead of duplicating.
+  sourceRef String?  @unique
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([name])
+  @@map("emoji_library_items")
+}
+
 // Разновидность продукта (например: белый хлеб, багет)
 model ProductVariant {
   id        String  @id @default(cuid())

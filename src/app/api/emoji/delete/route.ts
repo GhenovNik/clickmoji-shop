@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { requireAdmin } from '@/lib/auth-guards';
 import { UTApi } from 'uploadthing/server';
+import { isStoredImageInUse } from '@/lib/services/emoji-library';
 
 const utapi = new UTApi();
 
@@ -13,6 +14,10 @@ export async function DELETE(request: Request) {
 
     if (!imageUrl) {
       return NextResponse.json({ error: 'Image URL is required' }, { status: 400 });
+    }
+
+    if (await isStoredImageInUse(imageUrl)) {
+      return NextResponse.json({ error: 'Image is still in use' }, { status: 409 });
     }
 
     // Extract file key from UploadThing URL
