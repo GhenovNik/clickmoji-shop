@@ -4,6 +4,7 @@ import {
   generateWithOpenAI,
   type EmojiImageClientFactory,
 } from '@/lib/services/emoji-image-adapters';
+import { NORMALIZED_EMOJI_MIME, normalizeEmojiImage } from '@/lib/services/emoji-image-normalize';
 import { getEmojiGenerationCacheKey } from '@/lib/prompts/emoji-generation';
 import type { EmojiProvider } from '@/lib/services/emoji-errors';
 
@@ -28,7 +29,7 @@ function getProvider(value?: string): EmojiProvider {
 
 function emojiFileName(productName?: string) {
   const slug = productName?.toLowerCase().trim().replace(/\s+/g, '-') || 'product';
-  return `ai-emoji-${slug}-${Date.now()}.png`;
+  return `ai-emoji-${slug}-${Date.now()}.webp`;
 }
 
 export async function generateEmojiImage({
@@ -64,8 +65,10 @@ export async function uploadEmojiImage({
   productName,
   utapi = new UTApi(),
 }: UploadEmojiImageOptions) {
+  // Every stored emoji is normalized: no white field, the same margins, a fixed 256 WebP.
+  const normalized = await normalizeEmojiImage(imageBuffer);
   const fileName = emojiFileName(productName);
-  const file = new File([new Uint8Array(imageBuffer)], fileName, { type: 'image/png' });
+  const file = new File([new Uint8Array(normalized)], fileName, { type: NORMALIZED_EMOJI_MIME });
   const uploadResult = await utapi.uploadFiles(file);
 
   if (!uploadResult || uploadResult.error) {

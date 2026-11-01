@@ -1,7 +1,7 @@
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-// Builds the emoji batches for the operator (AGE-1465 п.1): docs/emoji-batches/candidates.json
+// Builds the emoji batches for the operator (AGE-1465 item 1): docs/emoji-batches/candidates.json
 // minus the catalog snapshot → batches of 9 with a ready Gemini prompt and a cell manifest.
 // Usage: npx tsx scripts/emoji-batches.ts
 
