@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { apiText } from '@/lib/api-messages';
+import { getRequestLocale } from '@/lib/auth-security';
 import Fuse from 'fuse.js';
 import enData from 'emojibase-data/en/data.json';
 import ruData from 'emojibase-data/ru/data.json';
@@ -7,6 +8,7 @@ import ruData from 'emojibase-data/ru/data.json';
 type EmojiEntry = {
   emoji: string;
   label: string;
+  labelEn?: string;
   group?: number;
   tags: string[];
   shortcodes: string[];
@@ -22,6 +24,9 @@ const dataset: EmojiEntry[] = (ruData as EmojiEntry[])
     return {
       emoji: ruItem.emoji,
       label: ruItem.label || enItem.label || '',
+      // Both labels are kept; the search runs over the merged one, the answer shows the label of
+      // the request language.
+      labelEn: enItem.label || ruItem.label || '',
       group: ruItem.group ?? enItem.group,
       tags: ruItem.tags || enItem.tags || [],
       shortcodes: ruItem.shortcodes || enItem.shortcodes || [],
@@ -49,9 +54,10 @@ export async function GET(request: Request) {
       return NextResponse.json({ error: await apiText(request, 'queryRequired') }, { status: 400 });
     }
 
+    const locale = getRequestLocale(request);
     const results = fuse.search(query.toLowerCase(), { limit: 5 }).map(({ item }) => ({
       emoji: item.emoji,
-      label: item.label,
+      label: locale === 'en' ? item.labelEn || item.label : item.label,
       group: item.group,
       shortcodes: item.shortcodes,
       // twemojiUrl could be added here if needed using item.hexcode

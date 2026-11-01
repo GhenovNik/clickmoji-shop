@@ -2,9 +2,11 @@
 import { describe, expect, it } from 'vitest';
 import { GET } from './route';
 
-async function search(q: string) {
+async function search(q: string, locale?: 'ru' | 'en') {
   const response = await GET(
-    new Request(`http://localhost/api/emoji/search?q=${encodeURIComponent(q)}`)
+    new Request(`http://localhost/api/emoji/search?q=${encodeURIComponent(q)}`, {
+      headers: locale ? { cookie: `NEXT_LOCALE=${locale}` } : {},
+    })
   );
   return { status: response.status, body: await response.json() };
 }
@@ -30,5 +32,27 @@ describe('GET /api/emoji/search', () => {
     for (const result of body.results) {
       expect(Object.keys(result).sort()).toEqual(['emoji', 'group', 'label', 'shortcodes']);
     }
+  });
+
+  it.each([
+    ['ru' as const, 'красное яблоко'],
+    ['en' as const, 'red apple'],
+  ])('shows the label in the request language (%s), the rest unchanged', async (locale, label) => {
+    const { body } = await search('яблоко', locale);
+    const apple = body.results.find((r: { emoji: string }) => r.emoji === '🍎');
+
+    expect(apple).toMatchObject({ emoji: '🍎', label });
+    expect(Object.keys(apple).sort()).toEqual(['emoji', 'group', 'label', 'shortcodes']);
+    expect(body.count).toBe(body.results.length);
+  });
+
+  it('returns the same results in the same order in both languages', async () => {
+    const ru = await search('сыр', 'ru');
+    const en = await search('сыр', 'en');
+
+    const shape = (body: {
+      results: Array<{ emoji: string; group: number; shortcodes: string[] }>;
+    }) => body.results.map(({ emoji, group, shortcodes }) => ({ emoji, group, shortcodes }));
+    expect(shape(en.body)).toEqual(shape(ru.body));
   });
 });

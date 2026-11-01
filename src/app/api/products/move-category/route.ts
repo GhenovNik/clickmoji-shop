@@ -2,6 +2,8 @@ import { NextResponse } from 'next/server';
 import { apiText } from '@/lib/api-messages';
 import { prisma } from '@/lib/prisma';
 import { requireAdmin } from '@/lib/auth-guards';
+import { getRequestLocale } from '@/lib/auth-security';
+import { localizedName } from '@/lib/catalog-name';
 
 export async function POST(request: Request) {
   try {
@@ -52,7 +54,8 @@ export async function POST(request: Request) {
     return NextResponse.json({
       success: true,
       movedCount: result.count,
-      targetCategory: targetCategory.name,
+      // The category name is read in the interface language, like the bulk-import report.
+      targetCategory: localizedName(targetCategory, getRequestLocale(request)),
     });
   } catch (error) {
     console.error('Error moving products to new category:', error);
