@@ -1,8 +1,9 @@
 import sharp from 'sharp';
 
-// One look for every emoji picture, whatever its source (AGE-1465 item 3): the white field is
-// removed by a flood fill from the edges, the picture is cropped to the object and centred in a
-// fixed square with the same margin, and stored as a transparent WebP. Port of the KB prototype
+// One look for every emoji picture, whatever its source (AGE-1465 item 3): the background is
+// removed (the source's own transparency when it has one, otherwise a flood fill of the white
+// field from the edges), the picture is cropped to the object and centred in a fixed square with
+// the same margin, and stored as a transparent WebP. Port of the KB prototype
 // projects/clickmoji-shop/research/2026-10-31-image-probe/normalize_prototype.py.
 
 export const NORMALIZED_EMOJI_SIZE = 256;
@@ -18,6 +19,13 @@ const EDGE_BLUR_SIGMA = 1.2;
 // Opening radius that drops specks and grid dashes before the crop box is measured.
 const SPECK_RADIUS = 2;
 const ALPHA_CUTOFF = 20;
+// Decoding stops above this many pixels; anything accepted is first scaled down to the working
+// size, so the masks below never hold more than WORK_SIZE² pixels.
+export const MAX_INPUT_PIXELS = 4096 * 4096;
+const WORK_SIZE = 1024;
+// A source counts as already transparent when this share of it is see-through.
+const SOURCE_ALPHA_MIN_SHARE = 0.01;
+const OPAQUE = 250;
 
 export class EmptyEmojiImageError extends Error {
   constructor() {
@@ -26,7 +34,22 @@ export class EmptyEmojiImageError extends Error {
   }
 }
 
-function floodBackground(rgb: Buffer, width: number, height: number) {
+export class EmojiImageTooLargeError extends Error {
+  constructor() {
+    super(`Emoji image is larger than ${MAX_INPUT_PIXELS} pixels`);
+    this.name = 'EmojiImageTooLargeError';
+  }
+}
+
+export type NormalizeEmojiOptions = {
+  size?: number;
+  // Also clear enclosed gaps of the background colour (between herb stems, inside a bunch of
+  // tomatoes). Only for pictures known to carry no text: elsewhere the same white region may be a
+  // label on the packaging, so by default every enclosed region is kept.
+  clearEnclosedGaps?: boolean;
+};
+
+function floodBackground(rgb: Buffer, width: number, height: number, clearGaps: boolean) {
   const background = new Uint8Array(width * height);
   const stack = new Int32Array(width * height);
 
@@ -70,13 +93,13 @@ function floodBackground(rgb: Buffer, width: number, height: number) {
     fillFrom(y * width);
     fillFrom(y * width + width - 1);
   }
-  clearEnclosedHoles(rgb, background, width, height, stack);
+  if (clearGaps) clearEnclosedHoles(rgb, background, width, height, stack);
   return background;
 }
 
-// Gaps the edge fill cannot reach (between herb stems, inside a bunch of tomatoes) are cleared
-// too, but only when they are almost exactly the background colour and not a speck: shaded
-// whites of the object itself (coconut flesh, a label) differ from the field by more than this.
+// Gaps the edge fill cannot reach (between herb stems, inside a bunch of tomatoes), on request:
+// only regions almost exactly the background colour and not a speck; shaded whites of the object
+// itself (coconut flesh) differ from the field by more than this.
 const HOLE_THRESHOLD = 18;
 const HOLE_MIN_SHARE = 0.0005;
 
@@ -184,30 +207,66 @@ function objectBox(alpha: Buffer, width: number, height: number) {
   return { left, top, width: right - left + 1, height: bottom - top + 1 };
 }
 
-export async function normalizeEmojiImage(input: Buffer, size = NORMALIZED_EMOJI_SIZE) {
-  // Transparent areas of the source become white first, so they are removed like a white field.
-  const { data: rgb, info } = await sharp(input)
-    .rotate()
-    .flatten({ background: '#ffffff' })
-    .removeAlpha()
-    .raw()
-    .toBuffer({ resolveWithObject: true });
-  const { width, height } = info;
+async function decode(input: Buffer) {
+  try {
+    return await sharp(input, { limitInputPixels: MAX_INPUT_PIXELS })
+      .rotate()
+      .resize(WORK_SIZE, WORK_SIZE, { fit: 'inside', withoutEnlargement: true })
+      .ensureAlpha()
+      .raw()
+      .toBuffer({ resolveWithObject: true });
+  } catch (error) {
+    if (error instanceof Error && /pixel limit/i.test(error.message)) {
+      throw new EmojiImageTooLargeError();
+    }
+    throw error;
+  }
+}
 
-  const background = floodBackground(rgb, width, height);
-  const hardAlpha = Buffer.alloc(width * height);
-  for (let i = 0; i < hardAlpha.length; i++) hardAlpha[i] = background[i] ? 0 : 255;
-  const alpha = await sharp(hardAlpha, { raw: { width, height, channels: 1 } })
-    .blur(EDGE_BLUR_SIGMA)
-    // libvips hands a one-band raw input back as sRGB; keep one band.
-    .extractChannel(0)
-    .raw()
-    .toBuffer();
+export async function normalizeEmojiImage(input: Buffer, options: NormalizeEmojiOptions = {}) {
+  const { size = NORMALIZED_EMOJI_SIZE, clearEnclosedGaps = false } = options;
+  const { data: source, info } = await decode(input);
+  const { width, height } = info;
+  const pixels = width * height;
+
+  let seeThrough = 0;
+  for (let i = 0; i < pixels; i++) if (source[i * 4 + 3] < OPAQUE) seeThrough++;
+
+  const rgb = Buffer.alloc(pixels * 3);
+  let alpha: Buffer;
+  if (seeThrough >= pixels * SOURCE_ALPHA_MIN_SHARE) {
+    // The source already separates the object from the background: trust its alpha, so a white
+    // object on a transparent background stays an object.
+    alpha = Buffer.alloc(pixels);
+    for (let i = 0; i < pixels; i++) {
+      rgb[i * 3] = source[i * 4];
+      rgb[i * 3 + 1] = source[i * 4 + 1];
+      rgb[i * 3 + 2] = source[i * 4 + 2];
+      alpha[i] = source[i * 4 + 3];
+    }
+  } else {
+    // An opaque picture on a white field: blend the few soft edges over white, then remove the
+    // field from the edges inwards.
+    for (let i = 0; i < pixels; i++) {
+      const a = source[i * 4 + 3] / 255;
+      for (let c = 0; c < 3; c++)
+        rgb[i * 3 + c] = Math.round(source[i * 4 + c] * a + 255 * (1 - a));
+    }
+    const background = floodBackground(rgb, width, height, clearEnclosedGaps);
+    const hardAlpha = Buffer.alloc(pixels);
+    for (let i = 0; i < pixels; i++) hardAlpha[i] = background[i] ? 0 : 255;
+    alpha = await sharp(hardAlpha, { raw: { width, height, channels: 1 } })
+      .blur(EDGE_BLUR_SIGMA)
+      // libvips hands a one-band raw input back as sRGB; keep one band.
+      .extractChannel(0)
+      .raw()
+      .toBuffer();
+  }
 
   const box = objectBox(alpha, width, height);
 
-  const rgba = Buffer.alloc(width * height * 4);
-  for (let i = 0; i < width * height; i++) {
+  const rgba = Buffer.alloc(pixels * 4);
+  for (let i = 0; i < pixels; i++) {
     rgba[i * 4] = rgb[i * 3];
     rgba[i * 4 + 1] = rgb[i * 3 + 1];
     rgba[i * 4 + 2] = rgb[i * 3 + 2];

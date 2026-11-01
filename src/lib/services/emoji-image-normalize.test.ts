@@ -2,6 +2,7 @@
 import sharp from 'sharp';
 import { describe, expect, it } from 'vitest';
 import {
+  EmojiImageTooLargeError,
   EmptyEmojiImageError,
   NORMALIZED_EMOJI_SIZE,
   normalizeEmojiImage,
@@ -88,17 +89,33 @@ describe('normalizeEmojiImage', () => {
     expect(alphaAt(128, 128)).toBe(255);
   });
 
-  it('clears an enclosed gap of the background colour, like between herb stems', async () => {
+  it('keeps a white label on coloured packaging by default', async () => {
+    for (const label of ['#ffffff', '#fafafa']) {
+      const input = await svg(
+        256,
+        256,
+        `<rect x="64" y="64" width="128" height="128" fill="#2e7d32"/><rect x="96" y="96" width="64" height="64" fill="${label}"/>`
+      );
+
+      const { alphaAt } = await decode(await normalizeEmojiImage(input));
+
+      expect(alphaAt(128, 128), label).toBe(255);
+    }
+  });
+
+  it('clears an enclosed gap of the background colour only when asked, for text-free pictures', async () => {
     const input = await svg(
       300,
       300,
       '<circle cx="150" cy="150" r="90" fill="#43a047"/><circle cx="150" cy="150" r="30" fill="#ffffff"/>'
     );
 
-    const { alphaAt } = await decode(await normalizeEmojiImage(input));
+    const kept = await decode(await normalizeEmojiImage(input));
+    const cleared = await decode(await normalizeEmojiImage(input, { clearEnclosedGaps: true }));
 
-    expect(alphaAt(128, 128)).toBe(0);
-    expect(alphaAt(128, 40)).toBe(255);
+    expect(kept.alphaAt(128, 128)).toBe(255);
+    expect(cleared.alphaAt(128, 128)).toBe(0);
+    expect(cleared.alphaAt(128, 40)).toBe(255);
   });
 
   it('drops the light grid dashes a Gemini sheet leaves at the cell edge', async () => {
@@ -126,6 +143,53 @@ describe('normalizeEmojiImage', () => {
     expect(alphaAt(0, 0)).toBe(0);
     expect(alphaAt(128, 128)).toBe(255);
     expect(box.right - box.left).toBeGreaterThan(205);
+  });
+
+  it('keeps a white object on a transparent background', async () => {
+    const input = await svg(
+      256,
+      256,
+      '<rect x="64" y="64" width="128" height="128" fill="#ffffff"/>',
+      'none'
+    );
+
+    const { alphaAt, box } = await decode(await normalizeEmojiImage(input));
+
+    expect(alphaAt(128, 128)).toBe(255);
+    expect(alphaAt(0, 0)).toBe(0);
+    expect(box.right - box.left).toBeGreaterThan(205);
+  });
+
+  it('rejects a fully transparent picture', async () => {
+    const input = await sharp({
+      create: { width: 64, height: 64, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 0 } },
+    })
+      .png()
+      .toBuffer();
+
+    await expect(normalizeEmojiImage(input)).rejects.toBeInstanceOf(EmptyEmojiImageError);
+  });
+
+  it('refuses a picture above the pixel limit before decoding it', async () => {
+    // A tiny compressed PNG that would decode to 5000 × 5000 pixels.
+    const input = await sharp({
+      create: { width: 5000, height: 5000, channels: 3, background: '#ffffff' },
+    })
+      .png()
+      .toBuffer();
+
+    await expect(normalizeEmojiImage(input)).rejects.toBeInstanceOf(EmojiImageTooLargeError);
+  });
+
+  it('scales a large accepted picture down before building its masks', async () => {
+    const input = await svg(3000, 3000, '<circle cx="1500" cy="1500" r="900" fill="#e53935"/>');
+
+    const started = Date.now();
+    const { info, alphaAt } = await decode(await normalizeEmojiImage(input));
+
+    expect(info.width).toBe(NORMALIZED_EMOJI_SIZE);
+    expect(alphaAt(128, 128)).toBe(255);
+    expect(Date.now() - started).toBeLessThan(5000);
   });
 
   it('keeps a dark object that touches the edge of the picture', async () => {
