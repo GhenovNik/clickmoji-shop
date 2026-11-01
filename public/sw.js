@@ -1,6 +1,18 @@
-const CACHE_NAME = 'clickmoji-cache-v1';
+// v2: v1 also cached server-rendered responses (React Server Component payloads, `?_rsc=`), so a
+// page refresh after a language switch or a data change could replay a stale copy forever.
+// Activating v2 deletes the v1 cache.
+const CACHE_NAME = 'clickmoji-cache-v2';
 const OFFLINE_URL = '/offline.html';
-const STATIC_ASSETS = ['/', '/manifest.json', '/icon.svg', OFFLINE_URL];
+const STATIC_ASSETS = ['/manifest.json', '/icon.svg', OFFLINE_URL];
+
+// Only immutable, content-hashed build output and the precached files are served from the cache;
+// every page and every server-rendered payload depends on the cookies and goes to the network.
+function isCacheable(url) {
+  return (
+    url.origin === self.location.origin &&
+    (url.pathname.startsWith('/_next/static/') || STATIC_ASSETS.includes(url.pathname))
+  );
+}
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
@@ -27,30 +39,24 @@ self.addEventListener('fetch', (event) => {
 
   const url = new URL(event.request.url);
 
-  if (url.pathname.startsWith('/api')) {
-    return;
-  }
-
   if (event.request.mode === 'navigate') {
     event.respondWith(fetch(event.request).catch(() => caches.match(OFFLINE_URL)));
     return;
   }
 
+  if (!isCacheable(url)) return;
+
   event.respondWith(
     caches.match(event.request).then((cached) => {
       if (cached) return cached;
 
-      return fetch(event.request)
-        .then((response) => {
-          if (!response || !response.ok || url.origin !== self.location.origin) {
-            return response;
-          }
-
+      return fetch(event.request).then((response) => {
+        if (response && response.ok) {
           const responseClone = response.clone();
           caches.open(CACHE_NAME).then((cache) => cache.put(event.request, responseClone));
-          return response;
-        })
-        .catch(() => cached);
+        }
+        return response;
+      });
     })
   );
 });
