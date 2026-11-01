@@ -1,0 +1,12 @@
+{
+  "loading": "Загрузка...",
+  "save": "Сохранить",
+  "cancel": "Отмена",
+  "delete": "Удалить",
+  "edit": "Изменить",
+  "close": "Закрыть",
+  "back": "Назад",
+  "error": "Ошибка",
+  "language": "Язык",
+  "languageNames": { "ru": "Русский", "en": "English" }
+}

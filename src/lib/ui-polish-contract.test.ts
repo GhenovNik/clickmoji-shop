@@ -9,10 +9,10 @@ function read(relativePath: string) {
 }
 
 describe('UI polish contract', () => {
-  it('sets Russian document language and keeps page text selectable', () => {
+  it('sets the document language from the active locale and keeps page text selectable', () => {
     const globalStyles = read('src/app/globals.css');
 
-    expect(read('src/app/layout.tsx')).toContain('<html lang="ru">');
+    expect(read('src/app/layout.tsx')).toContain('<html lang={locale}>');
     expect(globalStyles).not.toMatch(/body\s*\{[\s\S]*select-none/);
     expect(globalStyles).toMatch(/body\s*\{[\s\S]*user-select:\s*text/);
     expect(globalStyles).toMatch(/body\s*\{[\s\S]*-webkit-user-select:\s*text/);

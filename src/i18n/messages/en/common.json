@@ -1,0 +1,12 @@
+{
+  "loading": "Loading...",
+  "save": "Save",
+  "cancel": "Cancel",
+  "delete": "Delete",
+  "edit": "Edit",
+  "close": "Close",
+  "back": "Back",
+  "error": "Error",
+  "language": "Language",
+  "languageNames": { "ru": "Русский", "en": "English" }
+}

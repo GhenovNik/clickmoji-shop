@@ -1,0 +1,13 @@
+{
+  "home": "Home",
+  "lists": "Lists",
+  "categories": "Categories",
+  "catalog": "Catalog",
+  "favorites": "Favorites",
+  "history": "History",
+  "login": "Log in",
+  "register": "Sign up",
+  "logout": "Log out",
+  "admin": "Admin",
+  "switchLanguage": "Change language"
+}
