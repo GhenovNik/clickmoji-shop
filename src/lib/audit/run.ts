@@ -94,6 +94,13 @@ export async function runAuditCheck(options: RunAuditCheckOptions): Promise<Deci
   }
 
   const configDirectory = mkdtempSync(path.join(tmpdir(), 'audit-check-'));
+  const cleanupConfig = (): void => rmSync(configDirectory, { recursive: true, force: true });
+  const cleanupSignals: readonly NodeJS.Signals[] = ['SIGINT', 'SIGTERM', 'SIGHUP'];
+  // The runner re-raises interruptions, bypassing finally. Run synchronous cleanup first;
+  // once listeners let the re-raised signal retain its normal exit behavior.
+  for (const signal of cleanupSignals) {
+    process.once(signal, cleanupConfig);
+  }
 
   try {
     const configFiles: AuditConfigFiles = {
@@ -146,6 +153,9 @@ export async function runAuditCheck(options: RunAuditCheckOptions): Promise<Deci
       now,
     });
   } finally {
-    rmSync(configDirectory, { recursive: true, force: true });
+    for (const signal of cleanupSignals) {
+      process.removeListener(signal, cleanupConfig);
+    }
+    cleanupConfig();
   }
 }
