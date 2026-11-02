@@ -29,6 +29,12 @@ import {
 const TSX_BIN = path.join(REPO_ROOT, 'node_modules', '.bin', 'tsx');
 const SCRIPT = path.join(REPO_ROOT, 'scripts', 'audit-check.ts');
 
+// The spawned check reads the wall clock and rejects an expired exception, so the exception these
+// tests run with expires a year from today instead of on the fixed fixture date. The repository
+// allowlist is never used here: its content changes with every review, unlike these assertions.
+const SPAWN_EXPIRES = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+const spawnAllowlistJson = () => initialAllowlistJson({ expires: SPAWN_EXPIRES });
+
 const temporaryDirectories: string[] = [];
 
 afterEach(() => {
@@ -98,29 +104,26 @@ function runScript(options: RunOptions = {}) {
   const logPath = path.join(fixtures, 'calls.log');
   writeFileSync(fullPath, options.full ?? liveFull());
   writeFileSync(productionPath, options.production ?? liveProduction());
+  const root = options.root ?? materializeScriptTree(spawnAllowlistJson());
 
-  const result = spawnSync(
-    TSX_BIN,
-    [path.join(options.root ?? REPO_ROOT, 'scripts', 'audit-check.ts')],
-    {
-      cwd: options.processCwd ?? options.root ?? REPO_ROOT,
-      encoding: 'utf8',
-      timeout: 60_000,
-      env: {
-        ...process.env,
-        PATH: `${directory}${path.delimiter}${process.env.PATH ?? ''}`,
-        NODE_ENV: 'production',
-        npm_config_offline: 'true',
-        npm_config_registry: 'http://127.0.0.1:9/',
-        AUDIT_FAKE_FULL: fullPath,
-        AUDIT_FAKE_PROD: productionPath,
-        AUDIT_FAKE_LOG: logPath,
-        AUDIT_FAKE_MODE: options.mode ?? 'reports',
-        AUDIT_FAKE_EXIT_FULL: '1',
-        AUDIT_FAKE_EXIT_PROD: '0',
-      },
-    }
-  );
+  const result = spawnSync(TSX_BIN, [path.join(root, 'scripts', 'audit-check.ts')], {
+    cwd: options.processCwd ?? root,
+    encoding: 'utf8',
+    timeout: 60_000,
+    env: {
+      ...process.env,
+      PATH: `${directory}${path.delimiter}${process.env.PATH ?? ''}`,
+      NODE_ENV: 'production',
+      npm_config_offline: 'true',
+      npm_config_registry: 'http://127.0.0.1:9/',
+      AUDIT_FAKE_FULL: fullPath,
+      AUDIT_FAKE_PROD: productionPath,
+      AUDIT_FAKE_LOG: logPath,
+      AUDIT_FAKE_MODE: options.mode ?? 'reports',
+      AUDIT_FAKE_EXIT_FULL: '1',
+      AUDIT_FAKE_EXIT_PROD: '0',
+    },
+  });
 
   const calls = existsSync(logPath)
     ? readFileSync(logPath, 'utf8')
@@ -141,23 +144,17 @@ describe('AC-11 the real entrypoint under a fake npm', () => {
     expect(result.status).toBe(0);
     expect(result.stdout).toContain('allowed advisory GHSA-vfj7-8cjw-p6xm');
     expect(result.stdout).toContain('braces');
-    expect(result.stdout).toContain('2026-11-04');
+    expect(result.stdout).toContain(SPAWN_EXPIRES);
   });
 
-  it('prints the package list and the real entry reason on the allowed line', () => {
+  it('prints the package list and the entry reason on the allowed line', () => {
     const { result } = runScript();
-    const allowlist = JSON.parse(
-      readFileSync(path.join(REPO_ROOT, 'audit-allowlist.json'), 'utf8')
-    ) as {
-      exceptions: { reason: string }[];
-    };
 
     expect(result.status).toBe(0);
     expect(result.stdout).toContain(
-      'packages: braces, reason: braces <= 3.0.3 has a stack-exhaustion denial of service'
+      'packages: braces, reason: dev-only glob tooling, tracked in AGE-951'
     );
     expect(result.stdout).not.toMatch(/reason: braces\)/);
-    expect(result.stdout).toContain(allowlist.exceptions[0].reason.slice(0, 40));
   });
 
   it('calls npm twice with the pinned arguments and a sanitized environment', () => {
@@ -241,7 +238,7 @@ describe('AC-11 the real entrypoint under a fake npm', () => {
   });
 
   it('exits 1 when the allowlist file is missing', () => {
-    const root = materializeScriptTree(initialAllowlistJson());
+    const root = materializeScriptTree(spawnAllowlistJson());
     rmSync(path.join(root, 'audit-allowlist.json'));
 
     const { result } = runScript({ root });
@@ -252,7 +249,7 @@ describe('AC-11 the real entrypoint under a fake npm', () => {
   });
 
   it('exits 1 without calling npm when the scratch project has an .npmrc', () => {
-    const root = materializeScriptTree(initialAllowlistJson());
+    const root = materializeScriptTree(spawnAllowlistJson());
     writeFileSync(path.join(root, '.npmrc'), 'registry=http://127.0.0.1:9/\n');
 
     const { result, calls } = runScript({ root });
@@ -263,7 +260,7 @@ describe('AC-11 the real entrypoint under a fake npm', () => {
   });
 
   it('runs npm in the repository root of the script even when launched elsewhere', () => {
-    const root = materializeScriptTree(initialAllowlistJson());
+    const root = materializeScriptTree(spawnAllowlistJson());
 
     const { result, calls } = runScript({ root, processCwd: tempDir() });
 
@@ -275,7 +272,7 @@ describe('AC-11 the real entrypoint under a fake npm', () => {
   });
 
   it('refuses the .npmrc of the script root when launched elsewhere', () => {
-    const root = materializeScriptTree(initialAllowlistJson());
+    const root = materializeScriptTree(spawnAllowlistJson());
     writeFileSync(path.join(root, '.npmrc'), 'offline=true\n');
 
     const { result, calls } = runScript({ root, processCwd: tempDir() });

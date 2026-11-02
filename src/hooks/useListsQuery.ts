@@ -3,6 +3,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { useSession } from 'next-auth/react';
 import { useLists } from '@/store/lists';
+import { queryKeys } from '@/lib/query-keys';
 
 export type List = {
   id: string;
@@ -15,7 +16,7 @@ export type List = {
   };
 };
 
-export const listsQueryKey = ['lists'] as const;
+export const listsQueryKey = queryKeys.lists();
 
 export const fetchListsAPI = async (): Promise<List[]> => {
   const response = await fetch('/api/lists');

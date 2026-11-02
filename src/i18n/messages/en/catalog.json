@@ -1,0 +1,75 @@
+{
+  "shared": {
+    "productCount": "{count, plural, one {# item} other {# items}}",
+    "noVariant": "No variant",
+    "variantsButton": "Variants · {count}",
+    "variantsTitle": "{name}: variants",
+    "addFavorite": "Add to favorites",
+    "removeFavorite": "Remove from favorites",
+    "selectListFirst": "Choose a shopping list first",
+    "signInForFavorites": "Sign in to add items to favorites",
+    "addProductFailed": "Could not add the item",
+    "addProductsFailed": "Could not add the items",
+    "uniqueImage": "🎨 With a unique AI picture!",
+    "backToCategories": "Back to categories"
+  },
+  "categories": {
+    "title": "Choose a category",
+    "subtitle": "Pick a product category for your list",
+    "favorites": "Favorites",
+    "historyLink": "Purchase history"
+  },
+  "products": {
+    "subtitle": "Pick items with a single tap",
+    "addOwn": "Add your own item"
+  },
+  "favoritesPage": {
+    "title": "Favorites",
+    "subtitle": "Your favorite items",
+    "emptyTitle": "You have no favorite items yet",
+    "emptyHint": "Tap the star on an item to add it to favorites"
+  },
+  "favoritesSection": {
+    "loading": "Loading favorites...",
+    "emptyTitle": "Your favorite items will appear here",
+    "emptyHint": "Add the items you buy often to favorites",
+    "title": "Favorites",
+    "tapHint": "Tap an item to add it to your shopping list"
+  },
+  "search": {
+    "placeholder": "Search products...",
+    "searching": "Searching...",
+    "noResults": "Nothing found",
+    "createWithAi": "Create with AI",
+    "creating": "Creating (5-10 sec)...",
+    "aiHintCategory": "AI picks the category and an icon",
+    "aiHintImage": "For specific items it generates a unique picture",
+    "added": "{emoji} {name} added to the list!",
+    "foundAndAdded": "{emoji} {name} found and added to the list!",
+    "createdAndAdded": "{emoji} {name} created with AI and added to the list!",
+    "createFailed": "Could not create the item. Try again later or contact the administrator."
+  },
+  "selectionBar": {
+    "selected": "Selected: {count}",
+    "add": "Add",
+    "adding": "Adding...",
+    "signInToAdd": "Sign in to add"
+  },
+  "addProduct": {
+    "title": "Add an item",
+    "category": "Category: <name>{category}</name>",
+    "nameLabel": "Item name",
+    "namePlaceholder": "For example: Mango, Soy milk, Chia seeds",
+    "nameRequired": "Enter the item name",
+    "smartTitle": "Smart item creation",
+    "smartCategory": "Picks the category",
+    "smartEmoji": "Regular items (fish 🐟) get a Unicode emoji",
+    "smartImage": "Specific ones (carp, bream) get a unique AI picture 🎨",
+    "create": "Create",
+    "creating": "Creating (may take 5-10 sec)...",
+    "exists": "The item \"{name}\" already exists",
+    "created": "The item \"{name}\" has been created!",
+    "createFailed": "Could not create the item",
+    "genericError": "Something went wrong"
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "page": {
+    "backHome": "Home",
+    "title": "Purchase history",
+    "subtitle": "Your completed shopping lists"
+  },
+  "empty": {
+    "title": "No purchase history yet",
+    "hint": "Completed shopping lists will appear here",
+    "toLists": "Go to shopping lists"
+  },
+  "list": {
+    "itemCount": "{count, plural, one {# item} other {# items}}",
+    "restore": "Restore to a new list",
+    "restoring": "Restoring...",
+    "restoredName": "List from {date}",
+    "signInToRestore": "Sign in to restore the list",
+    "restoreFailed": "Could not restore the list",
+    "deleteConfirm": "Delete this list from history?",
+    "deleteFailed": "Could not delete the history entry"
+  }
+}

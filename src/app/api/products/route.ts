@@ -1,7 +1,9 @@
 import { NextResponse } from 'next/server';
+import { apiText } from '@/lib/api-messages';
 import { prisma } from '@/lib/prisma';
 import { requireAdmin } from '@/lib/auth-guards';
 import { auth } from '@/lib/auth';
+import { visibleProductsWhere } from '@/lib/product-visibility';
 
 export async function GET(request: Request) {
   try {
@@ -9,9 +11,7 @@ export async function GET(request: Request) {
     const { searchParams } = new URL(request.url);
     const categoryId = searchParams.get('categoryId');
 
-    const accessFilter = {
-      OR: [{ isGlobal: true }, ...(session?.user?.id ? [{ createdById: session.user.id }] : [])],
-    };
+    const accessFilter = visibleProductsWhere(session?.user?.id);
 
     if (!categoryId) {
       // Return the full visible catalog when no category is selected.
@@ -23,6 +23,7 @@ export async function GET(request: Request) {
             select: {
               id: true,
               name: true,
+              nameEn: true,
               emoji: true,
               isCustom: true,
               imageUrl: true,
@@ -47,6 +48,7 @@ export async function GET(request: Request) {
           select: {
             id: true,
             name: true,
+            nameEn: true,
             emoji: true,
             isCustom: true,
             imageUrl: true,
@@ -61,7 +63,10 @@ export async function GET(request: Request) {
     return NextResponse.json(products);
   } catch (error) {
     console.error('Error fetching products:', error);
-    return NextResponse.json({ error: 'Failed to fetch products' }, { status: 500 });
+    return NextResponse.json(
+      { error: await apiText(request, 'fetchProductsFailed') },
+      { status: 500 }
+    );
   }
 }
 
@@ -71,19 +76,19 @@ export async function POST(request: Request) {
     if (guard instanceof Response) return guard;
 
     const body = await request.json();
-    const { name, nameEn, emoji, categoryId, isCustom, imageUrl, variants } = body;
+    const { name, nameEn, emoji, categoryId, isCustom, imageUrl, imageUrlEn, variants } = body;
 
     // An emoji is required unless a custom image is supplied.
     if (!name || !nameEn || !categoryId) {
       return NextResponse.json(
-        { error: 'Missing required fields: name, nameEn, categoryId' },
+        { error: await apiText(request, 'productFieldsRequired') },
         { status: 400 }
       );
     }
 
     if (!isCustom && !emoji) {
       return NextResponse.json(
-        { error: 'Emoji is required for non-custom products' },
+        { error: await apiText(request, 'productEmojiRequired') },
         { status: 400 }
       );
     }
@@ -96,6 +101,7 @@ export async function POST(request: Request) {
         categoryId,
         isCustom: isCustom || false,
         imageUrl: imageUrl || null,
+        imageUrlEn: imageUrlEn || null,
         variants: Array.isArray(variants)
           ? {
               create: variants
@@ -117,6 +123,9 @@ export async function POST(request: Request) {
     return NextResponse.json(product);
   } catch (error) {
     console.error('Error creating product:', error);
-    return NextResponse.json({ error: 'Failed to create product' }, { status: 500 });
+    return NextResponse.json(
+      { error: await apiText(request, 'createProductFailed') },
+      { status: 500 }
+    );
   }
 }

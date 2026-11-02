@@ -1,0 +1,82 @@
+{
+  "listsPage": {
+    "title": "Мои списки",
+    "subtitle": "Управляйте своими покупками просто",
+    "newList": "Новый список"
+  },
+  "listCard": {
+    "itemCount": "{count, plural, one {# товар} few {# товара} many {# товаров} other {# товара}}",
+    "deleteList": "Удалить список"
+  },
+  "createModal": {
+    "title": "Создать новый список",
+    "namePlaceholder": "Название списка",
+    "cancel": "Отмена",
+    "creating": "Создание...",
+    "create": "Создать"
+  },
+  "listPage": {
+    "listFallback": "Список",
+    "backToLists": "К спискам",
+    "itemsLeft": "{count, plural, one {# товар осталось купить} few {# товара осталось купить} many {# товаров осталось купить} other {# товара осталось купить}}",
+    "duplicateHint": "💡 Можно добавлять один товар несколько раз с разными заметками",
+    "importFromText": "Импорт из текста",
+    "toBuy": "Нужно купить",
+    "purchased": "Куплено ({count})",
+    "completePurchase": "✓ Завершить покупку",
+    "completeHint": "Список будет сохранен в историю покупок",
+    "addProducts": "+ Добавить товары",
+    "clearAll": "Очистить всё",
+    "history": "История покупок"
+  },
+  "emptyState": {
+    "backToLists": "К спискам",
+    "title": "{listName} пуст",
+    "subtitle": "Добавьте товары из категорий",
+    "addProducts": "Добавить товары",
+    "importFromText": "Импорт из текста"
+  },
+  "importModal": {
+    "title": "Импорт списка",
+    "textLabel": "Вставьте список покупок",
+    "textPlaceholder": "Примеры форматов:\n\n- Молоко 2L\n- Хлеб белый\n- Яблоки красные 1кг\n\nили\n\n1. Помидоры 500г\n2. Огурцы свежие\n3. Сыр моцарелла\n\nили просто:\n\nМолоко, хлеб, яблоки, помидоры, огурцы",
+    "emptyText": "Введите список покупок",
+    "genericError": "Произошла ошибка",
+    "aiTitle": "AI автоматически:",
+    "aiRecognize": "Распознает товары в любом формате",
+    "aiCategories": "Определит категории",
+    "aiIcons": "Подберёт значки",
+    "aiQuantities": "Извлечёт количество и заметки",
+    "aiCreate": "Создаст новые товары, если их нет в базе",
+    "cancel": "Отмена",
+    "importing": "Импорт...",
+    "import": "Импортировать",
+    "doneTitle": "Импорт завершён!",
+    "addedLabel": "Добавлено товаров:",
+    "createdLabel": "Создано новых товаров:",
+    "skippedLabel": "Пропущено (уже в списке):",
+    "failedLabel": "Ошибок:",
+    "createdTitle": "Созданные товары:",
+    "skippedTitle": "Уже в списке:",
+    "failedTitle": "Ошибки:",
+    "unrecognizedEntry": "Нераспознанная позиция",
+    "closingIn": "{seconds, plural, one {Закрытие через # секунду...} few {Закрытие через # секунды...} many {Закрытие через # секунд...} other {Закрытие через # секунды...}}"
+  },
+  "item": {
+    "notePlaceholder": "Заметка к товару...",
+    "noteSave": "Ок"
+  },
+  "listsManagement": {
+    "createFailed": "Ошибка при создании списка",
+    "deleteFailed": "Ошибка при удалении списка",
+    "nameRequired": "Введите название списка",
+    "deleteConfirm": "Удалить список \"{listName}\"?"
+  },
+  "listItems": {
+    "clearConfirm": "Удалить все товары из списка?",
+    "completeFailed": "Не удалось завершить список"
+  },
+  "importMutation": {
+    "failed": "Ошибка при импорте списка"
+  }
+}

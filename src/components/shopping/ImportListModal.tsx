@@ -1,7 +1,8 @@
 'use client';
 
 import { useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { useLocale, useTranslations } from 'next-intl';
+import { useImportListText, type ImportResults } from '@/hooks/useListMutations';
 
 interface ImportListModalProps {
   listId: string;
@@ -10,29 +11,6 @@ interface ImportListModalProps {
   onSuccess?: () => void;
 }
 
-type ImportResultEntry = {
-  name: string;
-  category: string;
-  note?: string;
-};
-
-type ImportResultSkipped = {
-  name: string;
-  reason: string;
-};
-
-type ImportResultFailed = {
-  product?: { nameRu?: string };
-  reason: string;
-};
-
-type ImportResults = {
-  added: ImportResultEntry[];
-  created: ImportResultEntry[];
-  skipped: ImportResultSkipped[];
-  failed: ImportResultFailed[];
-};
-
 export default function ImportListModal({
   listId,
   isOpen,
@@ -40,10 +18,12 @@ export default function ImportListModal({
   onSuccess,
 }: ImportListModalProps) {
   const [text, setText] = useState('');
-  const [isImporting, setIsImporting] = useState(false);
   const [error, setError] = useState('');
   const [result, setResult] = useState<ImportResults | null>(null);
-  const router = useRouter();
+  const importMutation = useImportListText();
+  const isImporting = importMutation.isPending;
+  const t = useTranslations('lists');
+  const locale = useLocale();
 
   if (!isOpen) return null;
 
@@ -53,27 +33,12 @@ export default function ImportListModal({
     setResult(null);
 
     if (!text.trim()) {
-      setError('Введите список покупок');
+      setError(t('importModal.emptyText'));
       return;
     }
 
-    setIsImporting(true);
-
     try {
-      const res = await fetch('/api/lists/import-text', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          text: text.trim(),
-          listId,
-        }),
-      });
-
-      const data = await res.json();
-
-      if (!res.ok) {
-        throw new Error(data.error || 'Ошибка при импорте списка');
-      }
+      const data = await importMutation.mutateAsync({ listId, text: text.trim() });
 
       setResult(data.results);
       setText('');
@@ -82,15 +47,13 @@ export default function ImportListModal({
         onSuccess();
       }
 
-      // Keep the result visible briefly before closing the modal.
+      // Keep the result visible briefly before closing the modal. The list behind it is already
+      // refetching: the mutation invalidated the list and, when products were created, the catalog.
       setTimeout(() => {
         handleClose();
-        router.refresh();
       }, 3000);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Произошла ошибка');
-    } finally {
-      setIsImporting(false);
+      setError(err instanceof Error ? err.message : t('importModal.genericError'));
     }
   };
 
@@ -105,7 +68,7 @@ export default function ImportListModal({
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50 p-4">
       <div className="bg-white rounded-2xl shadow-xl max-w-2xl w-full p-6 max-h-[90vh] overflow-y-auto">
         <div className="flex justify-between items-center mb-4">
-          <h2 className="text-2xl font-bold text-gray-900">Импорт списка</h2>
+          <h2 className="text-2xl font-bold text-gray-900">{t('importModal.title')}</h2>
           <button
             onClick={handleClose}
             className="text-gray-400 hover:text-gray-600 text-2xl leading-none"
@@ -118,27 +81,13 @@ export default function ImportListModal({
           <form onSubmit={handleSubmit}>
             <div className="mb-4">
               <label htmlFor="listText" className="block text-sm font-medium text-gray-700 mb-2">
-                Вставьте список покупок
+                {t('importModal.textLabel')}
               </label>
               <textarea
                 id="listText"
                 value={text}
                 onChange={(e) => setText(e.target.value)}
-                placeholder={`Примеры форматов:
-
-- Молоко 2L
-- Хлеб белый
-- Яблоки красные 1кг
-
-или
-
-1. Помидоры 500г
-2. Огурцы свежие
-3. Сыр моцарелла
-
-или просто:
-
-Молоко, хлеб, яблоки, помидоры, огурцы`}
+                placeholder={t('importModal.textPlaceholder')}
                 className="w-full px-4 py-3 border-2 border-gray-300 rounded-lg focus:border-blue-500 focus:outline-none text-gray-900 font-mono text-sm"
                 rows={12}
                 autoFocus
@@ -150,14 +99,14 @@ export default function ImportListModal({
             <div className="bg-gradient-to-r from-purple-50 to-indigo-50 rounded-lg p-4 mb-4">
               <p className="text-sm text-gray-700 font-semibold mb-2 flex items-center gap-2">
                 <span>✨</span>
-                <span>AI автоматически:</span>
+                <span>{t('importModal.aiTitle')}</span>
               </p>
               <ul className="text-sm text-gray-600 space-y-1 ml-6">
-                <li>• Распознает товары в любом формате</li>
-                <li>• Определит категории</li>
-                <li>• Подберёт значки</li>
-                <li>• Извлечёт количество и заметки</li>
-                <li>• Создаст новые товары, если их нет в базе</li>
+                <li>• {t('importModal.aiRecognize')}</li>
+                <li>• {t('importModal.aiCategories')}</li>
+                <li>• {t('importModal.aiIcons')}</li>
+                <li>• {t('importModal.aiQuantities')}</li>
+                <li>• {t('importModal.aiCreate')}</li>
               </ul>
             </div>
 
@@ -168,7 +117,7 @@ export default function ImportListModal({
                 disabled={isImporting}
                 className="flex-1 px-4 py-3 border-2 border-gray-300 text-gray-700 rounded-lg font-semibold hover:bg-gray-50 transition-colors disabled:opacity-50"
               >
-                Отмена
+                {t('importModal.cancel')}
               </button>
               <button
                 type="submit"
@@ -178,12 +127,12 @@ export default function ImportListModal({
                 {isImporting ? (
                   <>
                     <span className="animate-spin">⏳</span>
-                    <span>Импорт...</span>
+                    <span>{t('importModal.importing')}</span>
                   </>
                 ) : (
                   <>
                     <span>✨</span>
-                    <span>Импортировать</span>
+                    <span>{t('importModal.import')}</span>
                   </>
                 )}
               </button>
@@ -194,23 +143,23 @@ export default function ImportListModal({
             <div className="bg-green-50 border border-green-200 rounded-lg p-4">
               <p className="text-green-800 font-semibold mb-2 flex items-center gap-2">
                 <span>✅</span>
-                <span>Импорт завершён!</span>
+                <span>{t('importModal.doneTitle')}</span>
               </p>
               <div className="text-sm text-green-700 space-y-1">
                 <p>
-                  • Добавлено товаров: <strong>{result.added?.length || 0}</strong>
+                  • {t('importModal.addedLabel')} <strong>{result.added?.length || 0}</strong>
                 </p>
                 <p>
-                  • Создано новых товаров: <strong>{result.created?.length || 0}</strong>
+                  • {t('importModal.createdLabel')} <strong>{result.created?.length || 0}</strong>
                 </p>
                 {result.skipped?.length > 0 && (
                   <p>
-                    • Пропущено (уже в списке): <strong>{result.skipped.length}</strong>
+                    • {t('importModal.skippedLabel')} <strong>{result.skipped.length}</strong>
                   </p>
                 )}
                 {result.failed?.length > 0 && (
                   <p className="text-red-600">
-                    • Ошибок: <strong>{result.failed.length}</strong>
+                    • {t('importModal.failedLabel')} <strong>{result.failed.length}</strong>
                   </p>
                 )}
               </div>
@@ -218,7 +167,9 @@ export default function ImportListModal({
 
             {result.created && result.created.length > 0 && (
               <div className="bg-purple-50 border border-purple-200 rounded-lg p-4">
-                <p className="font-semibold text-purple-900 mb-2">Созданные товары:</p>
+                <p className="font-semibold text-purple-900 mb-2">
+                  {t('importModal.createdTitle')}
+                </p>
                 <div className="space-y-1 text-sm text-purple-700">
                   {result.created.map((item, i) => (
                     <p key={i}>
@@ -231,7 +182,9 @@ export default function ImportListModal({
 
             {result.skipped && result.skipped.length > 0 && (
               <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
-                <p className="font-semibold text-yellow-900 mb-2">Уже в списке:</p>
+                <p className="font-semibold text-yellow-900 mb-2">
+                  {t('importModal.skippedTitle')}
+                </p>
                 <div className="space-y-1 text-sm text-yellow-700">
                   {result.skipped.map((item, i) => (
                     <p key={i}>
@@ -244,18 +197,26 @@ export default function ImportListModal({
 
             {result.failed && result.failed.length > 0 && (
               <div className="bg-red-50 border border-red-200 rounded-lg p-4">
-                <p className="font-semibold text-red-900 mb-2">Ошибки:</p>
+                <p className="font-semibold text-red-900 mb-2">{t('importModal.failedTitle')}</p>
                 <div className="space-y-1 text-sm text-red-700">
                   {result.failed.map((item, i) => (
                     <p key={i}>
-                      • {item.product?.nameRu || 'Unknown'}: {item.reason}
+                      •{' '}
+                      {(locale === 'en' &&
+                        typeof item.product?.nameEn === 'string' &&
+                        item.product.nameEn) ||
+                        (typeof item.product?.nameRu === 'string' && item.product.nameRu) ||
+                        t('importModal.unrecognizedEntry')}
+                      : {String(item.reason)}
                     </p>
                   ))}
                 </div>
               </div>
             )}
 
-            <p className="text-center text-gray-500 text-sm">Закрытие через 3 секунды...</p>
+            <p className="text-center text-gray-500 text-sm">
+              {t('importModal.closingIn', { seconds: 3 })}
+            </p>
           </div>
         )}
       </div>

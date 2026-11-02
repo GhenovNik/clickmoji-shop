@@ -1,0 +1,13 @@
+{
+  "home": "На главную",
+  "lists": "Списки",
+  "categories": "Категории",
+  "catalog": "Каталог",
+  "favorites": "Избранное",
+  "history": "История",
+  "login": "Войти",
+  "register": "Регистрация",
+  "logout": "Выйти",
+  "admin": "Админ-панель",
+  "switchLanguage": "Сменить язык"
+}

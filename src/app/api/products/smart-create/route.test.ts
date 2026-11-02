@@ -1,6 +1,9 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+// The shared daily AI budget is covered by src/app/api/ai-daily-quota.test.ts.
+vi.mock('@/lib/ai-quota', () => ({ enforceAiQuota: async () => null }));
+
 const marker = 'synthetic-provider-marker-347';
 
 const doubles = vi.hoisted(() => ({
@@ -210,4 +213,40 @@ describe('AC-16 an unavailable provider degrades to the Unicode emoji', () => {
       expect(doubles.sdkCalls).toHaveLength(0);
     });
   }
+});
+
+describe('smart-create messages follow the request language', () => {
+  function request(cookie: string) {
+    return new Request('http://localhost:3000/api/products/smart-create', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', cookie },
+      body: JSON.stringify({ productName: 'Молоко' }),
+    });
+  }
+
+  it.each([
+    ['NEXT_LOCALE=ru', 'ИИ не настроен. Обратитесь к администратору.'],
+    ['NEXT_LOCALE=en', 'AI is not configured. Please contact the administrator.'],
+  ])('reports a missing AI key in the interface language (%s)', async (cookie, message) => {
+    delete process.env.GOOGLE_GENAI_API_KEY;
+    delete process.env.GEMINI_API_KEY;
+
+    const response = await POST(request(cookie));
+
+    expect(response.status).toBe(500);
+    expect(await response.json()).toEqual({ error: message });
+    expect(doubles.analyzeSmartProduct).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['NEXT_LOCALE=ru', 'Не удалось создать товар'],
+    ['NEXT_LOCALE=en', 'Could not create the product'],
+  ])('reports a general failure in the interface language (%s)', async (cookie, message) => {
+    doubles.findCategories.mockRejectedValue(new Error('database down'));
+
+    const response = await POST(request(cookie));
+
+    expect(response.status).toBe(500);
+    expect(await response.json()).toEqual({ error: message });
+  });
 });

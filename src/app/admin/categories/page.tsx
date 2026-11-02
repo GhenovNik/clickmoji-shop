@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import Link from 'next/link';
+import { useTranslations } from 'next-intl';
 import { useCategories } from '@/hooks/admin/useCategories';
 import CategoryForm, { FormData } from '@/components/admin/categories/CategoryForm';
 import CategoriesTable from '@/components/admin/categories/CategoriesTable';
@@ -39,6 +40,7 @@ const fetchProductsByCategoryAPI = async (categoryId: string): Promise<Product[]
 };
 
 export default function AdminCategoriesPage() {
+  const t = useTranslations('admin');
   const [showForm, setShowForm] = useState(false);
   const [editingCategory, setEditingCategory] = useState<Category | null>(null);
   const [scrollToCategoryId, setScrollToCategoryId] = useState<string | null>(null);
@@ -97,7 +99,7 @@ export default function AdminCategoriesPage() {
       }
     } catch (error) {
       console.error('Error saving category:', error);
-      alert('Ошибка при сохранении категории');
+      alert(t('categoriesPage.saveFailed'));
     }
   };
 
@@ -115,7 +117,7 @@ export default function AdminCategoriesPage() {
       await deleteCategory(id);
     } catch (error) {
       console.error('Error deleting category:', error);
-      alert('Ошибка при удалении категории');
+      alert(t('categoriesPage.deleteFailed'));
     }
   };
 
@@ -144,10 +146,12 @@ export default function AdminCategoriesPage() {
             href="/admin"
             className="text-blue-600 hover:text-blue-700 text-sm mb-4 inline-block"
           >
-            ← Назад в админ-панель
+            {t('shared.backToAdmin')}
           </Link>
           <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4">
-            <h1 className="text-3xl sm:text-4xl font-bold text-gray-900">Категории</h1>
+            <h1 className="text-3xl sm:text-4xl font-bold text-gray-900">
+              {t('categoriesPage.title')}
+            </h1>
             <button
               onClick={() => {
                 if (!showForm) {
@@ -157,7 +161,7 @@ export default function AdminCategoriesPage() {
               }}
               className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded-lg font-semibold transition-colors whitespace-nowrap"
             >
-              {showForm ? 'Отмена' : '+ Добавить'}
+              {showForm ? t('shared.cancel') : t('shared.add')}
             </button>
           </div>
         </div>
@@ -165,7 +169,7 @@ export default function AdminCategoriesPage() {
         {showForm && (
           <div ref={formRef} className="bg-white p-6 rounded-xl shadow-md mb-8">
             <h2 className="text-2xl font-bold mb-4">
-              {editingCategory ? 'Редактировать категорию' : 'Новая категория'}
+              {editingCategory ? t('categoriesPage.editCategory') : t('categoriesPage.newCategory')}
             </h2>
             <CategoryForm
               category={editingCategory}
@@ -182,19 +186,19 @@ export default function AdminCategoriesPage() {
               <thead className="bg-gray-50 border-b border-gray-200">
                 <tr>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
-                    Порядок
+                    {t('columns.order')}
                   </th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
-                    Иконка
+                    {t('columns.icon')}
                   </th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
-                    Название
+                    {t('columns.name')}
                   </th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
-                    Продуктов
+                    {t('columns.products')}
                   </th>
                   <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">
-                    Действия
+                    {t('columns.actions')}
                   </th>
                 </tr>
               </thead>

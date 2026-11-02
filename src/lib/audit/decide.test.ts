@@ -21,7 +21,7 @@ import {
 } from './test-helpers';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import { ALLOWLIST_FILE, readFixture, REPO_ROOT } from './test-helpers';
+import { readFixture, REPO_ROOT } from './test-helpers';
 
 function bracesChain(via: unknown[]): string {
   return reportJson({
@@ -30,10 +30,10 @@ function bracesChain(via: unknown[]): string {
 }
 
 describe('AC-1 live braces chain', () => {
-  it('accepts the saved live full report with the repository allowlist and empty production report', () => {
-    const repositoryAllowlist = readFileSync(ALLOWLIST_FILE, 'utf8');
-
-    const decision = decide(liveFull(), liveProduction(), repositoryAllowlist);
+  it('accepts the saved live full report with the reviewed braces exception and empty production report', () => {
+    // The fixture is the report from when the braces exception was reviewed (AGE-951). The
+    // repository allowlist no longer carries it because npm audit stopped reporting the advisory.
+    const decision = decide(liveFull(), liveProduction(), initialAllowlistJson());
 
     expect(decision.exitCode).toBe(0);
     expect(text(decision)).toContain(GHSA_BRACES);

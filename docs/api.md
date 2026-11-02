@@ -93,12 +93,12 @@ All endpoints are implemented as Next.js Route Handlers under `src/app/api`.
 
 - Auth: admin
 - Body: `name?`, `nameEn?`, `emoji?`, `order?`, `isCustom?`, `imageUrl?`
-- Notes: handles order swap; deletes old UploadThing image when replaced
+- Notes: handles order swap; a replaced image stays in UploadThing; leftovers are removed by `npm run db:files`, which must run with the app stopped (with writers running it can delete a file attached during the run; a safe protocol is AGE-1472)
 
 ### `DELETE /api/categories/:categoryId`
 
 - Auth: admin
-- Notes: cascades products, deletes UploadThing image if present
+- Notes: cascades products; the image stays in UploadThing; leftovers are removed by `npm run db:files`, which must run with the app stopped (with writers running it can delete a file attached during the run; a safe protocol is AGE-1472)
 
 ## Products
 
@@ -118,23 +118,24 @@ All endpoints are implemented as Next.js Route Handlers under `src/app/api`.
 
 - Auth: admin
 - Body: `name?`, `nameEn?`, `emoji?`, `categoryId?`, `isCustom?`, `imageUrl?`, `variants?`
-- Notes: upserts/deletes variants; keeps variants that are already used in items; deletes old UploadThing image when replaced
+- Notes: upserts/deletes variants; keeps variants that are already used in items; accepts `imageUrlEn?`; a replaced image stays in UploadThing; leftovers are removed by `npm run db:files`, which must run with the app stopped (with writers running it can delete a file attached during the run; a safe protocol is AGE-1472)
 
 ### `DELETE /api/products/:productId`
 
 - Auth: admin
+- Notes: the product's images stay in UploadThing; leftovers are removed by `npm run db:files`, which must run with the app stopped (with writers running it can delete a file attached during the run; a safe protocol is AGE-1472)
 
 ### `POST /api/products/bulk-import`
 
 - Auth: admin
 - Body: `productNames: string[]`
-- Notes: Gemini categorization + translation + emoji; skips duplicates; rate limited to 10 requests/hour per admin user; response includes `promptVersion` and `model`
+- Notes: Gemini categorization + translation + emoji; skips duplicates; rate limited to 10 requests/hour per admin user and takes one unit of the admin daily AI budget before the analysis (`403` off, `429` used up, `503` unreadable; no provider call then); response includes `promptVersion` and `model`
 
 ### `POST /api/products/smart-create`
 
 - Auth: signed in
 - Body: `productName`, `categoryId?`
-- Notes: Gemini analysis through the AI product service; rate limited to 20 requests/hour per user; non-admin users are limited by `User.createdProductsCount` and create user-scoped products, while admins create global products. If a custom image is needed, the route calls the emoji asset service directly and does not self-call `/api/emoji/generate` or `/api/emoji/upload`. Response includes `promptVersion` and `model`.
+- Notes: Gemini analysis through the AI product service; rate limited to 20 requests/hour per user; the text analysis takes a unit of the daily AI budget first (`403` off, `429` used up, `503` unreadable; no provider call then); the custom image takes a second unit after the analysis, and if that one is refused for any reason the product is still created with its Unicode emoji (see `docs/ai.md`); non-admin users are limited by `User.createdProductsCount` and create user-scoped products, while admins create global products. If a custom image is needed, the route calls the emoji asset service directly and does not self-call `/api/emoji/generate` or `/api/emoji/upload`. Response includes `promptVersion` and `model`.
 
 ### `POST /api/products/move-category`
 
@@ -178,8 +179,10 @@ All endpoints are implemented as Next.js Route Handlers under `src/app/api`.
 ### `POST /api/lists/:listId/items`
 
 - Auth: signed in
-- Body: `items: Array<{ productId, variantId?, note? }>`
-- Notes: allows duplicates (different notes)
+- Body: `items: Array<{ productId, variantId?, note? }>`, at most 100 items
+- Notes: allows duplicates (different notes); all-or-nothing: the whole batch is validated (`400` for
+  more than 100 items, a missing `productId` or a variant of another product, `404` for a product the
+  user cannot see) before one transactional insert, so an error never leaves part of the batch
 
 ### `PUT /api/lists/:listId/items/:itemId`
 
@@ -195,7 +198,20 @@ All endpoints are implemented as Next.js Route Handlers under `src/app/api`.
 
 - Auth: signed in
 - Body: `text`, `listId`
-- Notes: Gemini parses, creates missing products, adds items; rate limited to 10 requests/hour per user; response includes `promptVersion` and `model`
+- Notes: Gemini parses, creates missing products, adds items. The prompt carries the visible catalog
+  (id, name, nameEn, category; above 400 products only those sharing a word with the text) and the
+  model may return `existingProductId` instead of a new proposal; an id outside the visible catalog
+  is ignored. Before creating anything the server also compares normalised names (lowercase, ё→е,
+  quantities and units such as `20%`, `1 л`, `2 шт`, punctuation removed), so `Молоко 2.5%` reuses
+  the catalog `Молоко` whatever category the model chose. A Russian name is kept as written, only
+  cleaned and capitalised, never translated to English and back; quantities go to `note`. The model
+  is asked for the closest Unicode emoji (📦 only when nothing valid came back) and categories carry
+  a short hint so food never lands in pharmacy. A category (English name, Russian name or the
+  `English (Russian)` form of the prompt, any case, with or without the hint) is needed only to
+  create a missing product; an unusable entry in the AI response is reported in `results.failed` and
+  the rest is imported; rate limited to 10 requests/hour per user and takes one unit of the daily AI
+  budget before the analysis (`403` off, `429` used up, `503` unreadable; no provider call then);
+  response includes `promptVersion` and `model`
 
 ## History
 
@@ -208,7 +224,10 @@ All endpoints are implemented as Next.js Route Handlers under `src/app/api`.
 
 - Auth: signed in
 - Body: `listId`
-- Notes: snapshots list items into history and clears items from the source list
+- Notes: snapshots list items into history and clears items from the source list in one
+  transaction under a row lock on the list; only the items that were snapshotted are removed, so an
+  item added concurrently stays in the list. A second complete of the same list gets `400`
+  (`List is empty`)
 
 ### `DELETE /api/history/:historyId`
 
@@ -220,7 +239,8 @@ All endpoints are implemented as Next.js Route Handlers under `src/app/api`.
 - Auth: signed in
 - Body: `name?`
 - Response: `{ listId, createdCount, skippedCount }`
-- Notes: restores history snapshot into a new list and skips missing/invalid product references
+- Notes: restores history snapshot into a new list and skips missing/invalid product references;
+  the list and its items are created in one transaction, so a failure leaves no list behind
 
 ## Favorites
 
@@ -261,7 +281,7 @@ All endpoints are implemented as Next.js Route Handlers under `src/app/api`.
 - Auth: admin
 - Body: `productName`
 - Response: `{ base64, message, provider, model, promptVersion, cacheKey }`
-- Notes: provider selected by `AI_PROVIDER`; rate limited to 20 requests/hour per admin user
+- Notes: provider selected by `AI_PROVIDER`; rate limited to 20 requests/hour per admin user and takes one unit of the admin daily AI budget before the provider call (`403` off, `429` used up, `503` unreadable; no provider call then)
 
 ### `POST /api/emoji/upload`
 
@@ -274,6 +294,9 @@ All endpoints are implemented as Next.js Route Handlers under `src/app/api`.
 
 - Auth: admin
 - Body: `imageUrl`
+- Notes: refuses with 409 while the library, a product (either picture) or a category shows the
+  file. The check and the delete are not atomic: a concurrent request attaching the same URL can
+  still race it (AGE-1472).
 
 ## UploadThing
 

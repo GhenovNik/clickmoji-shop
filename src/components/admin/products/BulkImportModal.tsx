@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { useTranslations } from 'next-intl';
 
 interface BulkImportModalProps {
   onClose: () => void;
@@ -8,12 +9,13 @@ interface BulkImportModalProps {
 }
 
 export default function BulkImportModal({ onClose, onImportComplete }: BulkImportModalProps) {
+  const t = useTranslations('admin');
   const [bulkImportText, setBulkImportText] = useState('');
   const [bulkImporting, setBulkImporting] = useState(false);
 
   const handleBulkImport = async () => {
     if (!bulkImportText.trim()) {
-      alert('Введите названия продуктов (по одному на строке)');
+      alert(t('bulkImport.enterNames'));
       return;
     }
 
@@ -23,7 +25,7 @@ export default function BulkImportModal({ onClose, onImportComplete }: BulkImpor
       .filter((line) => line.length > 0);
 
     if (productNames.length === 0) {
-      alert('Не найдено названий продуктов');
+      alert(t('bulkImport.noNames'));
       return;
     }
 
@@ -41,9 +43,10 @@ export default function BulkImportModal({ onClose, onImportComplete }: BulkImpor
       if (res.ok) {
         const { results } = data;
         alert(
-          `✅ Импорт завершен!\n` +
-            `Добавлено: ${results.success.length}\n` +
-            `Ошибок: ${results.failed.length}`
+          t('bulkImport.done', {
+            added: results.success.length,
+            failed: results.failed.length,
+          })
         );
 
         if (results.failed.length > 0) {
@@ -54,11 +57,13 @@ export default function BulkImportModal({ onClose, onImportComplete }: BulkImpor
         onImportComplete();
         onClose();
       } else {
-        alert(`Ошибка: ${data.error || 'Не удалось импортировать продукты'}`);
+        alert(
+          t('bulkImport.errorWithReason', { error: data.error || t('bulkImport.importFailed') })
+        );
       }
     } catch (error) {
       console.error('Bulk import error:', error);
-      alert('Ошибка при импорте продуктов');
+      alert(t('bulkImport.importError'));
     } finally {
       setBulkImporting(false);
     }
@@ -68,39 +73,38 @@ export default function BulkImportModal({ onClose, onImportComplete }: BulkImpor
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
       <div className="bg-white rounded-xl shadow-2xl max-w-2xl w-full max-h-[90vh] overflow-hidden flex flex-col">
         <div className="p-4 sm:p-6 border-b border-gray-200">
-          <h2 className="text-xl sm:text-2xl font-bold text-gray-900">
-            📦 Множественное добавление продуктов
-          </h2>
-          <p className="text-sm text-gray-500 mt-2">
-            Введите названия продуктов (по одному на строке). AI автоматически переведет их на
-            русский и английский, распределит по категориям и подберет emoji.
-          </p>
+          <h2 className="text-xl sm:text-2xl font-bold text-gray-900">{t('bulkImport.title')}</h2>
+          <p className="text-sm text-gray-500 mt-2">{t('bulkImport.description')}</p>
         </div>
 
         <div className="flex-1 overflow-y-auto p-6">
           <div className="mb-4">
             <label className="block text-sm font-medium text-gray-700 mb-2">
-              Названия продуктов (по одному на строке):
+              {t('bulkImport.namesLabel')}
             </label>
             <textarea
               value={bulkImportText}
               onChange={(e) => setBulkImportText(e.target.value)}
-              placeholder={'авокадо\nхумус\nтофу\nкинза\nбазилик'}
+              placeholder={t('bulkImport.placeholder')}
               className="w-full h-64 px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent text-gray-900 font-mono"
               disabled={bulkImporting}
             />
             <p className="text-xs text-gray-500 mt-2">
-              Продуктов: {bulkImportText.split('\n').filter((l) => l.trim()).length}
+              {t('bulkImport.count', {
+                count: bulkImportText.split('\n').filter((l) => l.trim()).length,
+              })}
             </p>
           </div>
 
           <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-4">
-            <h3 className="text-sm font-semibold text-blue-900 mb-2">ℹ️ Как это работает:</h3>
+            <h3 className="text-sm font-semibold text-blue-900 mb-2">
+              {t('bulkImport.howItWorks')}
+            </h3>
             <ul className="text-sm text-blue-800 space-y-1">
-              <li>• AI переведет названия на русский и английский</li>
-              <li>• Автоматически распределит по существующим категориям</li>
-              <li>• Подберет Unicode emoji (🍎, 🥕) где возможно</li>
-              <li>• Если emoji не найден, будет использован 📦</li>
+              <li>{t('bulkImport.stepTranslate')}</li>
+              <li>{t('bulkImport.stepCategories')}</li>
+              <li>{t('bulkImport.stepEmoji')}</li>
+              <li>{t('bulkImport.stepFallback')}</li>
             </ul>
           </div>
         </div>
@@ -112,14 +116,14 @@ export default function BulkImportModal({ onClose, onImportComplete }: BulkImpor
               disabled={bulkImporting || !bulkImportText.trim()}
               className="flex-1 bg-purple-600 hover:bg-purple-700 text-white px-6 py-3 rounded-lg font-semibold transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              {bulkImporting ? '⏳ Обработка...' : '🚀 Импортировать'}
+              {bulkImporting ? t('bulkImport.processing') : t('bulkImport.import')}
             </button>
             <button
               onClick={onClose}
               disabled={bulkImporting}
               className="flex-1 sm:flex-none px-6 py-3 bg-gray-500 hover:bg-gray-600 text-white rounded-lg font-semibold transition-colors disabled:opacity-50"
             >
-              Отмена
+              {t('shared.cancel')}
             </button>
           </div>
         </div>

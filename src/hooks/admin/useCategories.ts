@@ -1,4 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useTranslations } from 'next-intl';
 
 export interface Category {
   id: string;
@@ -70,6 +71,7 @@ const deleteCategoryAPI = async (id: string) => {
 // React Query Hook
 export function useCategories() {
   const queryClient = useQueryClient();
+  const t = useTranslations('admin');
 
   // Query for fetching categories
   const {
@@ -125,7 +127,7 @@ export function useCategories() {
   };
 
   const deleteCategory = async (id: string) => {
-    if (!confirm('Удалить категорию? Все продукты в ней также будут удалены.')) {
+    if (!confirm(t('useCategories.confirmDelete'))) {
       return false;
     }
     await deleteMutation.mutateAsync(id);

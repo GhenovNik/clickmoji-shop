@@ -1,0 +1,18 @@
+{
+  "fallbackLink": "If the button does not work, open this link: {url}",
+  "verification": {
+    "subject": "Confirm your email for Clickmoji Shop",
+    "text": "Confirm your email with this link: {url}",
+    "heading": "Welcome to Clickmoji Shop",
+    "intro": "Confirm your email to sign in to your account.",
+    "button": "Confirm email"
+  },
+  "passwordReset": {
+    "subject": "Reset your Clickmoji Shop password",
+    "text": "Password reset link: {url}",
+    "heading": "Password reset",
+    "intro": "You asked to change your Clickmoji Shop password.",
+    "button": "Change password",
+    "expiry": "The link is valid for 1 hour."
+  }
+}

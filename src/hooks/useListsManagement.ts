@@ -4,6 +4,7 @@ import { useEffect } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useSession } from 'next-auth/react';
 import { useRouter } from 'next/navigation';
+import { useTranslations } from 'next-intl';
 import { listsQueryKey, useListsQuery } from './useListsQuery';
 
 export type { List } from './useListsQuery';
@@ -31,6 +32,7 @@ export function useListsManagement() {
   const router = useRouter();
   const { data: session } = useSession();
   const queryClient = useQueryClient();
+  const t = useTranslations('lists');
 
   // Redirect if not authenticated (must be in useEffect for SSR)
   useEffect(() => {
@@ -49,7 +51,7 @@ export function useListsManagement() {
       queryClient.invalidateQueries({ queryKey: listsQueryKey });
     },
     onError: (error: Error) => {
-      alert('Ошибка при создании списка');
+      alert(t('listsManagement.createFailed'));
     },
   });
 
@@ -60,13 +62,13 @@ export function useListsManagement() {
       queryClient.invalidateQueries({ queryKey: listsQueryKey });
     },
     onError: (error: Error) => {
-      alert('Ошибка при удалении списка');
+      alert(t('listsManagement.deleteFailed'));
     },
   });
 
   const createList = async (name: string) => {
     if (!name.trim()) {
-      alert('Введите название списка');
+      alert(t('listsManagement.nameRequired'));
       return false;
     }
 
@@ -79,7 +81,7 @@ export function useListsManagement() {
   };
 
   const deleteList = async (listId: string, listName: string) => {
-    if (!confirm(`Удалить список "${listName}"?`)) return;
+    if (!confirm(t('listsManagement.deleteConfirm', { listName }))) return;
 
     try {
       await deleteMutation.mutateAsync(listId);

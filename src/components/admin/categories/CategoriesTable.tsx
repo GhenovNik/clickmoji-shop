@@ -1,6 +1,7 @@
 'use client';
 
 import Image from 'next/image';
+import { useTranslations } from 'next-intl';
 
 interface Category {
   id: string;
@@ -28,6 +29,7 @@ export default function CategoriesTable({
   onDelete,
   onManageProducts,
 }: CategoriesTableProps) {
+  const t = useTranslations('admin');
   return (
     <>
       {/* Desktop Table View */}
@@ -37,19 +39,19 @@ export default function CategoriesTable({
             <thead className="bg-gray-50 border-b border-gray-200">
               <tr>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Порядок
+                  {t('columns.order')}
                 </th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Иконка
+                  {t('columns.icon')}
                 </th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Название
+                  {t('columns.name')}
                 </th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Продуктов
+                  {t('columns.products')}
                 </th>
                 <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Действия
+                  {t('columns.actions')}
                 </th>
               </tr>
             </thead>
@@ -89,19 +91,19 @@ export default function CategoriesTable({
                       onClick={() => onManageProducts(category)}
                       className="text-purple-600 hover:text-purple-900"
                     >
-                      Товары
+                      {t('categoriesTable.manageProducts')}
                     </button>
                     <button
                       onClick={() => onEdit(category)}
                       className="text-blue-600 hover:text-blue-900"
                     >
-                      Редактировать
+                      {t('shared.edit')}
                     </button>
                     <button
                       onClick={() => onDelete(category.id)}
                       className="text-red-600 hover:text-red-900"
                     >
-                      Удалить
+                      {t('shared.delete')}
                     </button>
                   </td>
                 </tr>
@@ -138,8 +140,12 @@ export default function CategoriesTable({
                 <h3 className="font-semibold text-gray-900">{category.name}</h3>
                 <p className="text-sm text-gray-500">{category.nameEn}</p>
                 <div className="mt-2 flex items-center gap-4 text-xs text-gray-600">
-                  <span>Порядок: {category.order}</span>
-                  <span>Товаров: {category._count?.products || 0}</span>
+                  <span>{t('categoriesTable.order', { order: category.order })}</span>
+                  <span>
+                    {t('categoriesTable.productsCount', {
+                      count: category._count?.products || 0,
+                    })}
+                  </span>
                 </div>
               </div>
             </div>
@@ -148,19 +154,19 @@ export default function CategoriesTable({
                 onClick={() => onManageProducts(category)}
                 className="bg-purple-50 text-purple-700 px-3 py-2 rounded-lg text-sm font-medium hover:bg-purple-100 transition-colors"
               >
-                Товары
+                {t('categoriesTable.manageProducts')}
               </button>
               <button
                 onClick={() => onEdit(category)}
                 className="bg-blue-50 text-blue-700 px-3 py-2 rounded-lg text-sm font-medium hover:bg-blue-100 transition-colors"
               >
-                Изменить
+                {t('shared.change')}
               </button>
               <button
                 onClick={() => onDelete(category.id)}
                 className="bg-red-50 text-red-700 px-3 py-2 rounded-lg text-sm font-medium hover:bg-red-100 transition-colors"
               >
-                Удалить
+                {t('shared.delete')}
               </button>
             </div>
           </div>

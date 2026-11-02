@@ -1,7 +1,9 @@
 import 'dotenv/config';
 import { readdirSync } from 'fs';
 import { resolve } from 'path';
+import { fileURLToPath } from 'url';
 import { spawn } from 'child_process';
+import { POSTGRES_DOCKER_IMAGE } from './postgres-docker-image';
 
 function run(cmd: string, args: string[]) {
   return new Promise<void>((resolvePromise, rejectPromise) => {
@@ -39,6 +41,29 @@ function getLatestDumpFile(backupDir: string): string {
   return latest;
 }
 
+export function buildRestoreDockerArgs({
+  pgUrl,
+  backupDir,
+  fileName,
+}: {
+  pgUrl: string;
+  backupDir: string;
+  fileName: string;
+}): string[] {
+  return [
+    'run',
+    '--rm',
+    '-e',
+    `DATABASE_URL=${pgUrl}`,
+    '--mount',
+    `type=bind,source=${backupDir},target=/backups`,
+    POSTGRES_DOCKER_IMAGE,
+    'sh',
+    '-lc',
+    `pg_restore --clean --if-exists --no-owner --no-privileges -d "$DATABASE_URL" "/backups/${fileName}"`,
+  ];
+}
+
 async function main() {
   const databaseUrl = process.env.DATABASE_URL?.trim();
   if (!databaseUrl) {
@@ -53,23 +78,14 @@ async function main() {
   console.log(`Restoring from: backups/${fileName}`);
   console.log('Warning: current data in target DB will be overwritten.');
 
-  await run('docker', [
-    'run',
-    '--rm',
-    '-e',
-    `DATABASE_URL=${pgUrl}`,
-    '--mount',
-    `type=bind,source=${backupDir},target=/backups`,
-    'postgres:16-alpine',
-    'sh',
-    '-lc',
-    `pg_restore --clean --if-exists --no-owner --no-privileges -d "$DATABASE_URL" "/backups/${fileName}"`,
-  ]);
+  await run('docker', buildRestoreDockerArgs({ pgUrl, backupDir, fileName }));
 
   console.log(`Restore completed from backups/${fileName}`);
 }
 
-main().catch((error) => {
-  console.error('Restore failed:', error instanceof Error ? error.message : error);
-  process.exit(1);
-});
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  main().catch((error) => {
+    console.error('Restore failed:', error instanceof Error ? error.message : error);
+    process.exit(1);
+  });
+}

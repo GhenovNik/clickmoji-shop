@@ -1,4 +1,6 @@
 import { NextResponse } from 'next/server';
+import { apiText } from '@/lib/api-messages';
+import { getRequestLocale } from '@/lib/auth-security';
 import Fuse from 'fuse.js';
 import enData from 'emojibase-data/en/data.json';
 import ruData from 'emojibase-data/ru/data.json';
@@ -6,21 +8,25 @@ import ruData from 'emojibase-data/ru/data.json';
 type EmojiEntry = {
   emoji: string;
   label: string;
+  labelEn?: string;
   group?: number;
   tags: string[];
   shortcodes: string[];
   hexcode: string;
 };
 
-// Build combined RU/EN dataset once per module load
+// Build combined RU/EN dataset once per module load. The hexcode index keeps this linear:
+// a per-entry Array.find over ~1,900 entries cost ~32 ms on every cold start.
+const enByHexcode = new Map((enData as EmojiEntry[]).map((item) => [item.hexcode, item]));
 const dataset: EmojiEntry[] = (ruData as EmojiEntry[])
   .map((ruItem) => {
-    const enItem =
-      (enData as EmojiEntry[]).find((i) => i.hexcode === ruItem.hexcode) ||
-      ({} as Partial<EmojiEntry>);
+    const enItem = enByHexcode.get(ruItem.hexcode) || ({} as Partial<EmojiEntry>);
     return {
       emoji: ruItem.emoji,
       label: ruItem.label || enItem.label || '',
+      // Both labels are kept; the search runs over the merged one, the answer shows the label of
+      // the request language.
+      labelEn: enItem.label || ruItem.label || '',
       group: ruItem.group ?? enItem.group,
       tags: ruItem.tags || enItem.tags || [],
       shortcodes: ruItem.shortcodes || enItem.shortcodes || [],
@@ -45,12 +51,13 @@ export async function GET(request: Request) {
     const query = searchParams.get('q')?.trim();
 
     if (!query) {
-      return NextResponse.json({ error: 'Query parameter required' }, { status: 400 });
+      return NextResponse.json({ error: await apiText(request, 'queryRequired') }, { status: 400 });
     }
 
+    const locale = getRequestLocale(request);
     const results = fuse.search(query.toLowerCase(), { limit: 5 }).map(({ item }) => ({
       emoji: item.emoji,
-      label: item.label,
+      label: locale === 'en' ? item.labelEn || item.label : item.label,
       group: item.group,
       shortcodes: item.shortcodes,
       // twemojiUrl could be added here if needed using item.hexcode
@@ -63,6 +70,9 @@ export async function GET(request: Request) {
     });
   } catch (error) {
     console.error('Error searching emoji:', error);
-    return NextResponse.json({ error: 'Failed to search emoji' }, { status: 500 });
+    return NextResponse.json(
+      { error: await apiText(request, 'searchEmojiFailed') },
+      { status: 500 }
+    );
   }
 }

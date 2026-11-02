@@ -61,6 +61,12 @@ vi.mock('openai', () => ({
   },
 }));
 
+// These checks are about the adapter's bytes; normalization has its own tests.
+vi.mock('@/lib/services/emoji-image-normalize', () => ({
+  NORMALIZED_EMOJI_MIME: 'image/webp',
+  normalizeEmojiImage: async (input: Buffer) => input,
+}));
+
 vi.mock('uploadthing/server', () => ({
   UTApi: class UploadThingDouble {
     async uploadFiles(file: File) {

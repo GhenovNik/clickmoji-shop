@@ -4,6 +4,7 @@ import {
   generateWithOpenAI,
   type EmojiImageClientFactory,
 } from '@/lib/services/emoji-image-adapters';
+import { NORMALIZED_EMOJI_MIME, normalizeEmojiImage } from '@/lib/services/emoji-image-normalize';
 import { getEmojiGenerationCacheKey } from '@/lib/prompts/emoji-generation';
 import type { EmojiProvider } from '@/lib/services/emoji-errors';
 
@@ -28,7 +29,7 @@ function getProvider(value?: string): EmojiProvider {
 
 function emojiFileName(productName?: string) {
   const slug = productName?.toLowerCase().trim().replace(/\s+/g, '-') || 'product';
-  return `ai-emoji-${slug}-${Date.now()}.png`;
+  return `ai-emoji-${slug}-${Date.now()}.webp`;
 }
 
 export async function generateEmojiImage({
@@ -59,13 +60,14 @@ export async function generateEmojiImage({
   };
 }
 
-export async function uploadEmojiImage({
+// Stores a picture that is already normalized (a WebP from normalizeEmojiImage).
+export async function uploadNormalizedEmojiImage({
   imageBuffer,
   productName,
   utapi = new UTApi(),
 }: UploadEmojiImageOptions) {
   const fileName = emojiFileName(productName);
-  const file = new File([new Uint8Array(imageBuffer)], fileName, { type: 'image/png' });
+  const file = new File([new Uint8Array(imageBuffer)], fileName, { type: NORMALIZED_EMOJI_MIME });
   const uploadResult = await utapi.uploadFiles(file);
 
   if (!uploadResult || uploadResult.error) {
@@ -81,6 +83,16 @@ export async function uploadEmojiImage({
     imageUrl,
     fileName,
   };
+}
+
+export async function uploadEmojiImage({
+  imageBuffer,
+  productName,
+  utapi,
+}: UploadEmojiImageOptions) {
+  // Every stored emoji is normalized: no white field, the same margins, a fixed 256 WebP.
+  const normalized = await normalizeEmojiImage(imageBuffer);
+  return uploadNormalizedEmojiImage({ imageBuffer: normalized, productName, utapi });
 }
 
 export function base64ToImageBuffer(base64: string) {

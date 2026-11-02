@@ -2,24 +2,26 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
+import { useTranslations } from 'next-intl';
 import { useSession } from 'next-auth/react';
 import { ShoppingCart, History, Star, Grid, LogIn } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 const authenticatedNavItems = [
-  { href: '/lists', label: 'Списки', icon: ShoppingCart, emoji: '🛒' },
-  { href: '/categories', label: 'Категории', icon: Grid, emoji: '📁' },
-  { href: '/categories/favorites', label: 'Избранное', icon: Star, emoji: '⭐' },
-  { href: '/history', label: 'История', icon: History, emoji: '📜' },
-];
+  { href: '/lists', label: 'lists', icon: ShoppingCart, emoji: '🛒' },
+  { href: '/categories', label: 'categories', icon: Grid, emoji: '📁' },
+  { href: '/categories/favorites', label: 'favorites', icon: Star, emoji: '⭐' },
+  { href: '/history', label: 'history', icon: History, emoji: '📜' },
+] as const;
 
 const anonymousNavItems = [
-  { href: '/categories', label: 'Каталог', icon: Grid, emoji: '📁' },
-  { href: '/login', label: 'Войти', icon: LogIn, emoji: '🔐' },
-];
+  { href: '/categories', label: 'catalog', icon: Grid, emoji: '📁' },
+  { href: '/login', label: 'login', icon: LogIn, emoji: '🔐' },
+] as const;
 
 export default function MobileNav() {
   const pathname = usePathname();
+  const t = useTranslations('nav');
   const { data: session } = useSession();
   const navItems = session?.user ? authenticatedNavItems : anonymousNavItems;
 
@@ -57,7 +59,9 @@ export default function MobileNav() {
                   <div className="absolute -top-1 -right-1 w-2 h-2 bg-secondary rounded-full" />
                 )}
               </div>
-              <span className="text-[10px] font-bold uppercase tracking-wider">{item.label}</span>
+              <span className="text-[10px] font-bold uppercase tracking-wider">
+                {t(item.label)}
+              </span>
             </Link>
           );
         })}

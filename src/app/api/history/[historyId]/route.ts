@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { apiText } from '@/lib/api-messages';
 import { prisma } from '@/lib/prisma';
 import { requireUser } from '@/lib/auth-guards';
 
@@ -19,7 +20,10 @@ export async function DELETE(
     });
 
     if (!history) {
-      return NextResponse.json({ error: 'History not found' }, { status: 404 });
+      return NextResponse.json(
+        { error: await apiText(request, 'historyNotFound') },
+        { status: 404 }
+      );
     }
 
     await prisma.listHistory.delete({ where: { id: historyId } });
@@ -27,6 +31,9 @@ export async function DELETE(
     return NextResponse.json({ success: true });
   } catch (error) {
     console.error('Error deleting history:', error);
-    return NextResponse.json({ error: 'Failed to delete history' }, { status: 500 });
+    return NextResponse.json(
+      { error: await apiText(request, 'deleteHistoryFailed') },
+      { status: 500 }
+    );
   }
 }

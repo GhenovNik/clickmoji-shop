@@ -1,8 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { runAuditCheck } from './run';
 import type { Decision } from './types';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import {
+  EMPTY_PROD,
   GHSA_BRACES,
+  REPO_ROOT,
   allowlistJson,
   entry,
   fixturesRunner,
@@ -213,6 +217,26 @@ describe('AC-7 allowlist file schema', () => {
       now: new Date(NOW),
     });
 
+    expect(decision.exitCode).toBe(0);
+  });
+});
+
+describe('repository audit-allowlist.json', () => {
+  // `npm run audit:all` (CI "Dependency audit") rejects the whole allowlist once any entry has
+  // expired, even when the advisory it covered is no longer reported. The day after the last
+  // reviewed expiry the repository file must still pass that check.
+  it('has no exception that turns audit:all red after 2026-11-04', async () => {
+    const raw = readFileSync(path.join(REPO_ROOT, 'audit-allowlist.json'), 'utf8');
+
+    const decision = await runAuditCheck({
+      // Both reports empty, as `npm audit` reports for the current lockfile.
+      runner: fixturesRunner(EMPTY_PROD, EMPTY_PROD).runner,
+      readAllowlistFile: () => raw,
+      findProjectNpmrc: () => null,
+      now: new Date('2026-11-05T00:00:00.000Z'),
+    });
+
+    expect(text(decision)).not.toContain('is in the past');
     expect(decision.exitCode).toBe(0);
   });
 });

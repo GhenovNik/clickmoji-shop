@@ -1,6 +1,8 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
+import sharp from 'sharp';
 import { describe, expect, it } from 'vitest';
+import { TINY_PNG_BYTES } from '@/test/emoji-image-fixtures';
 
 function read(relativePath: string) {
   return readFileSync(path.join(process.cwd(), relativePath), 'utf8');
@@ -40,12 +42,12 @@ describe('UploadThing security contract', () => {
     expect(read('src/lib/uploadthing.ts')).toContain('generateReactHelpers<OurFileRouter>()');
   });
 
-  it('uploads emoji buffers through injectable UTApi-compatible client', async () => {
+  it('uploads normalized emoji WebP through injectable UTApi-compatible client', async () => {
     const { uploadEmojiImage } = await import('./services/emoji-assets');
     const uploadedFiles: File[] = [];
 
     const result = await uploadEmojiImage({
-      imageBuffer: Buffer.from('png-bytes'),
+      imageBuffer: TINY_PNG_BYTES,
       productName: 'Test Milk',
       utapi: {
         uploadFiles: async (file: File) => {
@@ -56,8 +58,10 @@ describe('UploadThing security contract', () => {
     });
 
     expect(result.imageUrl).toBe('https://utfs.io/f/test-file.png');
-    expect(result.fileName).toMatch(/^ai-emoji-test-milk-\d+\.png$/);
+    expect(result.fileName).toMatch(/^ai-emoji-test-milk-\d+\.webp$/);
     expect(uploadedFiles).toHaveLength(1);
-    expect(uploadedFiles[0].type).toBe('image/png');
+    expect(uploadedFiles[0].type).toBe('image/webp');
+    const uploaded = await sharp(Buffer.from(await uploadedFiles[0].arrayBuffer())).metadata();
+    expect(uploaded).toMatchObject({ format: 'webp', width: 256, height: 256, hasAlpha: true });
   });
 });

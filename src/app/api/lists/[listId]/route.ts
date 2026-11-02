@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server';
+import { apiText } from '@/lib/api-messages';
 import { prisma } from '@/lib/prisma';
 import { requireUser } from '@/lib/auth-guards';
+import { visibleItemsWhere } from '@/lib/product-visibility';
 
 // GET /api/lists/[listId] - fetch a shopping list.
 export async function GET(request: Request, { params }: { params: Promise<{ listId: string }> }) {
@@ -18,6 +20,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ list
       },
       include: {
         items: {
+          where: visibleItemsWhere(session.user.id),
           include: {
             product: {
               include: {
@@ -29,20 +32,20 @@ export async function GET(request: Request, { params }: { params: Promise<{ list
         },
         _count: {
           select: {
-            items: true,
+            items: { where: visibleItemsWhere(session.user.id) },
           },
         },
       },
     });
 
     if (!list) {
-      return NextResponse.json({ error: 'List not found' }, { status: 404 });
+      return NextResponse.json({ error: await apiText(request, 'listNotFound') }, { status: 404 });
     }
 
     return NextResponse.json(list);
   } catch (error) {
     console.error('Error fetching list:', error);
-    return NextResponse.json({ error: 'Failed to fetch list' }, { status: 500 });
+    return NextResponse.json({ error: await apiText(request, 'fetchListFailed') }, { status: 500 });
   }
 }
 
@@ -102,13 +105,16 @@ export async function PUT(request: Request, { params }: { params: Promise<{ list
     });
 
     if (!list) {
-      return NextResponse.json({ error: 'List not found' }, { status: 404 });
+      return NextResponse.json({ error: await apiText(request, 'listNotFound') }, { status: 404 });
     }
 
     return NextResponse.json(list);
   } catch (error) {
     console.error('Error updating list:', error);
-    return NextResponse.json({ error: 'Failed to update list' }, { status: 500 });
+    return NextResponse.json(
+      { error: await apiText(request, 'updateListFailed') },
+      { status: 500 }
+    );
   }
 }
 
@@ -166,12 +172,15 @@ export async function DELETE(
     });
 
     if (!deletedList) {
-      return NextResponse.json({ error: 'List not found' }, { status: 404 });
+      return NextResponse.json({ error: await apiText(request, 'listNotFound') }, { status: 404 });
     }
 
     return NextResponse.json({ success: true });
   } catch (error) {
     console.error('Error deleting list:', error);
-    return NextResponse.json({ error: 'Failed to delete list' }, { status: 500 });
+    return NextResponse.json(
+      { error: await apiText(request, 'deleteListFailed') },
+      { status: 500 }
+    );
   }
 }

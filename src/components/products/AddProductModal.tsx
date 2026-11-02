@@ -2,6 +2,8 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { useLocale, useTranslations } from 'next-intl';
+import { localizedName } from '@/lib/catalog-name';
 
 interface AddProductModalProps {
   categoryId: string;
@@ -15,7 +17,7 @@ type SmartCreateProduct = {
   id: string;
   name: string;
   emoji: string;
-  nameEn?: string;
+  nameEn?: string | null;
   categoryId?: string;
   isCustom?: boolean;
   imageUrl?: string | null;
@@ -32,6 +34,9 @@ export default function AddProductModal({
   const [isCreating, setIsCreating] = useState(false);
   const [error, setError] = useState('');
   const router = useRouter();
+  const t = useTranslations('catalog');
+  const tCommon = useTranslations('common');
+  const locale = useLocale();
 
   if (!isOpen) return null;
 
@@ -40,7 +45,7 @@ export default function AddProductModal({
     setError('');
 
     if (!productName.trim()) {
-      setError('Введите название товара');
+      setError(t('addProduct.nameRequired'));
       return;
     }
 
@@ -59,21 +64,21 @@ export default function AddProductModal({
       const data = await res.json();
 
       if (!res.ok) {
-        throw new Error(data.error || 'Ошибка при создании товара');
+        throw new Error(data.error || t('addProduct.createFailed'));
       }
 
+      const createdName = localizedName(data.product, locale);
       if (data.exists) {
-        alert(`Товар "${data.product.name}" уже существует`);
+        alert(t('addProduct.exists', { name: createdName }));
       } else {
-        let message = `Товар "${data.product.name}" создан!`;
+        let message = t('addProduct.created', { name: createdName });
         if (data.customEmojiGenerated) {
-          message += ' 🎨 С уникальным AI-изображением!';
+          message += ` ${t('shared.uniqueImage')}`;
         } else {
           message += ` ${data.product.emoji}`;
         }
-        if (data.aiSuggestion?.reasoning) {
-          message += `\n\n${data.aiSuggestion.reasoning}`;
-        }
+        // The model's own `reasoning` is free English text whatever the interface language, so it
+        // stays a diagnostic field of the response and is not shown to the shopper.
         alert(message);
       }
 
@@ -85,7 +90,7 @@ export default function AddProductModal({
       onClose();
       router.refresh();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Произошла ошибка');
+      setError(err instanceof Error ? err.message : t('addProduct.genericError'));
     } finally {
       setIsCreating(false);
     }
@@ -101,7 +106,7 @@ export default function AddProductModal({
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50 p-4">
       <div className="bg-white rounded-2xl shadow-xl max-w-md w-full p-6">
         <div className="flex justify-between items-center mb-4">
-          <h2 className="text-2xl font-bold text-gray-900">Добавить товар</h2>
+          <h2 className="text-2xl font-bold text-gray-900">{t('addProduct.title')}</h2>
           <button
             onClick={handleClose}
             className="text-gray-400 hover:text-gray-600 text-2xl leading-none"
@@ -111,20 +116,23 @@ export default function AddProductModal({
         </div>
 
         <p className="text-gray-600 mb-4">
-          Категория: <span className="font-semibold">{categoryName}</span>
+          {t.rich('addProduct.category', {
+            category: categoryName,
+            name: (chunks) => <span className="font-semibold">{chunks}</span>,
+          })}
         </p>
 
         <form onSubmit={handleSubmit}>
           <div className="mb-4">
             <label htmlFor="productName" className="block text-sm font-medium text-gray-700 mb-2">
-              Название товара
+              {t('addProduct.nameLabel')}
             </label>
             <input
               type="text"
               id="productName"
               value={productName}
               onChange={(e) => setProductName(e.target.value)}
-              placeholder="Например: Манго, Соевое молоко, Чиа семена"
+              placeholder={t('addProduct.namePlaceholder')}
               className="w-full px-4 py-3 border-2 border-gray-300 rounded-lg focus:border-blue-500 focus:outline-none text-gray-900"
               autoFocus
               disabled={isCreating}
@@ -135,12 +143,12 @@ export default function AddProductModal({
           <div className="bg-gradient-to-r from-purple-50 to-indigo-50 rounded-lg p-4 mb-4">
             <p className="text-sm font-semibold text-gray-800 mb-2 flex items-center gap-2">
               <span>✨</span>
-              <span>Умное создание товара</span>
+              <span>{t('addProduct.smartTitle')}</span>
             </p>
             <ul className="text-xs text-gray-600 space-y-1 ml-6">
-              <li>• Подберёт категорию</li>
-              <li>• Для обычных товаров (рыба 🐟) - Unicode emoji</li>
-              <li>• Для специфичных (карп, сазан) - уникальное AI-изображение 🎨</li>
+              <li>• {t('addProduct.smartCategory')}</li>
+              <li>• {t('addProduct.smartEmoji')}</li>
+              <li>• {t('addProduct.smartImage')}</li>
             </ul>
           </div>
 
@@ -151,7 +159,7 @@ export default function AddProductModal({
               disabled={isCreating}
               className="flex-1 px-4 py-3 border-2 border-gray-300 text-gray-700 rounded-lg font-semibold hover:bg-gray-50 transition-colors disabled:opacity-50"
             >
-              Отмена
+              {tCommon('cancel')}
             </button>
             <button
               type="submit"
@@ -161,12 +169,12 @@ export default function AddProductModal({
               {isCreating ? (
                 <>
                   <span className="animate-spin">⏳</span>
-                  <span>Создание (может занять 5-10 сек)...</span>
+                  <span>{t('addProduct.creating')}</span>
                 </>
               ) : (
                 <>
                   <span>✨</span>
-                  <span>Создать</span>
+                  <span>{t('addProduct.create')}</span>
                 </>
               )}
             </button>

@@ -5,7 +5,11 @@ import Image from 'next/image';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useRouter } from 'next/navigation';
 import { useSession } from 'next-auth/react';
+import { useLocale, useTranslations } from 'next-intl';
 import { listsQueryKey, useActiveList } from '@/hooks/useListsQuery';
+import { queryKeys } from '@/lib/query-keys';
+import { localizedName } from '@/lib/catalog-name';
+import { productImageUrl } from '@/lib/product-image';
 
 type SearchProduct = {
   id: string;
@@ -14,19 +18,24 @@ type SearchProduct = {
   emoji: string;
   isCustom: boolean;
   imageUrl: string | null;
+  imageUrlEn?: string | null;
   variants?: { id: string; name: string; nameEn: string; emoji: string }[];
   category: {
     id: string;
     name: string;
+    nameEn?: string | null;
     emoji: string;
     isCustom: boolean;
     imageUrl: string | null;
   };
 };
 
-const searchProductsAPI = async (query: string): Promise<SearchProduct[]> => {
+const searchProductsAPI = async (query: string, locale: string): Promise<SearchProduct[]> => {
   if (!query.trim()) return [];
-  const res = await fetch(`/api/search?q=${encodeURIComponent(query)}`);
+  // The language is sent explicitly, so a response always matches the key it is cached under.
+  const res = await fetch(
+    `/api/search?q=${encodeURIComponent(query)}&locale=${encodeURIComponent(locale)}`
+  );
   if (!res.ok) throw new Error('Search failed');
   return res.json();
 };
@@ -71,6 +80,8 @@ export default function ProductSearch() {
   const router = useRouter();
   const queryClient = useQueryClient();
   const { data: session } = useSession();
+  const t = useTranslations('catalog');
+  const locale = useLocale();
 
   // Debounce query
   useEffect(() => {
@@ -83,8 +94,8 @@ export default function ProductSearch() {
 
   // Search query
   const { data: results = [], isLoading } = useQuery({
-    queryKey: ['search', debouncedQuery],
-    queryFn: () => searchProductsAPI(debouncedQuery),
+    queryKey: queryKeys.searchQuery(debouncedQuery, locale),
+    queryFn: () => searchProductsAPI(debouncedQuery, locale),
     enabled: debouncedQuery.trim().length > 0,
   });
 
@@ -121,7 +132,7 @@ export default function ProductSearch() {
     }) => addProductToListAPI(listId, productId, variantId),
     onSuccess: (_, variables) => {
       queryClient.invalidateQueries({ queryKey: listsQueryKey });
-      queryClient.invalidateQueries({ queryKey: ['list', variables.listId] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.list(variables.listId) });
     },
   });
 
@@ -132,7 +143,7 @@ export default function ProductSearch() {
     }
 
     if (!activeListId) {
-      alert('Сначала выберите список покупок');
+      alert(t('shared.selectListFirst'));
       return;
     }
 
@@ -147,7 +158,7 @@ export default function ProductSearch() {
 
       // Successfully added (duplicates are now allowed)
       if (result.createdItems && result.createdItems.length > 0) {
-        alert(`${product.emoji} ${product.name} добавлен в список!`);
+        alert(t('search.added', { emoji: product.emoji, name: localizedName(product, locale) }));
       }
 
       setQuery('');
@@ -159,7 +170,7 @@ export default function ProductSearch() {
       router.push(`/lists/${activeListId}`);
     } catch (error) {
       console.error('Error adding product:', error);
-      alert('Ошибка при добавлении товара');
+      alert(t('shared.addProductFailed'));
     }
   };
 
@@ -170,7 +181,7 @@ export default function ProductSearch() {
     }
 
     if (!activeListId) {
-      alert('Сначала выберите список покупок');
+      alert(t('shared.selectListFirst'));
       return;
     }
 
@@ -191,16 +202,18 @@ export default function ProductSearch() {
       });
 
       // Product successfully added (duplicates are now allowed)
+      const created = {
+        emoji: createResult.product.emoji,
+        name: localizedName(createResult.product, locale),
+      };
       if (createResult.exists) {
         // Product existed, was successfully added
-        alert(
-          `${createResult.product.emoji} ${createResult.product.name} найден и добавлен в список!`
-        );
+        alert(t('search.foundAndAdded', created));
       } else {
         // Product was created and added
-        let message = `${createResult.product.emoji} ${createResult.product.name} создан с помощью AI и добавлен в список!`;
+        let message = t('search.createdAndAdded', created);
         if (createResult.customEmojiGenerated) {
-          message += '\n🎨 С уникальным AI-изображением!';
+          message += `\n${t('shared.uniqueImage')}`;
         }
         alert(message);
       }
@@ -212,11 +225,7 @@ export default function ProductSearch() {
       router.push(`/lists/${activeListId}`);
     } catch (error) {
       console.error('Error creating product with AI:', error);
-      alert(
-        error instanceof Error
-          ? error.message
-          : 'Ошибка при создании товара. Попробуйте позже или обратитесь к администратору.'
-      );
+      alert(error instanceof Error ? error.message : t('search.createFailed'));
     } finally {
       setIsCreating(false);
     }
@@ -230,7 +239,7 @@ export default function ProductSearch() {
           type="text"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          placeholder="Поиск товаров..."
+          placeholder={t('search.placeholder')}
           className="w-full px-4 py-3 pr-10 rounded-xl border-2 border-gray-300 focus:border-blue-500 focus:outline-none text-gray-900"
         />
         <div className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400">🔍</div>
@@ -240,10 +249,10 @@ export default function ProductSearch() {
       {isOpen && (
         <div className="absolute z-10 w-full mt-2 bg-white rounded-xl shadow-lg max-h-96 overflow-y-auto">
           {isLoading ? (
-            <div className="p-4 text-center text-gray-500">Поиск...</div>
+            <div className="p-4 text-center text-gray-500">{t('search.searching')}</div>
           ) : results.length === 0 ? (
             <div className="p-4">
-              <p className="text-center text-gray-500 mb-3">Ничего не найдено</p>
+              <p className="text-center text-gray-500 mb-3">{t('search.noResults')}</p>
               <button
                 onClick={handleCreateWithAI}
                 disabled={isCreating || !query.trim()}
@@ -252,87 +261,91 @@ export default function ProductSearch() {
                 {isCreating ? (
                   <>
                     <span className="animate-spin">⏳</span>
-                    <span>Создание (5-10 сек)...</span>
+                    <span>{t('search.creating')}</span>
                   </>
                 ) : (
                   <>
                     <span>✨</span>
-                    <span>Создать через AI</span>
+                    <span>{t('search.createWithAi')}</span>
                   </>
                 )}
               </button>
               <p className="text-xs text-gray-400 mt-2 text-center">
-                AI определит категорию и подберёт значок
+                {t('search.aiHintCategory')}
                 <br />
-                Для специфичных товаров сгенерирует уникальное изображение
+                {t('search.aiHintImage')}
               </p>
             </div>
           ) : (
             <div className="py-2">
-              {results.map((product) => (
-                <button
-                  key={product.id}
-                  onClick={() => handleAddProduct(product)}
-                  disabled={addProductMutation.isPending}
-                  className="w-full px-4 py-3 hover:bg-gray-100 flex items-center gap-3 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  {product.isCustom && product.imageUrl ? (
-                    <Image
-                      src={product.imageUrl}
-                      alt={product.name}
-                      width={48}
-                      height={48}
-                      className="w-12 h-12 object-contain"
-                    />
-                  ) : (
-                    <span className="text-3xl">{product.emoji}</span>
-                  )}
-                  <div className="flex-1 text-left">
-                    <p className="font-medium text-gray-900">{product.name}</p>
-                    <p className="text-sm text-gray-500 flex items-center gap-1">
-                      {product.category.isCustom && product.category.imageUrl ? (
-                        <Image
-                          src={product.category.imageUrl}
-                          alt=""
-                          width={20}
-                          height={20}
-                          className="w-5 h-5 object-contain inline-block"
-                        />
-                      ) : (
-                        <span>{product.category.emoji}</span>
-                      )}
-                      <span>{product.category.name}</span>
-                    </p>
-                    {product.variants && product.variants.length > 0 && (
-                      <div className="mt-2">
-                        <select
-                          value={selectedVariants[product.id] || ''}
-                          onChange={(event) => {
-                            event.stopPropagation();
-                            setSelectedVariants((current) => ({
-                              ...current,
-                              [product.id]: event.target.value || null,
-                            }));
-                          }}
-                          onClick={(event) => event.stopPropagation()}
-                          className="mt-1 w-full rounded-md border border-gray-300 px-2 py-1 text-xs text-gray-900"
-                        >
-                          <option value="">Без варианта</option>
-                          {product.variants.map((variant) => (
-                            <option key={variant.id} value={variant.id}>
-                              {variant.emoji ? `${variant.emoji} ` : ''}
-                              {variant.name}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
+              {results.map((product) => {
+                const name = localizedName(product, locale);
+                const imageUrl = productImageUrl(product, locale);
+                return (
+                  <button
+                    key={product.id}
+                    onClick={() => handleAddProduct(product)}
+                    disabled={addProductMutation.isPending}
+                    className="w-full px-4 py-3 hover:bg-gray-100 flex items-center gap-3 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {product.isCustom && imageUrl ? (
+                      <Image
+                        src={imageUrl}
+                        alt={name}
+                        width={48}
+                        height={48}
+                        className="w-12 h-12 object-contain"
+                      />
+                    ) : (
+                      <span className="text-3xl">{product.emoji}</span>
                     )}
-                  </div>
-                  <span className="text-green-600 font-semibold">
-                    {addProductMutation.isPending ? '⏳' : '+'}
-                  </span>
-                </button>
-              ))}
+                    <div className="flex-1 text-left">
+                      <p className="font-medium text-gray-900">{name}</p>
+                      <p className="text-sm text-gray-500 flex items-center gap-1">
+                        {product.category.isCustom && product.category.imageUrl ? (
+                          <Image
+                            src={product.category.imageUrl}
+                            alt=""
+                            width={20}
+                            height={20}
+                            className="w-5 h-5 object-contain inline-block"
+                          />
+                        ) : (
+                          <span>{product.category.emoji}</span>
+                        )}
+                        <span>{localizedName(product.category, locale)}</span>
+                      </p>
+                      {product.variants && product.variants.length > 0 && (
+                        <div className="mt-2">
+                          <select
+                            value={selectedVariants[product.id] || ''}
+                            onChange={(event) => {
+                              event.stopPropagation();
+                              setSelectedVariants((current) => ({
+                                ...current,
+                                [product.id]: event.target.value || null,
+                              }));
+                            }}
+                            onClick={(event) => event.stopPropagation()}
+                            className="mt-1 w-full rounded-md border border-gray-300 px-2 py-1 text-xs text-gray-900"
+                          >
+                            <option value="">{t('shared.noVariant')}</option>
+                            {product.variants.map((variant) => (
+                              <option key={variant.id} value={variant.id}>
+                                {variant.emoji ? `${variant.emoji} ` : ''}
+                                {localizedName(variant, locale)}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      )}
+                    </div>
+                    <span className="text-green-600 font-semibold">
+                      {addProductMutation.isPending ? '⏳' : '+'}
+                    </span>
+                  </button>
+                );
+              })}
             </div>
           )}
         </div>

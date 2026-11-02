@@ -4,15 +4,19 @@ import { Suspense, useEffect } from 'react';
 import Link from 'next/link';
 import { useSession } from 'next-auth/react';
 import { useSearchParams } from 'next/navigation';
+import { useTranslations } from 'next-intl';
 import { useLists } from '@/store/lists';
 import { useFavorites } from '@/hooks/useFavorites';
 import FavoriteCard from '@/components/favorites/FavoriteCard';
 import ProductSelectionBar from '@/components/products/ProductSelectionBar';
+import { favoriteKey } from '@/lib/favorites';
 
 function FavoritesPageContent() {
   const { data: session } = useSession();
   const searchParams = useSearchParams();
   const { setActiveList } = useLists();
+  const t = useTranslations('catalog');
+  const tCommon = useTranslations('common');
 
   // Set active list from URL parameter
   useEffect(() => {
@@ -34,7 +38,7 @@ function FavoritesPageContent() {
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
-        <div className="text-2xl">Loading...</div>
+        <div className="text-2xl">{tCommon('loading')}</div>
       </div>
     );
   }
@@ -48,25 +52,23 @@ function FavoritesPageContent() {
       <div className="max-w-4xl mx-auto">
         <div className="text-center mb-8">
           <div className="text-6xl mb-2">⭐</div>
-          <h1 className="text-4xl font-bold mb-2 text-gray-900">Избранное</h1>
-          <p className="text-gray-700">Ваши любимые товары</p>
+          <h1 className="text-4xl font-bold mb-2 text-gray-900">{t('favoritesPage.title')}</h1>
+          <p className="text-gray-700">{t('favoritesPage.subtitle')}</p>
         </div>
 
         {favorites.length === 0 ? (
           <div className="text-center py-12 bg-white rounded-2xl shadow-md">
             <div className="text-4xl mb-4">☆</div>
-            <p className="text-gray-600 mb-2">У вас пока нет избранных товаров</p>
-            <p className="text-sm text-gray-500">
-              Добавляйте товары в избранное нажатием на звездочку
-            </p>
+            <p className="text-gray-600 mb-2">{t('favoritesPage.emptyTitle')}</p>
+            <p className="text-sm text-gray-500">{t('favoritesPage.emptyHint')}</p>
           </div>
         ) : (
-          <div className="grid grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
+          <div className="grid grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3 md:gap-4">
             {favorites.map((favorite) => (
               <FavoriteCard
                 key={favorite.id}
                 favorite={favorite}
-                isSelected={selectedProducts.has(favorite.product.id)}
+                isSelected={selectedProducts.has(favoriteKey(favorite))}
                 onToggle={toggleProduct}
                 onRemove={removeFromFavorites}
               />
@@ -76,7 +78,7 @@ function FavoritesPageContent() {
 
         <div className="text-center mt-8">
           <Link href="/categories" className="text-blue-600 hover:text-blue-800 underline">
-            ← Назад к категориям
+            ← {t('shared.backToCategories')}
           </Link>
         </div>
       </div>
@@ -92,11 +94,13 @@ function FavoritesPageContent() {
 }
 
 export default function FavoritesPage() {
+  const t = useTranslations('common');
+
   return (
     <Suspense
       fallback={
         <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 p-6 flex items-center justify-center">
-          <div className="text-2xl">Загрузка...</div>
+          <div className="text-2xl">{t('loading')}</div>
         </div>
       }
     >

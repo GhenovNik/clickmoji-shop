@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server';
+import { apiText } from '@/lib/api-messages';
 import { prisma } from '@/lib/prisma';
 import { requireUser } from '@/lib/auth-guards';
+import { visibleProductsWhere } from '@/lib/product-visibility';
 
 export async function POST(
   request: Request,
@@ -21,7 +23,10 @@ export async function POST(
     });
 
     if (!history) {
-      return NextResponse.json({ error: 'History not found' }, { status: 404 });
+      return NextResponse.json(
+        { error: await apiText(request, 'historyNotFound') },
+        { status: 404 }
+      );
     }
 
     const productIds = history.items
@@ -33,7 +38,7 @@ export async function POST(
 
     const [products, variants] = await Promise.all([
       prisma.product.findMany({
-        where: { id: { in: productIds } },
+        where: { id: { in: productIds }, ...visibleProductsWhere(session.user.id) },
         select: { id: true },
       }),
       prisma.productVariant.findMany({
@@ -57,22 +62,28 @@ export async function POST(
         isPurchased: false,
       }));
 
-    const list = await prisma.list.create({
-      data: {
-        userId: session.user.id,
-        name: name || history.listName,
-        isActive: false,
-      },
-    });
-
-    if (itemsToCreate.length > 0) {
-      await prisma.item.createMany({
-        data: itemsToCreate.map((item) => ({
-          ...item,
-          listId: list.id,
-        })),
+    // The list and its items are created together: if an insert fails (for example a product
+    // deleted after the lookup above), no empty or half-filled list is left behind.
+    const list = await prisma.$transaction(async (tx) => {
+      const created = await tx.list.create({
+        data: {
+          userId: session.user.id,
+          name: name || history.listName,
+          isActive: false,
+        },
       });
-    }
+
+      if (itemsToCreate.length > 0) {
+        await tx.item.createMany({
+          data: itemsToCreate.map((item) => ({
+            ...item,
+            listId: created.id,
+          })),
+        });
+      }
+
+      return created;
+    });
 
     return NextResponse.json({
       listId: list.id,
@@ -81,6 +92,9 @@ export async function POST(
     });
   } catch (error) {
     console.error('Error restoring history:', error);
-    return NextResponse.json({ error: 'Failed to restore history' }, { status: 500 });
+    return NextResponse.json(
+      { error: await apiText(request, 'restoreHistoryFailed') },
+      { status: 500 }
+    );
   }
 }

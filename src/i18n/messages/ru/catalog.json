@@ -1,0 +1,75 @@
+{
+  "shared": {
+    "productCount": "{count, plural, one {# товар} few {# товара} many {# товаров} other {# товара}}",
+    "noVariant": "Без варианта",
+    "variantsButton": "Варианты · {count}",
+    "variantsTitle": "{name}: варианты",
+    "addFavorite": "Добавить в избранное",
+    "removeFavorite": "Убрать из избранного",
+    "selectListFirst": "Сначала выберите список покупок",
+    "signInForFavorites": "Войдите чтобы добавить товары в избранное",
+    "addProductFailed": "Ошибка при добавлении товара",
+    "addProductsFailed": "Ошибка при добавлении товаров",
+    "uniqueImage": "🎨 С уникальным AI-изображением!",
+    "backToCategories": "Назад к категориям"
+  },
+  "categories": {
+    "title": "Выберите категорию",
+    "subtitle": "Выберите категорию товаров для вашего списка",
+    "favorites": "Избранное",
+    "historyLink": "История покупок"
+  },
+  "products": {
+    "subtitle": "Выберите товары одним нажатием",
+    "addOwn": "Добавить свой товар"
+  },
+  "favoritesPage": {
+    "title": "Избранное",
+    "subtitle": "Ваши любимые товары",
+    "emptyTitle": "У вас пока нет избранных товаров",
+    "emptyHint": "Добавляйте товары в избранное нажатием на звездочку"
+  },
+  "favoritesSection": {
+    "loading": "Загрузка избранного...",
+    "emptyTitle": "Избранные товары появятся здесь",
+    "emptyHint": "Добавляйте часто используемые товары в избранное",
+    "title": "Избранное",
+    "tapHint": "Нажмите на товар чтобы добавить в список покупок"
+  },
+  "search": {
+    "placeholder": "Поиск товаров...",
+    "searching": "Поиск...",
+    "noResults": "Ничего не найдено",
+    "createWithAi": "Создать через AI",
+    "creating": "Создание (5-10 сек)...",
+    "aiHintCategory": "AI определит категорию и подберёт значок",
+    "aiHintImage": "Для специфичных товаров сгенерирует уникальное изображение",
+    "added": "{emoji} {name} добавлен в список!",
+    "foundAndAdded": "{emoji} {name} найден и добавлен в список!",
+    "createdAndAdded": "{emoji} {name} создан с помощью AI и добавлен в список!",
+    "createFailed": "Ошибка при создании товара. Попробуйте позже или обратитесь к администратору."
+  },
+  "selectionBar": {
+    "selected": "Выбрано: {count}",
+    "add": "Добавить",
+    "adding": "Добавление...",
+    "signInToAdd": "Войти и добавить"
+  },
+  "addProduct": {
+    "title": "Добавить товар",
+    "category": "Категория: <name>{category}</name>",
+    "nameLabel": "Название товара",
+    "namePlaceholder": "Например: Манго, Соевое молоко, Чиа семена",
+    "nameRequired": "Введите название товара",
+    "smartTitle": "Умное создание товара",
+    "smartCategory": "Подберёт категорию",
+    "smartEmoji": "Для обычных товаров (рыба 🐟) - Unicode emoji",
+    "smartImage": "Для специфичных (карп, сазан) - уникальное AI-изображение 🎨",
+    "create": "Создать",
+    "creating": "Создание (может занять 5-10 сек)...",
+    "exists": "Товар \"{name}\" уже существует",
+    "created": "Товар \"{name}\" создан!",
+    "createFailed": "Ошибка при создании товара",
+    "genericError": "Произошла ошибка"
+  }
+}

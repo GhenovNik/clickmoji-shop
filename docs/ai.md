@@ -8,6 +8,24 @@ AI is used for emoji generation and product automation. Providers can be switche
   reachable only through the legacy `models.generateImages` adapter
 - OpenAI SDK: GPT Image (optional)
 
+## Text model selection
+
+The text model used by product automation (smart-create, bulk import, list import from free text)
+is configuration, not code. Unset, empty or whitespace-only `GOOGLE_TEXT_MODEL` uses the operator
+default `gemini-3.8-flash` (decision 2026-10-30). A non-empty value is trimmed and must match
+`^gemini-[a-z0-9]+(?:[.-][a-z0-9]+)*$` and must not be an image model id
+(`^gemini-[a-z0-9]+(?:[.-][a-z0-9]+)*-image(?:-[a-z0-9]+(?:[.-][a-z0-9]+)*)?$`). Anything else fails
+with a configuration error naming `GOOGLE_TEXT_MODEL` before any SDK call. `GOOGLE_TEXT_MODEL` still
+overrides the default, for example `gemini-3.5-flash-lite` on the free tier.
+
+The resolved model is passed to `models.generateContent({ model, contents, config: {
+responseMimeType: 'application/json' } })` and returned as `model` in the service response and the
+route body. JSON response mode is requested because the free-tier flash-lite model is less forgiving
+with free-form output; the existing parsing (markdown fences, control characters) stays as fallback.
+
+`gemini-2.5-flash` access is limited to existing users per Google release notes 2026-09-18;
+`gemini-3.5-flash-lite` remains available through `GOOGLE_TEXT_MODEL` when the free tier is used.
+
 ## Image model selection
 
 The image model is configuration, not code. Every value below is the operator default from the
@@ -260,15 +278,48 @@ Text automation prompts use `AI_PRODUCTS_PROMPT_VERSION` from
 `src/lib/services/ai-products.ts`. AI responses include prompt metadata where it is useful for
 debugging or cache strategy.
 
-## Rate limits
+## Rate limits and daily budget
 
-AI endpoints use `checkRateLimit` with the in-memory fallback or Upstash Redis when configured:
+AI endpoints use `checkRateLimit` with the in-memory fallback or Upstash Redis when configured.
+Without Upstash these hourly limits are counted per server instance and reset on a cold start, so
+on their own they do not bound spend:
 
 - `POST /api/emoji/generate`: `ai:emoji-generate:<userId>`, 20 requests/hour
 - `POST /api/emoji/upload`: `ai:emoji-upload:<userId>`, 40 requests/hour
 - `POST /api/products/bulk-import`: `ai:bulk-import:<userId>`, 10 requests/hour
 - `POST /api/products/smart-create`: `ai:smart-create:<userId>`, 20 requests/hour
 - `POST /api/lists/import-text`: `ai:import:<userId>`, 10 requests/hour
+
+Every paid provider call also takes a unit of a daily budget per user, stored in PostgreSQL
+(`ai_usage_counters`, `src/lib/ai-quota.ts`) and therefore shared by every instance, with or without
+Upstash. The unit is reserved right before the call it pays for:
+
+| Route                             | Auth  | Units                                                                               |
+| --------------------------------- | ----- | ----------------------------------------------------------------------------------- |
+| `POST /api/lists/import-text`     | user  | 1 for the text analysis                                                             |
+| `POST /api/products/smart-create` | user  | 1 for the text analysis, 1 more for the custom image when the analysis asks for one |
+| `POST /api/emoji/generate`        | admin | 1 for the image                                                                     |
+| `POST /api/products/bulk-import`  | admin | 1 for the analysis of the whole batch (one provider call)                           |
+
+Limit per role, read on every request (`AI_DAILY_CALLS_PER_USER` for users,
+`AI_DAILY_CALLS_PER_ADMIN` for administrators):
+
+- unset, empty or anything other than a plain non-negative integer (`abc`, `-1`, `1.5`): the default,
+  30 for users and 300 for administrators. These defaults are conservative placeholders, not a
+  product decision
+- `0`: paid AI is off for that role; the route answers `403` and makes no provider call
+- `N > 0`: at most `N` units per UTC calendar day; once they are used the route answers `429` with
+  `Retry-After` until the next UTC midnight
+
+Outcome of a reservation, by stage:
+
+1. Before the first (or only) paid call of a request: `403` (off), `429` (used up) or `503` (the
+   budget cannot be read: database error, migration not applied). No provider call is made and
+   nothing is written. This is the only stage of import-text, emoji/generate and bulk-import.
+2. smart-create, before the custom image, after the paid text analysis already succeeded: any
+   refusal (off, used up or unreadable budget) skips the image only. The request still succeeds,
+   the product is created with the Unicode emoji from the analysis (`customEmojiGenerated: false`),
+   the same outcome as a failed image generation. It does not answer `503`.
 
 ## Cache strategy
 

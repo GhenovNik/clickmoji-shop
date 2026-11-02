@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { auth } from '@/lib/auth';
 import { redirect } from 'next/navigation';
+import { getTranslations } from 'next-intl/server';
 
 export default async function AdminPage() {
   const session = await auth();
@@ -9,15 +10,17 @@ export default async function AdminPage() {
     redirect('/');
   }
 
+  const t = await getTranslations('admin');
+
   return (
     <div className="min-h-screen bg-gray-50">
       <div className="container mx-auto px-4 py-8">
         <div className="mb-8">
           <Link href="/" className="text-blue-600 hover:text-blue-700 text-sm mb-4 inline-block">
-            ← На главную
+            {t('dashboard.backHome')}
           </Link>
-          <h1 className="text-4xl font-bold text-gray-900">Админ-панель</h1>
-          <p className="text-gray-600 mt-2">Управление категориями, продуктами и пользователями</p>
+          <h1 className="text-4xl font-bold text-gray-900">{t('dashboard.title')}</h1>
+          <p className="text-gray-600 mt-2">{t('dashboard.subtitle')}</p>
         </div>
 
         <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
@@ -26,10 +29,10 @@ export default async function AdminPage() {
             className="block p-8 bg-white rounded-xl shadow-md hover:shadow-lg transition-shadow border border-gray-200"
           >
             <div className="text-5xl mb-4">🗂️</div>
-            <h2 className="text-2xl font-bold text-gray-900 mb-2">Категории</h2>
-            <p className="text-gray-600">
-              Управление категориями товаров, добавление новых и редактирование существующих
-            </p>
+            <h2 className="text-2xl font-bold text-gray-900 mb-2">
+              {t('dashboard.categoriesTitle')}
+            </h2>
+            <p className="text-gray-600">{t('dashboard.categoriesDescription')}</p>
           </Link>
 
           <Link
@@ -37,10 +40,10 @@ export default async function AdminPage() {
             className="block p-8 bg-white rounded-xl shadow-md hover:shadow-lg transition-shadow border border-gray-200"
           >
             <div className="text-5xl mb-4">🛍️</div>
-            <h2 className="text-2xl font-bold text-gray-900 mb-2">Продукты</h2>
-            <p className="text-gray-600">
-              Добавление новых продуктов, редактирование и загрузка кастомных изображений
-            </p>
+            <h2 className="text-2xl font-bold text-gray-900 mb-2">
+              {t('dashboard.productsTitle')}
+            </h2>
+            <p className="text-gray-600">{t('dashboard.productsDescription')}</p>
           </Link>
 
           <Link
@@ -48,10 +51,8 @@ export default async function AdminPage() {
             className="block p-8 bg-white rounded-xl shadow-md hover:shadow-lg transition-shadow border border-gray-200"
           >
             <div className="text-5xl mb-4">👥</div>
-            <h2 className="text-2xl font-bold text-gray-900 mb-2">Пользователи</h2>
-            <p className="text-gray-600">
-              Управление пользователями, назначение ролей и редактирование профилей
-            </p>
+            <h2 className="text-2xl font-bold text-gray-900 mb-2">{t('dashboard.usersTitle')}</h2>
+            <p className="text-gray-600">{t('dashboard.usersDescription')}</p>
           </Link>
         </div>
       </div>

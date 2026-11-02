@@ -1,15 +1,15 @@
 import { NextResponse } from 'next/server';
+import { apiText } from '@/lib/api-messages';
 import { requireAdmin } from '@/lib/auth-guards';
-import { checkRateLimit, rateLimitResponse } from '@/lib/auth-security';
-import { generateEmojiImage } from '@/lib/services/emoji-assets';
+import { checkRateLimit, getRequestLocale, rateLimitResponse } from '@/lib/auth-security';
+import { enforceAiQuota } from '@/lib/ai-quota';
+import { generateEmojiImage, uploadEmojiImage } from '@/lib/services/emoji-assets';
+import { recordEmojiLibraryItem } from '@/lib/services/emoji-library';
 import {
   EmojiProviderUnavailableError,
   IMAGE_PROVIDER_UNAVAILABLE_CODE,
   summarizeEmojiGenerationFailure,
 } from '@/lib/services/emoji-errors';
-
-const PROVIDER_UNAVAILABLE_MESSAGE =
-  'AI image generation is unavailable right now (provider quota or API key). Pick a regular emoji instead.';
 
 export async function POST(request: Request) {
   try {
@@ -18,10 +18,13 @@ export async function POST(request: Request) {
     if (guard instanceof Response) return guard;
     const { session } = guard;
 
-    const { productName, description } = await request.json();
+    const { productName, description, name, nameEn } = await request.json();
 
     if (!productName) {
-      return NextResponse.json({ error: 'Product name is required' }, { status: 400 });
+      return NextResponse.json(
+        { error: await apiText(request, 'productNameRequired') },
+        { status: 400 }
+      );
     }
 
     const userLimit = await checkRateLimit({
@@ -30,8 +33,12 @@ export async function POST(request: Request) {
       windowMs: 60 * 60 * 1000,
     });
     if (!userLimit.allowed) {
-      return rateLimitResponse(userLimit.resetAt);
+      return rateLimitResponse(userLimit.resetAt, getRequestLocale(request));
     }
+
+    // One unit of the administrator's daily AI budget for the image.
+    const quotaResponse = await enforceAiQuota(session.user, getRequestLocale(request));
+    if (quotaResponse) return quotaResponse;
 
     // Image generation is the only provider call of this route, so it is the only place where a
     // provider error can appear: FR-10 logging is applied here, and the catch below therefore only
@@ -44,19 +51,44 @@ export async function POST(request: Request) {
       console.error('Error generating AI emoji:', summarizeEmojiGenerationFailure(error));
       if (error instanceof EmojiProviderUnavailableError) {
         return NextResponse.json(
-          { error: PROVIDER_UNAVAILABLE_MESSAGE, code: IMAGE_PROVIDER_UNAVAILABLE_CODE },
+          {
+            error: await apiText(request, 'imageProviderUnavailable'),
+            code: IMAGE_PROVIDER_UNAVAILABLE_CODE,
+          },
           { status: 503 }
         );
       }
-      return NextResponse.json({ error: 'Failed to generate emoji' }, { status: 500 });
+      return NextResponse.json(
+        { error: await apiText(request, 'generateEmojiFailed') },
+        { status: 500 }
+      );
     }
 
-    // Return a preview without persisting it to UploadThing.
-    const base64Image = `data:image/png;base64,${generated.imageBuffer.toString('base64')}`;
+    // A paid picture is kept at once: normalized, stored and recorded in the library, so closing
+    // the form or generating again never loses it. The form only links the returned URL.
+    const { imageUrl } = await uploadEmojiImage({
+      imageBuffer: generated.imageBuffer,
+      productName,
+    });
+    const libraryEntry = {
+      imageUrl,
+      name: String(name || productName),
+      nameEn: typeof nameEn === 'string' ? nameEn : null,
+      source: 'generated' as const,
+    };
+    // One retry; if the library still cannot be written the picture is returned anyway, and the
+    // response says so instead of claiming it is in the library.
+    const libraryRecorded = Boolean(
+      (await recordEmojiLibraryItem(libraryEntry)) ?? (await recordEmojiLibraryItem(libraryEntry))
+    );
 
     return NextResponse.json({
-      base64: base64Image,
-      message: 'Image generated successfully. Will be uploaded when product is saved.',
+      imageUrl,
+      libraryRecorded,
+      message: await apiText(
+        request,
+        libraryRecorded ? 'emojiGeneratedSaved' : 'emojiGeneratedNotSaved'
+      ),
       provider: generated.provider,
       model: generated.model,
       promptVersion: generated.promptVersion,
@@ -67,6 +99,9 @@ export async function POST(request: Request) {
     // itself — a guard, a rate limit or an unparsable body — and it is logged with its class and
     // message: nothing of an image provider can reach this log.
     console.error('Error generating AI emoji:', error);
-    return NextResponse.json({ error: 'Failed to generate emoji' }, { status: 500 });
+    return NextResponse.json(
+      { error: await apiText(request, 'generateEmojiFailed') },
+      { status: 500 }
+    );
   }
 }

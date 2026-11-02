@@ -1,6 +1,9 @@
 // @vitest-environment node
 import { inspect } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+// The shared daily AI budget is covered by src/app/api/ai-daily-quota.test.ts.
+vi.mock('@/lib/ai-quota', () => ({ enforceAiQuota: async () => null }));
 import { restoreEnv, snapshotEnv } from '@/test/emoji-image-fixtures';
 
 const BODY_MARKER = 'synthetic-sdk-body-marker-347';
@@ -350,7 +353,7 @@ describe('Н-02 a failure outside image generation keeps its diagnostics', () =>
     const body = await response.json();
 
     expect(response.status).toBe(500);
-    expect(body).toEqual({ error: 'Failed to create product' });
+    expect(body).toEqual({ error: 'Could not create the product' });
     const logged = records.map((record) => record.text).join('\n');
     expect(logged).toContain('PrismaClientKnownRequestError');
     expect(logged).toContain('Prisma write failed');
@@ -368,7 +371,7 @@ describe('Н-02 a failure outside image generation keeps its diagnostics', () =>
     const body = await response.json();
 
     expect(response.status).toBe(500);
-    expect(body).toEqual({ error: 'Failed to create product' });
+    expect(body).toEqual({ error: 'Could not create the product' });
     expect(doubles.createProduct).not.toHaveBeenCalled();
     const logged = records.map((record) => record.text).join('\n');
     expect(logged).toContain('ApiError');
@@ -387,7 +390,7 @@ describe('Н-02 a failure outside image generation keeps its diagnostics', () =>
     );
 
     expect(response.status).toBe(500);
-    expect(await response.json()).toEqual({ error: 'Failed to create product' });
+    expect(await response.json()).toEqual({ error: 'Could not create the product' });
     const logged = records.map((record) => record.text).join('\n');
     expect(logged).toContain('SyntaxError');
     expect(logged).not.toContain(KEY_MARKER);
