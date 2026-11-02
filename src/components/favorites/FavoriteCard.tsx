@@ -38,22 +38,22 @@ export default function FavoriteCard({
       <button
         onClick={() => onToggle(favorite.product.id)}
         className={`
-          w-full bg-white rounded-2xl p-4 shadow-md transition-all
+          w-full bg-white rounded-2xl px-1.5 py-2.5 md:p-3 shadow-md transition-all
           ${isSelected ? 'ring-4 ring-green-500 scale-95' : 'hover:shadow-lg hover:scale-105'}
         `}
       >
         <div className="text-center">
-          <div className="mx-auto mb-2 h-16 w-16 flex items-center justify-center overflow-hidden">
+          <div className="mx-auto mb-1 h-14 w-14 md:h-20 md:w-20 flex items-center justify-center overflow-hidden">
             {product.isCustom && imageUrl ? (
               <Image
                 src={imageUrl}
                 alt={name}
-                width={64}
-                height={64}
-                className="h-16 w-16 object-contain"
+                width={80}
+                height={80}
+                className="h-14 w-14 md:h-20 md:w-20 object-contain"
               />
             ) : (
-              <span className="text-4xl leading-none">{favorite.product.emoji}</span>
+              <span className="text-4xl md:text-6xl leading-none">{favorite.product.emoji}</span>
             )}
           </div>
           <p lang={nameLang} className={productNameClassName(name)}>

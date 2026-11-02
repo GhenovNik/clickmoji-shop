@@ -83,7 +83,7 @@ function CategoriesPageContent() {
         {/* Categories Grid */}
         <div
           data-testid="categories-grid"
-          className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4"
+          className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-4"
         >
           {loading
             ? Array.from({ length: 8 }).map((_, i) => <CategoryCardSkeleton key={i} />)
@@ -100,20 +100,20 @@ function CategoriesPageContent() {
                         : `/categories/${category.id}/products${listQuery}`
                     }
                     data-testid="category-link"
-                    className="bg-white rounded-2xl p-2.5 shadow-lg hover:shadow-xl transition-all hover:scale-105 cursor-pointer h-[198px]"
+                    className="bg-white rounded-2xl p-2.5 shadow-lg hover:shadow-xl transition-all hover:scale-105 cursor-pointer h-[198px] md:h-[172px]"
                   >
                     <div className="text-center h-full flex flex-col">
-                      <div className="h-28 flex items-center justify-center">
+                      <div className="h-28 md:h-[88px] flex items-center justify-center">
                         {category.isCustom && category.imageUrl ? (
                           <Image
                             src={category.imageUrl}
                             alt={categoryName}
                             width={96}
                             height={96}
-                            className="max-h-24 max-w-24 object-contain"
+                            className="max-h-24 max-w-24 md:max-h-20 md:max-w-20 object-contain"
                           />
                         ) : (
-                          <div className="text-7xl leading-none">{category.emoji}</div>
+                          <div className="text-7xl md:text-6xl leading-none">{category.emoji}</div>
                         )}
                       </div>
 
