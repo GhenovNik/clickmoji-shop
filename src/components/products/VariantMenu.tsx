@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import Image from 'next/image';
 import { useLocale, useTranslations } from 'next-intl';
 import type { Product } from '@/hooks/useProductSelection';
@@ -35,10 +35,43 @@ export default function VariantMenu({
   const locale = useLocale();
   const productName = localizedName(product, locale);
   const productImage = product.isCustom ? productImageUrl(product, locale) : null;
+  const dialogRef = useRef<HTMLDivElement>(null);
+
+  // Focus belongs to the dialog's lifetime, not to changing callbacks or favorite state.
+  useEffect(() => {
+    const opener = document.activeElement;
+    dialogRef.current?.querySelector<HTMLButtonElement>('button')?.focus();
+    return () => {
+      if (opener instanceof HTMLElement && opener.isConnected) opener.focus();
+    };
+  }, []);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.key === 'Escape') onClose();
+      if (event.key !== 'Tab') return;
+
+      const dialog = dialogRef.current;
+      if (!dialog) return;
+      // All dialog actions are buttons. Read them on each keypress as favorites can rerender.
+      const buttons = dialog.querySelectorAll<HTMLButtonElement>(
+        'button:not(:disabled):not([tabindex="-1"])'
+      );
+      const first = buttons[0];
+      const last = buttons[buttons.length - 1];
+      if (!first) {
+        event.preventDefault();
+        dialog.focus();
+      } else if (!dialog.contains(document.activeElement)) {
+        event.preventDefault();
+        (event.shiftKey ? last : first).focus();
+      } else if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
@@ -51,9 +84,11 @@ export default function VariantMenu({
       onClick={onClose}
     >
       <div
+        ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-label={t('variantsTitle', { name: productName })}
+        tabIndex={-1}
         className="w-full rounded-t-2xl bg-white p-4 pb-[max(2rem,env(safe-area-inset-bottom))] shadow-xl sm:max-w-md sm:rounded-2xl sm:pb-4"
         onClick={(event) => event.stopPropagation()}
       >
@@ -76,14 +111,11 @@ export default function VariantMenu({
             const name = localizedName(variant, locale);
             const nameLang = locale === 'en' && variant.nameEn?.trim() ? 'en' : 'ru';
             // A variant without a picture or emoji of its own shows the product's.
-            const image = variant.imageUrl
-              ? productImageUrl(
-                  { imageUrl: variant.imageUrl, imageUrlEn: variant.imageUrlEn },
-                  locale
-                )
-              : variant.emoji
-                ? null
-                : productImage;
+            const variantImage = productImageUrl(
+              { imageUrl: variant.imageUrl ?? null, imageUrlEn: variant.imageUrlEn },
+              locale
+            );
+            const image = variantImage || (variant.emoji ? null : productImage);
             const emoji = variant.emoji || product.emoji;
             const picked = variant.id === pickedVariantId;
             const starred = favoriteVariantIds?.has(variant.id) ?? false;
