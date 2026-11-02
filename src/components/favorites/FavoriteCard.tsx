@@ -4,14 +4,13 @@ import Image from 'next/image';
 import { useLocale, useTranslations } from 'next-intl';
 import type { FavoriteProduct } from '@/hooks/useFavorites';
 import { productNameClassName } from '@/components/products/product-name';
-import { localizedName } from '@/lib/catalog-name';
-import { productImageUrl } from '@/lib/product-image';
+import { favoriteDisplay, favoriteKey } from '@/lib/favorites';
 
 interface FavoriteCardProps {
   favorite: FavoriteProduct;
   isSelected: boolean;
-  onToggle: (productId: string) => void;
-  onRemove: (productId: string) => void;
+  onToggle: (key: string) => void;
+  onRemove: (favorite: FavoriteProduct) => void;
 }
 
 export default function FavoriteCard({
@@ -22,21 +21,18 @@ export default function FavoriteCard({
 }: FavoriteCardProps) {
   const t = useTranslations('catalog.shared');
   const locale = useLocale();
-  const { product } = favorite;
-  const name = localizedName(product, locale);
-  // Hyphenation follows the language the name is actually shown in (English falls back to Russian).
-  const nameLang = locale === 'en' && product.nameEn?.trim() ? 'en' : 'ru';
-  const imageUrl = productImageUrl(product, locale);
+  // A starred variant shows its own name and picture; hyphenation follows the shown language.
+  const { name, imageUrl, emoji, nameLang } = favoriteDisplay(favorite, locale);
 
   const handleRemoveClick = (e: React.MouseEvent) => {
     e.stopPropagation();
-    onRemove(favorite.product.id);
+    onRemove(favorite);
   };
 
   return (
     <div className="relative">
       <button
-        onClick={() => onToggle(favorite.product.id)}
+        onClick={() => onToggle(favoriteKey(favorite))}
         className={`
           w-full bg-white rounded-2xl px-1.5 py-2.5 md:p-3 shadow-md transition-all
           ${isSelected ? 'ring-4 ring-green-500 scale-95' : 'hover:shadow-lg hover:scale-105'}
@@ -44,7 +40,7 @@ export default function FavoriteCard({
       >
         <div className="text-center">
           <div className="mx-auto mb-1 h-14 w-14 md:h-20 md:w-20 flex items-center justify-center overflow-hidden">
-            {product.isCustom && imageUrl ? (
+            {imageUrl ? (
               <Image
                 src={imageUrl}
                 alt={name}
@@ -53,7 +49,7 @@ export default function FavoriteCard({
                 className="h-14 w-14 md:h-20 md:w-20 object-contain"
               />
             ) : (
-              <span className="text-4xl md:text-6xl leading-none">{favorite.product.emoji}</span>
+              <span className="text-4xl md:text-6xl leading-none">{emoji}</span>
             )}
           </div>
           <p lang={nameLang} className={productNameClassName(name)}>

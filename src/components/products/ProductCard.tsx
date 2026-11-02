@@ -1,11 +1,13 @@
 ﻿'use client';
 
+import { useState } from 'react';
 import Image from 'next/image';
 import { useLocale, useTranslations } from 'next-intl';
 import type { Product } from '@/hooks/useProductSelection';
 import { localizedName } from '@/lib/catalog-name';
 import { productImageUrl } from '@/lib/product-image';
 import { productNameClassName } from './product-name';
+import VariantMenu from './VariantMenu';
 
 interface ProductCardProps {
   product: Product;
@@ -13,9 +15,11 @@ interface ProductCardProps {
   isFavorite: boolean;
   showFavorite: boolean;
   selectedVariantId?: string | null;
+  favoriteVariantIds?: ReadonlySet<string>;
   onToggle: (product: Product) => void;
-  onVariantChange?: (productId: string, variantId: string | null) => void;
+  onSelectVariant?: (product: Product, variantId: string) => void;
   onToggleFavorite: (productId: string) => void;
+  onToggleVariantFavorite?: (variantId: string) => void;
 }
 
 export default function ProductCard({
@@ -24,16 +28,23 @@ export default function ProductCard({
   isFavorite,
   showFavorite,
   selectedVariantId,
+  favoriteVariantIds,
   onToggle,
-  onVariantChange,
+  onSelectVariant,
   onToggleFavorite,
+  onToggleVariantFavorite,
 }: ProductCardProps) {
   const t = useTranslations('catalog.shared');
   const locale = useLocale();
+  const [variantsOpen, setVariantsOpen] = useState(false);
   const name = localizedName(product, locale);
   // Hyphenation follows the language the name is actually shown in (English falls back to Russian).
   const nameLang = locale === 'en' && product.nameEn?.trim() ? 'en' : 'ru';
   const imageUrl = productImageUrl(product, locale);
+  const variants = product.variants ?? [];
+  const pickedVariant = isSelected
+    ? variants.find((variant) => variant.id === selectedVariantId)
+    : undefined;
 
   const handleFavoriteClick = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -72,22 +83,27 @@ export default function ProductCard({
         </div>
       </button>
 
-      {product.variants && product.variants.length > 0 && isSelected && (
-        <div className="mt-2">
-          <select
-            value={selectedVariantId || ''}
-            onChange={(event) => onVariantChange?.(product.id, event.target.value || null)}
-            className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-900"
-          >
-            <option value="">{t('noVariant')}</option>
-            {product.variants.map((variant) => (
-              <option key={variant.id} value={variant.id}>
-                {variant.emoji ? `${variant.emoji} ` : ''}
-                {localizedName(variant, locale)}
-              </option>
-            ))}
-          </select>
-        </div>
+      {/* Variants stay out of the way: a small chip on the card's bottom edge opens them, and
+          shows the picked one once a variant is in the selection. */}
+      {variants.length > 0 && (
+        <button
+          type="button"
+          onClick={() => setVariantsOpen(true)}
+          aria-haspopup="dialog"
+          className={`
+            absolute -bottom-2 left-1/2 -translate-x-1/2 max-w-full truncate rounded-full border
+            px-1.5 py-0.5 text-[10px] font-semibold leading-tight shadow-sm transition-colors
+            ${
+              pickedVariant
+                ? 'border-green-500 bg-green-500 text-white'
+                : 'border-indigo-200 bg-indigo-50 text-indigo-700 hover:bg-indigo-100'
+            }
+          `}
+        >
+          {pickedVariant
+            ? localizedName(pickedVariant, locale)
+            : t('variantsButton', { count: variants.length })}
+        </button>
       )}
 
       {showFavorite && (
@@ -102,6 +118,21 @@ export default function ProductCard({
         >
           <span className="text-xl">{isFavorite ? '⭐' : '☆'}</span>
         </button>
+      )}
+
+      {variantsOpen && (
+        <VariantMenu
+          product={product}
+          pickedVariantId={pickedVariant?.id ?? null}
+          favoriteVariantIds={favoriteVariantIds}
+          showFavorite={showFavorite}
+          onPick={(variantId) => {
+            onSelectVariant?.(product, variantId);
+            setVariantsOpen(false);
+          }}
+          onToggleFavorite={onToggleVariantFavorite}
+          onClose={() => setVariantsOpen(false)}
+        />
       )}
     </div>
   );

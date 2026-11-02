@@ -27,6 +27,7 @@
     "format:check": "prettier --check .",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "test:catalog-postgres": "tsx scripts/test-catalog-cleanup-postgres.ts",
     "test:watch": "vitest",
     "test:ui": "vitest --ui",
     "test:coverage": "vitest --coverage",
@@ -75,7 +76,7 @@
     "@prisma/adapter-pg": "^7.10.1",
     "@prisma/client": "^7.10.1",
     "@tanstack/react-query": "^5.104.1",
-    "@tanstack/react-query-devtools": "^5.104.1",
+    "@tanstack/react-query-devtools": "^5.105.0",
     "@uploadthing/react": "^7.3.3",
     "bcryptjs": "^3.0.3",
     "clsx": "^2.1.1",
@@ -95,7 +96,7 @@
     "sharp": "^0.35.5",
     "tailwind-merge": "^3.7.0",
     "uploadthing": "^7.7.4",
-    "zustand": "^5.0.15"
+    "zustand": "^5.0.16"
   },
   "devDependencies": {
     "@next/bundle-analyzer": "^16.4.3",
