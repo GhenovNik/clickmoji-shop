@@ -7,6 +7,12 @@ import { useRouter } from 'next/navigation';
 import { useTranslations } from 'next-intl';
 import { listsQueryKey, useActiveList } from './useListsQuery';
 import { queryKeys } from '@/lib/query-keys';
+import {
+  favoriteKey,
+  favoriteListItem,
+  favoriteRemoveUrl,
+  type FavoriteVariant,
+} from '@/lib/favorites';
 
 export type FavoriteProduct = {
   id: string;
@@ -28,6 +34,7 @@ export type FavoriteProduct = {
       imageUrl: string | null;
     };
   };
+  variant?: FavoriteVariant | null;
 };
 
 // API functions
@@ -37,15 +44,16 @@ const fetchFavoritesAPI = async (): Promise<FavoriteProduct[]> => {
   return res.json();
 };
 
-const removeFromFavoritesAPI = async (productId: string) => {
-  const res = await fetch(`/api/favorites?productId=${productId}`, {
-    method: 'DELETE',
-  });
+const removeFromFavoritesAPI = async (favorite: FavoriteProduct) => {
+  const res = await fetch(favoriteRemoveUrl(favorite), { method: 'DELETE' });
   if (!res.ok) throw new Error('Failed to remove from favorites');
   return res.json();
 };
 
-const addToListAPI = async (listId: string, items: { productId: string }[]) => {
+const addToListAPI = async (
+  listId: string,
+  items: { productId: string; variantId: string | null }[]
+) => {
   const res = await fetch(`/api/lists/${listId}/items`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -81,25 +89,26 @@ export function useFavorites() {
   // Mutation for removing from favorites with optimistic updates
   const removeMutation = useMutation({
     mutationFn: removeFromFavoritesAPI,
-    onMutate: async (productId) => {
+    onMutate: async (favorite) => {
+      const key = favoriteKey(favorite);
       await queryClient.cancelQueries({ queryKey: queryKeys.favorites() });
       const previousFavorites = queryClient.getQueryData<FavoriteProduct[]>(queryKeys.favorites());
 
       queryClient.setQueryData<FavoriteProduct[]>(queryKeys.favorites(), (old) => {
         if (!old) return old;
-        return old.filter((fav) => fav.product.id !== productId);
+        return old.filter((fav) => favoriteKey(fav) !== key);
       });
 
       // Also remove from selection
       setSelectedProducts((prev) => {
         const newSet = new Set(prev);
-        newSet.delete(productId);
+        newSet.delete(key);
         return newSet;
       });
 
       return { previousFavorites };
     },
-    onError: (err, productId, context) => {
+    onError: (err, favorite, context) => {
       if (context?.previousFavorites) {
         queryClient.setQueryData(queryKeys.favorites(), context.previousFavorites);
       }
@@ -109,20 +118,21 @@ export function useFavorites() {
     },
   });
 
-  const toggleProduct = (productId: string) => {
+  // Selection is keyed by favoriteKey: a product and its starred variant are separate cards.
+  const toggleProduct = (key: string) => {
     setSelectedProducts((prev) => {
       const newSet = new Set(prev);
-      if (newSet.has(productId)) {
-        newSet.delete(productId);
+      if (newSet.has(key)) {
+        newSet.delete(key);
       } else {
-        newSet.add(productId);
+        newSet.add(key);
       }
       return newSet;
     });
   };
 
-  const removeFromFavorites = async (productId: string) => {
-    await removeMutation.mutateAsync(productId);
+  const removeFromFavorites = async (favorite: FavoriteProduct) => {
+    await removeMutation.mutateAsync(favorite);
   };
 
   const addToList = async () => {
@@ -134,10 +144,8 @@ export function useFavorites() {
     setAdding(true);
 
     const selectedItems = favorites
-      .filter((fav) => selectedProducts.has(fav.product.id))
-      .map((fav) => ({
-        productId: fav.product.id,
-      }));
+      .filter((fav) => selectedProducts.has(favoriteKey(fav)))
+      .map(favoriteListItem);
 
     try {
       await addToListAPI(activeListId, selectedItems);
