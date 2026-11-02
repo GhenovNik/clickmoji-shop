@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   chmodSync,
+  cpSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -53,6 +54,20 @@ function tempDir(): string {
   const directory = mkdtempSync(path.join(tmpdir(), 'audit-check-test-'));
   temporaryDirectories.push(directory);
   return directory;
+}
+
+// Process-lifecycle tests must not depend on the repository allowlist or its expiry dates.
+function isolatedAuditScript(): string {
+  const root = tempDir();
+  mkdirSync(path.join(root, 'scripts'));
+  const script = path.join(root, 'scripts', 'audit-check.ts');
+  cpSync(path.join(REPO_ROOT, 'scripts', 'audit-check.ts'), script);
+  cpSync(path.join(REPO_ROOT, 'src', 'lib', 'audit'), path.join(root, 'src', 'lib', 'audit'), {
+    recursive: true,
+    filter: (source) => !source.endsWith('.test.ts') && !source.endsWith('test-helpers.ts'),
+  });
+  writeFileSync(path.join(root, 'audit-allowlist.json'), allowlistJson([]));
+  return script;
 }
 
 function fakeNpm(directory: string, body: string): string {
@@ -562,19 +577,15 @@ describe('AC-9 npm process failures', () => {
           'setTimeout(() => {}, 25_000);',
         ].join('\n')
       );
-      const check = spawn(
-        process.execPath,
-        ['--import', 'tsx', path.join(REPO_ROOT, 'scripts', 'audit-check.ts')],
-        {
-          cwd: REPO_ROOT,
-          env: {
-            ...process.env,
-            PATH: `${directory}${path.delimiter}${process.env.PATH ?? ''}`,
-            TMPDIR: isolatedTmp,
-          },
-          stdio: ['ignore', 'pipe', 'pipe'],
-        }
-      );
+      const check = spawn(process.execPath, ['--import', 'tsx', isolatedAuditScript()], {
+        cwd: REPO_ROOT,
+        env: {
+          ...process.env,
+          PATH: `${directory}${path.delimiter}${process.env.PATH ?? ''}`,
+          TMPDIR: isolatedTmp,
+        },
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
 
       try {
         await waitFor(() => existsSync(pidFile) && existsSync(grandchildPidFile), 20_000);
@@ -635,27 +646,26 @@ describe('AC-9 npm process failures', () => {
           "const fs = require('node:fs');",
           "const config = process.argv.find(arg => arg.startsWith('--userconfig='));",
           `fs.writeFileSync(${JSON.stringify(configFile)}, require('node:path').dirname(config.slice('--userconfig='.length)));`,
-          `process.stdout.write(process.argv.includes('--omit=dev') ? ${JSON.stringify(liveProduction())} : ${JSON.stringify(liveFull())});`,
+          `process.stdout.write(${JSON.stringify(EMPTY_PROD)});`,
           `process.exitCode = ${status};`,
         ].join('\n')
       );
-      const check = spawn(
-        process.execPath,
-        ['--import', 'tsx', path.join(REPO_ROOT, 'scripts', 'audit-check.ts')],
-        {
-          cwd: REPO_ROOT,
-          env: {
-            ...process.env,
-            PATH: `${directory}${path.delimiter}${process.env.PATH ?? ''}`,
-            TMPDIR: isolatedTmp,
-          },
-          stdio: ['ignore', 'pipe', 'pipe'],
-        }
-      );
+      const check = spawn(process.execPath, ['--import', 'tsx', isolatedAuditScript()], {
+        cwd: REPO_ROOT,
+        env: {
+          ...process.env,
+          PATH: `${directory}${path.delimiter}${process.env.PATH ?? ''}`,
+          TMPDIR: isolatedTmp,
+        },
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
       try {
         expect(await waitForExit(check, 20_000)).toBeNull();
         expect(check.exitCode).toBe(status === 0 ? 0 : 1);
-        expect(existsSync(readFileSync(configFile, 'utf8'))).toBe(false);
+        const configDirectory = readFileSync(configFile, 'utf8');
+        expect(path.dirname(configDirectory)).toBe(isolatedTmp);
+        expect(path.basename(configDirectory)).toMatch(/^audit-check-/);
+        expect(existsSync(configDirectory)).toBe(false);
         expect(readdirSync(isolatedTmp).filter((name) => name.startsWith('audit-check-'))).toEqual([
           'audit-check-unrelated',
         ]);
