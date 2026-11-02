@@ -2,6 +2,8 @@
   "shared": {
     "productCount": "{count, plural, one {# item} other {# items}}",
     "noVariant": "No variant",
+    "variantsButton": "Variants · {count}",
+    "variantsTitle": "{name}: variants",
     "addFavorite": "Add to favorites",
     "removeFavorite": "Remove from favorites",
     "selectListFirst": "Choose a shopping list first",
