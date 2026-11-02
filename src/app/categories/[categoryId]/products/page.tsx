@@ -83,7 +83,7 @@ function ProductsPageContent() {
 
         <div
           data-testid="products-grid"
-          className="grid grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4"
+          className="grid grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3 md:gap-4"
         >
           {loading
             ? Array.from({ length: 12 }).map((_, i) => <ProductCardSkeleton key={i} />)

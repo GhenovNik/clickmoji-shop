@@ -46,22 +46,22 @@ export default function ProductCard({
         data-testid="product-card"
         onClick={() => onToggle(product)}
         className={`
-          w-full h-[126px] bg-white rounded-2xl p-3 shadow-md transition-all
+          w-full h-[116px] md:h-[156px] bg-white rounded-2xl px-1.5 py-2.5 md:p-3 shadow-md transition-all
           ${isSelected ? 'ring-4 ring-green-500 scale-95' : 'hover:shadow-lg hover:scale-105'}
         `}
       >
         <div className="text-center">
-          <div className="mx-auto mb-1 h-14 w-14 shrink-0 flex items-center justify-center overflow-hidden">
+          <div className="mx-auto mb-1 h-14 w-14 md:h-20 md:w-20 shrink-0 flex items-center justify-center overflow-hidden">
             {product.isCustom && imageUrl ? (
               <Image
                 src={imageUrl}
                 alt={name}
-                width={56}
-                height={56}
-                className="h-14 w-14 object-contain"
+                width={80}
+                height={80}
+                className="h-14 w-14 md:h-20 md:w-20 object-contain"
               />
             ) : (
-              <span className="text-4xl leading-none">{product.emoji}</span>
+              <span className="text-4xl md:text-6xl leading-none">{product.emoji}</span>
             )}
           </div>
           <div className="h-[42px] flex items-center justify-center">
