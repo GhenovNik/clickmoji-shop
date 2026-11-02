@@ -60,6 +60,7 @@
     "seed": "tsx prisma/seed.ts"
   },
   "overrides": {
+    "minimatch@<11.0.1": "11.0.1",
     "effect": "3.21.4",
     "micromatch": {
       "picomatch": "2.3.2"
