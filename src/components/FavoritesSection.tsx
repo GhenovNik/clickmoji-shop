@@ -6,8 +6,14 @@ import { useSession } from 'next-auth/react';
 import { useLocale, useTranslations } from 'next-intl';
 import { listsQueryKey, useActiveList } from '@/hooks/useListsQuery';
 import { queryKeys } from '@/lib/query-keys';
-import { localizedName } from '@/lib/catalog-name';
-import { productImageUrl } from '@/lib/product-image';
+import {
+  favoriteDisplay,
+  favoriteKey,
+  favoriteListItem,
+  favoriteRemoveUrl,
+  favoriteTarget,
+  type FavoriteVariant,
+} from '@/lib/favorites';
 
 type FavoriteProduct = {
   id: string;
@@ -30,6 +36,7 @@ type FavoriteProduct = {
       imageUrl: string | null;
     };
   };
+  variant?: FavoriteVariant | null;
 };
 
 const fetchFavoritesAPI = async (): Promise<FavoriteProduct[]> => {
@@ -38,35 +45,33 @@ const fetchFavoritesAPI = async (): Promise<FavoriteProduct[]> => {
   return res.json();
 };
 
-const updateFavoriteUsageAPI = async (productId: string) => {
+const updateFavoriteUsageAPI = async (favorite: FavoriteProduct) => {
   const res = await fetch('/api/favorites', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ productId }),
+    body: JSON.stringify(favoriteTarget(favorite)),
   });
   if (!res.ok) throw new Error('Failed to update favorite usage');
   return res.json();
 };
 
-const removeFavoriteAPI = async (productId: string) => {
-  const res = await fetch(`/api/favorites?productId=${productId}`, {
-    method: 'DELETE',
-  });
+const removeFavoriteAPI = async (favorite: FavoriteProduct) => {
+  const res = await fetch(favoriteRemoveUrl(favorite), { method: 'DELETE' });
   if (!res.ok) throw new Error('Failed to remove favorite');
   return res.json();
 };
 
 const addFavoriteToListAPI = async ({
   listId,
-  productId,
+  item,
 }: {
   listId: string;
-  productId: string;
+  item: { productId: string; variantId: string | null };
 }) => {
   const res = await fetch(`/api/lists/${listId}/items`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ items: [{ productId }] }),
+    body: JSON.stringify({ items: [item] }),
   });
   if (!res.ok) throw new Error('Failed to add favorite to list');
   return res.json();
@@ -94,18 +99,19 @@ export default function FavoritesSection() {
 
   const removeMutation = useMutation({
     mutationFn: removeFavoriteAPI,
-    onMutate: async (productId) => {
+    onMutate: async (favorite) => {
+      const key = favoriteKey(favorite);
       await queryClient.cancelQueries({ queryKey: queryKeys.favorites() });
       const previousFavorites = queryClient.getQueryData<FavoriteProduct[]>(queryKeys.favorites());
 
       queryClient.setQueryData<FavoriteProduct[]>(queryKeys.favorites(), (old) => {
         if (!old) return old;
-        return old.filter((fav) => fav.product.id !== productId);
+        return old.filter((fav) => favoriteKey(fav) !== key);
       });
 
       return { previousFavorites };
     },
-    onError: (err, productId, context) => {
+    onError: (err, favorite, context) => {
       if (context?.previousFavorites) {
         queryClient.setQueryData(queryKeys.favorites(), context.previousFavorites);
       }
@@ -132,18 +138,18 @@ export default function FavoritesSection() {
     try {
       await addToListMutation.mutateAsync({
         listId: activeListId,
-        productId: favorite.product.id,
+        item: favoriteListItem(favorite),
       });
-      await updateUsageMutation.mutateAsync(favorite.product.id);
+      await updateUsageMutation.mutateAsync(favorite);
     } catch (error) {
       console.error('Error adding favorite to list:', error);
       alert(t('shared.addProductFailed'));
     }
   };
 
-  const handleRemoveFromFavorites = async (productId: string) => {
+  const handleRemoveFromFavorites = async (favorite: FavoriteProduct) => {
     try {
-      await removeMutation.mutateAsync(productId);
+      await removeMutation.mutateAsync(favorite);
     } catch (error) {
       console.error('Error removing from favorites:', error);
     }
@@ -182,8 +188,7 @@ export default function FavoritesSection() {
 
       <div className="grid grid-cols-4 sm:grid-cols-6 md:grid-cols-8 lg:grid-cols-10 gap-3">
         {favorites.map((favorite) => {
-          const name = localizedName(favorite.product, locale);
-          const imageUrl = productImageUrl(favorite.product, locale);
+          const { name, imageUrl, emoji } = favoriteDisplay(favorite, locale);
           return (
             <div key={favorite.id} className="relative group">
               <button
@@ -191,7 +196,7 @@ export default function FavoritesSection() {
                 className="w-full bg-white rounded-xl p-3 shadow-md hover:shadow-lg hover:scale-105 transition-all"
                 title={name}
               >
-                {favorite.product.isCustom && imageUrl ? (
+                {imageUrl ? (
                   <Image
                     src={imageUrl}
                     alt={name}
@@ -200,13 +205,13 @@ export default function FavoritesSection() {
                     className="w-12 h-12 sm:w-16 sm:h-16 object-contain mx-auto"
                   />
                 ) : (
-                  <div className="text-3xl sm:text-4xl">{favorite.product.emoji}</div>
+                  <div className="text-3xl sm:text-4xl">{emoji}</div>
                 )}
               </button>
 
               {/* Reveal the remove action on hover. */}
               <button
-                onClick={() => handleRemoveFromFavorites(favorite.product.id)}
+                onClick={() => handleRemoveFromFavorites(favorite)}
                 className="absolute -top-2 -right-2 bg-red-500 hover:bg-red-600 text-white rounded-full w-6 h-6 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
                 title={t('shared.removeFavorite')}
               >
