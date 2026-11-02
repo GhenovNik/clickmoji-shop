@@ -16,7 +16,14 @@ export type Product = {
   isCustom: boolean;
   imageUrl: string | null;
   imageUrlEn?: string | null;
-  variants?: { id: string; name: string; nameEn: string; emoji: string }[];
+  variants?: {
+    id: string;
+    name: string;
+    nameEn: string;
+    emoji: string;
+    imageUrl?: string | null;
+    imageUrlEn?: string | null;
+  }[];
   category: {
     id: string;
     name: string;
@@ -40,18 +47,21 @@ const fetchFavoritesAPI = async () => {
   return res.json();
 };
 
-const addFavoriteAPI = async (productId: string) => {
+type FavoriteTarget = { productId: string } | { variantId: string };
+
+const addFavoriteAPI = async (target: FavoriteTarget) => {
   const res = await fetch('/api/favorites', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ productId }),
+    body: JSON.stringify(target),
   });
   if (!res.ok) throw new Error('Failed to add favorite');
   return res.json();
 };
 
-const removeFavoriteAPI = async (productId: string) => {
-  const res = await fetch(`/api/favorites?productId=${productId}`, {
+const removeFavoriteAPI = async (target: FavoriteTarget) => {
+  const params = new URLSearchParams(target as Record<string, string>);
+  const res = await fetch(`/api/favorites?${params}`, {
     method: 'DELETE',
   });
   if (!res.ok) throw new Error('Failed to remove favorite');
@@ -96,8 +106,13 @@ export function useProductSelection(categoryId: string) {
     enabled: !!session?.user,
   });
 
+  // A starred variant is its own favorite: it does not make the whole product a favorite.
+  type FavoriteRow = { product: { id: string }; variant?: { id: string } | null };
   const favoriteProducts = new Set<string>(
-    favoritesData.map((fav: { product: { id: string } }) => fav.product.id)
+    (favoritesData as FavoriteRow[]).filter((fav) => !fav.variant).map((fav) => fav.product.id)
+  );
+  const favoriteVariants = new Set<string>(
+    (favoritesData as FavoriteRow[]).flatMap((fav) => (fav.variant ? [fav.variant.id] : []))
   );
 
   // Mutation for adding favorite
@@ -127,23 +142,30 @@ export function useProductSelection(categoryId: string) {
           return updated;
         });
       } else {
+        // Tapping the card picks the product itself; a variant is picked from its menu.
         newSet.add(product.id);
-        if (product.variants && product.variants.length > 0) {
-          setSelectedVariants((current) => ({
-            ...current,
-            [product.id]: product.variants?.[0]?.id || null,
-          }));
-        }
       }
       return newSet;
     });
   };
 
-  const setVariant = (productId: string, variantId: string | null) => {
-    setSelectedVariants((current) => ({
-      ...current,
-      [productId]: variantId,
-    }));
+  // Picking the variant that is already picked takes the product off the selection; another
+  // variant replaces it, since one product is added to the list once.
+  const selectVariant = (product: Product, variantId: string) => {
+    const alreadyPicked =
+      selectedProducts.has(product.id) && selectedVariants[product.id] === variantId;
+    setSelectedProducts((prev) => {
+      const newSet = new Set(prev);
+      if (alreadyPicked) newSet.delete(product.id);
+      else newSet.add(product.id);
+      return newSet;
+    });
+    setSelectedVariants((current) => {
+      const updated = { ...current };
+      if (alreadyPicked) delete updated[product.id];
+      else updated[product.id] = variantId;
+      return updated;
+    });
   };
 
   const toggleFavorite = async (productId: string) => {
@@ -152,13 +174,24 @@ export function useProductSelection(categoryId: string) {
       return;
     }
 
-    const isFavorite = favoriteProducts.has(productId);
+    await toggleFavoriteTarget({ productId }, favoriteProducts.has(productId));
+  };
 
+  const toggleVariantFavorite = async (variantId: string) => {
+    if (!session?.user) {
+      alert(t('signInForFavorites'));
+      return;
+    }
+
+    await toggleFavoriteTarget({ variantId }, favoriteVariants.has(variantId));
+  };
+
+  const toggleFavoriteTarget = async (target: FavoriteTarget, isFavorite: boolean) => {
     try {
       if (isFavorite) {
-        await removeFavoriteMutation.mutateAsync(productId);
+        await removeFavoriteMutation.mutateAsync(target);
       } else {
-        await addFavoriteMutation.mutateAsync(productId);
+        await addFavoriteMutation.mutateAsync(target);
       }
     } catch (error) {
       console.error('Error toggling favorite:', error);
@@ -209,11 +242,13 @@ export function useProductSelection(categoryId: string) {
     selectedProducts,
     selectedVariants,
     favoriteProducts,
+    favoriteVariants,
     loading,
     adding,
     toggleProduct,
-    setVariant,
+    selectVariant,
     toggleFavorite,
+    toggleVariantFavorite,
     addToList,
   };
 }

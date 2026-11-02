@@ -121,6 +121,7 @@ vi.mock('@/lib/prisma', () => {
       findMany: async ({ where }: { where: Row }) =>
         FAVORITES.filter((favorite) => matches(favorite, where)).map(withProduct),
     },
+    variantFavorite: { findMany: async () => [] },
     product: {
       findMany: async ({ where }: { where: Row }) =>
         PRODUCTS.filter((product) => matches(product, where)).map(({ id }) => ({ id })),
