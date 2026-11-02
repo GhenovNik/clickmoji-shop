@@ -101,6 +101,23 @@ export async function applyCatalogCleanup(
   plan: CatalogCleanupPlan,
   log: (line: string) => void
 ) {
+  // Must run in one READ COMMITTED interactive transaction. Block all affected writers before
+  // taking any snapshots, including raw history inserts (which used to have no catalogue FK).
+  // Readers continue normally. A writer already in flight finishes before our first read;
+  // a later stale write waits until commit and then fails its FK instead of being cascaded away.
+  await tx.$executeRaw`SET LOCAL lock_timeout = '10s'`;
+  await tx.$executeRaw`LOCK TABLE categories, products, product_variants, items, favorites,
+    variant_favorites, list_history_items IN SHARE ROW EXCLUSIVE MODE`;
+  const [constraints] = await tx.$queryRaw<Array<{ count: bigint }>>`
+    SELECT count(*) AS count FROM pg_constraint
+    WHERE conrelid = 'list_history_items'::regclass AND contype = 'f'
+      AND convalidated AND confdeltype = 'n'
+      AND ((conname = 'list_history_items_productId_fkey' AND confrelid = 'products'::regclass)
+        OR (conname = 'list_history_items_variantId_fkey' AND confrelid = 'product_variants'::regclass))`;
+  if (Number(constraints.count) !== 2) {
+    throw new Error('History reference migration must be deployed before catalog cleanup');
+  }
+
   for (const { keep: keepRef, drop: dropRef } of plan.merges) {
     const [keep, drop] = [await findProduct(tx, keepRef), await findProduct(tx, dropRef)];
     if (!drop) {
@@ -147,18 +164,48 @@ export async function applyCatalogCleanup(
       throw new Error(`${label(step.child)} has variants of its own and cannot become one`);
     }
 
-    const variant =
-      (await tx.productVariant.findFirst({ where: { productId: parent.id, name: step.name } })) ??
-      (await tx.productVariant.create({
-        data: {
-          productId: parent.id,
-          name: step.name,
-          nameEn: step.nameEn,
-          emoji: child.emoji,
-          imageUrl: child.isCustom ? child.imageUrl : null,
-          imageUrlEn: child.isCustom ? child.imageUrlEn : null,
-        },
-      }));
+    // A collision in either language is not permission to reuse an arbitrary row. Even multiple
+    // exact matches are ambiguous. Other parents may legitimately have variants of these names.
+    const candidates = await tx.productVariant.findMany({
+      where: { productId: parent.id, OR: [{ name: step.name }, { nameEn: step.nameEn }] },
+    });
+    const existing = candidates[0];
+    if (
+      candidates.length > 1 ||
+      (existing &&
+        (existing.productId !== parent.id ||
+          existing.name !== step.name ||
+          existing.nameEn !== step.nameEn))
+    ) {
+      throw new Error(`Ambiguous or conflicting variant ${step.name} / ${step.nameEn}`);
+    }
+    const pictures = {
+      imageUrl: child.isCustom ? child.imageUrl : null,
+      imageUrlEn: child.isCustom ? child.imageUrlEn : null,
+    };
+    // Never silently overwrite a different existing picture, or lose the child's picture.
+    for (const key of ['imageUrl', 'imageUrlEn'] as const) {
+      if (existing?.[key] && pictures[key] && existing[key] !== pictures[key]) {
+        throw new Error(`Conflicting variant ${step.name}: ${key}`);
+      }
+    }
+    const variant = existing
+      ? await tx.productVariant.update({
+          where: { id: existing.id },
+          data: {
+            imageUrl: pictures.imageUrl ?? existing.imageUrl,
+            imageUrlEn: pictures.imageUrlEn ?? existing.imageUrlEn,
+          },
+        })
+      : await tx.productVariant.create({
+          data: {
+            productId: parent.id,
+            name: step.name,
+            nameEn: step.nameEn,
+            emoji: child.emoji,
+            ...pictures,
+          },
+        });
     const moved = { productId: parent.id, variantId: variant.id };
     const items = await tx.item.updateMany({ where: { productId: child.id }, data: moved });
     const history = await tx.listHistoryItem.updateMany({

@@ -105,9 +105,10 @@ model Product {
   createdById String?
   createdBy   User?   @relation("UserCreatedProducts", fields: [createdById], references: [id], onDelete: SetNull)
 
-  variants  ProductVariant[]
-  items     Item[]
-  favorites Favorite[]
+  variants     ProductVariant[]
+  items        Item[]
+  favorites    Favorite[]
+  historyItems ListHistoryItem[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -156,8 +157,9 @@ model ProductVariant {
   productId String
   product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
 
-  items     Item[]
-  favorites VariantFavorite[]
+  items        Item[]
+  favorites    VariantFavorite[]
+  historyItems ListHistoryItem[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -211,8 +213,11 @@ model ListHistoryItem {
   historyId String
   history   ListHistory @relation(fields: [historyId], references: [id], onDelete: Cascade)
 
+  // Snapshot fields below survive deletion; optional live references may not dangle.
   productId String?
+  product   Product?        @relation(fields: [productId], references: [id], onDelete: SetNull)
   variantId String?
+  variant   ProductVariant? @relation(fields: [variantId], references: [id], onDelete: SetNull)
 
   productName       String
   // English copies taken at the same time, for the English UI; null falls back to Russian.
@@ -234,6 +239,8 @@ model ListHistoryItem {
   createdAt   DateTime @default(now())
 
   @@index([historyId])
+  @@index([productId])
+  @@index([variantId])
   @@map("list_history_items")
 }
 

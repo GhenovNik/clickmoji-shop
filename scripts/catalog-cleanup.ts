@@ -7,6 +7,9 @@ import { applyCatalogCleanup, CATALOG_CLEANUP_PLAN } from '../src/lib/services/c
 // fixes English typos (src/lib/services/catalog-cleanup.ts). Without --apply everything runs in a
 // transaction that is rolled back, so the report shows exactly what --apply would do. Take a
 // backup first (npm run db:backup): merged products are deleted.
+// Deploy migrations first. The helper locks catalogue/reference tables for the entire transaction
+// (dry runs too); normal reads continue, writes wait or fail their lock timeout. Stale post-cleanup
+// references fail their FK, including history, whose snapshot fields are never deleted.
 
 const prisma = new PrismaClient({ adapter: createPrismaPgAdapter() });
 const apply = process.argv.includes('--apply');
@@ -21,7 +24,7 @@ async function main() {
         await applyCatalogCleanup(tx, CATALOG_CLEANUP_PLAN, (line) => console.log(`  ${line}`));
         if (!apply) throw new DryRun();
       },
-      { timeout: 60_000 }
+      { timeout: 60_000, isolationLevel: 'ReadCommitted' }
     );
     console.log('\nDone.');
   } catch (error) {

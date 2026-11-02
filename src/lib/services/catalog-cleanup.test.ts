@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { Prisma } from '@prisma/client';
 import { applyCatalogCleanup, type CatalogCleanupPlan } from './catalog-cleanup';
 
@@ -8,8 +8,12 @@ import { applyCatalogCleanup, type CatalogCleanupPlan } from './catalog-cleanup'
 
 type Row = Record<string, unknown> & { id: string };
 
-function matches(row: Row, where: Record<string, unknown> = {}) {
-  return Object.entries(where).every(([key, value]) => row[key] === value);
+function matches(row: Row, where: Record<string, unknown> = {}): boolean {
+  return Object.entries(where).every(([key, value]) =>
+    key === 'OR'
+      ? (value as Record<string, unknown>[]).some((clause) => matches(row, clause))
+      : row[key] === value
+  );
 }
 
 function table(rows: Row[]) {
@@ -97,6 +101,8 @@ function catalogue() {
   ]);
   const productVariant = table([]);
   const db = {
+    $executeRaw: vi.fn<(query: TemplateStringsArray) => Promise<number>>(async () => 0),
+    $queryRaw: vi.fn(async () => [{ count: BigInt(2) }]),
     product: {
       ...product,
       // The cleanup reads each product with its variants.
@@ -172,6 +178,78 @@ async function run(db: ReturnType<typeof catalogue>) {
 }
 
 describe('applyCatalogCleanup', () => {
+  function existingVariant(overrides: Record<string, unknown> = {}): Row {
+    return {
+      id: 'existing',
+      productId: 'apple',
+      name: plan.variants[0].name,
+      nameEn: plan.variants[0].nameEn,
+      emoji: '🍏',
+      imageUrl: null,
+      imageUrlEn: null,
+      ...overrides,
+    };
+  }
+
+  it.each([
+    [existingVariant({ nameEn: 'Different apple' })],
+    [existingVariant({ name: 'Другое яблоко' })],
+    [existingVariant(), existingVariant({ id: 'second' })],
+    [existingVariant({ imageUrl: '/different.webp' })],
+    [existingVariant({ imageUrlEn: '/different-en.webp' })],
+  ])('rejects conflicting or ambiguous existing variants: %j', async (...candidates) => {
+    const db = catalogue();
+    db.productVariant.rows.push(...candidates);
+    // This unit test checks fail-closed identity validation before moving the child. Real
+    // transaction rollback, including earlier merges, is covered on PostgreSQL.
+    const childRows = () =>
+      JSON.stringify({
+        child: db.product.rows.find((row) => row.id === 'honeycrisp'),
+        item: db.item.rows.find((row) => row.id === 'i-2'),
+        history: db.listHistoryItem.rows,
+        star: db.favorite.rows.find((row) => row.id === 'f-4'),
+      });
+    const before = childRows();
+    await expect(run(db)).rejects.toThrow(/variant/i);
+    expect(childRows()).toBe(before);
+  });
+
+  it('reuses only an exact identity and explicitly transfers both child pictures', async () => {
+    const db = catalogue();
+    db.productVariant.rows.push(existingVariant());
+    await run(db);
+    expect(db.productVariant.rows).toEqual([
+      existingVariant({ imageUrl: '/hc.webp', imageUrlEn: '/hc-en.webp' }),
+    ]);
+    expect(db.item.rows.find((row) => row.id === 'i-2')).toMatchObject({
+      productId: 'apple',
+      variantId: 'existing',
+    });
+    expect(db.listHistoryItem.rows[0].variantId).toBe('existing');
+    expect(db.variantFavorite.rows[0].variantId).toBe('existing');
+  });
+
+  it('locks writers before any catalogue reads', async () => {
+    const db = catalogue();
+    const read = vi.spyOn(db.product, 'findMany');
+    await run(db);
+    const statements = db.$executeRaw.mock.calls.map((call) => String(call[0]));
+    const lockIndex = statements.findIndex((statement) => /LOCK TABLE/.test(statement));
+    expect(lockIndex).toBeGreaterThanOrEqual(0);
+    expect(statements[lockIndex]).toContain('SHARE ROW EXCLUSIVE MODE');
+    expect(db.$executeRaw.mock.invocationCallOrder[lockIndex]).toBeLessThan(
+      read.mock.invocationCallOrder[0]
+    );
+  });
+
+  it('refuses cleanup before the history reference migration is deployed', async () => {
+    const db = catalogue();
+    db.$queryRaw.mockResolvedValue([{ count: BigInt(0) }]);
+    const before = JSON.stringify(db);
+    await expect(run(db)).rejects.toThrow(/history.*migration/i);
+    expect(JSON.stringify(db)).toBe(before);
+  });
+
   it('folds a duplicate into the singular product without losing items or favorites', async () => {
     const db = catalogue();
     await run(db);
