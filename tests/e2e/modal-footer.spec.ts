@@ -8,6 +8,7 @@ import {
 } from './fixtures/auth';
 import {
   expectButtonsReachable,
+  expectKeyboardFooter,
   expectScrollUnchanged,
   mockModalAdmin,
   modalPanel,
@@ -98,6 +99,8 @@ for (const height of [667, 812]) {
       expect(requests).toEqual(Array(2).fill({ text: 'Молоко 2 л\nХлеб', listId: E2E_LIST_ID }));
       await expect(panel.getByRole('alert')).toHaveText(unavailable);
       await expectScrollUnchanged(page, scrollY, 'retry error response');
+      await expectKeyboardFooter(page, [cancel, submit], scrollY);
+      await screenshotModal(page, testInfo, 'import-list-keyboard');
       await tapWithoutScroll(page, cancel, scrollY);
       await expect(page.getByRole('heading', { name: importTitle, exact: true })).toHaveCount(0);
       await expectScrollUnchanged(page, scrollY, 'closing import error');
@@ -197,6 +200,8 @@ for (const height of [667, 812]) {
       );
       await expect(panel.getByRole('alert')).toHaveText(unavailable);
       await expectScrollUnchanged(page, scrollY, 'product retry response');
+      await expectKeyboardFooter(page, [cancel, submit], scrollY);
+      await screenshotModal(page, testInfo, 'add-product-keyboard');
       await tapWithoutScroll(page, cancel, scrollY);
       await expect(page.getByRole('heading', { name: addTitle, exact: true })).toHaveCount(0);
       await expectScrollUnchanged(page, scrollY, 'closing add product');
@@ -232,6 +237,7 @@ for (const height of [667, 812]) {
       await expectScrollUnchanged(page, scrollY, 'create response / close');
       await openModal(page, opener, createTitle);
       await screenshotModal(page, testInfo, 'create-list-cancel');
+      await expectKeyboardFooter(page, [cancel, submit], scrollY);
       await tapWithoutScroll(page, cancel, scrollY);
       await expect(page.getByRole('heading', { name: createTitle, exact: true })).toHaveCount(0);
       expect(requests).toHaveLength(1);
@@ -259,10 +265,11 @@ for (const height of [667, 812]) {
       const panel = page.getByRole('dialog', { name: title });
       await expect(panel.getByTestId('variant-card')).toHaveCount(30);
       await screenshotModal(page, testInfo, 'variant-menu');
-      // VariantMenu has no footer in the existing DOM. Its dismiss action is the
-      // header close button; test it AND the bottom-row actions rather than inventing a footer.
+      // Keep the original header dismissal contract and test the shared footer too.
       const close = panel.getByRole('button', { name: 'Закрыть', exact: true });
+      const cancel = panel.getByRole('button', { name: 'Отмена', exact: true });
       await expectButtonsReachable(page, [close], scrollY);
+      await expectKeyboardFooter(page, [cancel], scrollY);
       const last = panel.getByTestId('variant-card').last();
       await scrollBodyToEnd(page, last, scrollY);
       await screenshotModal(page, testInfo, 'variant-menu-scrolled');
@@ -319,6 +326,7 @@ for (const height of [667, 812]) {
       await expectScrollUnchanged(page, scrollY, 'bulk import response / close');
       await openModal(page, opener, bulkTitle);
       await screenshotModal(page, testInfo, 'bulk-import-cancel');
+      await expectKeyboardFooter(page, [cancel], scrollY);
       await tapWithoutScroll(page, cancel, scrollY);
       await expect(page.getByRole('heading', { name: bulkTitle, exact: true })).toHaveCount(0);
       expect(requests).toHaveLength(1);
@@ -389,6 +397,7 @@ for (const height of [667, 812]) {
       await screenshotModal(page, testInfo, 'product-move-selected');
       const move = panel.getByRole('button', { name: '✓ Переместить (1)', exact: true });
       await expectButtonsReachable(page, [move, close], scrollY);
+      await expectKeyboardFooter(page, [move, close], scrollY);
       const alert = page.waitForEvent('dialog');
       const action = tapWithoutScroll(page, move, scrollY);
       const dialog = await alert;

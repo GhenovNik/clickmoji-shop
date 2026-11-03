@@ -160,3 +160,22 @@ export async function scrollBodyToEnd(page: Page, lastItem: Locator, scrollY: nu
   );
   await expectScrollUnchanged(page, scrollY, 'scrolling modal content');
 }
+
+// Headless engines do not open a real iOS software keyboard. Model the Visual
+// Viewport resize + pan events on its REAL EventTarget, without modifying app CSS.
+export async function expectKeyboardFooter(page: Page, buttons: Locator[], scrollY: number) {
+  await page.evaluate(() => {
+    const viewport = window.visualViewport!;
+    Object.defineProperty(viewport, 'height', { configurable: true, value: 420 });
+    Object.defineProperty(viewport, 'offsetTop', { configurable: true, value: 80 });
+    viewport.dispatchEvent(new Event('resize'));
+    viewport.dispatchEvent(new Event('scroll'));
+  });
+  for (const button of buttons) {
+    const { top, bottom, centerHitsButton } = await buttonGeometry(button);
+    expect(top, 'Footer above the visual viewport top').toBeGreaterThanOrEqual(80);
+    expect(bottom, 'Footer above keyboard at visualViewport bottom').toBeLessThanOrEqual(500);
+    expect(centerHitsButton).toBe(true);
+  }
+  await expectScrollUnchanged(page, scrollY, 'keyboard resize and viewport pan');
+}
