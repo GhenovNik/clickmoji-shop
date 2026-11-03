@@ -404,8 +404,19 @@ test.describe('Compact touch and keyboard behavior', () => {
         const emoji = initiallyPurchased ? '🫛' : '🐄';
         const card = item(page, id);
         const toggle = page.getByRole('button', { name: `Куплено: ${name}`, exact: true });
+        // Below-fold purchased rows must be clear of the fixed mobile nav.
+        // Native touch adjustment can select that nav even when a text point
+        // barely passes hit-testing at the viewport edge (Linux font metrics).
+        await card.evaluate((element) =>
+          element.scrollIntoView({ block: 'center', behavior: 'instant' })
+        );
         await card.getByText(name, { exact: true }).tap();
+        await expect(page).toHaveURL(new RegExp(`/lists/${E2E_LIST_ID}$`));
+        await expect(toggle).toHaveAttribute('aria-pressed', String(initiallyPurchased));
+        expect(state.updateItemRequests).toEqual([]);
         await card.getByText(emoji, { exact: true }).tap();
+        await expect(toggle).toHaveAttribute('aria-pressed', String(initiallyPurchased));
+        expect(state.updateItemRequests).toEqual([]);
         // Hit the straight left edge, not a transparent rounded corner or the
         // top edge where Chromium touch adjustment can select the group header.
         await card.tap({ position: { x: 2, y: 28 } });
