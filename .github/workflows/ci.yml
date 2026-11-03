@@ -60,10 +60,22 @@ jobs:
         run: npm run build
 
       - name: Install Playwright browser
-        run: npx playwright install --with-deps chromium
+        run: npx playwright install --with-deps chromium webkit
 
       - name: E2E smoke
         run: npm run test:e2e:smoke
+
+      - name: Mobile modal WebKit regression
+        run: npx playwright test tests/e2e/modal-footer.spec.ts --project=modal-webkit --output=test-results/webkit
+
+      - name: Upload mobile modal footer evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: modal-footer-evidence-${{ github.event.pull_request.head.sha || github.sha }}
+          path: test-results/**/modal-footer-*.png
+          if-no-files-found: error
+          retention-days: 30
 
       - name: Upload shopping list screenshot evidence
         if: success()

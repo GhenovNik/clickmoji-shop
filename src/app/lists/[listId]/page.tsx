@@ -13,6 +13,7 @@ import ShoppingListItem from '@/components/shopping/ShoppingListItem';
 import ShoppingListEmptyState from '@/components/shopping/ShoppingListEmptyState';
 import ProductSearch from '@/components/ProductSearch';
 import ImportListModal from '@/components/shopping/ImportListModal';
+import { openModalFromTrigger } from '@/components/ui/Modal';
 
 export default function ShoppingListPage({ params }: { params: Promise<{ listId: string }> }) {
   const router = useRouter();
@@ -127,7 +128,7 @@ export default function ShoppingListPage({ params }: { params: Promise<{ listId:
 
               {/* Import list button */}
               <button
-                onClick={() => setIsImportModalOpen(true)}
+                onClick={openModalFromTrigger(() => setIsImportModalOpen(true))}
                 className="mt-4 bg-gradient-to-r from-green-500 to-teal-600 hover:from-green-600 hover:to-teal-700 text-white px-6 py-2 rounded-lg font-semibold transition-all flex items-center gap-2 mx-auto"
               >
                 <span>📋</span>
