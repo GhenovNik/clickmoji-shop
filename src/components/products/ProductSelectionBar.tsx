@@ -6,6 +6,7 @@ import { useTranslations } from 'next-intl';
 interface ProductSelectionBarProps {
   count: number;
   adding: boolean;
+  error?: string;
   onAddToList: () => void;
   isAuthenticated: boolean;
 }
@@ -13,6 +14,7 @@ interface ProductSelectionBarProps {
 export default function ProductSelectionBar({
   count,
   adding,
+  error,
   onAddToList,
   isAuthenticated,
 }: ProductSelectionBarProps) {
@@ -22,6 +24,11 @@ export default function ProductSelectionBar({
 
   return (
     <div className="fixed sm:bottom-0 bottom-16 left-0 right-0 bg-white border-t border-gray-200 p-4 shadow-lg z-40 pb-safe-bottom">
+      {error && (
+        <p role="alert" className="max-w-4xl mx-auto text-red-500 text-sm mb-2">
+          {error}
+        </p>
+      )}
       <div className="max-w-4xl mx-auto flex items-center justify-between">
         <div className="text-lg font-semibold">{t('selected', { count })}</div>
         {isAuthenticated ? (

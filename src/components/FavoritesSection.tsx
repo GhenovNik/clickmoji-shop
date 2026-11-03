@@ -1,11 +1,13 @@
 'use client';
 
+import { useRef, useState } from 'react';
 import Image from 'next/image';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useSession } from 'next-auth/react';
 import { useLocale, useTranslations } from 'next-intl';
 import { listsQueryKey, useActiveList } from '@/hooks/useListsQuery';
 import { queryKeys } from '@/lib/query-keys';
+import { refreshQueryCache } from '@/lib/refresh-query-cache';
 import {
   favoriteDisplay,
   favoriteKey,
@@ -38,6 +40,22 @@ type FavoriteProduct = {
   };
   variant?: FavoriteVariant | null;
 };
+
+type AddFeedback = {
+  pending: boolean;
+  addFailed: boolean;
+  succeeded: boolean;
+  // Deliberate duplicates stay possible without losing earlier failed usage updates.
+  failedUsage: number;
+};
+const emptyFeedback: AddFeedback = {
+  pending: false,
+  addFailed: false,
+  succeeded: false,
+  failedUsage: 0,
+};
+const addTargetKey = (listId: string, favorite: FavoriteProduct) =>
+  JSON.stringify([listId, favoriteKey(favorite)]);
 
 const fetchFavoritesAPI = async (): Promise<FavoriteProduct[]> => {
   const res = await fetch('/api/favorites');
@@ -83,18 +101,14 @@ export default function FavoritesSection() {
   const queryClient = useQueryClient();
   const t = useTranslations('catalog');
   const locale = useLocale();
+  const [addError, setAddError] = useState('');
+  const [feedback, setFeedback] = useState<Record<string, AddFeedback>>({});
+  const pendingTargets = useRef(new Set<string>());
 
   const { data: favorites = [], isLoading: loading } = useQuery({
     queryKey: queryKeys.favorites(),
     queryFn: fetchFavoritesAPI,
     enabled: !!session?.user,
-  });
-
-  const updateUsageMutation = useMutation({
-    mutationFn: updateFavoriteUsageAPI,
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.favorites() });
-    },
   });
 
   const removeMutation = useMutation({
@@ -121,29 +135,57 @@ export default function FavoritesSection() {
     },
   });
 
-  const addToListMutation = useMutation({
-    mutationFn: addFavoriteToListAPI,
-    onSuccess: (_, variables) => {
-      queryClient.invalidateQueries({ queryKey: listsQueryKey });
-      queryClient.invalidateQueries({ queryKey: queryKeys.list(variables.listId) });
-    },
-  });
-
-  const handleAddToList = async (favorite: FavoriteProduct) => {
+  const handleAddToList = async (favorite: FavoriteProduct, usageOnly = false) => {
+    setAddError('');
     if (!activeListId) {
-      alert(t('shared.selectListFirst'));
+      setAddError(t('shared.selectListFirst'));
       return;
     }
 
+    const listId = activeListId;
+    const key = addTargetKey(listId, favorite);
+    // A pending render is not synchronous: guard two taps in the same event turn, too.
+    if (pendingTargets.current.has(key) || (usageOnly && !feedback[key]?.failedUsage)) return;
+    pendingTargets.current.add(key);
+    const updateFeedback = (update: (previous: AddFeedback) => AddFeedback) =>
+      setFeedback((current) => ({ ...current, [key]: update(current[key] ?? emptyFeedback) }));
+    updateFeedback((previous) => ({
+      ...previous,
+      pending: true,
+      addFailed: false,
+      succeeded: false,
+    }));
+
     try {
-      await addToListMutation.mutateAsync({
-        listId: activeListId,
-        item: favoriteListItem(favorite),
-      });
-      await updateUsageMutation.mutateAsync(favorite);
-    } catch (error) {
-      console.error('Error adding favorite to list:', error);
-      alert(t('shared.addProductFailed'));
+      if (!usageOnly) {
+        try {
+          await addFavoriteToListAPI({ listId, item: favoriteListItem(favorite) });
+        } catch (error) {
+          console.error('Error adding favorite to list:', error);
+          updateFeedback((previous) => ({ ...previous, addFailed: true }));
+          return;
+        }
+        refreshQueryCache(queryClient, [listsQueryKey, queryKeys.list(listId)]);
+      }
+
+      try {
+        await updateFavoriteUsageAPI(favorite);
+        updateFeedback((previous) => ({
+          ...previous,
+          succeeded: true,
+          failedUsage: previous.failedUsage - (usageOnly ? 1 : 0),
+        }));
+        refreshQueryCache(queryClient, [queryKeys.favorites()]);
+      } catch (error) {
+        console.error('Error updating favorite usage after list add:', error);
+        updateFeedback((previous) => ({
+          ...previous,
+          failedUsage: previous.failedUsage + (usageOnly ? 0 : 1),
+        }));
+      }
+    } finally {
+      pendingTargets.current.delete(key);
+      updateFeedback((previous) => ({ ...previous, pending: false }));
     }
   };
 
@@ -186,14 +228,21 @@ export default function FavoritesSection() {
         </span>
       </div>
 
+      {addError && !activeListId && (
+        <p role="alert" className="text-red-500 text-sm mb-2">
+          {addError}
+        </p>
+      )}
       <div className="grid grid-cols-4 sm:grid-cols-6 md:grid-cols-8 lg:grid-cols-10 gap-3">
         {favorites.map((favorite) => {
           const { name, imageUrl, emoji } = favoriteDisplay(favorite, locale);
+          const state = activeListId ? feedback[addTargetKey(activeListId, favorite)] : undefined;
           return (
             <div key={favorite.id} className="relative group">
               <button
                 onClick={() => handleAddToList(favorite)}
-                className="w-full bg-white rounded-xl p-3 shadow-md hover:shadow-lg hover:scale-105 transition-all"
+                disabled={state?.pending}
+                className="w-full bg-white rounded-xl p-3 shadow-md hover:shadow-lg hover:scale-105 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
                 title={name}
               >
                 {imageUrl ? (
@@ -208,6 +257,31 @@ export default function FavoritesSection() {
                   <div className="text-3xl sm:text-4xl">{emoji}</div>
                 )}
               </button>
+
+              {state?.addFailed && (
+                <p role="alert" className="text-red-500 text-sm mt-2">
+                  {t('shared.addProductFailed')}
+                </p>
+              )}
+              {!!state?.failedUsage && (
+                <div className="text-sm mt-2">
+                  <p role="alert" className="text-amber-800">
+                    {t('favoritesSection.usageUpdateFailed')}
+                  </p>
+                  <button
+                    onClick={() => handleAddToList(favorite, true)}
+                    disabled={state.pending}
+                    className="text-blue-600 underline disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {t('favoritesSection.retryUsage')}
+                  </button>
+                </div>
+              )}
+              {state?.succeeded && !state.failedUsage && (
+                <p role="status" className="text-green-700 text-sm mt-2">
+                  {t('favoritesSection.added')}
+                </p>
+              )}
 
               {/* Reveal the remove action on hover. */}
               <button

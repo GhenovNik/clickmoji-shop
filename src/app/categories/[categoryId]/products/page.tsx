@@ -1,6 +1,8 @@
 ﻿'use client';
 
 import { Suspense, useEffect, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
+import { queryKeys } from '@/lib/query-keys';
 import { useParams, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import Image from 'next/image';
@@ -24,6 +26,7 @@ function ProductsPageContent() {
   const t = useTranslations('catalog');
   const tCommon = useTranslations('common');
   const locale = useLocale();
+  const queryClient = useQueryClient();
 
   // Set active list from URL parameter
   useEffect(() => {
@@ -41,6 +44,7 @@ function ProductsPageContent() {
     favoriteVariants,
     loading,
     adding,
+    addError,
     toggleProduct,
     selectVariant,
     toggleFavorite,
@@ -116,6 +120,7 @@ function ProductsPageContent() {
       <ProductSelectionBar
         count={selectedProducts.size}
         adding={adding}
+        error={addError}
         isAuthenticated={isAuthenticated}
         onAddToList={addToList}
       />
@@ -127,8 +132,7 @@ function ProductsPageContent() {
           isOpen={isModalOpen}
           onClose={() => setIsModalOpen(false)}
           onSuccess={() => {
-            // Refresh products list
-            window.location.reload();
+            queryClient.invalidateQueries({ queryKey: queryKeys.categoryProducts(categoryId) });
           }}
         />
       )}

@@ -55,8 +55,9 @@ describe('AddProductModal success', () => {
     fireEvent.change(screen.getByPlaceholderText(/Например/), { target: { value: 'Молоко' } });
     fireEvent.submit(screen.getByPlaceholderText(/Например/).closest('form')!);
 
-    await vi.waitFor(() => expect(alert).toHaveBeenCalledTimes(1));
-    expect(String(alert.mock.calls[0][0])).toContain('Молоко');
-    expect(String(alert.mock.calls[0][0])).not.toContain('Unicode');
+    const status = await screen.findByRole('status');
+    expect(status.textContent).toContain('Молоко');
+    expect(status.textContent).not.toContain('Unicode');
+    expect(alert).not.toHaveBeenCalled();
   });
 });

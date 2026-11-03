@@ -80,6 +80,41 @@ async function submitImport() {
 }
 
 describe('import from text', () => {
+  it.each(['throw', 'reject'] as const)(
+    'preserves the real partial-result report without replaying the import when cache refreshes %s',
+    async (failure) => {
+      const body = importResults(1);
+      const partial = {
+        results: {
+          ...body.results,
+          failed: [{ product: { nameRu: 'Сливки', nameEn: 'Cream' }, reason: 'Try later' }],
+        },
+      };
+      mockFetch([{ method: 'POST', url: '/api/lists/import-text', body: partial }]);
+      vi.spyOn(queryClient, 'invalidateQueries').mockImplementation(() => {
+        if (failure === 'throw') throw new Error('Cache unavailable');
+        return Promise.reject(new Error('Cache unavailable'));
+      });
+      const onSuccess = vi.fn();
+      render(<ImportListModal listId="list-1" isOpen onClose={vi.fn()} onSuccess={onSuccess} />, {
+        wrapper,
+      });
+      fireEvent.change(screen.getByLabelText('Вставьте список покупок'), {
+        target: { value: 'молоко, тархун, сливки' },
+      });
+      fireEvent.click(screen.getByRole('button', { name: /Импортировать/ }));
+      await screen.findByText('Импорт выполнен частично');
+      expect(screen.getByText(/Сливки: Try later/)).toBeTruthy();
+      expect(screen.getByText(/Тархун \(Напитки\)/)).toBeTruthy();
+      expect(onSuccess).toHaveBeenCalledTimes(1);
+      expect(fetch).toHaveBeenCalledExactlyOnceWith('/api/lists/import-text', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: 'молоко, тархун, сливки', listId: 'list-1' }),
+      });
+    }
+  );
+
   it('invalidates the list, the list counts and the catalog when products were created', async () => {
     mockFetch([{ method: 'POST', url: '/api/lists/import-text', body: importResults(1) }]);
 

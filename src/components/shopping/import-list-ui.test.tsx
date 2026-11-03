@@ -111,7 +111,13 @@ describe('import result report', () => {
     });
     fireEvent.click(screen.getByRole('button', { name: /Импортировать/ }));
 
-    expect(await screen.findByText('Импорт завершён!')).toBeTruthy();
+    expect(await screen.findByText('Импорт выполнен частично')).toBeTruthy();
     expect(screen.getByText(/Нераспознанная позиция: Unrecognized entry/)).toBeTruthy();
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Проверить и повторить неудавшиеся позиции' })
+    );
+    expect((screen.getByLabelText('Вставьте список покупок') as HTMLTextAreaElement).value).toBe(
+      'Нераспознанная позиция'
+    );
   });
 });
