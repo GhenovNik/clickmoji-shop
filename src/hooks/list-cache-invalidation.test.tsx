@@ -103,7 +103,7 @@ describe('import from text', () => {
         target: { value: 'молоко, тархун, сливки' },
       });
       fireEvent.click(screen.getByRole('button', { name: /Импортировать/ }));
-      await screen.findByText('Импорт завершён!');
+      await screen.findByText('Импорт выполнен частично');
       expect(screen.getByText(/Сливки: Try later/)).toBeTruthy();
       expect(screen.getByText(/Тархун \(Напитки\)/)).toBeTruthy();
       expect(onSuccess).toHaveBeenCalledTimes(1);

@@ -104,7 +104,7 @@ describe('import report from the real route', () => {
     });
     fireEvent.click(screen.getByRole('button', { name: /Импортировать/ }));
 
-    expect(await screen.findByText('Импорт завершён!')).toBeTruthy();
+    expect(await screen.findByText('Импорт выполнен частично')).toBeTruthy();
     expect(state.items.map((item) => item.productId)).toEqual(['milk']);
     expect(
       screen.getByText(/Нераспознанная позиция: ИИ вернул нераспознанную строку/)
