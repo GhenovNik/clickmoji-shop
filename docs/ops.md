@@ -31,7 +31,7 @@ GOOGLE_GENAI_API_KEY="your-google-api-key"
 OPENAI_API_KEY="your-openai-api-key"
 
 # Optional text model override for product automation. Unset/empty/whitespace = gemini-3.8-flash.
-# Must be a Gemini text model id (an image model id is rejected). See docs/ai.md.
+# Must be one of the exact text-generation IDs in docs/ai.md#text-model-selection.
 # GOOGLE_TEXT_MODEL="gemini-3.8-flash"
 
 # Optional image model overrides. Leave them unset to use the defaults (see docs/ai.md).
@@ -58,6 +58,10 @@ of [500, 1000) then [1000, 2000) milliseconds. Only 503/429, canonical `UNAVAILA
 `RESOURCE_EXHAUSTED` and network timeouts retry; other 4xx never retry. Optional
 `GOOGLE_TEXT_MODEL_FALLBACK` selects the third attempt's model; unset/blank keeps the primary.
 Both model settings are validated before any SDK request. Each attempt logs only code and number.
+Primary and fallback share an exact allowlist (`SUPPORTED_GOOGLE_TEXT_MODELS`); a `gemini-*` name
+alone proves no capability. Embedding, image, TTS, live/audio and unknown IDs are refused before
+SDK construction. Configuration diagnostics name the env and `UNSUPPORTED_TEXT_MODEL`, not its raw
+value or keys. See `docs/ai.md#text-model-selection` for supported IDs, sources and update policy.
 The operator CLI has no authenticated shopper and therefore no per-user daily reservation; its
 existing product writes are not run by the regression tests.
 

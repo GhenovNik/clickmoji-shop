@@ -79,7 +79,7 @@ describe('resolveGoogleTextModel', () => {
       expect(() => resolveGoogleTextModel()).toThrow(`value "${value.trim()}"`);
     });
 
-    it(`rejects the same fallback grammar: ${JSON.stringify(value)}`, () => {
+    it(`rejects the same unsupported fallback: ${JSON.stringify(value)}`, () => {
       process.env[GOOGLE_TEXT_MODEL_FALLBACK_ENV] = value;
 
       expect(() => resolveGoogleTextModelFallback()).toThrow(GOOGLE_TEXT_MODEL_FALLBACK_ENV);

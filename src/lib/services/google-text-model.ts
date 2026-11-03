@@ -3,18 +3,23 @@ export const GOOGLE_TEXT_MODEL_FALLBACK_ENV = 'GOOGLE_TEXT_MODEL_FALLBACK';
 
 export const DEFAULT_GOOGLE_TEXT_MODEL = 'gemini-3.8-flash';
 
-// Model id grammar, not a catalogue of models: an id that matches is routed, it is not guaranteed
-// that the model itself accepts text input.
-const GEMINI_TEXT_MODEL_ID_PATTERN = /^gemini-[a-z0-9]+(?:[.-][a-z0-9]+)*$/;
-const GEMINI_IMAGE_MODEL_ID_PATTERN =
-  /^gemini-[a-z0-9]+(?:[.-][a-z0-9]+)*-image(?:-[a-z0-9]+(?:[.-][a-z0-9]+)*)?$/;
+// Reviewed text-output / structured-output models for this generateContent JSON path.
+// Exact membership is intentional: Gemini naming grammar does not establish capability.
+// Sources and the procedure for adding a model are in docs/ai.md#text-model-selection.
+export const SUPPORTED_GOOGLE_TEXT_MODELS = Object.freeze([
+  DEFAULT_GOOGLE_TEXT_MODEL,
+  'gemini-3.5-flash-lite',
+  'gemini-2.5-flash',
+] as const);
+const supportedTextModels = new Set<string>(SUPPORTED_GOOGLE_TEXT_MODELS);
 
 export class GoogleTextModelConfigurationError extends Error {
   readonly env: string;
+  readonly code = 'UNSUPPORTED_TEXT_MODEL';
 
   constructor(model: string, env = GOOGLE_TEXT_MODEL_ENV) {
     super(
-      `Invalid ${env} value "${model}": expected a Gemini text model id (${GEMINI_TEXT_MODEL_ID_PATTERN.source}) that is not an image model`
+      `Invalid ${env} value "${model}": expected a supported generateContent text-generation model; allowed: ${SUPPORTED_GOOGLE_TEXT_MODELS.join(', ')}`
     );
     this.name = 'GoogleTextModelConfigurationError';
     this.env = env;
@@ -24,7 +29,7 @@ export class GoogleTextModelConfigurationError extends Error {
 function configuredModel(env: string): string | undefined {
   const model = process.env[env]?.trim();
   if (!model) return undefined;
-  if (!GEMINI_TEXT_MODEL_ID_PATTERN.test(model) || GEMINI_IMAGE_MODEL_ID_PATTERN.test(model)) {
+  if (!supportedTextModels.has(model)) {
     throw new GoogleTextModelConfigurationError(model, env);
   }
   return model;

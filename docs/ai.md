@@ -12,19 +12,35 @@ AI is used for emoji generation and product automation. Providers can be switche
 
 The text model used by product automation (smart-create, bulk import, list import from free text)
 is configuration, not code. Unset, empty or whitespace-only `GOOGLE_TEXT_MODEL` uses the operator
-default `gemini-3.8-flash` (decision 2026-10-30). A non-empty value is trimmed and must match
-`^gemini-[a-z0-9]+(?:[.-][a-z0-9]+)*$` and must not be an image model id
-(`^gemini-[a-z0-9]+(?:[.-][a-z0-9]+)*-image(?:-[a-z0-9]+(?:[.-][a-z0-9]+)*)?$`). Anything else fails
-with a configuration error naming `GOOGLE_TEXT_MODEL` before any SDK call. `GOOGLE_TEXT_MODEL` still
-overrides the default, for example `gemini-3.5-flash-lite` on the free tier.
+default `gemini-3.8-flash` (decision 2026-10-30). Both `GOOGLE_TEXT_MODEL` and optional
+`GOOGLE_TEXT_MODEL_FALLBACK` are trimmed and checked against the same closed, exact-ID allowlist in
+`SUPPORTED_GOOGLE_TEXT_MODELS` (`src/lib/services/google-text-model.ts`):
+
+| Allowed ID              | Capability source                                                                           |
+| ----------------------- | ------------------------------------------------------------------------------------------- |
+| `gemini-3.8-flash`      | [Google model documentation](https://aistudio.google.com/docs/models/gemini-3.8-flash)      |
+| `gemini-3.5-flash-lite` | [Google model documentation](https://aistudio.google.com/docs/models/gemini-3.5-flash-lite) |
+| `gemini-2.5-flash`      | [Google model documentation](https://aistudio.google.com/docs/models/gemini-2.5-flash)      |
+
+These model pages document text output and structured outputs; checked on 2026-11-03. The existing
+[generateContent API](https://aistudio.google.com/api-reference/generate-content) JSON path is retained.
+Name grammar is **not** capability evidence: embedding, image, TTS, live/audio, unknown models and
+unreviewed aliases/suffixes fail closed before SDK construction, even if their name starts with
+`gemini-`. Adding another model requires reviewing its documented text-generation/JSON capability,
+updating the exact list and adding a positive test; never broaden a prefix regexp instead.
+This offline compatibility list does not guarantee current availability, account access or quota;
+no model-discovery/network request is made during validation. A rejected setting logs its env name,
+`UNSUPPORTED_TEXT_MODEL`, expected capability and supported IDs, never the raw value/key or prompt.
+An absent/blank fallback stays disabled; an explicit valid fallback is used only on attempt three.
 
 The resolved model is passed to `models.generateContent({ model, contents, config: {
 responseMimeType: 'application/json' } })` and returned as `model` in the service response and the
 route body. JSON response mode is requested because the free-tier flash-lite model is less forgiving
 with free-form output; the existing parsing (markdown fences, control characters) stays as fallback.
 
-`gemini-2.5-flash` access is limited to existing users per Google release notes 2026-09-18;
-`gemini-3.5-flash-lite` remains available through `GOOGLE_TEXT_MODEL` when the free tier is used.
+`gemini-2.5-flash` is retained for existing-user compatibility, not as a promise of new-account
+access. Its model page documents automatic routing to `gemini-3.5-flash-lite` from December 1, 2026;
+operators can explicitly select `gemini-3.5-flash-lite` now without changing the application's default.
 
 ## Image model selection
 

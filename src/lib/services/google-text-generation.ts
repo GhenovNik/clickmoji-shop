@@ -1,7 +1,9 @@
 import { GoogleGenAI } from '@google/genai';
 import {
+  GoogleTextModelConfigurationError,
   resolveGoogleTextModel,
   resolveGoogleTextModelFallback,
+  SUPPORTED_GOOGLE_TEXT_MODELS,
 } from '@/lib/services/google-text-model';
 import {
   GoogleTextUnavailableError,
@@ -51,8 +53,23 @@ async function generateAttempt(
 /** Shared text-only policy; image generation deliberately does not use these retries. */
 export async function generateGoogleText({ apiKey, prompt }: { apiKey: string; prompt: string }) {
   // Validate both settings before constructing the SDK, even when primary would succeed.
-  const primary = resolveGoogleTextModel();
-  const fallback = resolveGoogleTextModelFallback();
+  let primary: string;
+  let fallback: string | undefined;
+  try {
+    primary = resolveGoogleTextModel();
+    fallback = resolveGoogleTextModelFallback();
+  } catch (error) {
+    if (error instanceof GoogleTextModelConfigurationError) {
+      // Never log the raw configured value or Error.message: either could contain a pasted key.
+      console.error('Google text model configuration rejected:', {
+        code: error.code,
+        env: error.env,
+        expected: 'An explicitly supported generateContent text-generation model',
+        supportedModels: SUPPORTED_GOOGLE_TEXT_MODELS,
+      });
+    }
+    throw error;
+  }
   // In SDK 1.52 the no-client-retryOptions path performs exactly one fetch and preserves ApiError.
   // Enabling client-level retryOptions (even attempts: 1) instead erases HTTP status on failures.
   // Keep it unset; the real-SDK transport regression tests guard this as well as the request hint.
