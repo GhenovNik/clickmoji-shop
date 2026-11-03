@@ -76,6 +76,58 @@ async function chooseHoneycrisp(page: Page, listId: string) {
 }
 const addButton = (page: Page) => page.getByRole('button', { name: 'Добавить', exact: true });
 
+test('AI partial success retries only list add, not successful catalog creation', async ({
+  page,
+}, testInfo) => {
+  const list = await db.list.create({
+    data: { userId, name: 'AI partial retry E2E', isActive: true },
+  });
+  let creates = 0;
+  let adds = 0;
+  const dialogs: string[] = [];
+  page.on('dialog', async (dialog) => {
+    dialogs.push(dialog.message());
+    await dialog.dismiss();
+  });
+  await page.route('**/api/search?**', (route) => route.fulfill({ json: [] }));
+  // Explicitly simulate the AI response; no paid/external provider is called.
+  await page.route('**/api/products/smart-create', async (route) => {
+    creates++;
+    await route.fulfill({
+      json: {
+        product: { id: productId, name: 'Яблоко', nameEn: 'Apple', emoji: '🍎' },
+        exists: false,
+      },
+    });
+  });
+  await page.route(`**/api/lists/${list.id}/items`, async (route) => {
+    adds++;
+    if (adds === 1)
+      return route.fulfill({
+        status: 500,
+        json: { error: 'Injected list-add failure after catalog success' },
+      });
+    return route.continue();
+  });
+  await page.goto(`/categories?listId=${list.id}`);
+  await page.getByPlaceholder('Поиск товаров...').fill('AI partial fixture');
+  await page.getByRole('button', { name: /Создать через AI/ }).tap();
+  await expect(page.locator('main').getByRole('alert')).toContainText('Товар создан в каталоге');
+  expect(creates).toBe(1);
+  expect(adds).toBe(1);
+  expect(await db.item.count({ where: { listId: list.id } })).toBe(0);
+  await page.getByRole('button', { name: 'Повторить добавление в список', exact: true }).tap();
+  await expect(page).toHaveURL(`http://localhost:3136/lists/${list.id}`);
+  expect(creates).toBe(1);
+  expect(adds).toBe(2);
+  expect(await db.item.count({ where: { listId: list.id, productId } })).toBe(1);
+  expect(dialogs).toEqual([]);
+  await testInfo.attach('partial-retry-receipt.json', {
+    body: JSON.stringify({ creates, adds, dialogs }),
+    contentType: 'application/json',
+  });
+});
+
 test('adds the same Honeycrisp twice through real API and renders two pending variant badges', async ({
   page,
 }, testInfo) => {
