@@ -56,6 +56,9 @@ const json = (value: unknown, status = 200) => new Response(JSON.stringify(value
 let addResponse: () => Promise<Response>;
 let createResponse: () => Promise<Response>;
 let searchResults: (typeof product)[];
+let products: (typeof product)[];
+let favorites: (typeof favorite)[];
+let usageResponse: () => Promise<Response>;
 let fetchMock: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
@@ -63,16 +66,19 @@ beforeEach(() => {
   vi.clearAllMocks();
   mocks.activeListId = 'list-1';
   searchResults = [product];
+  products = [product];
+  favorites = [favorite];
+  usageResponse = async () => json({});
   addResponse = async () => json({ error: 'Database constraint' }, 500);
   createResponse = async () => json({ product });
   vi.spyOn(window, 'alert').mockImplementation(() => {});
   vi.spyOn(console, 'error').mockImplementation(() => {});
   fetchMock = vi.fn(async (url: string, options?: RequestInit) => {
-    if (url === '/api/lists/list-1/items') return addResponse();
+    if (/^\/api\/lists\/list-[12]\/items$/.test(url)) return addResponse();
     if (url === '/api/products/smart-create') return createResponse();
     if (url.startsWith('/api/search')) return json(searchResults);
-    if (url.startsWith('/api/products?')) return json([product]);
-    if (url === '/api/favorites') return json(options?.method === 'POST' ? {} : [favorite]);
+    if (url.startsWith('/api/products?')) return json(products);
+    if (url === '/api/favorites') return options?.method === 'POST' ? usageResponse() : json(favorites);
     throw new Error(`Unexpected fetch: ${url}`);
   });
   vi.stubGlobal('fetch', fetchMock);
@@ -82,9 +88,15 @@ function renderUI(ui: React.ReactElement) {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
-  return renderWithIntl(<QueryClientProvider client={client}>{ui}</QueryClientProvider>, {
+  const view = renderWithIntl(<QueryClientProvider client={client}>{ui}</QueryClientProvider>, {
     locale: 'en',
   });
+  return {
+    ...view,
+    client,
+    rerenderUI: (next: React.ReactElement) =>
+      view.rerender(<QueryClientProvider client={client}>{next}</QueryClientProvider>),
+  };
 }
 
 type Path = 'category' | 'favorites page' | 'search' | 'AI search' | 'favorites section';
@@ -114,7 +126,7 @@ async function prepare(path: Path) {
   });
   if (path === 'AI search') {
     await screen.findByRole('button', { name: /Create with AI/ });
-    return () => screen.getByRole('button', { name: /Create with AI/ });
+    return () => screen.getByRole('button', { name: /Create with AI|Retry list add/ });
   }
   await screen.findByText('Milk');
   fireEvent.change(screen.getByRole('combobox'), { target: { value: 'skimmed' } });
@@ -156,7 +168,9 @@ describe.each(paths)('%s list add feedback', (path) => {
     fireEvent.click(button());
     const error = await screen.findByRole('alert');
     expect(error).toBeVisible();
-    expect(error).toHaveTextContent(/Could not add the item/);
+    expect(error).toHaveTextContent(
+      path === 'AI search' ? /created in the catalog.*could not be added to the list/ : /Could not add the item/
+    );
     assertRetained(path);
     expect(window.alert).not.toHaveBeenCalled();
     expect(mocks.router.push).not.toHaveBeenCalled();
@@ -188,6 +202,192 @@ describe.each(paths)('%s list add feedback', (path) => {
     }
     expect(window.alert).not.toHaveBeenCalled();
     expect(screen.queryByRole('alert')).toBeNull();
+  });
+});
+
+const usageRequests = () => fetchMock.mock.calls.filter(([url, options]) => url === '/api/favorites' && options?.method === 'POST');
+const createRequests = () => fetchMock.mock.calls.filter(([url]) => url === '/api/products/smart-create');
+const allListRequests = () => fetchMock.mock.calls.filter(([url]) => /^\/api\/lists\/list-[12]\/items$/.test(url));
+const bodyOf = (call: (typeof fetchMock.mock.calls)[number]) => JSON.parse(call[1].body);
+
+function deferredResponse() {
+  let finish!: (response: Response) => void;
+  const response = new Promise<Response>((resolve) => { finish = resolve; });
+  return { response: () => response, finish: (value: Response) => finish(value) };
+}
+
+const cream = { ...product, id: 'cream', name: 'Сливки', nameEn: 'Cream', variants: [] };
+const creamFavorite = { ...favorite, id: 'favorite-2', productId: cream.id, product: cream, variant: undefined };
+
+describe('favorite add and usage are separate completed operations', () => {
+  it('reports the completed add, retries only usage after repeated failures, and still permits a deliberate duplicate', async () => {
+    addResponse = async () => json({ createdItems: [{ id: 'item-1' }] });
+    usageResponse = async () => json({ error: 'Usage unavailable' }, 500);
+    renderUI(<FavoritesSection />);
+    const add = await screen.findByTitle('Skimmed');
+    fireEvent.click(add);
+    expect(await screen.findByRole('alert')).toHaveTextContent('Item was added to the list, but the favorite usage update failed');
+    expect(screen.getByRole('alert')).not.toHaveTextContent('Could not add');
+    expect(listRequests()).toHaveLength(1);
+    expect(bodyOf(listRequests()[0])).toEqual({ items: [{ productId: 'milk', variantId: 'skimmed' }] });
+    expect(usageRequests()).toHaveLength(1);
+    expect(bodyOf(usageRequests()[0])).toEqual({ variantId: 'skimmed' });
+    fireEvent.click(screen.getByRole('button', { name: 'Retry usage update' }));
+    await waitFor(() => expect(usageRequests()).toHaveLength(2));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Item was added');
+    expect(listRequests()).toHaveLength(1);
+
+    const pending = deferredResponse();
+    usageResponse = pending.response;
+    const retry = screen.getByRole('button', { name: 'Retry usage update' });
+    act(() => { fireEvent.click(retry); fireEvent.click(retry); });
+    await waitFor(() => expect(usageRequests()).toHaveLength(3));
+    expect(retry).toBeDisabled();
+    expect(add).toBeDisabled();
+    await act(async () => pending.finish(json({})));
+    expect(await screen.findByRole('status')).toHaveTextContent('Item added to the list. Favorite usage updated');
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Retry usage update' })).toBeNull();
+    expect(usageRequests().map(bodyOf)).toEqual([{ variantId: 'skimmed' }, { variantId: 'skimmed' }, { variantId: 'skimmed' }]);
+    expect(listRequests()).toHaveLength(1);
+    usageResponse = async () => json({});
+    fireEvent.click(add);
+    await waitFor(() => expect(usageRequests()).toHaveLength(4));
+    expect(listRequests()).toHaveLength(2);
+    expect(bodyOf(listRequests()[1])).toEqual(bodyOf(listRequests()[0]));
+    expect(window.alert).not.toHaveBeenCalled();
+  });
+
+  it('guards reentrant taps through both steps and scopes pending/retry to list and favorite', async () => {
+    favorites = [favorite, creamFavorite as unknown as typeof favorite];
+    const pending = deferredResponse();
+    addResponse = pending.response;
+    usageResponse = async () => json({}, 500);
+    const view = renderUI(<FavoritesSection />);
+    const add = await screen.findByTitle('Skimmed');
+    act(() => { fireEvent.click(add); fireEvent.click(add); });
+    await waitFor(() => expect(listRequests()).toHaveLength(1));
+    expect(add).toBeDisabled();
+    mocks.activeListId = 'list-2';
+    view.rerenderUI(<FavoritesSection />);
+    expect(screen.getByTitle('Skimmed')).toBeEnabled();
+    await act(async () => pending.finish(json({ createdItems: [{ id: 'item-1' }] })));
+    await waitFor(() => expect(usageRequests()).toHaveLength(1));
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Retry usage update' })).toBeNull();
+    addResponse = async () => json({ createdItems: [{ id: 'item-2' }] });
+    usageResponse = async () => json({});
+    fireEvent.click(screen.getByTitle('Cream'));
+    await waitFor(() => expect(usageRequests()).toHaveLength(2));
+    expect(allListRequests().map(([url]) => url)).toEqual(['/api/lists/list-1/items', '/api/lists/list-2/items']);
+    expect(bodyOf(allListRequests()[1])).toEqual({ items: [{ productId: 'cream', variantId: null }] });
+    mocks.activeListId = 'list-1';
+    view.rerenderUI(<FavoritesSection />);
+    fireEvent.click(screen.getByRole('button', { name: 'Retry usage update' }));
+    await waitFor(() => expect(usageRequests()).toHaveLength(3));
+    expect(bodyOf(usageRequests()[2])).toEqual({ variantId: 'skimmed' });
+    expect(allListRequests()).toHaveLength(2);
+  });
+});
+
+describe.each(['category', 'favorites page'] as const)('%s atomic multi-item operation', (path) => {
+  it('retains the entire valid batch on failure and retries the whole batch exactly once', async () => {
+    products = [product, cream];
+    favorites = [favorite, creamFavorite as unknown as typeof favorite];
+    const button = await prepare(path);
+    fireEvent.click(screen.getByRole('button', { name: /Cream/ }));
+    expect(screen.getByText(/Selected: 2/)).toBeVisible();
+    fireEvent.click(button());
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not add the items');
+    expect(screen.getByText(/Selected: 2/)).toBeVisible();
+    const expected = { items: [{ productId: 'milk', variantId: 'skimmed' }, { productId: 'cream', variantId: null }] };
+    expect(listRequests().map(bodyOf)).toEqual([expected]);
+    expect(mocks.router.push).not.toHaveBeenCalled();
+    const pending = deferredResponse();
+    addResponse = pending.response;
+    const add = button();
+    act(() => { fireEvent.click(add); fireEvent.click(add); });
+    await waitFor(() => expect(listRequests()).toHaveLength(2));
+    expect(listRequests().map(bodyOf)).toEqual([expected, expected]);
+    expect(add).toBeDisabled();
+    await act(async () => pending.finish(json({ createdItems: [{ id: 'item-1' }, { id: 'item-2' }] })));
+    await waitFor(() => expect(mocks.router.push).toHaveBeenCalledExactlyOnceWith('/lists/list-1'));
+    expect(screen.queryByText(/Selected:/)).toBeNull();
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(listRequests()).toHaveLength(2);
+    expect(usageRequests()).toHaveLength(0);
+  });
+});
+
+describe('AI catalog create followed by list add', () => {
+  it('retains the created product over repeated add failures and guards the add-only retry', async () => {
+    const button = await prepare('AI search');
+    fireEvent.click(button());
+    expect(await screen.findByRole('alert')).toHaveTextContent('created in the catalog, but could not be added to the list');
+    expect(createRequests().map(bodyOf)).toEqual([{ productName: 'milk' }]);
+    fireEvent.click(screen.getByRole('button', { name: /Retry list add/ }));
+    await waitFor(() => expect(listRequests()).toHaveLength(2));
+    expect(await screen.findByRole('alert')).toHaveTextContent('created in the catalog');
+    const pending = deferredResponse();
+    addResponse = pending.response;
+    const retry = screen.getByRole('button', { name: /Retry list add/ });
+    act(() => { fireEvent.click(retry); fireEvent.click(retry); });
+    await waitFor(() => expect(listRequests()).toHaveLength(3));
+    expect(createRequests()).toHaveLength(1);
+    expect(listRequests().map(bodyOf)).toEqual(Array(3).fill({ items: [{ productId: 'milk', variantId: null }] }));
+    expect(mocks.router.push).not.toHaveBeenCalled();
+    await act(async () => pending.finish(json({ createdItems: [{ id: 'item-1' }] })));
+    await waitFor(() => expect(mocks.router.push).toHaveBeenCalledExactlyOnceWith('/lists/list-1'));
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('resets the retry product and feedback when the query changes', async () => {
+    const button = await prepare('AI search');
+    fireEvent.click(button());
+    await screen.findByRole('alert');
+    fireEvent.change(screen.getByPlaceholderText('Search products...'), { target: { value: 'cream' } });
+    expect(screen.queryByRole('alert')).toBeNull();
+    createResponse = async () => json({ product: cream });
+    await screen.findByRole('button', { name: /Create with AI/ });
+    fireEvent.click(screen.getByRole('button', { name: /Create with AI/ }));
+    await waitFor(() => expect(createRequests()).toHaveLength(2));
+    await waitFor(() => expect(listRequests()).toHaveLength(2));
+    expect(createRequests().map(bodyOf)).toEqual([{ productName: 'milk' }, { productName: 'cream' }]);
+    expect(bodyOf(listRequests()[1])).toEqual({ items: [{ productId: 'cream', variantId: null }] });
+  });
+
+  it('does not continue an obsolete AI create after the query changes while it is pending', async () => {
+    const pending = deferredResponse();
+    createResponse = pending.response;
+    const button = await prepare('AI search');
+    const create = button();
+    act(() => { fireEvent.click(create); fireEvent.click(create); });
+    await waitFor(() => expect(createRequests()).toHaveLength(1));
+    fireEvent.change(screen.getByPlaceholderText('Search products...'), { target: { value: 'cream' } });
+    await act(async () => pending.finish(json({ product })));
+    expect(listRequests()).toHaveLength(0);
+    expect(mocks.router.push).not.toHaveBeenCalled();
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+});
+
+describe.each(paths)('%s post-success housekeeping', (path) => {
+  it.each(['throw', 'reject'] as const)('does not turn a committed add into a failed add when cache refreshes %s', async (failure) => {
+    addResponse = async () => json({ createdItems: [{ id: 'item-1' }] });
+    vi.spyOn(QueryClient.prototype, 'invalidateQueries').mockImplementation(() => {
+      if (failure === 'throw') throw new Error('Cache unavailable');
+      return Promise.reject(new Error('Cache unavailable'));
+    });
+    const button = await prepare(path);
+    fireEvent.click(button());
+    if (path !== 'favorites section') {
+      await waitFor(() => expect(mocks.router.push).toHaveBeenCalledExactlyOnceWith('/lists/list-1'));
+    } else {
+      expect(await screen.findByRole('status')).toHaveTextContent('Item added to the list');
+      expect(usageRequests()).toHaveLength(1);
+    }
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(listRequests()).toHaveLength(1);
   });
 });
 
