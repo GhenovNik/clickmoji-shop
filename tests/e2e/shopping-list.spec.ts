@@ -18,20 +18,13 @@ test.describe('Shopping list smoke flows', () => {
 
     const result = page.getByRole('button', { name: /Молоко/ }).first();
     await expect(result).toBeVisible();
-    const dialogPromise = page.waitForEvent('dialog');
-    await Promise.all([
-      result.click(),
-      dialogPromise.then(async (dialog) => {
-        expect(dialog.message()).toContain('Молоко');
-        expect(dialog.message()).toContain('добавлен');
-        await dialog.accept();
-      }),
-    ]);
+    await result.click();
 
     await expect
       .poll(() => state.addItemRequests)
       .toEqual([{ items: [{ productId: e2eMilkProduct.id, variantId: null }] }]);
     await expect.poll(() => state.items).toHaveLength(2);
+    await expect(page.getByText('Молоко', { exact: true })).toHaveCount(2);
   });
 
   test('adds product from category grid with authenticated fixture @smoke', async ({ page }) => {

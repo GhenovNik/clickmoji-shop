@@ -91,6 +91,7 @@ export function useProductSelection(categoryId: string) {
   const [selectedProducts, setSelectedProducts] = useState<Set<string>>(new Set());
   const [selectedVariants, setSelectedVariants] = useState<Record<string, string | null>>({});
   const [adding, setAdding] = useState(false);
+  const [addError, setAddError] = useState('');
 
   // Query for products by category
   const { data: products = [], isLoading: loading } = useQuery({
@@ -199,13 +200,14 @@ export function useProductSelection(categoryId: string) {
   };
 
   const addToList = async () => {
+    setAddError('');
     if (!session?.user) {
       router.push('/login');
       return;
     }
 
     if (!activeListId) {
-      alert(t('selectListFirst'));
+      setAddError(t('selectListFirst'));
       return;
     }
 
@@ -231,7 +233,7 @@ export function useProductSelection(categoryId: string) {
       }
     } catch (error) {
       console.error('Error adding items to list:', error);
-      alert(t('addProductsFailed'));
+      setAddError(t('addProductsFailed'));
     } finally {
       setAdding(false);
     }
@@ -245,6 +247,7 @@ export function useProductSelection(categoryId: string) {
     favoriteVariants,
     loading,
     adding,
+    addError,
     toggleProduct,
     selectVariant,
     toggleFavorite,

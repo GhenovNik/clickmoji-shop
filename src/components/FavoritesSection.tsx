@@ -1,5 +1,6 @@
 'use client';
 
+import { useState } from 'react';
 import Image from 'next/image';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useSession } from 'next-auth/react';
@@ -83,6 +84,7 @@ export default function FavoritesSection() {
   const queryClient = useQueryClient();
   const t = useTranslations('catalog');
   const locale = useLocale();
+  const [addError, setAddError] = useState('');
 
   const { data: favorites = [], isLoading: loading } = useQuery({
     queryKey: queryKeys.favorites(),
@@ -130,8 +132,9 @@ export default function FavoritesSection() {
   });
 
   const handleAddToList = async (favorite: FavoriteProduct) => {
+    setAddError('');
     if (!activeListId) {
-      alert(t('shared.selectListFirst'));
+      setAddError(t('shared.selectListFirst'));
       return;
     }
 
@@ -143,7 +146,7 @@ export default function FavoritesSection() {
       await updateUsageMutation.mutateAsync(favorite);
     } catch (error) {
       console.error('Error adding favorite to list:', error);
-      alert(t('shared.addProductFailed'));
+      setAddError(t('shared.addProductFailed'));
     }
   };
 
@@ -186,6 +189,11 @@ export default function FavoritesSection() {
         </span>
       </div>
 
+      {addError && (
+        <p role="alert" className="text-red-500 text-sm mb-2">
+          {addError}
+        </p>
+      )}
       <div className="grid grid-cols-4 sm:grid-cols-6 md:grid-cols-8 lg:grid-cols-10 gap-3">
         {favorites.map((favorite) => {
           const { name, imageUrl, emoji } = favoriteDisplay(favorite, locale);

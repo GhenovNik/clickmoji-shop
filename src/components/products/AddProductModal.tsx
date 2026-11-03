@@ -33,6 +33,7 @@ export default function AddProductModal({
   const [productName, setProductName] = useState('');
   const [isCreating, setIsCreating] = useState(false);
   const [error, setError] = useState('');
+  const [status, setStatus] = useState('');
   const router = useRouter();
   const t = useTranslations('catalog');
   const tCommon = useTranslations('common');
@@ -43,6 +44,7 @@ export default function AddProductModal({
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
+    setStatus('');
 
     if (!productName.trim()) {
       setError(t('addProduct.nameRequired'));
@@ -69,7 +71,7 @@ export default function AddProductModal({
 
       const createdName = localizedName(data.product, locale);
       if (data.exists) {
-        alert(t('addProduct.exists', { name: createdName }));
+        setStatus(t('addProduct.exists', { name: createdName }));
       } else {
         let message = t('addProduct.created', { name: createdName });
         if (data.customEmojiGenerated) {
@@ -79,7 +81,7 @@ export default function AddProductModal({
         }
         // The model's own `reasoning` is free English text whatever the interface language, so it
         // stays a diagnostic field of the response and is not shown to the shopper.
-        alert(message);
+        setStatus(message);
       }
 
       if (onSuccess) {
@@ -87,7 +89,6 @@ export default function AddProductModal({
       }
 
       setProductName('');
-      onClose();
       router.refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : t('addProduct.genericError'));
@@ -99,6 +100,7 @@ export default function AddProductModal({
   const handleClose = () => {
     setProductName('');
     setError('');
+    setStatus('');
     onClose();
   };
 
@@ -137,7 +139,19 @@ export default function AddProductModal({
               autoFocus
               disabled={isCreating}
             />
-            {error && <p className="text-red-500 text-sm mt-2">{error}</p>}
+            {error && (
+              <p role="alert" className="text-red-500 text-sm mt-2">
+                {error}
+              </p>
+            )}
+            {status && (
+              <p
+                role="status"
+                className="bg-green-50 border border-green-200 rounded-lg p-4 text-green-800 text-sm mt-2"
+              >
+                {status}
+              </p>
+            )}
           </div>
 
           <div className="bg-gradient-to-r from-purple-50 to-indigo-50 rounded-lg p-4 mb-4">

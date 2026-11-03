@@ -72,6 +72,7 @@ export function useFavorites() {
 
   const [selectedProducts, setSelectedProducts] = useState<Set<string>>(new Set());
   const [adding, setAdding] = useState(false);
+  const [addError, setAddError] = useState('');
 
   useEffect(() => {
     if (!session?.user) {
@@ -136,8 +137,9 @@ export function useFavorites() {
   };
 
   const addToList = async () => {
+    setAddError('');
     if (!activeListId) {
-      alert(t('selectListFirst'));
+      setAddError(t('selectListFirst'));
       return;
     }
 
@@ -160,7 +162,7 @@ export function useFavorites() {
       }
     } catch (error) {
       console.error('Error adding items to list:', error);
-      alert(t('addProductsFailed'));
+      setAddError(t('addProductsFailed'));
     } finally {
       setAdding(false);
     }
@@ -171,6 +173,7 @@ export function useFavorites() {
     selectedProducts,
     loading,
     adding,
+    addError,
     toggleProduct,
     removeFromFavorites,
     addToList,

@@ -74,6 +74,7 @@ export default function ProductSearch() {
   const [debouncedQuery, setDebouncedQuery] = useState('');
   const [isOpen, setIsOpen] = useState(false);
   const [isCreating, setIsCreating] = useState(false);
+  const [addError, setAddError] = useState('');
   const [selectedVariants, setSelectedVariants] = useState<Record<string, string | null>>({});
   const searchRef = useRef<HTMLDivElement>(null);
   const { activeListId } = useActiveList();
@@ -137,29 +138,25 @@ export default function ProductSearch() {
   });
 
   const handleAddProduct = async (product: SearchProduct) => {
+    setAddError('');
     if (!session?.user) {
       router.push('/login');
       return;
     }
 
     if (!activeListId) {
-      alert(t('shared.selectListFirst'));
+      setAddError(t('shared.selectListFirst'));
       return;
     }
 
     try {
       const variantId = selectedVariants[product.id] || product.variants?.[0]?.id || null;
 
-      const result = await addProductMutation.mutateAsync({
+      await addProductMutation.mutateAsync({
         listId: activeListId,
         productId: product.id,
         variantId,
       });
-
-      // Successfully added (duplicates are now allowed)
-      if (result.createdItems && result.createdItems.length > 0) {
-        alert(t('search.added', { emoji: product.emoji, name: localizedName(product, locale) }));
-      }
 
       setQuery('');
       setDebouncedQuery('');
@@ -170,18 +167,19 @@ export default function ProductSearch() {
       router.push(`/lists/${activeListId}`);
     } catch (error) {
       console.error('Error adding product:', error);
-      alert(t('shared.addProductFailed'));
+      setAddError(t('shared.addProductFailed'));
     }
   };
 
   const handleCreateWithAI = async () => {
+    setAddError('');
     if (!session?.user) {
       router.push('/login');
       return;
     }
 
     if (!activeListId) {
-      alert(t('shared.selectListFirst'));
+      setAddError(t('shared.selectListFirst'));
       return;
     }
 
@@ -190,33 +188,18 @@ export default function ProductSearch() {
     }
 
     setIsCreating(true);
+    let productCreated = false;
 
     try {
       // Create product with AI
       const createResult = await createSmartProductAPI(query.trim());
+      productCreated = true;
 
       // Add product to list
       await addProductMutation.mutateAsync({
         listId: activeListId,
         productId: createResult.product.id,
       });
-
-      // Product successfully added (duplicates are now allowed)
-      const created = {
-        emoji: createResult.product.emoji,
-        name: localizedName(createResult.product, locale),
-      };
-      if (createResult.exists) {
-        // Product existed, was successfully added
-        alert(t('search.foundAndAdded', created));
-      } else {
-        // Product was created and added
-        let message = t('search.createdAndAdded', created);
-        if (createResult.customEmojiGenerated) {
-          message += `\n${t('shared.uniqueImage')}`;
-        }
-        alert(message);
-      }
 
       setQuery('');
       setDebouncedQuery('');
@@ -225,7 +208,13 @@ export default function ProductSearch() {
       router.push(`/lists/${activeListId}`);
     } catch (error) {
       console.error('Error creating product with AI:', error);
-      alert(error instanceof Error ? error.message : t('search.createFailed'));
+      setAddError(
+        productCreated
+          ? t('shared.addProductFailed')
+          : error instanceof Error
+            ? error.message
+            : t('search.createFailed')
+      );
     } finally {
       setIsCreating(false);
     }
@@ -244,6 +233,12 @@ export default function ProductSearch() {
         />
         <div className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400">🔍</div>
       </div>
+
+      {addError && (
+        <p role="alert" className="text-red-500 text-sm mt-2">
+          {addError}
+        </p>
+      )}
 
       {/* Results Dropdown */}
       {isOpen && (

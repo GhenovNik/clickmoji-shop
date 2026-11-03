@@ -30,6 +30,7 @@ function FavoritesPageContent() {
     selectedProducts,
     loading,
     adding,
+    addError,
     toggleProduct,
     removeFromFavorites,
     addToList,
@@ -86,6 +87,7 @@ function FavoritesPageContent() {
       <ProductSelectionBar
         count={selectedProducts.size}
         adding={adding}
+        error={addError}
         isAuthenticated={true}
         onAddToList={addToList}
       />
