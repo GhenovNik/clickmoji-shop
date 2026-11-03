@@ -7,11 +7,11 @@ import type { Item } from '@/hooks/useShoppingListItems';
 import { localizedName } from '@/lib/catalog-name';
 import { productImageUrl } from '@/lib/product-image';
 import { cn } from '@/lib/utils';
-import { MoreHorizontal, X, MessageSquarePlus, Check } from 'lucide-react';
+import { X, MessageSquarePlus, Check } from 'lucide-react';
 
 interface ShoppingListItemProps {
   item: Item;
-  onToggle: (itemId: string) => void;
+  onToggle: (itemId: string) => void | Promise<void>;
   onRemove: (itemId: string) => void;
   onUpdateNote?: (itemId: string, note: string) => void;
 }
@@ -23,22 +23,23 @@ export default function ShoppingListItem({
   onUpdateNote,
 }: ShoppingListItemProps) {
   const [isEditingNote, setIsEditingNote] = useState(false);
+  const [isNoteExpanded, setIsNoteExpanded] = useState(false);
   const [noteValue, setNoteValue] = useState(item.note || '');
   const t = useTranslations('lists');
   const locale = useLocale();
   const productName = localizedName(item.product, locale);
   const imageUrl = productImageUrl(item.product, locale);
+  const toggleButtonId = `shopping-item-toggle-${item.id}`;
 
   return (
     <div
       className={cn(
-        'relative group flex items-center justify-between p-4 rounded-2xl bg-white border-2 border-border/50 shadow-sm transition-all cursor-pointer touch-manipulation',
+        'relative group grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-2 p-4 rounded-2xl bg-white border-2 border-border/50 shadow-sm transition-all',
         item.isPurchased && 'bg-muted/40 border-transparent opacity-80'
       )}
-      onClick={() => onToggle(item.id)}
     >
       {/* Main Content (Left) */}
-      <div className="flex items-center gap-4 flex-1 min-w-0">
+      <div className="flex items-center gap-2 sm:gap-4 min-w-0">
         <div
           className={cn(
             'flex-shrink-0 transition-transform duration-300',
@@ -74,19 +75,15 @@ export default function ShoppingListItem({
               </span>
             )}
           </div>
-
-          {item.note && !isEditingNote && (
-            <span className="text-sm text-muted-foreground line-clamp-1 italic mt-0.5">
-              {item.note}
-            </span>
-          )}
         </div>
       </div>
 
       {/* Right side actions */}
-      <div className="flex items-center gap-1 sm:gap-2 flex-shrink-0 ml-2">
+      <div className="flex items-center gap-1 sm:gap-2">
         {onUpdateNote && !isEditingNote && !item.isPurchased && (
           <button
+            type="button"
+            aria-label={t('item.editNote', { name: productName })}
             onClick={(e) => {
               e.stopPropagation();
               setIsEditingNote(true);
@@ -98,6 +95,8 @@ export default function ShoppingListItem({
         )}
 
         <button
+          type="button"
+          aria-label={t('item.remove', { name: productName })}
           onClick={(e) => {
             e.stopPropagation();
             onRemove(item.id);
@@ -107,18 +106,56 @@ export default function ShoppingListItem({
           <X size={20} />
         </button>
 
-        {/* Checkbox indicator */}
-        <div
-          className={cn(
-            'flex items-center justify-center w-8 h-8 rounded-full border-2 transition-all duration-300 ml-1',
-            item.isPurchased
-              ? 'bg-accent border-accent text-white scale-110'
-              : 'border-muted-foreground/30 text-transparent hover:border-accent/50'
-          )}
+        <button
+          type="button"
+          id={toggleButtonId}
+          aria-label={t('item.purchased', { name: productName })}
+          aria-pressed={item.isPurchased}
+          onClick={async (event) => {
+            const hadFocus = document.activeElement === event.currentTarget;
+            await onToggle(item.id);
+            // Moving between sections remounts the item. Restore lost focus, but do
+            // not steal it if the user has already moved to another control.
+            if (hadFocus && document.activeElement === document.body) {
+              document.getElementById(toggleButtonId)?.focus();
+            }
+          }}
+          className="flex items-center justify-center min-w-11 min-h-11 rounded-full cursor-pointer touch-manipulation focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2"
         >
-          <Check size={16} strokeWidth={item.isPurchased ? 3 : 2} />
-        </div>
+          <span
+            aria-hidden="true"
+            className={cn(
+              'flex items-center justify-center w-8 h-8 rounded-full border-2 transition-all duration-300',
+              item.isPurchased
+                ? 'bg-accent border-accent text-white scale-110'
+                : 'border-muted-foreground/30 text-transparent hover:border-accent/50'
+            )}
+          >
+            <Check size={16} strokeWidth={item.isPurchased ? 3 : 2} />
+          </span>
+        </button>
       </div>
+
+      {item.note && !isEditingNote && (
+        <button
+          type="button"
+          aria-expanded={isNoteExpanded}
+          onClick={() => setIsNoteExpanded((expanded) => !expanded)}
+          className="col-span-2 min-w-0 mt-2 text-left text-sm text-muted-foreground italic rounded cursor-pointer touch-manipulation focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2"
+        >
+          <span className="sr-only">
+            {t(isNoteExpanded ? 'item.collapseNote' : 'item.expandNote')}{' '}
+          </span>
+          <span
+            className={cn(
+              'block whitespace-pre-wrap [overflow-wrap:anywhere]',
+              !isNoteExpanded && 'line-clamp-1'
+            )}
+          >
+            {item.note}
+          </span>
+        </button>
+      )}
 
       {/* Note Editor Overlay */}
       {isEditingNote && (
