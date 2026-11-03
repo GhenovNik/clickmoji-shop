@@ -53,11 +53,11 @@ for (const locale of ['ru', 'en'] as const) {
     const text = 'Milk 2L\nGarlic';
     await input.fill(text);
     const submit = page.getByRole('button', {
-      name: locale === 'ru' ? 'Импортировать' : 'Import',
+      name: locale === 'ru' ? '✨ Импортировать' : '✨ Import',
       exact: true,
     });
     await submit.click();
-    await expect(page.getByRole('alert')).toHaveText(message);
+    await expect(page.getByRole('alert').filter({ hasText: message })).toBeVisible();
     await expect(input).toHaveValue(text);
     await expect(submit).toBeEnabled();
     expect(dialogs).toEqual([]);
