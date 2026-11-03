@@ -45,6 +45,7 @@ export type E2EShoppingItem = {
 export type MockShoppingState = {
   items: E2EShoppingItem[];
   addItemRequests: unknown[];
+  updateItemRequests: { itemId: string; body: unknown }[];
   listRequests: number;
 };
 
@@ -147,6 +148,27 @@ async function fulfillApiRoute(route: Route, state: MockShoppingState) {
     return;
   }
 
+  const itemPath = `/api/lists/${E2E_LIST_ID}/items/`;
+  if (path.startsWith(itemPath)) {
+    const itemId = path.slice(itemPath.length);
+    const item = state.items.find((entry) => entry.id === itemId);
+    if (request.method() === 'PUT' && item) {
+      const body = request.postDataJSON();
+      state.updateItemRequests.push({ itemId, body });
+      if (typeof body.isPurchased === 'boolean') item.isPurchased = body.isPurchased;
+      if (typeof body.note === 'string') item.note = body.note;
+      await route.fulfill(json(item));
+      return;
+    }
+    if (request.method() === 'DELETE') {
+      state.items = state.items.filter((entry) => entry.id !== itemId);
+      await route.fulfill(json({ ok: true }));
+      return;
+    }
+    await route.fulfill({ status: 404, json: { error: 'Item not found' } });
+    return;
+  }
+
   if (path === '/api/categories') {
     await route.fulfill(json([e2eCategory]));
     return;
@@ -175,6 +197,7 @@ export async function mockAuthenticatedShopping(page: Page, initialItems: E2ESho
   const state: MockShoppingState = {
     items: [...initialItems],
     addItemRequests: [],
+    updateItemRequests: [],
     listRequests: 0,
   };
 
