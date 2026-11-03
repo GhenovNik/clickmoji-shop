@@ -409,6 +409,16 @@ test.describe('Compact touch and keyboard behavior', () => {
         // Hit the straight left edge, not a transparent rounded corner or the
         // top edge where Chromium touch adjustment can select the group header.
         await card.tap({ position: { x: 2, y: 28 } });
+        await expect(toggle).toHaveAttribute('aria-pressed', String(initiallyPurchased));
+        expect(state.updateItemRequests).toEqual([]);
+        // Native touch adjustment may target the adjacent note button when
+        // tapping a small title. That may expand a note, but must never buy it.
+        // Reset only note expansion before testing its explicit touch control.
+        const noteControl = card.locator('button[aria-expanded]');
+        if ((await noteControl.getAttribute('aria-expanded')) === 'true') {
+          await noteControl.tap();
+          await expect(noteControl).toHaveAttribute('aria-expanded', 'false');
+        }
         await card.getByRole('button', { name: /^Развернуть комментарий/ }).tap();
         const expanded = card.getByRole('button', { name: /^Свернуть комментарий/ });
         await expectFullNote(expanded);
