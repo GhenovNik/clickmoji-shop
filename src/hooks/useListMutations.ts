@@ -73,7 +73,7 @@ export function useRestoreHistory() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: async ({ historyId, name }: { historyId: string; name: string }) => {
+    mutationFn: async ({ historyId, name }: { historyId: string; name?: string }) => {
       const response = await fetch(`/api/history/${historyId}/restore`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

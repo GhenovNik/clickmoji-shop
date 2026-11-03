@@ -5,9 +5,13 @@ import { renderWithIntl } from '@/test/intl';
 import HistoryPage from './page';
 
 const router = vi.hoisted(() => ({ push: vi.fn() }));
+const auth = vi.hoisted(() => ({
+  data: undefined as { user: { id: string } } | null | undefined,
+  status: 'loading' as 'loading' | 'authenticated' | 'unauthenticated',
+}));
 vi.mock('next/navigation', () => ({ useRouter: () => router }));
 vi.mock('next-auth/react', () => ({
-  useSession: () => ({ data: { user: { id: 'user-b' } }, status: 'authenticated' }),
+  useSession: () => auth,
 }));
 
 const completedAt = '2026-10-01T10:00:00.000Z';
@@ -48,6 +52,8 @@ function completionDate(locale: 'ru' | 'en') {
 
 beforeEach(() => {
   router.push.mockReset();
+  auth.data = { user: { id: 'user-b' } };
+  auth.status = 'authenticated';
   restoreBody = undefined;
   queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 });
@@ -55,6 +61,22 @@ beforeEach(() => {
 afterEach(() => {
   queryClient.clear();
   vi.unstubAllGlobals();
+});
+
+it('waits for the session before redirecting a direct history visit', () => {
+  auth.data = undefined;
+  auth.status = 'loading';
+  renderHistory('На неделю');
+
+  expect(router.push).not.toHaveBeenCalled();
+});
+
+it('redirects a confirmed unauthenticated visitor to login', async () => {
+  auth.data = null;
+  auth.status = 'unauthenticated';
+  renderHistory('На неделю');
+
+  await waitFor(() => expect(router.push).toHaveBeenCalledWith('/login'));
 });
 
 for (const locale of ['ru', 'en'] as const) {
