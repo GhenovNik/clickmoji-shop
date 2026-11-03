@@ -9,13 +9,23 @@ import { renderWithIntl } from '@/test/intl';
 
 type Row = Record<string, unknown>;
 
-const state = vi.hoisted(() => ({ reply: '', items: [] as Row[] }));
+const state = vi.hoisted(() => ({
+  reply: '',
+  items: [] as Row[],
+  overloaded: false,
+  locale: 'ru',
+}));
 
 vi.mock('next/navigation', () => ({ useRouter: () => ({ push: vi.fn(), refresh: vi.fn() }) }));
 
 vi.mock('@google/genai', () => ({
   GoogleGenAI: class {
-    models = { generateContent: async () => ({ text: state.reply }) };
+    models = {
+      generateContent: async () => {
+        if (state.overloaded) throw Object.assign(new Error('synthetic overload'), { status: 503 });
+        return { text: state.reply };
+      },
+    };
   },
 }));
 
@@ -42,6 +52,7 @@ vi.mock('@/lib/prisma', () => {
   };
   return {
     prisma: {
+      $executeRaw: vi.fn(async () => 1),
       list: { findUnique: async () => ({ id: 'list-1', userId: 'user-b' }) },
       category: {
         findMany: async () => [
@@ -71,6 +82,8 @@ const { default: ImportListModal } = await import('@/components/shopping/ImportL
 beforeEach(() => {
   process.env.GOOGLE_GENAI_API_KEY = 'synthetic-google-genai-key-for-tests';
   state.items = [];
+  state.overloaded = false;
+  state.locale = 'ru';
   vi.spyOn(console, 'error').mockImplementation(() => undefined);
   vi.stubGlobal(
     'fetch',
@@ -80,7 +93,10 @@ beforeEach(() => {
       route.POST(
         new Request(`http://localhost${url}`, {
           ...(init as RequestInit),
-          headers: { ...(init?.headers as Record<string, string>), cookie: 'NEXT_LOCALE=ru' },
+          headers: {
+            ...(init?.headers as Record<string, string>),
+            cookie: `NEXT_LOCALE=${state.locale}`,
+          },
         })
       )
     )
@@ -88,6 +104,48 @@ beforeEach(() => {
 });
 
 describe('import report from the real route', () => {
+  it.each([
+    ['ru', 'Сервис распознавания сейчас перегружен, попробуйте через минуту'],
+    ['en', 'The recognition service is overloaded right now. Please try again in a minute.'],
+  ] as const)(
+    'shows %s overload inline, preserves text and allows retry',
+    async (locale, message) => {
+      state.locale = locale;
+      state.overloaded = true;
+      const alert = vi.spyOn(window, 'alert').mockImplementation(() => undefined);
+      state.reply = JSON.stringify([
+        { nameRu: 'Молоко', nameEn: 'Milk', categoryName: 'Dairy', emoji: '🥛' },
+        { nameRu: { text: 'Сыр' }, nameEn: ['Cheese'], categoryName: 'Dairy', emoji: 7 },
+      ]);
+      renderWithIntl(
+        <QueryClientProvider
+          client={new QueryClient({ defaultOptions: { mutations: { retry: false } } })}
+        >
+          <ImportListModal listId="list-1" isOpen onClose={vi.fn()} />
+        </QueryClientProvider>,
+        { locale }
+      );
+      const input = screen.getByRole('textbox');
+      fireEvent.change(input, { target: { value: 'Молоко\nсыр' } });
+      const buttonName = locale === 'ru' ? /Импортировать/ : /Import$/;
+      fireEvent.click(screen.getByRole('button', { name: buttonName }));
+      expect((await screen.findByRole('alert', {}, { timeout: 15000 })).textContent).toBe(message);
+      expect((input as HTMLTextAreaElement).value).toBe('Молоко\nсыр');
+      expect(alert).not.toHaveBeenCalled();
+      expect(state.items).toEqual([]);
+      state.overloaded = false;
+      fireEvent.click(screen.getByRole('button', { name: buttonName }));
+      expect(
+        await screen.findByText(
+          locale === 'ru' ? 'Импорт выполнен частично' : 'Import partially completed'
+        )
+      ).toBeTruthy();
+      expect(state.items.map((item) => item.productId)).toEqual(['milk']);
+      expect(alert).not.toHaveBeenCalled();
+    },
+    20000
+  );
+
   it('renders a mixed valid + malformed AI reply: the item is added and the failure listed', async () => {
     state.reply = JSON.stringify([
       { nameRu: 'Молоко', nameEn: 'Milk', categoryName: 'Dairy', emoji: '🥛' },
