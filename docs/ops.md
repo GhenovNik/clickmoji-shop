@@ -43,6 +43,34 @@ OPENAI_API_KEY="your-openai-api-key"
 # IMAGEN_MODEL="gemini-3.1-flash-image"
 ```
 
+### Text AI overload and quota accounting (AGE-1540)
+
+The three text routes (list import, smart-create, admin bulk import) allow 60 seconds of route
+execution (`maxDuration = 60`). The text service has a total 30-second budget across retries and
+fallback; retries do not acquire more daily units. Exhausted temporary provider availability
+returns HTTP 503 with `Retry-After: 60` and a localized overload message. The import modal displays
+it inline, preserves the entered list and lets the shopper retry; it never opens a native alert.
+Hourly abuse throttles are unchanged and still count requests, including failed ones.
+
+Daily text accounting is **one unit per successful logical text operation**, including internal
+retries, fallback and AI response parsing, not one unit per provider attempt. The shared PostgreSQL
+budget is reserved immediately before the operation; failed generation or AI parsing compensates
+one unit before the route returns an error. A successful AI result remains charged even if product
+persistence, category matching or later list writes fail. Image reservations (including smart-create's
+optional image) keep their previous attempt-based behavior and are not compensated here.
+
+Reservation failure denies the operation without contacting the provider. Compensation is one atomic
+conditional UPDATE of the original user's original UTC-day counter (`count > 0`), not a read/modify/
+write and not a transaction held across provider network I/O. The timestamp is captured before
+reservation, so an operation crossing midnight cannot debit/refund the next day by mistake.
+The helper has one private failure catch and exposes no reusable refund handle.
+
+**Conservative failure mode:** process termination after reservation, or a database outage during
+compensation, can retain a daily unit. Compensation failure logs an allowlisted code only and is
+never blindly retried: an ambiguous commit must not be decremented twice. No automatic counter
+reset/reconciliation or new migration is required. Do not replay compensation manually without
+independent evidence of the original reservation and whether the UPDATE committed.
+
 ### Image model switch (Vercel)
 
 `GOOGLE_IMAGE_MODEL` and `OPENAI_IMAGE_MODEL` are optional. While both are absent (or empty or

@@ -87,6 +87,7 @@ const emojiGenerate = await import('@/app/api/emoji/generate/route');
 const bulkImport = await import('@/app/api/products/bulk-import/route');
 const { prisma } = await import('@/lib/prisma');
 const { aiDailyLimit } = await import('@/lib/ai-quota');
+const { GoogleTextUnavailableError } = await import('@/lib/services/text-ai-errors');
 
 const post = (body: unknown, locale = 'ru') =>
   new Request('http://localhost/', {
@@ -95,10 +96,12 @@ const post = (body: unknown, locale = 'ru') =>
     body: JSON.stringify(body),
   });
 
-const runImport = () => importText.POST(post({ text: 'тархун', listId: 'list-b' }));
-const runSmartCreate = () => smartCreate.POST(post({ productName: 'Тархун' }));
+const runImport = (locale = 'ru') =>
+  importText.POST(post({ text: 'тархун', listId: 'list-b' }, locale));
+const runSmartCreate = (locale = 'ru') => smartCreate.POST(post({ productName: 'Тархун' }, locale));
 const runEmojiGenerate = () => emojiGenerate.POST(post({ productName: 'Тархун' }));
-const runBulkImport = () => bulkImport.POST(post({ productNames: ['Тархун'] }));
+const runBulkImport = (locale = 'ru') =>
+  bulkImport.POST(post({ productNames: ['Тархун'] }, locale));
 const asAdmin = () =>
   doubles.requireUser.mockResolvedValue({ session: { user: { id: 'admin-1', role: 'ADMIN' } } });
 
@@ -156,7 +159,38 @@ const textRoutes = [
 ];
 
 describe('successful logical text operations', () => {
+  it('allows a 60-second route duration for all three text operations', () => {
+    expect([importText.maxDuration, smartCreate.maxDuration, bulkImport.maxDuration]).toEqual([
+      60, 60, 60,
+    ]);
+  });
+
+  it('a failed optional image keeps its separate attempt-based daily charge', async () => {
+    doubles.generateAndUploadEmojiAsset.mockRejectedValueOnce(new Error('synthetic image failure'));
+    expect((await runSmartCreate()).status).toBe(200);
+    expect(doubles.budget.used).toBe(2);
+    expect(prisma.$executeRaw).not.toHaveBeenCalled();
+  });
+
   for (const route of textRoutes) {
+    it.each([
+      ['ru', 'Сервис распознавания сейчас перегружен, попробуйте через минуту'],
+      ['en', 'The recognition service is overloaded right now. Please try again in a minute.'],
+    ])(
+      `${route.name}: overload is a localized %s 503 with a retry hint and no charge`,
+      async (locale, message) => {
+        asAdmin();
+        route.provider.mockRejectedValueOnce(new GoogleTextUnavailableError());
+        const response = await route.run(locale);
+        expect(response.status).toBe(503);
+        expect(response.headers.get('Retry-After')).toBe('60');
+        expect(await response.json()).toEqual({ error: message });
+        expect(doubles.budget.used).toBe(0);
+        expect(prisma.$executeRaw).toHaveBeenCalledTimes(1);
+        expect(route.provider).toHaveBeenCalledTimes(1);
+      }
+    );
+
     it(`${route.name}: fully failed provider operation leaves no daily charge`, async () => {
       asAdmin();
       route.provider.mockRejectedValueOnce(new Error('synthetic provider failure'));
@@ -165,6 +199,9 @@ describe('successful logical text operations', () => {
       expect(doubles.budget.used).toBe(0);
       expect(prisma.$executeRaw).toHaveBeenCalledTimes(1);
       expect(route.provider).toHaveBeenCalledTimes(1);
+      expect(JSON.stringify(vi.mocked(console.error).mock.calls)).not.toContain(
+        'synthetic provider failure'
+      );
     });
 
     it(`${route.name}: success consumes exactly one text unit`, async () => {

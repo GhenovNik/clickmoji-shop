@@ -124,11 +124,10 @@ upstream error that happens to say "blocked" stays a plain failure. The raw SDK 
 headers and `cause` are never passed to `console.error` for a generation failure, and the HTTP body
 never carries them either.
 
-A failure outside image generation — a Prisma write, the product text analysis or the parsing of the
-request body — is not a generation failure, and no provider error can reach that log: the
-`catch` around the generation call in `POST /api/emoji/generate` and the one around
-`generateAndUploadEmojiAsset` in smart-create handle those. Such a failure is logged with its class
-and message, as before.
+A failure outside image generation is not classified as an image-generation failure. Text route
+outer catches and text quota compensation log only allowlisted error codes, never raw SDK/Prisma
+errors, prompts, response bodies or keys. Image generation keeps its existing separate allowlisted
+classification.
 
 ### Prompt variants and metadata
 
@@ -290,16 +289,31 @@ on their own they do not bound spend:
 - `POST /api/products/smart-create`: `ai:smart-create:<userId>`, 20 requests/hour
 - `POST /api/lists/import-text`: `ai:import:<userId>`, 10 requests/hour
 
-Every paid provider call also takes a unit of a daily budget per user, stored in PostgreSQL
-(`ai_usage_counters`, `src/lib/ai-quota.ts`) and therefore shared by every instance, with or without
-Upstash. The unit is reserved right before the call it pays for:
+Text operations and image attempts share a daily budget per user, stored in PostgreSQL
+(`ai_usage_counters`, `src/lib/ai-quota.ts`) across every instance, with or without Upstash.
+A text unit is one **successful logical operation**, including all service retries, fallback and AI
+response parsing. `src/lib/text-ai-call.ts` reserves once before calling the service and compensates
+once if that operation throws, including parse failures. A successful AI result stays charged if
+subsequent persistence or route validation fails. Images retain one unit per attempted generation:
+no new image refunds or retry behavior are introduced here.
+
+The text service's total retry/fallback budget is 30 seconds; all three text routes export
+`maxDuration = 60`. Exhausted temporary availability is HTTP 503 with `Retry-After: 60` and a
+localized overload message (`api.aiText.unavailable`). The existing list import modal renders the
+message inline and preserves the text for retry. Hourly throttles remain unchanged.
+
+Compensation is a single atomic conditional decrement of the captured user's original UTC day,
+with `count > 0`, in one private catch; there is no public repeatable refund operation and no DB
+transaction spanning the provider call. Failed reservations never refund. Process death or DB
+outage can conservatively retain a unit; ambiguous compensation is never blindly retried.
+See `docs/ops.md` for operational handling. Units by route:
 
 | Route                             | Auth  | Units                                                                               |
 | --------------------------------- | ----- | ----------------------------------------------------------------------------------- |
 | `POST /api/lists/import-text`     | user  | 1 for the text analysis                                                             |
 | `POST /api/products/smart-create` | user  | 1 for the text analysis, 1 more for the custom image when the analysis asks for one |
 | `POST /api/emoji/generate`        | admin | 1 for the image                                                                     |
-| `POST /api/products/bulk-import`  | admin | 1 for the analysis of the whole batch (one provider call)                           |
+| `POST /api/products/bulk-import`  | admin | 1 for successful analysis of the whole batch (retries included)                     |
 
 Limit per role, read on every request (`AI_DAILY_CALLS_PER_USER` for users,
 `AI_DAILY_CALLS_PER_ADMIN` for administrators):
