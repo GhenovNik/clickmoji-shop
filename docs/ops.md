@@ -104,6 +104,42 @@ through `images.generate` with `size 1024x1024`, `quality medium` and `backgroun
 - Before a production migration, create and verify a fresh backup, run `prisma migrate deploy` with
   a direct/unpooled database URL, and confirm `prisma migrate status` afterwards.
 
+### Duplicate variant repair (AGE-1536 / AGE-1545)
+
+Migration `20261102224241_drop_legacy_item_variant_unique` removes the legacy
+`items_listId_productId_variantId_key` with `DROP INDEX IF EXISTS`. Existing shopping rows and
+history are not deleted. Do not edit or mark the older migration as reapplied: an already recorded
+migration does not repair a surviving index. The repair is safe when the index is already absent.
+
+Production rollout is operator-owned; local regression commands never deploy to production:
+
+1. Create and verify a fresh production backup. Schedule the index drop when brief write locking
+   is acceptable; use the direct/unpooled URL without printing credentials.
+2. From the reviewed release, run `npm run migrate:deploy`, then `npx prisma migrate status`.
+3. Run `npm run db:check-item-indexes` against the same database. This command opens a read-only
+   transaction, compares `public.items` indexes with the Item schema, and exits nonzero for an extra
+   UNIQUE (even if renamed), missing indexes, or changed definitions. It never repairs drift.
+4. Deploy the application containing nonblocking add feedback. In a test shopping list, add the
+   same variant twice: both requests must succeed and both rows/badges must remain visible.
+   Verify that an add error stays inline, preserves selection, and opens no native alert.
+
+Stop rollout if migration or verification fails. Do not recreate the old UNIQUE on code rollback:
+duplicate shopping rows are intentional and may already exist after rollout. Keep the compatible
+schema repair; a data restore is a separate operator decision, not an automatic rollback step.
+
+Local checks (after `npm ci`, with a local `.env`, never a production URL):
+
+- `npm run test:items-postgres`: real item POST handler against `clickmoji-local-pg` on loopback:5432;
+  randomly named fixtures only, no truncate/reset. Covers successive requests, one batch, and null
+  variants. Run before/after the migration to observe the constraint regression.
+- `npm run db:check-item-indexes`: expected indexes are `items_pkey` (unique id), `items_listId_idx`,
+  and `items_productId_idx` (both nonunique).
+- `npm run test:e2e:variants`: opt-in local DB suite, isolated fixture users, production build/server
+  on port 3136, Chromium and WebKit with 375px touch emulation. Successful adds use the real local
+  API. Injected 500/403/network failures test inline feedback, preserved selection and successful
+  retry. The native-dialog invariant is “no dialog at all”; the sampled former OK-area tap is not
+  proof of OS-native dialog geometry or of the original physical-phone ghost click.
+
 ## Scripts
 
 - `npm run dev` (Start local server)
