@@ -1,6 +1,13 @@
 'use client';
 
-import { useEffect, useRef, useState, type HTMLAttributes, type ReactNode } from 'react';
+import {
+  useEffect,
+  useRef,
+  useState,
+  type HTMLAttributes,
+  type MouseEventHandler,
+  type ReactNode,
+} from 'react';
 import { createPortal } from 'react-dom';
 import { cn } from '@/lib/utils';
 
@@ -39,8 +46,19 @@ export default function Modal({
     if (!overlay || !panel) return;
     const bodyOverflow = document.body.style.overflow;
     const htmlOverflow = document.documentElement.style.overflow;
+    const bodyPaddingBottom = document.body.style.paddingBottom;
+    const paddingBottom = getComputedStyle(document.body).paddingBottom || '0px';
+    const scrollY = window.scrollY;
     document.body.style.overflow = 'hidden';
     document.documentElement.style.overflow = 'hidden';
+    // WebKit can remove a root horizontal scrollbar on lock, increasing the
+    // viewport height and clamping scrollY near the page end. Retain precisely
+    // that lost scroll range until unlock instead of moving the background.
+    const lostScroll = scrollY - window.scrollY;
+    if (lostScroll > 0) {
+      document.body.style.paddingBottom = `calc(${paddingBottom} + ${lostScroll}px)`;
+      window.scrollTo(0, scrollY);
+    }
     const siblings = Array.from(document.body.children)
       .filter((node): node is HTMLElement => node instanceof HTMLElement && node !== overlay)
       .map((node) => ({ node, inert: node.inert }));
@@ -68,6 +86,7 @@ export default function Modal({
       });
       document.body.style.overflow = bodyOverflow;
       document.documentElement.style.overflow = htmlOverflow;
+      document.body.style.paddingBottom = bodyPaddingBottom;
       if (opener instanceof HTMLElement && opener.isConnected)
         opener.focus({ preventScroll: true });
     };
@@ -135,4 +154,13 @@ export function ModalBody({ className, ...props }: HTMLAttributes<HTMLDivElement
 
 export function ModalFooter({ className, ...props }: HTMLAttributes<HTMLDivElement>) {
   return <div className={cn('modal-footer', className)} {...props} />;
+}
+
+// Safari touch/click does not focus buttons. Focus the actual opener before
+// mounting autoFocus children so every dismissal can restore it without scrolling.
+export function openModalFromTrigger(open: () => void): MouseEventHandler<HTMLButtonElement> {
+  return (event) => {
+    event.currentTarget.focus({ preventScroll: true });
+    open();
+  };
 }

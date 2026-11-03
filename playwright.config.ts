@@ -28,6 +28,11 @@ export default defineConfig({
       name: 'Mobile Chrome',
       use: { ...devices['Pixel 5'] },
     },
+    {
+      name: 'modal-webkit',
+      testMatch: 'modal-footer.spec.ts',
+      use: { browserName: 'webkit' },
+    },
   ],
 
   webServer: {

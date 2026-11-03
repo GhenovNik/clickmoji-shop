@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import Modal, { ModalBody, ModalFooter } from './Modal';
+import Modal, { ModalBody, ModalFooter, openModalFromTrigger } from './Modal';
 
 function contents() {
   return (
@@ -18,10 +18,21 @@ function contents() {
 }
 
 afterEach(() => {
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 
 describe('Modal lifecycle', () => {
+  it('focuses touch openers before mounting autofocus children, without scrolling', () => {
+    const open = vi.fn(() => expect(screen.getByRole('button', { name: 'Open' })).toHaveFocus());
+    render(<button onClick={openModalFromTrigger(open)}>Open</button>);
+    const opener = screen.getByRole('button', { name: 'Open' });
+    const focus = vi.spyOn(opener, 'focus');
+    fireEvent.click(opener);
+    expect(open).toHaveBeenCalledOnce();
+    expect(focus).toHaveBeenCalledWith({ preventScroll: true });
+  });
+
   it('portals above app stacking contexts, locks scrolling and restores focus/styles', () => {
     const opener = document.createElement('button');
     document.body.append(opener);
@@ -68,6 +79,22 @@ describe('Modal lifecycle', () => {
     fireEvent.keyDown(save, { key: 'Escape' });
     expect(firstClose).not.toHaveBeenCalled();
     expect(latestClose).toHaveBeenCalledOnce();
+  });
+
+  it('preserves a WebKit-clamped scroll range and restores pre-existing padding on unlock', () => {
+    document.body.style.paddingBottom = '8px';
+    vi.spyOn(window, 'scrollY', 'get').mockReturnValueOnce(286).mockReturnValue(269);
+    const scroll = vi.spyOn(window, 'scrollTo').mockImplementation(() => {});
+    const view = render(
+      <Modal label="Near page end" onClose={vi.fn()}>
+        {contents()}
+      </Modal>
+    );
+    expect(scroll).toHaveBeenCalledExactlyOnceWith(0, 286);
+    expect(document.body.style.paddingBottom).not.toBe('8px');
+    view.unmount();
+    expect(document.body.style.paddingBottom).toBe('8px');
+    document.body.style.paddingBottom = '';
   });
 
   it('does not dismiss a pending write via Escape or backdrop', () => {
