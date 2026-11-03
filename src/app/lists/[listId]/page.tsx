@@ -4,11 +4,13 @@ import { use, useEffect, useState } from 'react';
 import { useSession } from 'next-auth/react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { useLocale, useTranslations } from 'next-intl';
-import { localizedName } from '@/lib/catalog-name';
+import { useTranslations } from 'next-intl';
+import { ChevronDown, ChevronUp, LayoutGrid, List } from 'lucide-react';
 import { useLists } from '@/store/lists';
 import { useShoppingListItems } from '@/hooks/useShoppingListItems';
 import { useShoppingListFocus } from '@/hooks/useShoppingListFocus';
+import { useShoppingListPresentation } from '@/hooks/useShoppingListPresentation';
+import ShoppingCategoryGroup from '@/components/shopping/ShoppingCategoryGroup';
 import ShoppingListItem from '@/components/shopping/ShoppingListItem';
 import ShoppingListEmptyState from '@/components/shopping/ShoppingListEmptyState';
 import ProductSearch from '@/components/ProductSearch';
@@ -22,13 +24,22 @@ export default function ShoppingListPage({ params }: { params: Promise<{ listId:
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
   const t = useTranslations('lists');
   const tCommon = useTranslations('common');
-  const locale = useLocale();
-  const { rememberFocus, registerTarget } = useShoppingListFocus();
+  const { rememberFocus, registerTarget, isFocusTarget } = useShoppingListFocus();
+  const { view, collapsed, setView, toggleGroup, expandGroups } = useShoppingListPresentation();
 
   const { list, items, loading, togglePurchased, removeItem, updateNote, clearAll, completeList } =
     useShoppingListItems(listId);
 
   const handleToggle = async (itemId: string) => {
+    const item = items.find((entry) => entry.id === itemId);
+    if (item && isFocusTarget(itemId)) {
+      // A focused circle must remain reachable when it moves into a folded
+      // section. The existing list-level intent still owns focus restoration.
+      expandGroups([
+        `${listId}:${item.isPurchased ? 'pending' : 'purchased'}:${item.product.category.name}`,
+        ...(!item.isPurchased ? [`${listId}:purchased`] : []),
+      ]);
+    }
     try {
       await togglePurchased(itemId);
     } catch (error) {
@@ -92,6 +103,39 @@ export default function ShoppingListPage({ params }: { params: Promise<{ listId:
 
   const groupedPendingItems = groupItemsByCategory(pendingItems);
   const groupedPurchasedItems = groupItemsByCategory(purchasedItems);
+  const purchasedKey = `${listId}:purchased`;
+  const purchasedExpanded = !collapsed.includes(purchasedKey);
+  const PurchasedChevron = purchasedExpanded ? ChevronUp : ChevronDown;
+
+  const renderGroups = (groups: typeof groupedPendingItems, purchased: boolean) =>
+    groups.map((group) => {
+      const key = `${listId}:${purchased ? 'purchased' : 'pending'}:${group.category.name}`;
+      const groupView = purchased ? 'list' : view;
+      return (
+        <ShoppingCategoryGroup
+          key={key}
+          category={group.category}
+          count={group.items.length}
+          expanded={!collapsed.includes(key)}
+          onToggle={() => toggleGroup(key)}
+          view={groupView}
+          purchased={purchased}
+        >
+          {group.items.map((item) => (
+            <ShoppingListItem
+              key={item.id}
+              item={item}
+              view={groupView}
+              onToggle={handleToggle}
+              toggleButtonRef={(node) => registerTarget(item.id, node)}
+              onToggleFocus={(event) => rememberFocus(item.id, event.currentTarget)}
+              onRemove={removeItem}
+              onUpdateNote={updateNote}
+            />
+          ))}
+        </ShoppingCategoryGroup>
+      );
+    });
 
   return (
     <>
@@ -101,9 +145,9 @@ export default function ShoppingListPage({ params }: { params: Promise<{ listId:
           onImport={() => setIsImportModalOpen(true)}
         />
       ) : (
-        <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 p-6 pb-32">
+        <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 -mx-4 sm:mx-0 px-3 py-2 sm:p-5 pb-24 rounded-2xl">
           <div className="max-w-2xl mx-auto">
-            <div className="mb-6 hidden sm:flex items-center justify-between gap-4">
+            <div className="mb-3 hidden sm:flex items-center justify-between gap-4">
               <Link
                 href="/lists"
                 className="inline-flex items-center gap-2 text-blue-600 hover:text-blue-800 font-medium"
@@ -113,82 +157,94 @@ export default function ShoppingListPage({ params }: { params: Promise<{ listId:
               </Link>
             </div>
 
-            <div className="text-center mb-8">
-              <h1 className="text-4xl font-bold mb-2 text-gray-900">
-                🛒 {list?.name || t('listPage.listFallback')}
-              </h1>
-              <p className="text-gray-700 mb-2">
-                {t('listPage.itemsLeft', { count: pendingItems.length })}
-              </p>
-              <p className="text-xs text-gray-500 mb-6">{t('listPage.duplicateHint')}</p>
-
-              {/* Search products */}
-              <ProductSearch />
-
-              {/* Import list button */}
-              <button
-                onClick={() => setIsImportModalOpen(true)}
-                className="mt-4 bg-gradient-to-r from-green-500 to-teal-600 hover:from-green-600 hover:to-teal-700 text-white px-6 py-2 rounded-lg font-semibold transition-all flex items-center gap-2 mx-auto"
+            <div className="mb-2">
+              <div className="flex items-center justify-between gap-2">
+                <h1 className="min-w-0 truncate text-xl sm:text-3xl font-bold text-gray-900">
+                  🛒 {list?.name || t('listPage.listFallback')}
+                </h1>
+                <p className="shrink-0 rounded-full bg-blue-100 px-2.5 py-1 text-xs font-medium text-gray-700">
+                  {t('listPage.itemsLeft', { count: pendingItems.length })}
+                </p>
+              </div>
+              <p
+                className="text-[10px] leading-3 sm:text-xs text-gray-500 truncate mt-1 mb-2"
+                title={t('listPage.duplicateHint')}
               >
-                <span>📋</span>
-                <span>{t('listPage.importFromText')}</span>
-              </button>
+                {t('listPage.duplicateHint')}
+              </p>
+
+              <div className="flex items-center gap-2">
+                <div className="min-w-0 flex-1">
+                  <ProductSearch compact />
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => setIsImportModalOpen(true)}
+                  className="shrink-0 w-28 sm:w-auto min-h-11 bg-gradient-to-r from-green-500 to-teal-600 hover:from-green-600 hover:to-teal-700 text-white px-2 sm:px-4 py-1 rounded-xl text-xs sm:text-sm font-semibold transition-all flex items-center justify-center gap-1"
+                >
+                  <span>📋</span>
+                  <span>{t('listPage.importFromText')}</span>
+                </button>
+              </div>
             </div>
 
-            {pendingItems.length > 0 && (
-              <div className="mb-8">
-                <h2 className="text-xl font-semibold mb-4 text-gray-900">{t('listPage.toBuy')}</h2>
-                {groupedPendingItems.map((group) => (
-                  <div key={group.category.name} className="mb-6">
-                    <h3 className="text-lg font-medium mb-3 text-gray-800 flex items-center gap-2">
-                      <span className="text-2xl">{group.category.emoji}</span>
-                      <span>{localizedName(group.category, locale)}</span>
-                    </h3>
-                    <div className="space-y-3">
-                      {group.items.map((item) => (
-                        <ShoppingListItem
-                          key={item.id}
-                          item={item}
-                          onToggle={handleToggle}
-                          toggleButtonRef={(node) => registerTarget(item.id, node)}
-                          onToggleFocus={(event) => rememberFocus(item.id, event.currentTarget)}
-                          onRemove={removeItem}
-                          onUpdateNote={updateNote}
-                        />
-                      ))}
-                    </div>
+            {items.length > 0 && (
+              <section
+                aria-labelledby="shopping-to-buy"
+                className="mb-3 rounded-2xl bg-white/30 p-1 space-y-1"
+              >
+                <div className="flex items-center justify-between gap-2 px-1">
+                  <h2 id="shopping-to-buy" className="text-xl font-semibold text-gray-900">
+                    {t('listPage.toBuy')}
+                  </h2>
+                  <div
+                    role="group"
+                    aria-label={t('listPage.viewLabel')}
+                    className="inline-flex rounded-lg bg-white/60 p-0.5"
+                  >
+                    {(['list', 'grid'] as const).map((option) => {
+                      const Icon = option === 'list' ? List : LayoutGrid;
+                      return (
+                        <button
+                          key={option}
+                          type="button"
+                          aria-label={t(
+                            option === 'list' ? 'listPage.listView' : 'listPage.gridView'
+                          )}
+                          aria-pressed={view === option}
+                          onClick={() => setView(option)}
+                          className={`flex min-h-9 min-w-9 items-center justify-center rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary ${view === option ? 'bg-primary/10 text-primary shadow-sm' : 'text-muted-foreground hover:bg-white'}`}
+                        >
+                          <Icon size={18} aria-hidden="true" />
+                        </button>
+                      );
+                    })}
                   </div>
-                ))}
-              </div>
+                </div>
+                {renderGroups(groupedPendingItems, false)}
+              </section>
             )}
 
             {purchasedItems.length > 0 && (
-              <div className="mb-8">
-                <h2 className="text-xl font-semibold mb-4 text-gray-900">
-                  {t('listPage.purchased', { count: purchasedItems.length })}
+              <section className="mb-3 rounded-2xl bg-green-50/80 p-2 space-y-2">
+                <h2>
+                  <button
+                    type="button"
+                    aria-expanded={purchasedExpanded}
+                    aria-controls="shopping-purchased"
+                    title={t(purchasedExpanded ? 'listPage.collapseGroup' : 'listPage.expandGroup')}
+                    onClick={() => toggleGroup(purchasedKey)}
+                    className="flex w-full items-center justify-between min-h-9 gap-2 px-1 text-left text-lg font-semibold text-gray-900 rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+                  >
+                    {t('listPage.purchased', { count: purchasedItems.length })}
+                    <PurchasedChevron size={18} aria-hidden="true" />
+                  </button>
                 </h2>
-                {groupedPurchasedItems.map((group) => (
-                  <div key={group.category.name} className="mb-6">
-                    <h3 className="text-lg font-medium mb-3 text-gray-800 flex items-center gap-2">
-                      <span className="text-2xl">{group.category.emoji}</span>
-                      <span>{localizedName(group.category, locale)}</span>
-                    </h3>
-                    <div className="space-y-3">
-                      {group.items.map((item) => (
-                        <ShoppingListItem
-                          key={item.id}
-                          item={item}
-                          onToggle={handleToggle}
-                          toggleButtonRef={(node) => registerTarget(item.id, node)}
-                          onToggleFocus={(event) => rememberFocus(item.id, event.currentTarget)}
-                          onRemove={removeItem}
-                          onUpdateNote={updateNote}
-                        />
-                      ))}
-                    </div>
-                  </div>
-                ))}
-              </div>
+                <div id="shopping-purchased" className="space-y-2">
+                  {purchasedExpanded && renderGroups(groupedPurchasedItems, true)}
+                </div>
+              </section>
             )}
 
             {pendingItems.length === 0 && purchasedItems.length > 0 && (
@@ -206,17 +262,17 @@ export default function ShoppingListPage({ params }: { params: Promise<{ listId:
             )}
 
             <div className="space-y-4">
-              <div className="flex gap-4">
+              <div className="flex gap-3">
                 <Link
                   href={`/categories?listId=${listId}`}
-                  className="flex-1 bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-xl font-semibold text-center transition-colors"
+                  className="flex-1 bg-blue-600 hover:bg-blue-700 text-white px-2 py-3 rounded-xl text-sm font-semibold text-center transition-colors"
                 >
                   {t('listPage.addProducts')}
                 </Link>
                 {items.length > 0 && (
                   <button
                     onClick={clearAll}
-                    className="bg-red-500 hover:bg-red-600 text-white px-6 py-3 rounded-xl font-semibold transition-colors"
+                    className="flex-1 bg-red-500 hover:bg-red-600 text-white px-2 py-3 rounded-xl text-sm font-semibold transition-colors"
                   >
                     {t('listPage.clearAll')}
                   </button>
@@ -224,8 +280,8 @@ export default function ShoppingListPage({ params }: { params: Promise<{ listId:
               </div>
             </div>
 
-            <div className="flex items-center justify-center gap-6 mt-8">
-              <Link href="/history" className="text-blue-600 hover:text-blue-800 underline">
+            <div className="flex items-center justify-center mt-3">
+              <Link href="/history" className="text-sm text-blue-600 hover:text-blue-800 underline">
                 {t('listPage.history')}
               </Link>
             </div>

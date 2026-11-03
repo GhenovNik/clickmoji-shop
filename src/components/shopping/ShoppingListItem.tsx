@@ -4,6 +4,7 @@ import { useState, type FocusEventHandler, type Ref } from 'react';
 import Image from 'next/image';
 import { useLocale, useTranslations } from 'next-intl';
 import type { Item } from '@/hooks/useShoppingListItems';
+import type { ShoppingView } from '@/hooks/useShoppingListPresentation';
 import { localizedName } from '@/lib/catalog-name';
 import { productImageUrl } from '@/lib/product-image';
 import { cn } from '@/lib/utils';
@@ -16,6 +17,7 @@ interface ShoppingListItemProps {
   onUpdateNote?: (itemId: string, note: string) => void;
   toggleButtonRef?: Ref<HTMLButtonElement>;
   onToggleFocus?: FocusEventHandler<HTMLButtonElement>;
+  view?: ShoppingView;
 }
 
 export default function ShoppingListItem({
@@ -25,6 +27,7 @@ export default function ShoppingListItem({
   onUpdateNote,
   toggleButtonRef,
   onToggleFocus,
+  view = 'list',
 }: ShoppingListItemProps) {
   const [isEditingNote, setIsEditingNote] = useState(false);
   const [isNoteExpanded, setIsNoteExpanded] = useState(false);
@@ -36,53 +39,70 @@ export default function ShoppingListItem({
 
   return (
     <div
+      data-testid="shopping-item"
+      data-item-id={item.id}
       className={cn(
-        'relative group grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-2 p-4 rounded-2xl bg-white border-2 border-border/50 shadow-sm transition-all',
-        item.isPurchased && 'bg-muted/40 border-transparent opacity-80'
+        'relative group grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-x-1 min-h-14 px-2 py-1 rounded-xl bg-white border border-border/50 shadow-sm transition-colors',
+        item.isPurchased && 'bg-green-50/80 border-green-100',
+        view === 'grid' && 'px-1',
+        view === 'grid' && isNoteExpanded && 'col-span-full'
       )}
     >
       {/* Main Content (Left) */}
-      <div className="flex items-center gap-2 sm:gap-4 min-w-0">
-        <div
-          className={cn(
-            'flex-shrink-0 transition-transform duration-300',
-            item.isPurchased && 'scale-90'
-          )}
-        >
-          {item.product.isCustom && imageUrl ? (
-            <Image
-              src={imageUrl}
-              alt={productName}
-              width={48}
-              height={48}
-              className="w-12 h-12 object-contain"
-            />
-          ) : (
-            <span className="text-4xl drop-shadow-sm">{item.product.emoji}</span>
-          )}
-        </div>
+      <div
+        className={cn(
+          'row-span-2 flex-shrink-0 transition-transform duration-300',
+          item.isPurchased && 'scale-90'
+        )}
+      >
+        {item.product.isCustom && imageUrl ? (
+          <Image
+            src={imageUrl}
+            alt={productName}
+            width={32}
+            height={32}
+            className={cn('w-8 h-8 object-contain', view === 'grid' && 'w-6 h-6')}
+          />
+        ) : (
+          <span
+            className={cn('text-3xl leading-none drop-shadow-sm', view === 'grid' && 'text-2xl')}
+          >
+            {item.product.emoji}
+          </span>
+        )}
+      </div>
 
-        <div className="flex flex-col flex-1 min-w-0 justify-center">
-          <div className="flex items-center gap-2 flex-wrap">
-            <p
-              className={cn(
-                'font-bold text-lg leading-tight truncate transition-all duration-300',
-                item.isPurchased ? 'line-through text-muted-foreground' : 'text-foreground'
-              )}
-            >
-              {productName}
-            </p>
-            {item.variant?.name && (
-              <span className="text-[10px] bg-secondary/10 text-secondary-foreground px-1.5 py-0.5 rounded-full font-bold">
-                {localizedName(item.variant, locale)}
-              </span>
+      <div
+        className={cn(
+          'min-w-0',
+          item.note && !isNoteExpanded && !isEditingNote ? 'self-end' : 'row-span-2'
+        )}
+      >
+        <div className="flex items-center gap-1 min-w-0">
+          <p
+            className={cn(
+              'font-bold text-base leading-5 truncate transition-all duration-300',
+              view === 'grid' && 'text-xs leading-4',
+              item.isPurchased ? 'line-through text-muted-foreground' : 'text-foreground'
             )}
-          </div>
+          >
+            {productName}
+          </p>
+          {item.variant?.name && (
+            <span className="max-w-1/2 truncate text-[10px] bg-secondary/10 text-secondary-foreground px-1.5 py-0.5 rounded-full font-bold">
+              {localizedName(item.variant, locale)}
+            </span>
+          )}
         </div>
       </div>
 
       {/* Right side actions */}
-      <div className="flex items-center gap-1 sm:gap-2">
+      <div
+        className={cn(
+          'col-start-3 row-start-1 row-span-2 flex items-center',
+          view === 'grid' && 'grid grid-cols-[24px_44px] grid-rows-2'
+        )}
+      >
         {onUpdateNote && !isEditingNote && !item.isPurchased && (
           <button
             type="button"
@@ -91,9 +111,9 @@ export default function ShoppingListItem({
               e.stopPropagation();
               setIsEditingNote(true);
             }}
-            className="p-2 text-muted-foreground hover:text-primary hover:bg-primary/5 rounded-full transition-colors"
+            className="flex items-center justify-center w-6 h-6 text-muted-foreground hover:text-primary hover:bg-primary/5 rounded-full transition-colors"
           >
-            <MessageSquarePlus size={20} />
+            <MessageSquarePlus size={16} />
           </button>
         )}
 
@@ -104,9 +124,12 @@ export default function ShoppingListItem({
             e.stopPropagation();
             onRemove(item.id);
           }}
-          className="p-2 text-muted-foreground hover:text-destructive hover:bg-destructive/10 rounded-full transition-colors opacity-0 group-hover:opacity-100 sm:opacity-100"
+          className={cn(
+            'flex items-center justify-center w-6 h-6 text-muted-foreground/60 hover:text-destructive hover:bg-destructive/10 rounded-full transition-colors',
+            view === 'grid' && 'col-start-1 row-start-2'
+          )}
         >
-          <X size={20} />
+          <X size={14} />
         </button>
 
         <button
@@ -116,12 +139,15 @@ export default function ShoppingListItem({
           aria-label={t('item.purchased', { name: productName })}
           aria-pressed={item.isPurchased}
           onClick={() => onToggle(item.id)}
-          className="flex items-center justify-center min-w-11 min-h-11 rounded-full cursor-pointer touch-manipulation focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2"
+          className={cn(
+            'flex items-center justify-center min-w-11 min-h-11 rounded-full cursor-pointer touch-manipulation focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2',
+            view === 'grid' && 'col-start-2 row-start-1 row-span-2'
+          )}
         >
           <span
             aria-hidden="true"
             className={cn(
-              'flex items-center justify-center w-8 h-8 rounded-full border-2 transition-all duration-300',
+              'flex items-center justify-center w-7 h-7 rounded-full border-2 transition-all duration-300',
               item.isPurchased
                 ? 'bg-accent border-accent text-white scale-110'
                 : 'border-muted-foreground/30 text-transparent hover:border-accent/50'
@@ -137,7 +163,12 @@ export default function ShoppingListItem({
           type="button"
           aria-expanded={isNoteExpanded}
           onClick={() => setIsNoteExpanded((expanded) => !expanded)}
-          className="col-span-2 min-w-0 mt-2 text-left text-sm text-muted-foreground italic rounded cursor-pointer touch-manipulation focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2"
+          className={cn(
+            'min-w-0 text-left text-xs leading-4 text-muted-foreground italic rounded cursor-pointer touch-manipulation focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2',
+            isNoteExpanded
+              ? 'col-span-3 col-start-1 row-start-3 mt-1'
+              : 'col-start-2 row-start-2 self-start'
+          )}
         >
           <span className="sr-only">
             {t(isNoteExpanded ? 'item.collapseNote' : 'item.expandNote')}{' '}
@@ -178,11 +209,12 @@ export default function ShoppingListItem({
               }
             }}
             placeholder={t('item.notePlaceholder')}
-            className="flex-1 px-4 py-2 text-sm bg-muted border-none rounded-xl focus:ring-2 focus:ring-primary outline-none"
+            aria-label={t('item.editNote', { name: productName })}
+            className="min-w-0 flex-1 px-2 py-2 text-sm bg-muted border-none rounded-xl focus:ring-2 focus:ring-primary outline-none"
             autoFocus
           />
           <button
-            className="px-4 py-2 text-sm font-bold bg-primary text-primary-foreground rounded-xl"
+            className="px-2 py-2 text-sm font-bold bg-primary text-primary-foreground rounded-xl"
             onClick={() => {
               onUpdateNote?.(item.id, noteValue);
               setIsEditingNote(false);

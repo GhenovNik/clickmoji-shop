@@ -72,7 +72,7 @@ test.describe('Shopping list smoke flows', () => {
         await expect(toggle).toHaveAttribute('aria-pressed', String(isPurchased));
         await expect(
           page.getByRole('heading', {
-            name: isPurchased ? 'Куплено (1)' : 'Нужно купить',
+            name: isPurchased ? 'Куплено (1)' : 'Купить',
             exact: true,
           })
         ).toBeVisible();
