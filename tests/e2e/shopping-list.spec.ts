@@ -61,6 +61,11 @@ test.describe('Shopping list smoke flows', () => {
       item.isPurchased = isPurchased;
       item.note =
         'Купить два пакета молока без лактозы, проверить срок годности и упаковку.\n' +
+        // Trailing whitespace must wrap too, not hang outside the card. This
+        // catches the overflow across font metrics on both macOS and Linux.
+        'Пробелы в конце строки' +
+        ' '.repeat(80) +
+        '\n' +
         'Если нужного нет, взять другой бренд. ' +
         'ОченьДлинноеСловоБезПробелов'.repeat(8);
       const state = await mockAuthenticatedShopping(page, [item]);

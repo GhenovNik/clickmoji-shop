@@ -56,6 +56,9 @@ describe('a shopping list item', () => {
 
 const longNote =
   'Купить два пакета молока без лактозы, проверить срок годности и выбрать упаковку без повреждений.\n' +
+  'Пробелы в конце строки' +
+  ' '.repeat(80) +
+  '\n' +
   'Если нужного нет, взять другой бренд. ' +
   'ОченьДлинноеСловоБезПробелов'.repeat(8);
 
@@ -91,7 +94,7 @@ describe.each([false, true])('shopping item interactions (purchased: %s)', (isPu
 
     expect(noteButton).toHaveAttribute('aria-expanded', 'true');
     expect(note).not.toHaveClass('line-clamp-1');
-    expect(note).toHaveClass('whitespace-pre-wrap', '[overflow-wrap:anywhere]');
+    expect(note).toHaveClass('whitespace-break-spaces', '[overflow-wrap:anywhere]');
     expect(note).toHaveTextContent('Если нужного нет, взять другой бренд.');
     expect(onToggle).not.toHaveBeenCalled();
     expect(onRemove).not.toHaveBeenCalled();

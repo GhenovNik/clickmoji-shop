@@ -148,7 +148,7 @@ export default function ShoppingListItem({
           </span>
           <span
             className={cn(
-              'block whitespace-pre-wrap [overflow-wrap:anywhere]',
+              'block whitespace-break-spaces [overflow-wrap:anywhere]',
               !isNoteExpanded && 'line-clamp-1'
             )}
           >
