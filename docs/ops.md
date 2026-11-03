@@ -52,6 +52,15 @@ returns HTTP 503 with `Retry-After: 60` and a localized overload message. The im
 it inline, preserves the entered list and lets the shopper retry; it never opens a native alert.
 Hourly abuse throttles are unchanged and still count requests, including failed ones.
 
+Every runtime text entry point, including `scripts/db-products.ts import`, uses the shared text
+policy: at most three attempts, an 8-second hard timeout per attempt, exponential equal jitter
+of [500, 1000) then [1000, 2000) milliseconds. Only 503/429, canonical `UNAVAILABLE`/
+`RESOURCE_EXHAUSTED` and network timeouts retry; other 4xx never retry. Optional
+`GOOGLE_TEXT_MODEL_FALLBACK` selects the third attempt's model; unset/blank keeps the primary.
+Both model settings are validated before any SDK request. Each attempt logs only code and number.
+The operator CLI has no authenticated shopper and therefore no per-user daily reservation; its
+existing product writes are not run by the regression tests.
+
 Daily text accounting is **one unit per successful logical text operation**, including internal
 retries, fallback and AI response parsing, not one unit per provider attempt. The shared PostgreSQL
 budget is reserved immediately before the operation; failed generation or AI parsing compensates

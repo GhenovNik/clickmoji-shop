@@ -1,9 +1,9 @@
 import { PrismaClient } from '@prisma/client';
-import { GoogleGenAI } from '@google/genai';
 import { readFileSync } from 'fs';
 import { join } from 'path';
 import { createPrismaPgAdapter } from '../src/lib/prisma-adapter';
-import { resolveGoogleTextModel } from '../src/lib/services/google-text-model';
+import { generateGoogleText } from '../src/lib/services/google-text-generation';
+import { textAiErrorCode } from '../src/lib/services/text-ai-errors';
 
 const prisma = new PrismaClient({
   adapter: createPrismaPgAdapter(),
@@ -200,8 +200,6 @@ async function importProducts() {
 
   console.log(`📚 Found ${categories.length} categories in database\n`);
 
-  const model = resolveGoogleTextModel();
-  const genAI = new GoogleGenAI({ apiKey });
   const categoriesStr = categories.map((c) => `${c.nameEn} (${c.name})`).join(', ');
 
   const prompt = `You are a grocery categorization assistant. Given a list of product names, translate them to Russian and English, assign them to the most appropriate category, and suggest a Unicode emoji if one exists.
@@ -230,16 +228,7 @@ Respond ONLY with valid JSON array in this exact format:
 
   console.log('🤖 Processing products with Gemini AI...\n');
 
-  const result = await genAI.models.generateContent({
-    model,
-    contents: prompt,
-    config: { responseMimeType: 'application/json' },
-  });
-  const responseText = result.text;
-
-  if (!responseText) {
-    throw new Error('No response from AI');
-  }
+  const { text: responseText } = await generateGoogleText({ apiKey, prompt });
 
   let jsonStr = responseText.trim();
   if (jsonStr.startsWith('```json')) {
@@ -335,7 +324,7 @@ async function main() {
 
 main()
   .catch((error) => {
-    console.error('DB products error:', error);
+    console.error('DB products error:', textAiErrorCode(error));
     process.exit(1);
   })
   .finally(async () => {

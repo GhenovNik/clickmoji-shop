@@ -53,6 +53,9 @@ export async function generateGoogleText({ apiKey, prompt }: { apiKey: string; p
   // Validate both settings before constructing the SDK, even when primary would succeed.
   const primary = resolveGoogleTextModel();
   const fallback = resolveGoogleTextModelFallback();
+  // In SDK 1.52 the no-client-retryOptions path performs exactly one fetch and preserves ApiError.
+  // Enabling client-level retryOptions (even attempts: 1) instead erases HTTP status on failures.
+  // Keep it unset; the real-SDK transport regression tests guard this as well as the request hint.
   const client = new GoogleGenAI({ apiKey });
   const deadline = Date.now() + TOTAL_BUDGET_MS;
 

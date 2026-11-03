@@ -1,7 +1,5 @@
 import { expect, test } from '@playwright/test';
 import { createShoppingItem, E2E_LIST_ID, mockAuthenticatedShopping } from './fixtures/auth';
-import ruApi from '../../src/i18n/messages/ru/api.json';
-import enApi from '../../src/i18n/messages/en/api.json';
 
 for (const locale of ['ru', 'en'] as const) {
   test(`text import overload stays inline and can be retried (${locale}) @smoke`, async ({
@@ -11,7 +9,10 @@ for (const locale of ['ru', 'en'] as const) {
     await page
       .context()
       .addCookies([{ name: 'NEXT_LOCALE', value: locale, domain: 'localhost', path: '/' }]);
-    const message = (locale === 'ru' ? ruApi : enApi).aiText.unavailable;
+    const message =
+      locale === 'ru'
+        ? 'Сервис распознавания сейчас перегружен, попробуйте через минуту'
+        : 'The recognition service is overloaded right now. Please try again in a minute.';
     const requests: unknown[] = [];
     const dialogs: string[] = [];
     page.on('dialog', async (dialog) => {
