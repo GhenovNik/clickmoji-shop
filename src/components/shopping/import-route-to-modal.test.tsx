@@ -1,5 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, screen } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { act, fireEvent, screen } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { renderWithIntl } from '@/test/intl';
 
@@ -115,6 +115,10 @@ beforeEach(() => {
   );
 });
 
+afterEach(() => {
+  vi.useRealTimers();
+});
+
 describe('import report from the real route', () => {
   it('a real service parsing failure compensates the text reservation', async () => {
     state.reply = 'synthetic invalid JSON';
@@ -133,23 +137,26 @@ describe('import report from the real route', () => {
   });
 
   it('real service retries remain inside a single text quota reservation', async () => {
+    vi.useFakeTimers();
     state.transientRemaining = 2;
     state.reply = JSON.stringify([
       { nameRu: 'Молоко', nameEn: 'Milk', categoryName: 'Dairy', emoji: '🥛' },
     ]);
-    const response = await route.POST(
+    const pendingResponse = route.POST(
       new Request('http://localhost/api/lists/import-text', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ text: 'Молоко', listId: 'list-1' }),
       })
     );
+    await vi.runAllTimersAsync();
+    const response = await pendingResponse;
     expect(response.status).toBe(200);
     expect(state.attempts).toBe(3);
     expect(enforceAiQuota).toHaveBeenCalledTimes(1);
     expect(prisma.$executeRaw).not.toHaveBeenCalled();
     expect(state.items).toHaveLength(1);
-  }, 10000);
+  });
 
   it.each([
     ['ru', 'Сервис распознавания сейчас перегружен, попробуйте через минуту'],
@@ -157,6 +164,7 @@ describe('import report from the real route', () => {
   ] as const)(
     'shows %s overload inline, preserves text and allows retry',
     async (locale, message) => {
+      vi.useFakeTimers();
       state.locale = locale;
       state.overloaded = true;
       const alert = vi.spyOn(window, 'alert').mockImplementation(() => undefined);
@@ -175,22 +183,27 @@ describe('import report from the real route', () => {
       const input = screen.getByRole('textbox');
       fireEvent.change(input, { target: { value: 'Молоко\nсыр' } });
       const buttonName = locale === 'ru' ? /Импортировать/ : /Import$/;
-      fireEvent.click(screen.getByRole('button', { name: buttonName }));
-      expect((await screen.findByRole('alert', {}, { timeout: 15000 })).textContent).toBe(message);
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: buttonName }));
+        await vi.advanceTimersByTimeAsync(3_000);
+      });
+      expect(screen.getByRole('alert').textContent).toBe(message);
       expect((input as HTMLTextAreaElement).value).toBe('Молоко\nсыр');
       expect(alert).not.toHaveBeenCalled();
       expect(state.items).toEqual([]);
       state.overloaded = false;
-      fireEvent.click(screen.getByRole('button', { name: buttonName }));
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: buttonName }));
+        await vi.advanceTimersByTimeAsync(1);
+      });
       expect(
-        await screen.findByText(
+        screen.getByText(
           locale === 'ru' ? 'Импорт выполнен частично' : 'Import partially completed'
         )
       ).toBeTruthy();
       expect(state.items.map((item) => item.productId)).toEqual(['milk']);
       expect(alert).not.toHaveBeenCalled();
-    },
-    20000
+    }
   );
 
   it('renders a mixed valid + malformed AI reply: the item is added and the failure listed', async () => {
