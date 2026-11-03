@@ -1,7 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import '@testing-library/jest-dom/vitest';
-import { fireEvent, screen, waitFor } from '@testing-library/react';
-import { useState } from 'react';
+import { fireEvent, screen } from '@testing-library/react';
 import ShoppingListItem from '@/components/shopping/ShoppingListItem';
 import type { Item } from '@/hooks/useShoppingListItems';
 import { renderWithIntl } from '@/test/intl';
@@ -147,32 +146,5 @@ describe.each([false, true])('shopping item interactions (purchased: %s)', (isPu
 
     expect(onUpdateNote).toHaveBeenCalledExactlyOnceWith(item.id, 'Новый комментарий');
     expect(onToggle).not.toHaveBeenCalled();
-  });
-
-  it('keeps keyboard focus when the item moves between shopping sections', async () => {
-    function ShoppingSections() {
-      const [purchased, setPurchased] = useState(isPurchased);
-      return [false, true].map((section) => (
-        <div key={String(section)}>
-          {purchased === section && (
-            <ShoppingListItem
-              item={{ ...item, isPurchased: purchased }}
-              onToggle={() => setPurchased((value) => !value)}
-              onRemove={vi.fn()}
-            />
-          )}
-        </div>
-      ));
-    }
-    renderWithIntl(<ShoppingSections />, { locale: 'ru' });
-    const toggle = screen.getByRole('button', { name: 'Куплено: Молоко' });
-    toggle.focus();
-    fireEvent.click(toggle);
-
-    await waitFor(() => {
-      expect(
-        screen.getByRole('button', { name: 'Куплено: Молоко', pressed: !isPurchased })
-      ).toHaveFocus();
-    });
   });
 });

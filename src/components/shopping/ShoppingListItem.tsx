@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, type FocusEventHandler, type Ref } from 'react';
 import Image from 'next/image';
 import { useLocale, useTranslations } from 'next-intl';
 import type { Item } from '@/hooks/useShoppingListItems';
@@ -14,6 +14,8 @@ interface ShoppingListItemProps {
   onToggle: (itemId: string) => void | Promise<void>;
   onRemove: (itemId: string) => void;
   onUpdateNote?: (itemId: string, note: string) => void;
+  toggleButtonRef?: Ref<HTMLButtonElement>;
+  onToggleFocus?: FocusEventHandler<HTMLButtonElement>;
 }
 
 export default function ShoppingListItem({
@@ -21,6 +23,8 @@ export default function ShoppingListItem({
   onToggle,
   onRemove,
   onUpdateNote,
+  toggleButtonRef,
+  onToggleFocus,
 }: ShoppingListItemProps) {
   const [isEditingNote, setIsEditingNote] = useState(false);
   const [isNoteExpanded, setIsNoteExpanded] = useState(false);
@@ -29,7 +33,6 @@ export default function ShoppingListItem({
   const locale = useLocale();
   const productName = localizedName(item.product, locale);
   const imageUrl = productImageUrl(item.product, locale);
-  const toggleButtonId = `shopping-item-toggle-${item.id}`;
 
   return (
     <div
@@ -108,18 +111,11 @@ export default function ShoppingListItem({
 
         <button
           type="button"
-          id={toggleButtonId}
+          ref={toggleButtonRef}
+          onFocus={onToggleFocus}
           aria-label={t('item.purchased', { name: productName })}
           aria-pressed={item.isPurchased}
-          onClick={async (event) => {
-            const hadFocus = document.activeElement === event.currentTarget;
-            await onToggle(item.id);
-            // Moving between sections remounts the item. Restore lost focus, but do
-            // not steal it if the user has already moved to another control.
-            if (hadFocus && document.activeElement === document.body) {
-              document.getElementById(toggleButtonId)?.focus();
-            }
-          }}
+          onClick={() => onToggle(item.id)}
           className="flex items-center justify-center min-w-11 min-h-11 rounded-full cursor-pointer touch-manipulation focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2"
         >
           <span
