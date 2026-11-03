@@ -4,6 +4,7 @@ import { itemIndexDrift, type ItemIndex } from './item-indexes';
 const indexes: ItemIndex[] = [
   {
     name: 'items_pkey',
+    definition: 'CREATE UNIQUE INDEX items_pkey ON public.items USING btree (id)',
     columns: ['id'],
     unique: true,
     primary: true,
@@ -13,6 +14,7 @@ const indexes: ItemIndex[] = [
   },
   {
     name: 'items_listId_idx',
+    definition: 'CREATE INDEX "items_listId_idx" ON public.items USING btree ("listId")',
     columns: ['listId'],
     unique: false,
     primary: false,
@@ -22,6 +24,7 @@ const indexes: ItemIndex[] = [
   },
   {
     name: 'items_productId_idx',
+    definition: 'CREATE INDEX "items_productId_idx" ON public.items USING btree ("productId")',
     columns: ['productId'],
     unique: false,
     primary: false,
@@ -64,6 +67,21 @@ describe('Item index drift contract', () => {
   it('rejects unexpected nonunique indexes too rather than hiding drift', () => {
     expect(itemIndexDrift([...indexes, { ...indexes[1], name: 'extra' }])).toEqual([
       'Unexpected index: extra (listId)',
+    ]);
+  });
+  it.each([
+    '"listId" DESC',
+    '"listId" NULLS FIRST',
+    '"listId" text_pattern_ops',
+    '"listId" COLLATE "C"',
+  ])('checks the full canonical key definition, not just attname: %s', (key) => {
+    const actual = indexes.map((index) => ({
+      ...index,
+      definition: index.definition,
+    }));
+    actual[1].definition = `CREATE INDEX "items_listId_idx" ON public.items USING btree (${key})`;
+    expect(itemIndexDrift(actual)).toEqual([
+      'Index definition differs from Item schema: items_listId_idx',
     ]);
   });
 });

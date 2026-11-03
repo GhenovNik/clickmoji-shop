@@ -6,6 +6,7 @@ export type ItemIndex = {
   valid: boolean;
   method: string;
   predicate: string | null;
+  definition: string;
 };
 
 // Keep in sync with model Item in prisma/schema.prisma. In particular, no
@@ -13,6 +14,7 @@ export type ItemIndex = {
 const expected: ItemIndex[] = [
   {
     name: 'items_pkey',
+    definition: 'CREATE UNIQUE INDEX items_pkey ON public.items USING btree (id)',
     columns: ['id'],
     unique: true,
     primary: true,
@@ -22,6 +24,7 @@ const expected: ItemIndex[] = [
   },
   {
     name: 'items_listId_idx',
+    definition: 'CREATE INDEX "items_listId_idx" ON public.items USING btree ("listId")',
     columns: ['listId'],
     unique: false,
     primary: false,
@@ -31,6 +34,7 @@ const expected: ItemIndex[] = [
   },
   {
     name: 'items_productId_idx',
+    definition: 'CREATE INDEX "items_productId_idx" ON public.items USING btree ("productId")',
     columns: ['productId'],
     unique: false,
     primary: false,
@@ -54,6 +58,7 @@ export function itemIndexDrift(indexes: ItemIndex[]): string[] {
       index.valid !== wanted.valid ||
       index.method !== wanted.method ||
       index.predicate !== wanted.predicate ||
+      index.definition !== wanted.definition ||
       JSON.stringify(index.columns) !== JSON.stringify(wanted.columns)
     ) {
       problems.push(`Index definition differs from Item schema: ${index.name}`);

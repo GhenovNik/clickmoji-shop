@@ -29,6 +29,7 @@
     "test": "vitest run",
     "test:catalog-postgres": "tsx scripts/test-catalog-cleanup-postgres.ts",
     "test:items-postgres": "tsx scripts/test-item-duplicates-postgres.ts",
+    "test:repair-postgres": "tsx scripts/test-item-repair-postgres.ts",
     "test:watch": "vitest",
     "test:ui": "vitest --ui",
     "test:coverage": "vitest --coverage",

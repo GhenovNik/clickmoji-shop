@@ -111,14 +111,34 @@ Migration `20261102224241_drop_legacy_item_variant_unique` removes the legacy
 history are not deleted. Do not edit or mark the older migration as reapplied: an already recorded
 migration does not repair a surviving index. The repair is safe when the index is already absent.
 
+The ordinary (non-CONCURRENTLY) `DROP INDEX` requests **ACCESS EXCLUSIVE on `items`**: it can
+block **SELECT/readers as well as writers** while held, and new requests can queue behind its
+lock request. The migration sets `lock_timeout = '5s'` and `statement_timeout = '15s'` before DROP.
+The first bounds each lock wait; the second bounds statement execution, not the entire deployment.
+These are not a promise of zero interruption. Use a quiet window and stop on timeout.
+
+Prisma execution was checked against the installed CLI 7.10.1 / schema engine
+`d1b3f377ca835d73fd50954a5e22128b9ebdd6b8` on local PostgreSQL: a single-statement CONCURRENTLY
+probe succeeds, and two writes in one migration file have different transaction IDs. This engine
+executes statements without a file-wide transaction. We retain ordinary DROP, not CONCURRENTLY.
+The timeout SETs belong only to the dedicated migration connection; RESET restores its default
+policy on success (verified by a following migration). On failure the deploy command exits and
+closes that connection. There is no global/server or application-pool timeout change. Explicit
+BEGIN was not used: on this engine an aborted transaction masks the original lock error while
+Prisma records the failure. The actual repair now returns PostgreSQL 55P03 on contention and
+preserves the index; the isolated test exercises recovery as well as successful/idempotent runs.
+
 Production rollout is operator-owned; local regression commands never deploy to production:
 
-1. Create and verify a fresh production backup. Schedule the index drop when brief write locking
-   is acceptable; use the direct/unpooled URL without printing credentials.
+1. Create and verify a fresh production backup. Schedule the index drop when briefly blocking
+   both reads and writes is acceptable; use the direct/unpooled URL without printing credentials.
 2. From the reviewed release, run `npm run migrate:deploy`, then `npx prisma migrate status`.
 3. Run `npm run db:check-item-indexes` against the same database. This command opens a read-only
    transaction, compares `public.items` indexes with the Item schema, and exits nonzero for an extra
-   UNIQUE (even if renamed), missing indexes, or changed definitions. It never repairs drift.
+   UNIQUE (even if renamed), missing indexes, or changed definitions. Full canonical
+   `pg_get_indexdef` is compared, including key order, sort/null order, operator classes, collation,
+   INCLUDE columns, method and predicates, in addition to unique/primary/valid flags. It never
+   repairs drift.
 4. Deploy the application containing nonblocking add feedback. In a test shopping list, add the
    same variant twice: both requests must succeed and both rows/badges must remain visible.
    Verify that an add error stays inline, preserves selection, and opens no native alert.
@@ -127,6 +147,15 @@ Stop rollout if migration or verification fails. Do not recreate the old UNIQUE 
 duplicate shopping rows are intentional and may already exist after rollout. Keep the compatible
 schema repair; a data restore is a separate operator decision, not an automatic rollback step.
 
+On lock timeout, do not loop deploy or kill application sessions blindly. Verify from a fresh
+connection that the legacy index still exists and inspect `prisma migrate status` / the failed
+migration receipt. Release the blocker normally or wait for a quieter window. Prisma records the
+failed attempt and blocks later deploys: after verification, mark **only this failed attempt**
+rolled back with `npx prisma migrate resolve --rolled-back 20261102224241_drop_legacy_item_variant_unique`,
+then retry `npm run migrate:deploy` in that quiet window and repeat status/drift verification.
+Do not mark it applied merely to bypass the failure. A code rollback remains compatible with the
+removed index; restoring uniqueness is neither required nor safe after duplicate rows exist.
+
 Local checks (after `npm ci`, with a local `.env`, never a production URL):
 
 - `npm run test:items-postgres`: real item POST handler against `clickmoji-local-pg` on loopback:5432;
@@ -134,11 +163,28 @@ Local checks (after `npm ci`, with a local `.env`, never a production URL):
   variants. Run before/after the migration to observe the constraint regression.
 - `npm run db:check-item-indexes`: expected indexes are `items_pkey` (unique id), `items_listId_idx`,
   and `items_productId_idx` (both nonunique).
+- `npm run test:repair-postgres`: owns a fresh database inside `clickmoji-local-pg`, never the
+  restored public schema. Runs Prisma transaction probes, holds a conflicting reader lock, checks
+  timeout/index preservation, resolve/retry, reset policy, and repeats the exact SQL twice. Also
+  creates partial/hash/DESC/null-order/opclass/collation/INCLUDE drift and runs the actual scanner.
+  `-- --baseline` reads the exact old `aae343d` migration/scanner from Git for RED receipts;
+  add `--drift-only` to exercise the old scanner separately. Scratch DB/files are removed in finally.
 - `npm run test:e2e:variants`: opt-in local DB suite, isolated fixture users, production build/server
   on port 3136, Chromium and WebKit with 375px touch emulation. Successful adds use the real local
   API. Injected 500/403/network failures test inline feedback, preserved selection and successful
   retry. The native-dialog invariant is “no dialog at all”; the sampled former OK-area tap is not
   proof of OS-native dialog geometry or of the original physical-phone ghost click.
+
+Add retry contract: category/favorites selection POSTs are atomic (validated batch, one database
+transaction), so no per-item partial response is invented: a failed batch remains selected and is
+retried as that whole failed operation. FavoritesSection's item-add and usage-counter update are
+separate operations: after item success/usage failure, feedback explicitly says the item was added,
+and the counter retry never sends another item POST. Deliberate duplicate adds remain available.
+AI create/add similarly retains the created product for add-only retry. Cache/callback housekeeping
+failure cannot relabel a committed write as an add failure. The separate text-import endpoint can
+return a true added/failed report: partial results stay open and retry prepares only failed names
+for user review, never the original successful entries. Its existing failed DTO lacks quantities/
+notes, so the UI explicitly asks the shopper to review those before resubmitting.
 
 ## Scripts
 

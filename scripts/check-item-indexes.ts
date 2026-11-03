@@ -10,6 +10,7 @@ try {
     await tx.$executeRaw`SET TRANSACTION READ ONLY`;
     return tx.$queryRaw<ItemIndex[]>`
       SELECT c.relname AS name, i.indisunique AS "unique", i.indisprimary AS "primary",
+             pg_get_indexdef(i.indexrelid) AS definition,
              i.indisvalid AS valid, am.amname AS method,
              pg_get_expr(i.indpred, i.indrelid) AS predicate,
              ARRAY(SELECT COALESCE(a.attname::text, pg_get_indexdef(i.indexrelid, k.n::int, true))
