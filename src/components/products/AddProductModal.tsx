@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useLocale, useTranslations } from 'next-intl';
 import { localizedName } from '@/lib/catalog-name';
@@ -34,6 +34,7 @@ export default function AddProductModal({
   const [isCreating, setIsCreating] = useState(false);
   const [error, setError] = useState('');
   const [status, setStatus] = useState('');
+  const createPending = useRef(false);
   const router = useRouter();
   const t = useTranslations('catalog');
   const tCommon = useTranslations('common');
@@ -43,6 +44,7 @@ export default function AddProductModal({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (createPending.current) return;
     setError('');
     setStatus('');
 
@@ -51,6 +53,7 @@ export default function AddProductModal({
       return;
     }
 
+    createPending.current = true;
     setIsCreating(true);
 
     try {
@@ -84,15 +87,25 @@ export default function AddProductModal({
         setStatus(message);
       }
 
-      if (onSuccess) {
-        onSuccess(data.product);
-      }
-
       setProductName('');
-      router.refresh();
+      // The catalog write has completed. Consumer/cache/navigation housekeeping cannot
+      // relabel it as a failed create and encourage a second create request.
+      try {
+        void Promise.resolve(onSuccess?.(data.product)).catch((error: unknown) => {
+          console.error('Error refreshing created product:', error);
+        });
+      } catch (error) {
+        console.error('Error refreshing created product:', error);
+      }
+      try {
+        router.refresh();
+      } catch (error) {
+        console.error('Error refreshing catalog:', error);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : t('addProduct.genericError'));
     } finally {
+      createPending.current = false;
       setIsCreating(false);
     }
   };

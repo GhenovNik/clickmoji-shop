@@ -34,7 +34,10 @@
     "emptyTitle": "Your favorite items will appear here",
     "emptyHint": "Add the items you buy often to favorites",
     "title": "Favorites",
-    "tapHint": "Tap an item to add it to your shopping list"
+    "tapHint": "Tap an item to add it to your shopping list",
+    "usageUpdateFailed": "Item was added to the list, but the favorite usage update failed. Retry only the usage update below.",
+    "retryUsage": "Retry usage update",
+    "added": "Item added to the list. Favorite usage updated."
   },
   "search": {
     "placeholder": "Search products...",
@@ -47,7 +50,10 @@
     "added": "{emoji} {name} added to the list!",
     "foundAndAdded": "{emoji} {name} found and added to the list!",
     "createdAndAdded": "{emoji} {name} created with AI and added to the list!",
-    "createFailed": "Could not create the item. Try again later or contact the administrator."
+    "createFailed": "Could not create the item. Try again later or contact the administrator.",
+    "createdButAddFailed": "Item was created in the catalog, but could not be added to the list. Retry the list add without creating it again.",
+    "existingButAddFailed": "Item already exists in the catalog, but could not be added to the list. Retry only the list add.",
+    "retryListAdd": "Retry list add"
   },
   "selectionBar": {
     "selected": "Selected: {count}",

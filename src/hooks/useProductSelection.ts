@@ -1,12 +1,13 @@
 'use client';
 
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useSession } from 'next-auth/react';
 import { useRouter } from 'next/navigation';
 import { useTranslations } from 'next-intl';
 import { listsQueryKey, useActiveList } from './useListsQuery';
 import { queryKeys } from '@/lib/query-keys';
+import { refreshQueryCache } from '@/lib/refresh-query-cache';
 
 export type Product = {
   id: string;
@@ -92,6 +93,7 @@ export function useProductSelection(categoryId: string) {
   const [selectedVariants, setSelectedVariants] = useState<Record<string, string | null>>({});
   const [adding, setAdding] = useState(false);
   const [addError, setAddError] = useState('');
+  const addPending = useRef(false);
 
   // Query for products by category
   const { data: products = [], isLoading: loading } = useQuery({
@@ -200,6 +202,7 @@ export function useProductSelection(categoryId: string) {
   };
 
   const addToList = async () => {
+    if (addPending.current) return;
     setAddError('');
     if (!session?.user) {
       router.push('/login');
@@ -211,6 +214,7 @@ export function useProductSelection(categoryId: string) {
       return;
     }
 
+    addPending.current = true;
     setAdding(true);
 
     const selectedItems = products
@@ -221,22 +225,21 @@ export function useProductSelection(categoryId: string) {
       }));
 
     try {
+      // This endpoint commits the entire validated batch or none of it.
       await addToListAPI(activeListId, selectedItems);
-
-      queryClient.invalidateQueries({ queryKey: listsQueryKey });
-      queryClient.invalidateQueries({ queryKey: queryKeys.list(activeListId) });
-
-      if (activeListId) {
-        router.push(`/lists/${activeListId}`);
-      } else {
-        router.push('/lists');
-      }
     } catch (error) {
       console.error('Error adding items to list:', error);
       setAddError(t('addProductsFailed'));
+      return;
     } finally {
+      addPending.current = false;
       setAdding(false);
     }
+
+    setSelectedProducts(new Set());
+    setSelectedVariants({});
+    refreshQueryCache(queryClient, [listsQueryKey, queryKeys.list(activeListId)]);
+    router.push(`/lists/${activeListId}`);
   };
 
   return {

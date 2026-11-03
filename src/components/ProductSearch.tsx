@@ -8,6 +8,7 @@ import { useSession } from 'next-auth/react';
 import { useLocale, useTranslations } from 'next-intl';
 import { listsQueryKey, useActiveList } from '@/hooks/useListsQuery';
 import { queryKeys } from '@/lib/query-keys';
+import { refreshQueryCache } from '@/lib/refresh-query-cache';
 import { localizedName } from '@/lib/catalog-name';
 import { productImageUrl } from '@/lib/product-image';
 
@@ -74,7 +75,19 @@ export default function ProductSearch() {
   const [debouncedQuery, setDebouncedQuery] = useState('');
   const [isOpen, setIsOpen] = useState(false);
   const [isCreating, setIsCreating] = useState(false);
-  const [addError, setAddError] = useState('');
+  const [feedback, setFeedback] = useState<{
+    listId: string | null;
+    query: string;
+    text: string;
+  } | null>(null);
+  const [createdProduct, setCreatedProduct] = useState<{
+    listId: string;
+    query: string;
+    productId: string;
+    exists: boolean;
+  } | null>(null);
+  const operationPending = useRef(false);
+  const targetVersion = useRef(0);
   const [selectedVariants, setSelectedVariants] = useState<Record<string, string | null>>({});
   const searchRef = useRef<HTMLDivElement>(null);
   const { activeListId } = useActiveList();
@@ -83,6 +96,18 @@ export default function ProductSearch() {
   const { data: session } = useSession();
   const t = useTranslations('catalog');
   const locale = useLocale();
+  const addError =
+    feedback?.listId === activeListId && feedback.query === query ? feedback.text : '';
+  const retryProduct =
+    createdProduct?.listId === activeListId && createdProduct.query === query
+      ? createdProduct
+      : null;
+  const setAddError = (text: string) => setFeedback({ listId: activeListId, query, text });
+
+  // Ignore stale continuations, including switching away and back while a request is pending.
+  useEffect(() => {
+    targetVersion.current += 1;
+  }, [activeListId, query]);
 
   // Debounce query
   useEffect(() => {
@@ -132,12 +157,12 @@ export default function ProductSearch() {
       variantId?: string | null;
     }) => addProductToListAPI(listId, productId, variantId),
     onSuccess: (_, variables) => {
-      queryClient.invalidateQueries({ queryKey: listsQueryKey });
-      queryClient.invalidateQueries({ queryKey: queryKeys.list(variables.listId) });
+      refreshQueryCache(queryClient, [listsQueryKey, queryKeys.list(variables.listId)]);
     },
   });
 
   const handleAddProduct = async (product: SearchProduct) => {
+    if (operationPending.current) return;
     setAddError('');
     if (!session?.user) {
       router.push('/login');
@@ -149,6 +174,8 @@ export default function ProductSearch() {
       return;
     }
 
+    const version = targetVersion.current;
+    operationPending.current = true;
     try {
       const variantId = selectedVariants[product.id] || product.variants?.[0]?.id || null;
 
@@ -157,21 +184,25 @@ export default function ProductSearch() {
         productId: product.id,
         variantId,
       });
-
-      setQuery('');
-      setDebouncedQuery('');
-      setIsOpen(false);
-      setSelectedVariants({});
-
-      // Redirect to the list page
-      router.push(`/lists/${activeListId}`);
     } catch (error) {
       console.error('Error adding product:', error);
-      setAddError(t('shared.addProductFailed'));
+      if (version === targetVersion.current) setAddError(t('shared.addProductFailed'));
+      return;
+    } finally {
+      operationPending.current = false;
     }
+
+    if (version !== targetVersion.current) return;
+    setQuery('');
+    setDebouncedQuery('');
+    setIsOpen(false);
+    setSelectedVariants({});
+    setCreatedProduct(null);
+    router.push(`/lists/${activeListId}`);
   };
 
   const handleCreateWithAI = async () => {
+    if (operationPending.current) return;
     setAddError('');
     if (!session?.user) {
       router.push('/login');
@@ -187,37 +218,55 @@ export default function ProductSearch() {
       return;
     }
 
+    const version = targetVersion.current;
+    operationPending.current = true;
     setIsCreating(true);
-    let productCreated = false;
+    let catalogProduct = retryProduct;
 
     try {
-      // Create product with AI
-      const createResult = await createSmartProductAPI(query.trim());
-      productCreated = true;
+      if (!catalogProduct) {
+        const createResult = await createSmartProductAPI(query.trim());
+        // The catalog write completed, but do not add an obsolete query to any list.
+        if (version !== targetVersion.current) return;
+        catalogProduct = {
+          listId: activeListId,
+          query,
+          productId: createResult.product.id,
+          exists: Boolean(createResult.exists),
+        };
+        setCreatedProduct(catalogProduct);
+      }
 
       // Add product to list
       await addProductMutation.mutateAsync({
         listId: activeListId,
-        productId: createResult.product.id,
+        productId: catalogProduct.productId,
       });
-
-      setQuery('');
-      setDebouncedQuery('');
-      setIsOpen(false);
-      setSelectedVariants({});
-      router.push(`/lists/${activeListId}`);
     } catch (error) {
       console.error('Error creating product with AI:', error);
-      setAddError(
-        productCreated
-          ? t('shared.addProductFailed')
-          : error instanceof Error
-            ? error.message
-            : t('search.createFailed')
-      );
+      if (version === targetVersion.current)
+        setAddError(
+          catalogProduct
+            ? t(
+                catalogProduct.exists ? 'search.existingButAddFailed' : 'search.createdButAddFailed'
+              )
+            : error instanceof Error
+              ? error.message
+              : t('search.createFailed')
+        );
+      return;
     } finally {
+      operationPending.current = false;
       setIsCreating(false);
     }
+
+    if (version !== targetVersion.current) return;
+    setCreatedProduct(null);
+    setQuery('');
+    setDebouncedQuery('');
+    setIsOpen(false);
+    setSelectedVariants({});
+    router.push(`/lists/${activeListId}`);
   };
 
   return (
@@ -227,7 +276,12 @@ export default function ProductSearch() {
         <input
           type="text"
           value={query}
-          onChange={(e) => setQuery(e.target.value)}
+          onChange={(e) => {
+            targetVersion.current += 1;
+            setQuery(e.target.value);
+            setCreatedProduct(null);
+            setFeedback(null);
+          }}
           placeholder={t('search.placeholder')}
           className="w-full px-4 py-3 pr-10 rounded-xl border-2 border-gray-300 focus:border-blue-500 focus:outline-none text-gray-900"
         />
@@ -240,6 +294,16 @@ export default function ProductSearch() {
         </p>
       )}
 
+      {retryProduct && (
+        <button
+          onClick={handleCreateWithAI}
+          disabled={isCreating || addProductMutation.isPending}
+          className="text-blue-600 underline text-sm mt-2 disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          {t('search.retryListAdd')}
+        </button>
+      )}
+
       {/* Results Dropdown */}
       {isOpen && (
         <div className="absolute z-10 w-full mt-2 bg-white rounded-xl shadow-lg max-h-96 overflow-y-auto">
@@ -248,23 +312,25 @@ export default function ProductSearch() {
           ) : results.length === 0 ? (
             <div className="p-4">
               <p className="text-center text-gray-500 mb-3">{t('search.noResults')}</p>
-              <button
-                onClick={handleCreateWithAI}
-                disabled={isCreating || !query.trim()}
-                className="w-full bg-gradient-to-r from-purple-500 to-indigo-600 hover:from-purple-600 hover:to-indigo-700 text-white px-4 py-3 rounded-lg font-semibold transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
-              >
-                {isCreating ? (
-                  <>
-                    <span className="animate-spin">⏳</span>
-                    <span>{t('search.creating')}</span>
-                  </>
-                ) : (
-                  <>
-                    <span>✨</span>
-                    <span>{t('search.createWithAi')}</span>
-                  </>
-                )}
-              </button>
+              {!retryProduct && (
+                <button
+                  onClick={handleCreateWithAI}
+                  disabled={isCreating || !query.trim()}
+                  className="w-full bg-gradient-to-r from-purple-500 to-indigo-600 hover:from-purple-600 hover:to-indigo-700 text-white px-4 py-3 rounded-lg font-semibold transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                >
+                  {isCreating ? (
+                    <>
+                      <span className="animate-spin">⏳</span>
+                      <span>{t('search.creating')}</span>
+                    </>
+                  ) : (
+                    <>
+                      <span>✨</span>
+                      <span>{t('search.createWithAi')}</span>
+                    </>
+                  )}
+                </button>
+              )}
               <p className="text-xs text-gray-400 mt-2 text-center">
                 {t('search.aiHintCategory')}
                 <br />
