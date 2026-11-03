@@ -221,10 +221,12 @@ const bodyOf = (call: (typeof fetchMock.mock.calls)[number]) => JSON.parse(call[
 
 function deferredResponse() {
   let finish!: (response: Response) => void;
-  const response = new Promise<Response>((resolve) => {
+  let fail!: (error: Error) => void;
+  const response = new Promise<Response>((resolve, reject) => {
     finish = resolve;
+    fail = reject;
   });
-  return { response: () => response, finish: (value: Response) => finish(value) };
+  return { response: () => response, finish: (value: Response) => finish(value), fail };
 }
 
 const cream = { ...product, id: 'cream', name: 'Сливки', nameEn: 'Cream', variants: [] };
@@ -237,6 +239,36 @@ const creamFavorite = {
 };
 
 describe('favorite add and usage are separate completed operations', () => {
+  it('settles A success without clearing B pending feedback or creating an item retry', async () => {
+    const first = deferredResponse();
+    const second = deferredResponse();
+    addResponse = first.response;
+    const view = renderUI(<FavoritesSection />);
+    fireEvent.click(await screen.findByTitle('Skimmed'));
+    await waitFor(() => expect(allListRequests()).toHaveLength(1));
+    mocks.activeListId = 'list-2';
+    view.rerenderUI(<FavoritesSection />);
+    addResponse = second.response;
+    fireEvent.click(screen.getByTitle('Skimmed'));
+    await waitFor(() => expect(allListRequests()).toHaveLength(2));
+    await act(async () => first.finish(json({ createdItems: [{ id: 'item-1' }] })));
+    expect(screen.getByTitle('Skimmed')).toBeDisabled();
+    expect(screen.queryByRole('status')).toBeNull();
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Retry usage update' })).toBeNull();
+    await act(async () => second.finish(json({ createdItems: [{ id: 'item-2' }] })));
+    expect(await screen.findByRole('status')).toHaveTextContent('Item added to the list');
+    mocks.activeListId = 'list-1';
+    view.rerenderUI(<FavoritesSection />);
+    expect(screen.getByRole('status')).toHaveTextContent('Item added to the list');
+    expect(screen.getByTitle('Skimmed')).toBeEnabled();
+    expect(allListRequests().map(([url]) => url)).toEqual([
+      '/api/lists/list-1/items',
+      '/api/lists/list-2/items',
+    ]);
+    expect(usageRequests()).toHaveLength(2);
+  });
+
   it('keeps the target guarded while the original usage update is pending and retains unresolved usage after a deliberate duplicate', async () => {
     addResponse = async () => json({ createdItems: [{ id: 'item-1' }] });
     const pending = deferredResponse();
@@ -392,6 +424,130 @@ describe.each(['category', 'favorites page'] as const)('%s atomic multi-item ope
     expect(screen.queryByRole('alert')).toBeNull();
     expect(listRequests()).toHaveLength(2);
     expect(usageRequests()).toHaveLength(0);
+  });
+});
+
+describe('AI completed operation ownership', () => {
+  async function startPendingAdd() {
+    searchResults = [];
+    const view = renderUI(<ProductSearch />);
+    fireEvent.change(screen.getByPlaceholderText('Search products...'), {
+      target: { value: 'milk' },
+    });
+    const pending = deferredResponse();
+    addResponse = pending.response;
+    fireEvent.click(await screen.findByRole('button', { name: /Create with AI/ }));
+    await waitFor(() => expect(allListRequests()).toHaveLength(1));
+    return { view, pending };
+  }
+
+  it.each([false, true])(
+    'records successful A add despite obsolete UI (A→B→A before response: %s)',
+    async (roundTrip) => {
+      const { view, pending } = await startPendingAdd();
+      mocks.activeListId = 'list-2';
+      view.rerenderUI(<ProductSearch />);
+      if (roundTrip) {
+        mocks.activeListId = 'list-1';
+        view.rerenderUI(<ProductSearch />);
+      }
+      await act(async () => pending.finish(json({ createdItems: [{ id: 'item-1' }] })));
+      mocks.activeListId = 'list-1';
+      view.rerenderUI(<ProductSearch />);
+      expect(mocks.router.push).not.toHaveBeenCalled();
+      expect(screen.getByPlaceholderText('Search products...')).toHaveValue('milk');
+      expect(createRequests()).toHaveLength(1);
+      expect(allListRequests()).toHaveLength(1);
+      expect(screen.queryByRole('button', { name: 'Retry list add' })).toBeNull();
+    }
+  );
+
+  it('never labels a pending item POST as a failed retry', async () => {
+    const { pending } = await startPendingAdd();
+    expect(screen.queryByRole('button', { name: 'Retry list add' })).toBeNull();
+    await act(async () => pending.finish(json({ createdItems: [{ id: 'item-1' }] })));
+  });
+
+  it.each([
+    ['500', false],
+    ['500', true],
+    ['abort', false],
+    ['abort', true],
+  ] as const)(
+    'retains failed add-only retry after %s (A→B→A before response: %s)',
+    async (failure, roundTrip) => {
+      const { view, pending } = await startPendingAdd();
+      mocks.activeListId = 'list-2';
+      view.rerenderUI(<ProductSearch />);
+      if (roundTrip) {
+        mocks.activeListId = 'list-1';
+        view.rerenderUI(<ProductSearch />);
+      }
+      await act(async () => {
+        if (failure === 'abort') pending.fail(new DOMException('Aborted', 'AbortError'));
+        else pending.finish(json({ error: 'Unavailable' }, 500));
+      });
+      expect(mocks.router.push).not.toHaveBeenCalled();
+      mocks.activeListId = 'list-1';
+      view.rerenderUI(<ProductSearch />);
+      const retry = screen.getByRole('button', { name: 'Retry list add' });
+      expect(retry).toBeEnabled();
+      addResponse = async () => json({ createdItems: [{ id: 'item-1' }] });
+      fireEvent.click(retry);
+      await waitFor(() =>
+        expect(mocks.router.push).toHaveBeenCalledExactlyOnceWith('/lists/list-1')
+      );
+      expect(createRequests().map(bodyOf)).toEqual([{ productName: 'milk' }]);
+      expect(allListRequests().map(([url]) => url)).toEqual([
+        '/api/lists/list-1/items',
+        '/api/lists/list-1/items',
+      ]);
+      expect(allListRequests().map(bodyOf)).toEqual(
+        Array(2).fill({ items: [{ productId: 'milk', variantId: null }] })
+      );
+      expect(screen.queryByRole('button', { name: 'Retry list add' })).toBeNull();
+    }
+  );
+
+  it('keeps a newer operation pending and then retries only its failed add', async () => {
+    const { view, pending } = await startPendingAdd();
+    mocks.activeListId = 'list-2';
+    fireEvent.change(screen.getByPlaceholderText('Search products...'), {
+      target: { value: 'cream' },
+    });
+    view.rerenderUI(<ProductSearch />);
+    // The component intentionally serializes operations, even across target changes.
+    const create = await screen.findByRole('button', { name: /Creating/ });
+    expect(create).toBeDisabled();
+    fireEvent.click(create);
+    expect(createRequests()).toHaveLength(1);
+    await act(async () => pending.finish(json({ createdItems: [{ id: 'item-1' }] })));
+    expect(mocks.router.push).not.toHaveBeenCalled();
+    expect(screen.getByPlaceholderText('Search products...')).toHaveValue('cream');
+    const newer = deferredResponse();
+    createResponse = async () => json({ product: cream });
+    addResponse = newer.response;
+    fireEvent.click(await screen.findByRole('button', { name: /Create with AI/ }));
+    await waitFor(() => expect(allListRequests()).toHaveLength(2));
+    expect(screen.queryByRole('button', { name: 'Retry list add' })).toBeNull();
+    await act(async () => newer.finish(json({ error: 'Unavailable' }, 500)));
+    addResponse = async () => json({ createdItems: [{ id: 'item-2' }] });
+    fireEvent.click(screen.getByRole('button', { name: 'Retry list add' }));
+    await waitFor(() => expect(mocks.router.push).toHaveBeenCalledExactlyOnceWith('/lists/list-2'));
+    expect(createRequests().map(bodyOf)).toEqual([
+      { productName: 'milk' },
+      { productName: 'cream' },
+    ]);
+    expect(allListRequests().map(([url]) => url)).toEqual([
+      '/api/lists/list-1/items',
+      '/api/lists/list-2/items',
+      '/api/lists/list-2/items',
+    ]);
+    expect(allListRequests().map(bodyOf)).toEqual([
+      { items: [{ productId: 'milk', variantId: null }] },
+      { items: [{ productId: 'cream', variantId: null }] },
+      { items: [{ productId: 'cream', variantId: null }] },
+    ]);
   });
 });
 

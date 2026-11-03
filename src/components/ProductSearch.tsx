@@ -11,6 +11,7 @@ import { queryKeys } from '@/lib/query-keys';
 import { refreshQueryCache } from '@/lib/refresh-query-cache';
 import { localizedName } from '@/lib/catalog-name';
 import { productImageUrl } from '@/lib/product-image';
+import { settleCatalogAddAttempt, type CatalogAddAttempt } from '@/lib/catalog-add-attempt';
 
 type SearchProduct = {
   id: string;
@@ -80,12 +81,8 @@ export default function ProductSearch() {
     query: string;
     text: string;
   } | null>(null);
-  const [createdProduct, setCreatedProduct] = useState<{
-    listId: string;
-    query: string;
-    productId: string;
-    exists: boolean;
-  } | null>(null);
+  const [createdProduct, setCreatedProduct] = useState<CatalogAddAttempt | null>(null);
+  const nextAttemptId = useRef(0);
   const operationPending = useRef(false);
   const targetVersion = useRef(0);
   const [selectedVariants, setSelectedVariants] = useState<Record<string, string | null>>({});
@@ -99,7 +96,9 @@ export default function ProductSearch() {
   const addError =
     feedback?.listId === activeListId && feedback.query === query ? feedback.text : '';
   const retryProduct =
-    createdProduct?.listId === activeListId && createdProduct.query === query
+    createdProduct?.status === 'failed' &&
+    createdProduct.listId === activeListId &&
+    createdProduct.query === query
       ? createdProduct
       : null;
   const setAddError = (text: string) => setFeedback({ listId: activeListId, query, text });
@@ -221,7 +220,10 @@ export default function ProductSearch() {
     const version = targetVersion.current;
     operationPending.current = true;
     setIsCreating(true);
-    let catalogProduct = retryProduct;
+    const attemptId = ++nextAttemptId.current;
+    let catalogProduct: CatalogAddAttempt | null = retryProduct
+      ? { ...retryProduct, attemptId, status: 'pending' }
+      : null;
 
     try {
       if (!catalogProduct) {
@@ -229,21 +231,26 @@ export default function ProductSearch() {
         // The catalog write completed, but do not add an obsolete query to any list.
         if (version !== targetVersion.current) return;
         catalogProduct = {
+          attemptId,
           listId: activeListId,
           query,
           productId: createResult.product.id,
           exists: Boolean(createResult.exists),
+          status: 'pending',
         };
-        setCreatedProduct(catalogProduct);
       }
 
       // Add product to list
+      setCreatedProduct(catalogProduct);
       await addProductMutation.mutateAsync({
         listId: activeListId,
         productId: catalogProduct.productId,
       });
+      // Record the committed write even when its navigation/query effects are stale.
+      setCreatedProduct((current) => settleCatalogAddAttempt(current, attemptId, 'succeeded'));
     } catch (error) {
       console.error('Error creating product with AI:', error);
+      setCreatedProduct((current) => settleCatalogAddAttempt(current, attemptId, 'failed'));
       if (version === targetVersion.current)
         setAddError(
           catalogProduct
@@ -261,7 +268,6 @@ export default function ProductSearch() {
     }
 
     if (version !== targetVersion.current) return;
-    setCreatedProduct(null);
     setQuery('');
     setDebouncedQuery('');
     setIsOpen(false);
