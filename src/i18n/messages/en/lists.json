@@ -63,6 +63,11 @@
     "closingIn": "{seconds, plural, one {Closing in # second...} other {Closing in # seconds...}}"
   },
   "item": {
+    "purchased": "Purchased: {name}",
+    "editNote": "Edit note: {name}",
+    "remove": "Remove item: {name}",
+    "expandNote": "Expand note",
+    "collapseNote": "Collapse note",
     "notePlaceholder": "Note for this item...",
     "noteSave": "OK"
   },

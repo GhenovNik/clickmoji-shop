@@ -8,6 +8,7 @@ import { useLocale, useTranslations } from 'next-intl';
 import { localizedName } from '@/lib/catalog-name';
 import { useLists } from '@/store/lists';
 import { useShoppingListItems } from '@/hooks/useShoppingListItems';
+import { useShoppingListFocus } from '@/hooks/useShoppingListFocus';
 import ShoppingListItem from '@/components/shopping/ShoppingListItem';
 import ShoppingListEmptyState from '@/components/shopping/ShoppingListEmptyState';
 import ProductSearch from '@/components/ProductSearch';
@@ -22,9 +23,20 @@ export default function ShoppingListPage({ params }: { params: Promise<{ listId:
   const t = useTranslations('lists');
   const tCommon = useTranslations('common');
   const locale = useLocale();
+  const { rememberFocus, registerTarget } = useShoppingListFocus();
 
   const { list, items, loading, togglePurchased, removeItem, updateNote, clearAll, completeList } =
     useShoppingListItems(listId);
+
+  const handleToggle = async (itemId: string) => {
+    try {
+      await togglePurchased(itemId);
+    } catch (error) {
+      // The mutation hook has already rolled the cache back. Consume the rejected
+      // UI action; focus follows DOM commits, never the network promise.
+      console.error('Error toggling purchased item:', error);
+    }
+  };
 
   useEffect(() => {
     if (status === 'loading') {
@@ -137,7 +149,9 @@ export default function ShoppingListPage({ params }: { params: Promise<{ listId:
                         <ShoppingListItem
                           key={item.id}
                           item={item}
-                          onToggle={togglePurchased}
+                          onToggle={handleToggle}
+                          toggleButtonRef={(node) => registerTarget(item.id, node)}
+                          onToggleFocus={(event) => rememberFocus(item.id, event.currentTarget)}
                           onRemove={removeItem}
                           onUpdateNote={updateNote}
                         />
@@ -164,7 +178,9 @@ export default function ShoppingListPage({ params }: { params: Promise<{ listId:
                         <ShoppingListItem
                           key={item.id}
                           item={item}
-                          onToggle={togglePurchased}
+                          onToggle={handleToggle}
+                          toggleButtonRef={(node) => registerTarget(item.id, node)}
+                          onToggleFocus={(event) => rememberFocus(item.id, event.currentTarget)}
                           onRemove={removeItem}
                           onUpdateNote={updateNote}
                         />
