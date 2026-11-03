@@ -3,6 +3,7 @@
 import { useMutation, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { useTranslations } from 'next-intl';
 import { changedBy } from '@/lib/query-keys';
+import { refreshQueryCache } from '@/lib/refresh-query-cache';
 
 // Mutations that change more than one cached entity. Each invalidates the keys listed for it in
 // `changedBy`, so the screens that read those entities refetch instead of showing stale data for
@@ -41,7 +42,8 @@ export function useImportListText() {
       return data as { results: ImportResults };
     },
     onSuccess: (data, { listId }) => {
-      invalidate(queryClient, changedBy.importText(listId, data.results.created.length > 0));
+      // Preserve the import endpoint's real added/created/failed report even if refetch fails.
+      refreshQueryCache(queryClient, changedBy.importText(listId, data.results.created.length > 0));
     },
   });
 }

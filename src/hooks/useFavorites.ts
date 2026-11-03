@@ -1,12 +1,13 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useSession } from 'next-auth/react';
 import { useRouter } from 'next/navigation';
 import { useTranslations } from 'next-intl';
 import { listsQueryKey, useActiveList } from './useListsQuery';
 import { queryKeys } from '@/lib/query-keys';
+import { refreshQueryCache } from '@/lib/refresh-query-cache';
 import {
   favoriteKey,
   favoriteListItem,
@@ -72,6 +73,8 @@ export function useFavorites() {
 
   const [selectedProducts, setSelectedProducts] = useState<Set<string>>(new Set());
   const [adding, setAdding] = useState(false);
+  const [addError, setAddError] = useState('');
+  const addPending = useRef(false);
 
   useEffect(() => {
     if (!session?.user) {
@@ -136,11 +139,14 @@ export function useFavorites() {
   };
 
   const addToList = async () => {
+    if (addPending.current) return;
+    setAddError('');
     if (!activeListId) {
-      alert(t('selectListFirst'));
+      setAddError(t('selectListFirst'));
       return;
     }
 
+    addPending.current = true;
     setAdding(true);
 
     const selectedItems = favorites
@@ -148,22 +154,20 @@ export function useFavorites() {
       .map(favoriteListItem);
 
     try {
+      // This endpoint commits the entire validated batch or none of it.
       await addToListAPI(activeListId, selectedItems);
-
-      queryClient.invalidateQueries({ queryKey: listsQueryKey });
-      queryClient.invalidateQueries({ queryKey: queryKeys.list(activeListId) });
-
-      if (activeListId) {
-        router.push(`/lists/${activeListId}`);
-      } else {
-        router.push('/lists');
-      }
     } catch (error) {
       console.error('Error adding items to list:', error);
-      alert(t('addProductsFailed'));
+      setAddError(t('addProductsFailed'));
+      return;
     } finally {
+      addPending.current = false;
       setAdding(false);
     }
+
+    setSelectedProducts(new Set());
+    refreshQueryCache(queryClient, [listsQueryKey, queryKeys.list(activeListId)]);
+    router.push(`/lists/${activeListId}`);
   };
 
   return {
@@ -171,6 +175,7 @@ export function useFavorites() {
     selectedProducts,
     loading,
     adding,
+    addError,
     toggleProduct,
     removeFromFavorites,
     addToList,

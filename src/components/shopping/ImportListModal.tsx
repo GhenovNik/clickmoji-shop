@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useLocale, useTranslations } from 'next-intl';
 import { useImportListText, type ImportResults } from '@/hooks/useListMutations';
 
@@ -20,15 +20,26 @@ export default function ImportListModal({
   const [text, setText] = useState('');
   const [error, setError] = useState('');
   const [result, setResult] = useState<ImportResults | null>(null);
+  const [reviewingFailed, setReviewingFailed] = useState(false);
+  const pending = useRef(false);
+  const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const importMutation = useImportListText();
   const isImporting = importMutation.isPending;
   const t = useTranslations('lists');
   const locale = useLocale();
 
+  useEffect(
+    () => () => {
+      if (closeTimer.current) clearTimeout(closeTimer.current);
+    },
+    [isOpen, listId]
+  );
+
   if (!isOpen) return null;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (pending.current) return;
     setError('');
     setResult(null);
 
@@ -37,31 +48,67 @@ export default function ImportListModal({
       return;
     }
 
+    pending.current = true;
     try {
       const data = await importMutation.mutateAsync({ listId, text: text.trim() });
 
       setResult(data.results);
       setText('');
 
-      if (onSuccess) {
-        onSuccess();
+      try {
+        void Promise.resolve(onSuccess?.()).catch((error: unknown) =>
+          console.error('Error refreshing imported list:', error)
+        );
+      } catch (error) {
+        console.error('Error refreshing imported list:', error);
       }
 
       // Keep the result visible briefly before closing the modal. The list behind it is already
       // refetching: the mutation invalidated the list and, when products were created, the catalog.
-      setTimeout(() => {
-        handleClose();
-      }, 3000);
+      if (data.results.failed.length === 0) {
+        closeTimer.current = setTimeout(() => {
+          handleClose();
+        }, 3000);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : t('importModal.genericError'));
+    } finally {
+      pending.current = false;
     }
   };
 
   const handleClose = () => {
+    if (pending.current) return;
+    if (closeTimer.current) clearTimeout(closeTimer.current);
     setText('');
     setError('');
     setResult(null);
+    setReviewingFailed(false);
     onClose();
+  };
+
+  const reviewFailed = () => {
+    if (!result || pending.current) return;
+    if (closeTimer.current) clearTimeout(closeTimer.current);
+    // The existing failed DTO has names, not the original quantities/notes. Let
+    // the shopper review this subset; never replay the original successful text.
+    setText(
+      result.failed
+        .map((item) => {
+          const nameRu = typeof item.product?.nameRu === 'string' ? item.product.nameRu.trim() : '';
+          const nameEn = typeof item.product?.nameEn === 'string' ? item.product.nameEn.trim() : '';
+          return (
+            (locale === 'en' ? nameEn : nameRu) ||
+            nameRu ||
+            nameEn ||
+            t('importModal.unrecognizedEntry')
+          );
+        })
+        .join('\n')
+    );
+    setResult(null);
+    setError('');
+    setReviewingFailed(true);
   };
 
   return (
@@ -71,6 +118,7 @@ export default function ImportListModal({
           <h2 className="text-2xl font-bold text-gray-900">{t('importModal.title')}</h2>
           <button
             onClick={handleClose}
+            disabled={isImporting}
             className="text-gray-400 hover:text-gray-600 text-2xl leading-none"
           >
             ×
@@ -79,6 +127,11 @@ export default function ImportListModal({
 
         {!result ? (
           <form onSubmit={handleSubmit}>
+            {reviewingFailed && (
+              <p role="status" className="text-sm text-amber-800 mb-3">
+                {t('importModal.retryFailedHint')}
+              </p>
+            )}
             <div className="mb-4">
               <label htmlFor="listText" className="block text-sm font-medium text-gray-700 mb-2">
                 {t('importModal.textLabel')}
@@ -93,7 +146,11 @@ export default function ImportListModal({
                 autoFocus
                 disabled={isImporting}
               />
-              {error && <p className="text-red-500 text-sm mt-2">{error}</p>}
+              {error && (
+                <p role="alert" className="text-red-500 text-sm mt-2">
+                  {error}
+                </p>
+              )}
             </div>
 
             <div className="bg-gradient-to-r from-purple-50 to-indigo-50 rounded-lg p-4 mb-4">
@@ -141,9 +198,20 @@ export default function ImportListModal({
         ) : (
           <div className="space-y-4">
             <div className="bg-green-50 border border-green-200 rounded-lg p-4">
-              <p className="text-green-800 font-semibold mb-2 flex items-center gap-2">
+              <p
+                role="status"
+                className="text-green-800 font-semibold mb-2 flex items-center gap-2"
+              >
                 <span>✅</span>
-                <span>{t('importModal.doneTitle')}</span>
+                <span>
+                  {t(
+                    result.failed.length
+                      ? result.added.length || result.created.length
+                        ? 'importModal.partialTitle'
+                        : 'importModal.failedOnlyTitle'
+                      : 'importModal.doneTitle'
+                  )}
+                </span>
               </p>
               <div className="text-sm text-green-700 space-y-1">
                 <p>
@@ -214,9 +282,19 @@ export default function ImportListModal({
               </div>
             )}
 
-            <p className="text-center text-gray-500 text-sm">
-              {t('importModal.closingIn', { seconds: 3 })}
-            </p>
+            {result.failed.length ? (
+              <button
+                type="button"
+                onClick={reviewFailed}
+                className="text-blue-600 underline text-sm"
+              >
+                {t('importModal.retryFailed')}
+              </button>
+            ) : (
+              <p className="text-center text-gray-500 text-sm">
+                {t('importModal.closingIn', { seconds: 3 })}
+              </p>
+            )}
           </div>
         )}
       </div>
