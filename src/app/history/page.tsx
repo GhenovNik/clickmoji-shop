@@ -34,7 +34,7 @@ type HistoryItem = {
 
 type HistoryList = {
   id: string;
-  listName: string;
+  listName?: string | null;
   completedAt: string;
   items: HistoryItem[];
 };
@@ -47,7 +47,7 @@ const fetchHistory = async (): Promise<HistoryList[]> => {
 
 export default function HistoryPage() {
   const router = useRouter();
-  const { data: session } = useSession();
+  const { data: session, status } = useSession();
   const queryClient = useQueryClient();
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [restoring, setRestoring] = useState(false);
@@ -58,10 +58,10 @@ export default function HistoryPage() {
   const locale = useLocale();
 
   useEffect(() => {
-    if (!session?.user) {
+    if (status === 'unauthenticated') {
       router.push('/login');
     }
-  }, [session, router]);
+  }, [status, router]);
 
   const { data: history = [], isLoading } = useQuery({
     queryKey: queryKeys.history(),
@@ -81,9 +81,14 @@ export default function HistoryPage() {
     setRestoring(true);
 
     try {
-      const listName = t('list.restoredName', { date: formatDate(historyList.completedAt) });
-
-      const { listId } = await restoreMutation.mutateAsync({ historyId, name: listName });
+      // Let the server use the snapshot's original name. Only legacy unnamed snapshots
+      // need a localized fallback; never replace a saved name with the completion date.
+      const { listId } = await restoreMutation.mutateAsync({
+        historyId,
+        ...(historyList.listName?.trim()
+          ? {}
+          : { name: t('list.restoredName', { date: formatDate(historyList.completedAt) }) }),
+      });
       router.push(`/lists/${listId}`);
     } catch (error) {
       console.error('Error restoring list:', error);
@@ -158,25 +163,32 @@ export default function HistoryPage() {
           <div className="space-y-3">
             {history.map((list) => {
               const isExpanded = expandedId === list.id;
+              const completedDate = formatDate(list.completedAt);
+              const hasName = !!list.listName?.trim();
               return (
                 <div key={list.id} className="bg-white rounded-2xl shadow-lg overflow-hidden">
                   {/* List Header - Clickable */}
                   <button
                     onClick={() => setExpandedId(isExpanded ? null : list.id)}
-                    className="w-full p-6 flex items-center justify-between hover:bg-gray-50 transition-colors"
+                    className="w-full p-6 flex items-center justify-between gap-2 hover:bg-gray-50 transition-colors"
                   >
-                    <div className="flex items-center gap-4">
-                      <span className="text-2xl">{isExpanded ? '📂' : '📁'}</span>
-                      <div className="text-left">
-                        <h3 className="text-lg font-semibold text-gray-900">
-                          {formatDate(list.completedAt)}
+                    <div className="flex items-center gap-4 min-w-0">
+                      <span className="text-2xl shrink-0">{isExpanded ? '📂' : '📁'}</span>
+                      <div className="text-left min-w-0">
+                        <h3 className="text-lg font-semibold text-gray-900 wrap-anywhere">
+                          {hasName ? list.listName : completedDate}
                         </h3>
+                        {hasName && (
+                          <time dateTime={list.completedAt} className="block text-sm text-gray-600">
+                            {completedDate}
+                          </time>
+                        )}
                         <p className="text-sm text-gray-600">
                           {t('list.itemCount', { count: list.items.length })}
                         </p>
                       </div>
                     </div>
-                    <div className="text-gray-400 text-2xl">{isExpanded ? '▼' : '▶'}</div>
+                    <div className="text-gray-400 text-2xl shrink-0">{isExpanded ? '▼' : '▶'}</div>
                   </button>
 
                   {/* Expanded Content */}
