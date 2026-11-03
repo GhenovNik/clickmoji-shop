@@ -82,7 +82,7 @@ export default function ShoppingListItem({
           <p
             className={cn(
               'font-bold text-base leading-5 truncate transition-all duration-300',
-              view === 'grid' && 'text-sm',
+              view === 'grid' && 'text-xs leading-4',
               item.isPurchased ? 'line-through text-muted-foreground' : 'text-foreground'
             )}
           >

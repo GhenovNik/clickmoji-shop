@@ -122,6 +122,18 @@ async function attachEvidence(
   const path = testInfo.outputPath(name);
   await page.screenshot({ path, fullPage: true, animations: 'disabled' });
   await testInfo.attach(name, { path, contentType: 'image/png' });
+  if (expanded) {
+    // A full-page capture keeps the fixed mobile nav at its real viewport
+    // position. Also show the entire note in a real scrolled viewport so the
+    // reviewer can read text that would otherwise be underneath that nav.
+    await item(page, 'compact-beef')
+      .getByRole('button', { name: /^Свернуть комментарий/ })
+      .evaluate((element) => element.scrollIntoView({ block: 'center', behavior: 'instant' }));
+    const viewportName = `shopping-compact-${width}-${view}-expanded-viewport.png`;
+    const viewportPath = testInfo.outputPath(viewportName);
+    await page.screenshot({ path: viewportPath, animations: 'disabled' });
+    await testInfo.attach(viewportName, { path: viewportPath, contentType: 'image/png' });
+  }
 }
 
 for (const width of [375, 1440]) {
@@ -170,6 +182,17 @@ for (const width of [375, 1440]) {
           toBuy.getByRole('heading', { name: 'Купить', exact: true }),
           viewControls(page)
         );
+        await expectSameRow(
+          page.getByRole('link', { name: '+ Добавить товары', exact: true }),
+          page.getByRole('button', { name: 'Очистить всё', exact: true })
+        );
+        const history = await page
+          .getByRole('link', { name: 'История покупок', exact: true })
+          .boundingBox();
+        const addItems = await page
+          .getByRole('link', { name: '+ Добавить товары', exact: true })
+          .boundingBox();
+        expect(history!.y).toBeGreaterThanOrEqual(addItems!.y + addItems!.height);
         await expectNoHorizontalOverflow(page);
 
         const listBounds = [];
@@ -330,6 +353,46 @@ test.describe('Compact touch and keyboard behavior', () => {
   });
 
   for (const view of ['list', 'grid'] as const) {
+    test(`${view}: compact search keeps inline failure and retry without native alerts @smoke`, async ({
+      page,
+    }) => {
+      const state = await openCompactList(page);
+      if (view === 'grid') await selectView(page, view);
+      const dialogs: string[] = [];
+      page.on('dialog', async (dialog) => {
+        dialogs.push(dialog.message());
+        await dialog.dismiss();
+      });
+      await page.route(
+        `**/api/lists/${E2E_LIST_ID}/items`,
+        (route) => route.fulfill({ status: 500, json: { error: 'Synthetic unavailable' } }),
+        { times: 1 }
+      );
+      const search = page.getByPlaceholder('Поиск товаров...');
+      await search.fill('молоко');
+      const result = page.getByRole('button', { name: /Молоко.*Молочные продукты/ });
+      const feedback = page.getByRole('main').getByRole('alert');
+      await result.tap();
+      await expect(feedback).toHaveText('Ошибка при добавлении товара');
+      await expect(search).toHaveValue('молоко');
+      await expect(page).toHaveURL(new RegExp(`/lists/${E2E_LIST_ID}$`));
+      expect(state.addItemRequests).toEqual([]);
+      await result.tap();
+      await expect.poll(() => state.addItemRequests).toHaveLength(1);
+      await expect(feedback).toHaveCount(0);
+      await expect(search).toHaveValue('');
+      await expect(
+        page.getByRole('button', { name: 'Куплено: Молоко', exact: true })
+      ).toBeVisible();
+      await expect(
+        viewControls(page).getByRole('button', {
+          name: view === 'list' ? 'Список' : 'Плитка',
+          exact: true,
+        })
+      ).toHaveAttribute('aria-pressed', 'true');
+      expect(dialogs).toEqual([]);
+    });
+
     for (const initiallyPurchased of [false, true]) {
       test(`${view}: ${initiallyPurchased ? 'purchased' : 'pending'} note and card never purchase, only the 44px circle does @smoke`, async ({
         page,
@@ -390,6 +453,11 @@ test.describe('Compact touch and keyboard behavior', () => {
     }) => {
       const state = await openCompactList(page);
       await selectView(page, 'grid');
+      await page.getByRole('button', { name: purchasedName }).click();
+      await expect(page.getByRole('button', { name: purchasedName })).toHaveAttribute(
+        'aria-expanded',
+        'false'
+      );
       const pageErrors: string[] = [];
       page.on('pageerror', (error) => pageErrors.push(error.message));
       let capturePut!: (route: Route) => void;
