@@ -70,7 +70,9 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: shopping-list-evidence-${{ github.event.pull_request.head.sha || github.sha }}
-          path: test-results/**/shopping-note-*.png
+          path: |
+            test-results/**/shopping-note-*.png
+            test-results/**/shopping-compact-*.png
           if-no-files-found: error
           retention-days: 30
 

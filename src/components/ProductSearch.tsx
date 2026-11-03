@@ -10,6 +10,7 @@ import { listsQueryKey, useActiveList } from '@/hooks/useListsQuery';
 import { queryKeys } from '@/lib/query-keys';
 import { localizedName } from '@/lib/catalog-name';
 import { productImageUrl } from '@/lib/product-image';
+import { cn } from '@/lib/utils';
 
 type SearchProduct = {
   id: string;
@@ -69,7 +70,7 @@ const createSmartProductAPI = async (productName: string) => {
   return res.json();
 };
 
-export default function ProductSearch() {
+export default function ProductSearch({ compact = false }: { compact?: boolean }) {
   const [query, setQuery] = useState('');
   const [debouncedQuery, setDebouncedQuery] = useState('');
   const [isOpen, setIsOpen] = useState(false);
@@ -240,7 +241,10 @@ export default function ProductSearch() {
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           placeholder={t('search.placeholder')}
-          className="w-full px-4 py-3 pr-10 rounded-xl border-2 border-gray-300 focus:border-blue-500 focus:outline-none text-gray-900"
+          className={cn(
+            'w-full px-4 pr-10 rounded-xl border-2 border-gray-300 focus:border-blue-500 focus:outline-none text-gray-900',
+            compact ? 'min-h-11 py-2 text-sm' : 'py-3'
+          )}
         />
         <div className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400">🔍</div>
       </div>

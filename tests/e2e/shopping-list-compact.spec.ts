@@ -10,6 +10,8 @@ import {
 } from './fixtures/compact';
 
 type View = 'list' | 'grid';
+// The mobile scenarios include many native touch/keyboard actions and layout reads.
+test.setTimeout(60_000);
 const purchasedName = /^Куплено \(1\)/;
 const purchasedVegetablesName = /^🥬 Овощи \(1\)/;
 
@@ -125,7 +127,7 @@ async function attachEvidence(
 for (const width of [375, 1440]) {
   test.describe(`Compact shopping at ${width}px`, () => {
     test.use({
-      viewport: { width, height: 1000 },
+      viewport: { width, height: width === 375 ? 812 : 1000 },
       hasTouch: width === 375,
       isMobile: width === 375,
       locale: 'ru-RU',
@@ -321,7 +323,7 @@ for (const width of [375, 1440]) {
 
 test.describe('Compact touch and keyboard behavior', () => {
   test.use({
-    viewport: { width: 375, height: 1000 },
+    viewport: { width: 375, height: 812 },
     hasTouch: true,
     isMobile: true,
     locale: 'ru-RU',
@@ -341,7 +343,9 @@ test.describe('Compact touch and keyboard behavior', () => {
         const toggle = page.getByRole('button', { name: `Куплено: ${name}`, exact: true });
         await card.getByText(name, { exact: true }).tap();
         await card.getByText(emoji, { exact: true }).tap();
-        await card.tap({ position: { x: 2, y: 2 } });
+        // Hit the straight left edge, not a transparent rounded corner or the
+        // top edge where Chromium touch adjustment can select the group header.
+        await card.tap({ position: { x: 2, y: 28 } });
         await card.getByRole('button', { name: /^Развернуть комментарий/ }).tap();
         const expanded = card.getByRole('button', { name: /^Свернуть комментарий/ });
         await expectFullNote(expanded);

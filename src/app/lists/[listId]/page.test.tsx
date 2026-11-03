@@ -217,6 +217,67 @@ describe('compact shopping presentation', () => {
   });
 });
 
+describe.each(['list', 'grid'])('collapsed destination focus in %s view', (view) => {
+  it.each([false, true])(
+    'reveals a focused item after its move and rollback (purchased: %s)',
+    async (initiallyPurchased) => {
+      serverItems = [
+        { ...milk, isPurchased: initiallyPurchased },
+        {
+          ...milk,
+          id: 'other-item',
+          isPurchased: !initiallyPurchased,
+          product: { ...milk.product, id: 'kefir', name: 'Кефир' },
+        },
+      ];
+      let resolvePut!: (response: Response) => void;
+      const heldPut = new Promise<Response>((resolve) => {
+        resolvePut = resolve;
+      });
+      vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      vi.stubGlobal(
+        'fetch',
+        vi.fn((url: string, init?: RequestInit) => {
+          if (init?.method === 'PUT') return heldPut;
+          if (url === '/api/lists/list-1')
+            return Promise.resolve(
+              Response.json({ id: 'list-1', name: 'Покупки', items: serverItems })
+            );
+          throw new Error(`Unexpected fetch: ${url}`);
+        })
+      );
+      const { queryClient } = renderPage();
+      const original = await screen.findByRole('button', { name: 'Куплено: Молоко' });
+      if (view === 'grid') fireEvent.click(screen.getByRole('button', { name: 'Плитка' }));
+      const destination = initiallyPurchased
+        ? screen.getByRole('region', { name: 'Купить' })
+        : screen.getByRole('button', { name: 'Куплено (1)' }).closest('section')!;
+      fireEvent.click(within(destination).getByRole('button', { name: /^🥛 Молочное \(1\)/ }));
+      if (!initiallyPurchased) fireEvent.click(screen.getByRole('button', { name: 'Куплено (1)' }));
+      original.focus();
+      fireEvent.click(original);
+      await waitFor(() =>
+        expect(screen.getByRole('button', { name: 'Куплено: Молоко' })).toHaveAttribute(
+          'aria-pressed',
+          String(!initiallyPurchased)
+        )
+      );
+      expect(screen.getByRole('button', { name: 'Куплено: Молоко' })).toHaveFocus();
+      await act(async () => {
+        resolvePut(Response.json({}, { status: 503 }));
+        await heldPut;
+      });
+      await waitFor(() => expect(queryClient.isMutating()).toBe(0));
+      expect(screen.getByRole('button', { name: 'Куплено: Молоко' })).toHaveAttribute(
+        'aria-pressed',
+        String(initiallyPurchased)
+      );
+      expect(screen.getByRole('button', { name: 'Куплено: Молоко' })).toHaveFocus();
+      queryClient.clear();
+    }
+  );
+});
+
 describe.each(['list', 'grid'])('purchase focus in %s view', (view) => {
   for (const initiallyPurchased of [false, true]) {
     describe(`purchase focus (initially purchased: ${initiallyPurchased})`, () => {
