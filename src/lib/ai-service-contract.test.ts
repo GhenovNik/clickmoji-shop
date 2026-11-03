@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
@@ -7,6 +7,25 @@ const aiProductsServicePath = path.join(serviceRoot, 'ai-products.ts');
 const emojiAssetsServicePath = path.join(serviceRoot, 'emoji-assets.ts');
 
 describe('AI service hardening contract', () => {
+  it('routes every runtime text call, including the database CLI, through the retry policy', () => {
+    // Do not import/run the database-writing CLI merely to inspect its AI boundary.
+    const cli = readFileSync(path.join(process.cwd(), 'scripts/db-products.ts'), 'utf8');
+    expect(cli).toContain('await generateGoogleText({ apiKey, prompt })');
+    const directCallers = ['src', 'scripts']
+      .flatMap((root) =>
+        readdirSync(path.join(process.cwd(), root), { recursive: true })
+          .filter((file): file is string => typeof file === 'string')
+          .filter((file) => /\.(?:ts|tsx|js|mjs)$/.test(file) && !/\.(?:test|spec)\./.test(file))
+          .map((file) => path.join(root, file))
+      )
+      .filter((file) => /\.generateContent\s*\(/.test(readFileSync(file, 'utf8')))
+      .sort();
+    expect(directCallers).toEqual([
+      'src/lib/services/emoji-image-adapters.ts', // Images intentionally retain their own policy.
+      'src/lib/services/google-text-generation.ts',
+    ]);
+  });
+
   it('keeps AI orchestration behind service boundaries', () => {
     expect(existsSync(aiProductsServicePath)).toBe(true);
     expect(existsSync(emojiAssetsServicePath)).toBe(true);
