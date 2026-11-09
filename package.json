@@ -89,7 +89,7 @@
     "emojibase": "^17.0.0",
     "emojibase-data": "^17.0.0",
     "fuse.js": "^7.5.0",
-    "lucide-react": "^1.52.0",
+    "lucide-react": "^1.70.0",
     "next": "^16.4.3",
     "next-auth": "^4.24.15",
     "next-intl": "^4.14.9",
