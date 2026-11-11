@@ -1,7 +1,7 @@
 import { Suspense } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import '@testing-library/jest-dom/vitest';
-import { act, fireEvent, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { renderWithIntl } from '@/test/intl';
 
@@ -78,6 +78,7 @@ afterEach(() => {
 });
 
 beforeEach(() => {
+  localStorage.clear();
   serverItems = [];
   listRequests = 0;
   vi.stubGlobal(
@@ -138,65 +139,210 @@ describe('a list with items', () => {
   });
 });
 
-for (const initiallyPurchased of [false, true]) {
-  describe(`purchase focus (initially purchased: ${initiallyPurchased})`, () => {
-    for (const outcome of ['success', '503', 'abort'] as const) {
-      it.each([false, true])(`${outcome}, user moved focus: %s`, async (moveFocus) => {
-        serverItems = [{ ...milk, isPurchased: initiallyPurchased }];
-        let resolvePut!: (response: Response) => void;
-        let rejectPut!: (error: Error) => void;
-        const heldPut = new Promise<Response>((resolve, reject) => {
-          resolvePut = resolve;
-          rejectPut = reject;
-        });
-        vi.stubGlobal(
-          'fetch',
-          vi.fn((url: string, init?: RequestInit) => {
-            if (init?.method === 'PUT' && url === '/api/lists/list-1/items/item-1') return heldPut;
-            if (!init?.method && url === '/api/lists/list-1') {
-              listRequests += 1;
-              return Promise.resolve(
-                Response.json({ id: 'list-1', name: 'Покупки', items: serverItems })
-              );
-            }
-            throw new Error(`Unexpected fetch: ${url}`);
-          })
-        );
-        const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
-        const { queryClient } = renderPage();
-        const original = await screen.findByRole('button', { name: 'Куплено: Молоко' });
-        const getToggle = () => screen.getByRole('button', { name: 'Куплено: Молоко' });
-        original.focus();
-        fireEvent.click(original);
-        await waitFor(() =>
-          expect(getToggle()).toHaveAttribute('aria-pressed', String(!initiallyPurchased))
-        );
-        // The real page and hook have committed the optimistic move, but PUT is still held.
-        expect(queryClient.isMutating()).toBe(1);
-        expect(getToggle()).not.toBe(original);
-        expect(getToggle()).toHaveFocus();
-        const neighbour = screen.getByRole('button', { name: /Импорт из текста/ });
-        if (moveFocus) neighbour.focus();
-        const readsBeforeResponse = listRequests;
-        await act(async () => {
-          if (outcome === 'success') {
-            serverItems = [{ ...milk, isPurchased: !initiallyPurchased }];
-            resolvePut(Response.json(serverItems[0]));
-          } else if (outcome === '503') {
-            resolvePut(Response.json({}, { status: 503 }));
-          } else {
-            rejectPut(new DOMException('Request aborted', 'AbortError'));
-          }
-          await heldPut.catch(() => undefined);
-        });
-        await waitFor(() => expect(queryClient.isMutating()).toBe(0));
-        await waitFor(() => expect(listRequests).toBeGreaterThan(readsBeforeResponse));
-        const expected = outcome === 'success' ? !initiallyPurchased : initiallyPurchased;
-        await waitFor(() => expect(getToggle()).toHaveAttribute('aria-pressed', String(expected)));
-        expect(moveFocus ? neighbour : getToggle()).toHaveFocus();
-        if (outcome !== 'success') expect(consoleError).toHaveBeenCalled();
-        queryClient.clear();
-      });
-    }
+describe('compact shopping presentation', () => {
+  const getList = () => screen.getByRole('button', { name: 'Список' });
+  const getGrid = () => screen.getByRole('button', { name: 'Плитка' });
+  const getCategory = () => screen.getByRole('button', { name: /^🥛 Молочное \(1\)/ });
+
+  it('defaults to list, collapses categories and remembers both choices after remount', async () => {
+    serverItems = [milk];
+    const first = renderPage();
+    await screen.findByText('Молоко');
+    expect(getList()).toHaveAttribute('aria-pressed', 'true');
+    expect(getGrid()).toHaveAttribute('aria-pressed', 'false');
+    expect(getCategory()).toHaveAttribute('aria-expanded', 'true');
+    fireEvent.click(getGrid());
+    fireEvent.click(getCategory());
+    expect(getGrid()).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.queryByText('Молоко')).not.toBeInTheDocument();
+    first.unmount();
+    first.queryClient.clear();
+    renderPage();
+    await screen.findByRole('button', { name: /^🥛 Молочное \(1\)/ });
+    expect(getGrid()).toHaveAttribute('aria-pressed', 'true');
+    expect(getCategory()).toHaveAttribute('aria-expanded', 'false');
+    fireEvent.click(getCategory());
+    expect(screen.getByText('Молоко')).toBeVisible();
+    expect(screen.getAllByRole('button', { name: 'Куплено: Молоко' })).toHaveLength(1);
   });
-}
+
+  it('collapses Purchased independently from its category and pending categories', async () => {
+    serverItems = [milk, { ...milk, id: 'item-2', isPurchased: true }];
+    renderPage();
+    const purchased = await screen.findByRole('button', { name: 'Куплено (1)' });
+    const toBuy = screen.getByRole('region', { name: 'Купить' });
+    fireEvent.click(within(toBuy).getByRole('button', { name: /^🥛 Молочное \(1\)/ }));
+    expect(screen.getAllByRole('button', { name: 'Куплено: Молоко' })).toHaveLength(1);
+    fireEvent.click(purchased);
+    expect(purchased).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByRole('button', { name: 'Куплено: Молоко' })).not.toBeInTheDocument();
+    fireEvent.click(purchased);
+    expect(screen.getByRole('button', { name: 'Куплено: Молоко' })).toHaveAttribute(
+      'aria-pressed',
+      'true'
+    );
+    expect(within(toBuy).getByRole('button', { name: /^🥛 Молочное \(1\)/ })).toHaveAttribute(
+      'aria-expanded',
+      'false'
+    );
+  });
+
+  it.each(['{invalid json', 'null', '[]', '{"view":"unknown","collapsed":null}'])(
+    'ignores malformed saved preferences: %s',
+    async (saved) => {
+      vi.spyOn(Storage.prototype, 'getItem').mockReturnValue(saved);
+      serverItems = [milk];
+      renderPage();
+      await screen.findByText('Молоко');
+      expect(getList()).toHaveAttribute('aria-pressed', 'true');
+      expect(getCategory()).toHaveAttribute('aria-expanded', 'true');
+    }
+  );
+
+  it('works when reading and writing localStorage throws', async () => {
+    vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
+      throw new Error('blocked');
+    });
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new Error('quota');
+    });
+    serverItems = [milk];
+    renderPage();
+    await screen.findByText('Молоко');
+    expect(getList()).toHaveAttribute('aria-pressed', 'true');
+    fireEvent.click(getGrid());
+    fireEvent.click(getCategory());
+    expect(getGrid()).toHaveAttribute('aria-pressed', 'true');
+    expect(getCategory()).toHaveAttribute('aria-expanded', 'false');
+  });
+});
+
+describe.each(['list', 'grid'])('collapsed destination focus in %s view', (view) => {
+  it.each([false, true])(
+    'reveals a focused item after its move and rollback (purchased: %s)',
+    async (initiallyPurchased) => {
+      serverItems = [
+        { ...milk, isPurchased: initiallyPurchased },
+        {
+          ...milk,
+          id: 'other-item',
+          isPurchased: !initiallyPurchased,
+          product: { ...milk.product, id: 'kefir', name: 'Кефир' },
+        },
+      ];
+      let resolvePut!: (response: Response) => void;
+      const heldPut = new Promise<Response>((resolve) => {
+        resolvePut = resolve;
+      });
+      vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      vi.stubGlobal(
+        'fetch',
+        vi.fn((url: string, init?: RequestInit) => {
+          if (init?.method === 'PUT') return heldPut;
+          if (url === '/api/lists/list-1')
+            return Promise.resolve(
+              Response.json({ id: 'list-1', name: 'Покупки', items: serverItems })
+            );
+          throw new Error(`Unexpected fetch: ${url}`);
+        })
+      );
+      const { queryClient } = renderPage();
+      const original = await screen.findByRole('button', { name: 'Куплено: Молоко' });
+      if (view === 'grid') fireEvent.click(screen.getByRole('button', { name: 'Плитка' }));
+      const destination = initiallyPurchased
+        ? screen.getByRole('region', { name: 'Купить' })
+        : screen.getByRole('button', { name: 'Куплено (1)' }).closest('section')!;
+      fireEvent.click(within(destination).getByRole('button', { name: /^🥛 Молочное \(1\)/ }));
+      if (!initiallyPurchased) fireEvent.click(screen.getByRole('button', { name: 'Куплено (1)' }));
+      original.focus();
+      fireEvent.click(original);
+      await waitFor(() =>
+        expect(screen.getByRole('button', { name: 'Куплено: Молоко' })).toHaveAttribute(
+          'aria-pressed',
+          String(!initiallyPurchased)
+        )
+      );
+      expect(screen.getByRole('button', { name: 'Куплено: Молоко' })).toHaveFocus();
+      await act(async () => {
+        resolvePut(Response.json({}, { status: 503 }));
+        await heldPut;
+      });
+      await waitFor(() => expect(queryClient.isMutating()).toBe(0));
+      expect(screen.getByRole('button', { name: 'Куплено: Молоко' })).toHaveAttribute(
+        'aria-pressed',
+        String(initiallyPurchased)
+      );
+      expect(screen.getByRole('button', { name: 'Куплено: Молоко' })).toHaveFocus();
+      queryClient.clear();
+    }
+  );
+});
+
+describe.each(['list', 'grid'])('purchase focus in %s view', (view) => {
+  for (const initiallyPurchased of [false, true]) {
+    describe(`purchase focus (initially purchased: ${initiallyPurchased})`, () => {
+      for (const outcome of ['success', '503', 'abort'] as const) {
+        it.each([false, true])(`${outcome}, user moved focus: %s`, async (moveFocus) => {
+          serverItems = [{ ...milk, isPurchased: initiallyPurchased }];
+          let resolvePut!: (response: Response) => void;
+          let rejectPut!: (error: Error) => void;
+          const heldPut = new Promise<Response>((resolve, reject) => {
+            resolvePut = resolve;
+            rejectPut = reject;
+          });
+          vi.stubGlobal(
+            'fetch',
+            vi.fn((url: string, init?: RequestInit) => {
+              if (init?.method === 'PUT' && url === '/api/lists/list-1/items/item-1')
+                return heldPut;
+              if (!init?.method && url === '/api/lists/list-1') {
+                listRequests += 1;
+                return Promise.resolve(
+                  Response.json({ id: 'list-1', name: 'Покупки', items: serverItems })
+                );
+              }
+              throw new Error(`Unexpected fetch: ${url}`);
+            })
+          );
+          const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+          const { queryClient } = renderPage();
+          const original = await screen.findByRole('button', { name: 'Куплено: Молоко' });
+          if (view === 'grid') fireEvent.click(screen.getByRole('button', { name: 'Плитка' }));
+          const getToggle = () => screen.getByRole('button', { name: 'Куплено: Молоко' });
+          original.focus();
+          fireEvent.click(original);
+          await waitFor(() =>
+            expect(getToggle()).toHaveAttribute('aria-pressed', String(!initiallyPurchased))
+          );
+          // The real page and hook have committed the optimistic move, but PUT is still held.
+          expect(queryClient.isMutating()).toBe(1);
+          expect(getToggle()).not.toBe(original);
+          expect(getToggle()).toHaveFocus();
+          const neighbour = screen.getByRole('button', { name: /Импорт из текста/ });
+          if (moveFocus) neighbour.focus();
+          const readsBeforeResponse = listRequests;
+          await act(async () => {
+            if (outcome === 'success') {
+              serverItems = [{ ...milk, isPurchased: !initiallyPurchased }];
+              resolvePut(Response.json(serverItems[0]));
+            } else if (outcome === '503') {
+              resolvePut(Response.json({}, { status: 503 }));
+            } else {
+              rejectPut(new DOMException('Request aborted', 'AbortError'));
+            }
+            await heldPut.catch(() => undefined);
+          });
+          await waitFor(() => expect(queryClient.isMutating()).toBe(0));
+          await waitFor(() => expect(listRequests).toBeGreaterThan(readsBeforeResponse));
+          const expected = outcome === 'success' ? !initiallyPurchased : initiallyPurchased;
+          await waitFor(() =>
+            expect(getToggle()).toHaveAttribute('aria-pressed', String(expected))
+          );
+          expect(moveFocus ? neighbour : getToggle()).toHaveFocus();
+          if (outcome !== 'success') expect(consoleError).toHaveBeenCalled();
+          queryClient.clear();
+        });
+      }
+    });
+  }
+});
