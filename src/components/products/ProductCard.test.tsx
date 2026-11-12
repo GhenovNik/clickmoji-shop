@@ -93,6 +93,42 @@ describe('a product card', () => {
   });
 });
 
+describe('the image placeholder of a product card', () => {
+  it('shows the product emoji as an aria-hidden placeholder until the picture loads', () => {
+    renderCard(product, 'ru');
+
+    const placeholder = screen.getByText('🥛');
+    expect(placeholder.getAttribute('aria-hidden')).toBe('true');
+    expect(screen.getByRole('img', { name: 'Молоко' })).toBeTruthy();
+  });
+
+  it('hides the placeholder and shows the picture once it loads', () => {
+    renderCard(product, 'ru');
+
+    fireEvent.load(screen.getByRole('img', { name: 'Молоко' }));
+
+    expect(screen.queryByText('🥛')).toBeNull();
+    expect(screen.getByRole('img', { name: 'Молоко' })).toBeTruthy();
+  });
+
+  it('keeps the emoji and drops the broken picture when loading fails', () => {
+    renderCard(product, 'ru');
+
+    fireEvent.error(screen.getByRole('img', { name: 'Молоко' }));
+
+    expect(screen.getByText('🥛')).toBeTruthy();
+    expect(screen.queryByRole('img', { name: 'Молоко' })).toBeNull();
+  });
+
+  it('shows the emoji as before for a product without a picture', () => {
+    const withoutImage: Product = { ...product, imageUrl: null, imageUrlEn: null };
+    renderCard(withoutImage, 'ru');
+
+    expect(screen.getByText('🥛')).toBeTruthy();
+    expect(screen.queryByRole('img')).toBeNull();
+  });
+});
+
 describe('the variants of a product card', () => {
   it('stay hidden behind a small button until it is pressed', () => {
     renderCard(product, 'en');
