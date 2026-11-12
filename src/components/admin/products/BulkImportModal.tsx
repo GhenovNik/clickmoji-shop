@@ -13,10 +13,12 @@ export default function BulkImportModal({ onClose, onImportComplete }: BulkImpor
   const t = useTranslations('admin');
   const [bulkImportText, setBulkImportText] = useState('');
   const [bulkImporting, setBulkImporting] = useState(false);
+  const [error, setError] = useState('');
 
   const handleBulkImport = async () => {
+    setError('');
     if (!bulkImportText.trim()) {
-      alert(t('bulkImport.enterNames'));
+      setError(t('bulkImport.enterNames'));
       return;
     }
 
@@ -26,7 +28,7 @@ export default function BulkImportModal({ onClose, onImportComplete }: BulkImpor
       .filter((line) => line.length > 0);
 
     if (productNames.length === 0) {
-      alert(t('bulkImport.noNames'));
+      setError(t('bulkImport.noNames'));
       return;
     }
 
@@ -58,13 +60,10 @@ export default function BulkImportModal({ onClose, onImportComplete }: BulkImpor
         onImportComplete();
         onClose();
       } else {
-        alert(
-          t('bulkImport.errorWithReason', { error: data.error || t('bulkImport.importFailed') })
-        );
+        setError(data.error || t('bulkImport.importFailed'));
       }
-    } catch (error) {
-      console.error('Bulk import error:', error);
-      alert(t('bulkImport.importError'));
+    } catch {
+      setError(t('bulkImport.importError'));
     } finally {
       setBulkImporting(false);
     }
@@ -84,16 +83,23 @@ export default function BulkImportModal({ onClose, onImportComplete }: BulkImpor
 
       <ModalBody>
         <div className="mb-4">
-          <label className="block text-sm font-medium text-gray-700 mb-2">
+          <label htmlFor="bulkImportText" className="block text-sm font-medium text-gray-700 mb-2">
             {t('bulkImport.namesLabel')}
           </label>
           <textarea
+            id="bulkImportText"
+            aria-describedby={error ? 'bulkImportError' : undefined}
             value={bulkImportText}
             onChange={(e) => setBulkImportText(e.target.value)}
             placeholder={t('bulkImport.placeholder')}
             className="w-full h-64 px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent text-gray-900 font-mono"
             disabled={bulkImporting}
           />
+          {error && (
+            <p id="bulkImportError" role="alert" className="text-red-500 text-sm mt-2">
+              {error}
+            </p>
+          )}
           <p className="text-xs text-gray-500 mt-2">
             {t('bulkImport.count', {
               count: bulkImportText.split('\n').filter((l) => l.trim()).length,

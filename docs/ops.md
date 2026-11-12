@@ -31,7 +31,7 @@ GOOGLE_GENAI_API_KEY="your-google-api-key"
 OPENAI_API_KEY="your-openai-api-key"
 
 # Optional text model override for product automation. Unset/empty/whitespace = gemini-3.8-flash.
-# Must be a Gemini text model id (an image model id is rejected). See docs/ai.md.
+# Must be one of the exact text-generation IDs in docs/ai.md#text-model-selection.
 # GOOGLE_TEXT_MODEL="gemini-3.8-flash"
 
 # Optional image model overrides. Leave them unset to use the defaults (see docs/ai.md).
@@ -42,6 +42,47 @@ OPENAI_API_KEY="your-openai-api-key"
 # Deprecated synonym of GOOGLE_IMAGE_MODEL; read only when that variable is unset/empty/whitespace.
 # IMAGEN_MODEL="gemini-3.1-flash-image"
 ```
+
+### Text AI overload and quota accounting (AGE-1540)
+
+The three text routes (list import, smart-create, admin bulk import) allow 60 seconds of route
+execution (`maxDuration = 60`). The text service has a total 30-second budget across retries and
+fallback; retries do not acquire more daily units. Exhausted temporary provider availability
+returns HTTP 503 with `Retry-After: 60` and a localized overload message. The import modal displays
+it inline, preserves the entered list and lets the shopper retry; it never opens a native alert.
+Hourly abuse throttles are unchanged and still count requests, including failed ones.
+
+Every runtime text entry point, including `scripts/db-products.ts import`, uses the shared text
+policy: at most three attempts, an 8-second hard timeout per attempt, exponential equal jitter
+of [500, 1000) then [1000, 2000) milliseconds. Only 503/429, canonical `UNAVAILABLE`/
+`RESOURCE_EXHAUSTED` and network timeouts retry; other 4xx never retry. Optional
+`GOOGLE_TEXT_MODEL_FALLBACK` selects the third attempt's model; unset/blank keeps the primary.
+Both model settings are validated before any SDK request. Each attempt logs only code and number.
+Primary and fallback share an exact allowlist (`SUPPORTED_GOOGLE_TEXT_MODELS`); a `gemini-*` name
+alone proves no capability. Embedding, image, TTS, live/audio and unknown IDs are refused before
+SDK construction. Configuration diagnostics name the env and `UNSUPPORTED_TEXT_MODEL`, not its raw
+value or keys. See `docs/ai.md#text-model-selection` for supported IDs, sources and update policy.
+The operator CLI has no authenticated shopper and therefore no per-user daily reservation; its
+existing product writes are not run by the regression tests.
+
+Daily text accounting is **one unit per successful logical text operation**, including internal
+retries, fallback and AI response parsing, not one unit per provider attempt. The shared PostgreSQL
+budget is reserved immediately before the operation; failed generation or AI parsing compensates
+one unit before the route returns an error. A successful AI result remains charged even if product
+persistence, category matching or later list writes fail. Image reservations (including smart-create's
+optional image) keep their previous attempt-based behavior and are not compensated here.
+
+Reservation failure denies the operation without contacting the provider. Compensation is one atomic
+conditional UPDATE of the original user's original UTC-day counter (`count > 0`), not a read/modify/
+write and not a transaction held across provider network I/O. The timestamp is captured before
+reservation, so an operation crossing midnight cannot debit/refund the next day by mistake.
+The helper has one private failure catch and exposes no reusable refund handle.
+
+**Conservative failure mode:** process termination after reservation, or a database outage during
+compensation, can retain a daily unit. Compensation failure logs an allowlisted code only and is
+never blindly retried: an ambiguous commit must not be decremented twice. No automatic counter
+reset/reconciliation or new migration is required. Do not replay compensation manually without
+independent evidence of the original reservation and whether the UPDATE committed.
 
 ### Image model switch (Vercel)
 

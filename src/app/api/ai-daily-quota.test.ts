@@ -56,6 +56,14 @@ vi.mock('@/lib/prisma', () => ({
       doubles.budget.used += 1;
       return [{ count: doubles.budget.used }];
     },
+    $executeRaw: vi.fn(async (strings: TemplateStringsArray, ...values: unknown[]) => {
+      expect(strings.join('?')).toMatch(/UPDATE ai_usage_counters/);
+      expect(strings.join('?')).toMatch(/"count" > 0/);
+      expect(values[0]).toBeTruthy();
+      expect(values[1]).toBeInstanceOf(Date);
+      doubles.budget.used = Math.max(0, doubles.budget.used - 1);
+      return 1;
+    }),
     list: { findUnique: async () => ({ id: 'list-b', userId: 'user-b' }) },
     category: {
       findMany: async () => [{ id: 'cat-1', name: 'Напитки', nameEn: 'Drinks', order: 1 }],
@@ -77,24 +85,29 @@ const importText = await import('@/app/api/lists/import-text/route');
 const smartCreate = await import('@/app/api/products/smart-create/route');
 const emojiGenerate = await import('@/app/api/emoji/generate/route');
 const bulkImport = await import('@/app/api/products/bulk-import/route');
+const { prisma } = await import('@/lib/prisma');
 const { aiDailyLimit } = await import('@/lib/ai-quota');
+const { GoogleTextUnavailableError } = await import('@/lib/services/text-ai-errors');
 
-const post = (body: unknown) =>
+const post = (body: unknown, locale = 'ru') =>
   new Request('http://localhost/', {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', cookie: `NEXT_LOCALE=${locale}` },
     body: JSON.stringify(body),
   });
 
-const runImport = () => importText.POST(post({ text: 'тархун', listId: 'list-b' }));
-const runSmartCreate = () => smartCreate.POST(post({ productName: 'Тархун' }));
+const runImport = (locale = 'ru') =>
+  importText.POST(post({ text: 'тархун', listId: 'list-b' }, locale));
+const runSmartCreate = (locale = 'ru') => smartCreate.POST(post({ productName: 'Тархун' }, locale));
 const runEmojiGenerate = () => emojiGenerate.POST(post({ productName: 'Тархун' }));
-const runBulkImport = () => bulkImport.POST(post({ productNames: ['Тархун'] }));
+const runBulkImport = (locale = 'ru') =>
+  bulkImport.POST(post({ productNames: ['Тархун'] }, locale));
 const asAdmin = () =>
   doubles.requireUser.mockResolvedValue({ session: { user: { id: 'admin-1', role: 'ADMIN' } } });
 
 beforeEach(() => {
   vi.clearAllMocks();
+  doubles.analyzeSmartProduct.mockReset();
   vi.spyOn(console, 'error').mockImplementation(() => undefined);
   delete process.env.AI_DAILY_CALLS_PER_USER;
   delete process.env.AI_DAILY_CALLS_PER_ADMIN;
@@ -137,6 +150,109 @@ beforeEach(() => {
     id: 'new-product',
     ...data,
   }));
+});
+
+const textRoutes = [
+  { name: 'import-text', run: runImport, provider: doubles.parseShoppingListText },
+  { name: 'smart-create', run: runSmartCreate, provider: doubles.analyzeSmartProduct },
+  { name: 'bulk-import', run: runBulkImport, provider: doubles.processProductBatch },
+];
+
+describe('successful logical text operations', () => {
+  it('allows a 60-second route duration for all three text operations', () => {
+    expect([importText.maxDuration, smartCreate.maxDuration, bulkImport.maxDuration]).toEqual([
+      60, 60, 60,
+    ]);
+  });
+
+  it('a failed optional image keeps its separate attempt-based daily charge', async () => {
+    doubles.generateAndUploadEmojiAsset.mockRejectedValueOnce(new Error('synthetic image failure'));
+    expect((await runSmartCreate()).status).toBe(200);
+    expect(doubles.budget.used).toBe(2);
+    expect(prisma.$executeRaw).not.toHaveBeenCalled();
+  });
+
+  for (const route of textRoutes) {
+    it.each([
+      ['ru', 'Сервис распознавания сейчас перегружен, попробуйте через минуту'],
+      ['en', 'The recognition service is overloaded right now. Please try again in a minute.'],
+    ])(
+      `${route.name}: overload is a localized %s 503 with a retry hint and no charge`,
+      async (locale, message) => {
+        asAdmin();
+        route.provider.mockRejectedValueOnce(new GoogleTextUnavailableError());
+        const response = await route.run(locale);
+        expect(response.status).toBe(503);
+        expect(response.headers.get('Retry-After')).toBe('60');
+        expect(await response.json()).toEqual({ error: message });
+        expect(doubles.budget.used).toBe(0);
+        expect(prisma.$executeRaw).toHaveBeenCalledTimes(1);
+        expect(route.provider).toHaveBeenCalledTimes(1);
+      }
+    );
+
+    it(`${route.name}: fully failed provider operation leaves no daily charge`, async () => {
+      asAdmin();
+      route.provider.mockRejectedValueOnce(new Error('synthetic provider failure'));
+      const response = await route.run();
+      expect(response.status).toBe(500);
+      expect(doubles.budget.used).toBe(0);
+      expect(prisma.$executeRaw).toHaveBeenCalledTimes(1);
+      expect(route.provider).toHaveBeenCalledTimes(1);
+      expect(JSON.stringify(vi.mocked(console.error).mock.calls)).not.toContain(
+        'synthetic provider failure'
+      );
+    });
+
+    it(`${route.name}: success consumes exactly one text unit`, async () => {
+      asAdmin();
+      // Image reservations are separate from this logical text operation.
+      if (route.name === 'smart-create') {
+        doubles.analyzeSmartProduct.mockResolvedValueOnce({
+          result: {
+            nameRu: 'Тархун',
+            nameEn: 'Soda',
+            categoryName: 'Drinks',
+            emoji: '🥤',
+            needsCustomEmoji: false,
+          },
+          promptVersion: 'v',
+          model: 'm',
+        });
+      }
+      const response = await route.run();
+      expect(response.status).toBe(200);
+      expect(doubles.budget.used).toBe(1);
+      expect(route.provider).toHaveBeenCalledTimes(1);
+      expect(prisma.$executeRaw).not.toHaveBeenCalled();
+    });
+
+    it(`${route.name}: denied reservation never refunds`, async () => {
+      process.env.AI_DAILY_CALLS_PER_USER = '0';
+      process.env.AI_DAILY_CALLS_PER_ADMIN = '0';
+      expect((await route.run()).status).toBe(403);
+      expect(route.provider).not.toHaveBeenCalled();
+      expect(prisma.$executeRaw).not.toHaveBeenCalled();
+    });
+
+    it(`${route.name}: persistence failure after AI success retains the unit`, async () => {
+      doubles.analyzeSmartProduct.mockResolvedValueOnce({
+        result: {
+          nameRu: 'Тархун',
+          nameEn: 'Soda',
+          categoryName: 'Drinks',
+          emoji: '🥤',
+          needsCustomEmoji: false,
+        },
+        promptVersion: 'v',
+        model: 'm',
+      });
+      doubles.createProduct.mockRejectedValueOnce(new Error('synthetic persistence failure'));
+      await route.run();
+      expect(doubles.budget.used).toBe(1);
+      expect(prisma.$executeRaw).not.toHaveBeenCalled();
+    });
+  }
 });
 
 describe('daily budget of paid AI calls', () => {

@@ -1,5 +1,8 @@
 {
   "rateLimited": "Too many attempts. Please try again later.",
+  "aiText": {
+    "unavailable": "The recognition service is overloaded right now. Please try again in a minute."
+  },
   "aiQuota": {
     "unavailable": "AI is temporarily unavailable. Please try again later.",
     "disabled": "AI features are turned off for this role.",

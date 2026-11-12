@@ -337,12 +337,11 @@ describe('AC-17 server logs of a provider failure carry allowlisted fields only'
 });
 
 /**
- * A failure outside image generation — Prisma, the text analysis of the product or the JSON parse of
- * the request — cannot reach the allowlist of FR-10, because no SDK error is involved. Its class and
- * message are logged again, so such a failure stays diagnosable in the server log.
+ * Text routes now log allowlisted codes for every outer failure: text SDK errors and even request
+ * parser/Prisma diagnostics can contain shopper input. The image-only route retains its contract.
  */
-describe('Н-02 a failure outside image generation keeps its diagnostics', () => {
-  it('logs the class and message of a Prisma write failure in smart-create', async () => {
+describe('Н-02 safe diagnostics outside image generation', () => {
+  it('logs a safe code, not raw Prisma write diagnostics in smart-create', async () => {
     const prismaFailure = Object.assign(new Error(`Prisma write failed: ${BODY_MARKER}`), {
       name: 'PrismaClientKnownRequestError',
     });
@@ -355,11 +354,14 @@ describe('Н-02 a failure outside image generation keeps its diagnostics', () =>
     expect(response.status).toBe(500);
     expect(body).toEqual({ error: 'Could not create the product' });
     const logged = records.map((record) => record.text).join('\n');
-    expect(logged).toContain('PrismaClientKnownRequestError');
-    expect(logged).toContain('Prisma write failed');
+    expect(logged).toContain("'Error in smart product creation:' 'UNKNOWN'");
+    expect(logged).not.toContain('PrismaClientKnownRequestError');
+    expect(logged).not.toContain('Prisma write failed');
+    expect(logged).not.toContain(BODY_MARKER);
+    expect(logged).not.toContain(KEY_MARKER);
   });
 
-  it('logs the class and message of a failed product text analysis', async () => {
+  it('logs a safe code, not raw text provider diagnostics', async () => {
     const analysisFailure = Object.assign(new Error(`text analysis failed: ${BODY_MARKER}`), {
       name: 'ApiError',
     });
@@ -374,11 +376,14 @@ describe('Н-02 a failure outside image generation keeps its diagnostics', () =>
     expect(body).toEqual({ error: 'Could not create the product' });
     expect(doubles.createProduct).not.toHaveBeenCalled();
     const logged = records.map((record) => record.text).join('\n');
-    expect(logged).toContain('ApiError');
-    expect(logged).toContain('text analysis failed');
+    expect(logged).toContain("'Error in smart product creation:' 'UNKNOWN'");
+    expect(logged).not.toContain('ApiError');
+    expect(logged).not.toContain('text analysis failed');
+    expect(logged).not.toContain(BODY_MARKER);
+    expect(logged).not.toContain(KEY_MARKER);
   });
 
-  it('logs the class and message of an unparsable request body in smart-create', async () => {
+  it('logs a safe code for an unparsable request body in smart-create', async () => {
     const records = captureLoggers();
 
     const response = await smartCreate(
@@ -392,7 +397,9 @@ describe('Н-02 a failure outside image generation keeps its diagnostics', () =>
     expect(response.status).toBe(500);
     expect(await response.json()).toEqual({ error: 'Could not create the product' });
     const logged = records.map((record) => record.text).join('\n');
-    expect(logged).toContain('SyntaxError');
+    expect(logged).toContain("'Error in smart product creation:' 'UNKNOWN'");
+    expect(logged).not.toContain('SyntaxError');
+    expect(logged).not.toContain(BODY_MARKER);
     expect(logged).not.toContain(KEY_MARKER);
   });
 
