@@ -66,7 +66,7 @@ const addToListAPI = async (
 
 export function useFavorites() {
   const router = useRouter();
-  const { data: session } = useSession();
+  const { data: session, status } = useSession();
   const { activeListId } = useActiveList();
   const queryClient = useQueryClient();
   const t = useTranslations('catalog.shared');
@@ -77,10 +77,10 @@ export function useFavorites() {
   const addPending = useRef(false);
 
   useEffect(() => {
-    if (!session?.user) {
+    if (status === 'unauthenticated') {
       router.push('/login');
     }
-  }, [session, router]);
+  }, [status, router]);
 
   // Query for favorites with React Query
   const { data: favorites = [], isLoading: loading } = useQuery({
