@@ -37,6 +37,8 @@ export default function ProductCard({
   const t = useTranslations('catalog.shared');
   const locale = useLocale();
   const [variantsOpen, setVariantsOpen] = useState(false);
+  const [imageLoaded, setImageLoaded] = useState(false);
+  const [imageFailed, setImageFailed] = useState(false);
   const name = localizedName(product, locale);
   // Hyphenation follows the language the name is actually shown in (English falls back to Russian).
   const nameLang = locale === 'en' && product.nameEn?.trim() ? 'en' : 'ru';
@@ -62,15 +64,27 @@ export default function ProductCard({
         `}
       >
         <div className="text-center">
-          <div className="mx-auto mb-1 h-14 w-14 md:h-20 md:w-20 shrink-0 flex items-center justify-center overflow-hidden">
-            {product.isCustom && imageUrl ? (
-              <Image
-                src={imageUrl}
-                alt={name}
-                width={80}
-                height={80}
-                className="h-14 w-14 md:h-20 md:w-20 object-contain"
-              />
+          <div className="relative mx-auto mb-1 h-14 w-14 md:h-20 md:w-20 shrink-0 flex items-center justify-center overflow-hidden">
+            {product.isCustom && imageUrl && !imageFailed ? (
+              <>
+                {!imageLoaded && (
+                  <span
+                    aria-hidden="true"
+                    className="absolute inset-0 flex items-center justify-center text-4xl md:text-6xl leading-none"
+                  >
+                    {product.emoji}
+                  </span>
+                )}
+                <Image
+                  src={imageUrl}
+                  alt={name}
+                  width={80}
+                  height={80}
+                  onLoad={() => setImageLoaded(true)}
+                  onError={() => setImageFailed(true)}
+                  className={`h-14 w-14 md:h-20 md:w-20 object-contain ${imageLoaded ? '' : 'opacity-0'}`}
+                />
+              </>
             ) : (
               <span className="text-4xl md:text-6xl leading-none">{product.emoji}</span>
             )}

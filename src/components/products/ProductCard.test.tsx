@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { fireEvent, screen } from '@testing-library/react';
+import { fireEvent, screen, waitFor } from '@testing-library/react';
 import ProductCard from '@/components/products/ProductCard';
 import FavoriteCard from '@/components/favorites/FavoriteCard';
 import ProductSelectionBar from '@/components/products/ProductSelectionBar';
@@ -102,12 +102,13 @@ describe('the image placeholder of a product card', () => {
     expect(screen.getByRole('img', { name: 'Молоко' })).toBeTruthy();
   });
 
-  it('hides the placeholder and shows the picture once it loads', () => {
+  it('hides the placeholder and shows the picture once it loads', async () => {
     renderCard(product, 'ru');
 
     fireEvent.load(screen.getByRole('img', { name: 'Молоко' }));
 
-    expect(screen.queryByText('🥛')).toBeNull();
+    // next/image delivers onLoad after img.decode() settles, so the swap is async.
+    await waitFor(() => expect(screen.queryByText('🥛')).toBeNull());
     expect(screen.getByRole('img', { name: 'Молоко' })).toBeTruthy();
   });
 
