@@ -4,6 +4,7 @@ import { prisma } from '@/lib/prisma';
 import { createEmailVerificationToken } from '@/lib/auth-tokens';
 import { isEmailVerificationRequired, sendVerificationEmail } from '@/lib/email';
 import { getPasswordValidationError } from '@/lib/validation/password';
+import { starterListData } from '@/lib/starter-lists';
 import {
   checkRateLimit,
   getClientIp,
@@ -99,19 +100,8 @@ export async function POST(request: Request) {
     }
 
     // Create starter shopping lists for the new account.
-    const defaultLists = [
-      { name: t('api.lists.defaultNames.main'), isActive: true },
-      { name: t('api.lists.defaultNames.weekend'), isActive: false },
-      { name: t('api.lists.defaultNames.holidays'), isActive: false },
-      { name: t('api.lists.defaultNames.party'), isActive: false },
-      { name: t('api.lists.defaultNames.urgent'), isActive: false },
-    ];
-
     await prisma.list.createMany({
-      data: defaultLists.map((list) => ({
-        ...list,
-        userId: user.id,
-      })),
+      data: starterListData(t, user.id),
     });
 
     return NextResponse.json(
