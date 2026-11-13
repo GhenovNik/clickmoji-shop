@@ -2,9 +2,16 @@ import { beforeEach, describe, expect, it, vi, afterEach } from 'vitest';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { renderWithIntl } from '@/test/intl';
 import { messages } from '@/i18n/messages';
-import ProductForm from '@/components/admin/products/ProductForm';
+import ProductForm, {
+  type FormData as ProductFormData,
+} from '@/components/admin/products/ProductForm';
 import CategoryForm from '@/components/admin/categories/CategoryForm';
 import EmojiPicker from '@/components/admin/shared/EmojiPicker';
+
+type ProductSubmit = (data: ProductFormData, imageUrl?: string) => Promise<void>;
+
+const noopSubmit: ProductSubmit = async () => undefined;
+const submitMock = () => vi.fn(noopSubmit);
 
 // AGE-1620: image picking in the admin product/category forms. Tests drive the forms and
 // the picker the way an operator does; they fail until the FR-1..FR-4 implementation lands.
@@ -28,7 +35,7 @@ const savedProduct = {
   emoji: '🍏',
   isCustom: true,
   imageUrl: 'https://utfs.io/f/old.webp',
-  imageUrlEn: 'https://utfs.io/f/old-en.webp',
+  imageUrlEn: 'https://utfs.io/f/old-en.webp' as string | null,
   categoryId: 'c1',
 };
 
@@ -53,7 +60,7 @@ function stubObjectUrls() {
   });
 }
 
-function renderProductForm(product = savedProduct, onSubmit = vi.fn(async () => undefined)) {
+function renderProductForm(product = savedProduct, onSubmit = submitMock()) {
   return {
     onSubmit,
     ...renderWithIntl(
@@ -252,7 +259,7 @@ describe('AC-1 large image view', () => {
 
 describe('AC-2 unchecking the custom-image checkbox clears the picture', () => {
   it('form passes an empty picture and isCustom: false to onSubmit', async () => {
-    const onSubmit = vi.fn(async () => undefined);
+    const onSubmit = submitMock();
     renderProductForm(savedProduct, onSubmit);
 
     fireEvent.click(screen.getByRole('checkbox', { name: /кастомное изображение/i }));
@@ -267,7 +274,7 @@ describe('AC-2 unchecking the custom-image checkbox clears the picture', () => {
 
 describe('AC-3 keeping the custom image', () => {
   it('form passes the unchanged picture through', async () => {
-    const onSubmit = vi.fn(async () => undefined);
+    const onSubmit = submitMock();
     renderProductForm(savedProduct, onSubmit);
 
     fireEvent.click(screen.getByRole('button', { name: 'Сохранить изменения' }));
@@ -285,7 +292,7 @@ describe('AC-3 keeping the custom image', () => {
 
 describe('AC-4 reverting a file selection', () => {
   it('shows Сейчас/Новая and restores the saved picture on "Вернуть прежнюю"', async () => {
-    const onSubmit = vi.fn(async () => undefined);
+    const onSubmit = submitMock();
     const { calls } = mockFetch([]);
     const { container } = renderProductForm(savedProduct, onSubmit);
 
@@ -456,7 +463,7 @@ describe('AC-9 late AI responses are ignored', () => {
         return Promise.resolve(new Response('{}', { status: 500 }));
       })
     );
-    const onSubmit = vi.fn(async () => undefined);
+    const onSubmit = submitMock();
     const { container } = renderProductForm(savedProduct, onSubmit);
 
     selectFile(container, 'file-b.png');
@@ -509,7 +516,7 @@ describe('AC-9 late AI responses are ignored', () => {
         return Promise.resolve(new Response('{}', { status: 500 }));
       })
     );
-    const onSubmit = vi.fn(async () => undefined);
+    const onSubmit = submitMock();
     const { container } = renderProductForm(savedProduct, onSubmit);
 
     selectFile(container, 'file-b.png');
