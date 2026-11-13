@@ -4,6 +4,8 @@ import { prisma } from '@/lib/prisma';
 import { requireAdmin } from '@/lib/auth-guards';
 import { auth } from '@/lib/auth';
 import { visibleProductsWhere } from '@/lib/product-visibility';
+import { getRequestLocale } from '@/lib/auth-security';
+import { sortByDisplayedName } from '@/lib/catalog-sort';
 
 export async function GET(request: Request) {
   try {
@@ -12,6 +14,7 @@ export async function GET(request: Request) {
     const categoryId = searchParams.get('categoryId');
 
     const accessFilter = visibleProductsWhere(session?.user?.id);
+    const locale = getRequestLocale(request);
 
     if (!categoryId) {
       // Return the full visible catalog when no category is selected.
@@ -34,7 +37,7 @@ export async function GET(request: Request) {
           name: 'asc',
         },
       });
-      return NextResponse.json(products);
+      return NextResponse.json(sortByDisplayedName(products, locale));
     }
 
     const products = await prisma.product.findMany({
@@ -60,7 +63,7 @@ export async function GET(request: Request) {
       },
     });
 
-    return NextResponse.json(products);
+    return NextResponse.json(sortByDisplayedName(products, locale));
   } catch (error) {
     console.error('Error fetching products:', error);
     return NextResponse.json(

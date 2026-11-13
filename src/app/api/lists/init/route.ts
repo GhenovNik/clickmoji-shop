@@ -3,6 +3,7 @@ import { apiText } from '@/lib/api-messages';
 import { prisma } from '@/lib/prisma';
 import { requireUser } from '@/lib/auth-guards';
 import { getRequestLocale, getServerTranslator } from '@/lib/auth-security';
+import { starterListData } from '@/lib/starter-lists';
 
 // POST /api/lists/init - create starter lists when the account has none, named in the
 // language of the request.
@@ -25,18 +26,8 @@ export async function POST(request: Request) {
     }
 
     // Create the starter lists.
-    const defaultLists = [
-      { name: t('api.lists.defaultNames.week'), isActive: true },
-      { name: t('api.lists.defaultNames.party'), isActive: false },
-      { name: t('api.lists.defaultNames.weekend'), isActive: false },
-      { name: t('api.lists.defaultNames.survival'), isActive: false },
-    ];
-
     await prisma.list.createMany({
-      data: defaultLists.map((list) => ({
-        ...list,
-        userId: session.user.id,
-      })),
+      data: starterListData(t, session.user.id),
     });
 
     const lists = await prisma.list.findMany({
