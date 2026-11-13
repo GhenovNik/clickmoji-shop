@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { findCredentialViolations } from './db-transfer-tree-scan';
 
+const REMOTE_BASE = 'postgresql://u:p@' + 'db.example.com/x';
+const REMOTE_BARE = 'postgres://u:p@' + 'db.example.com';
+
 const SYNTHETIC_CASES: ReadonlyArray<{
   name: string;
   line: string;
@@ -8,22 +11,22 @@ const SYNTHETIC_CASES: ReadonlyArray<{
 }> = [
   {
     name: 'remote host in single quotes',
-    line: `'postgresql://u:p@db.example.com/x'`,
+    line: `'${REMOTE_BASE}'`,
     expectViolation: true,
   },
   {
     name: 'remote host in double quotes',
-    line: `"postgresql://u:p@db.example.com/x"`,
+    line: `"${REMOTE_BASE}"`,
     expectViolation: true,
   },
   {
     name: 'remote host in backticks',
-    line: '`postgresql://u:p@db.example.com/x`',
+    line: `\`${REMOTE_BASE}\``,
     expectViolation: true,
   },
   {
     name: 'remote host without path',
-    line: 'postgres://u:p@db.example.com',
+    line: REMOTE_BARE,
     expectViolation: true,
   },
   {

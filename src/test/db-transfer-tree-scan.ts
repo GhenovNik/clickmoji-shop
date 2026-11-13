@@ -1,6 +1,7 @@
 export const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '::1', '[::1]']);
 
-const CREDENTIALED_URL = /[a-z][a-z0-9+.-]*:\/\/[^/\s:@]+:[^/\s@]+@(\[[0-9a-f:.]+\]|[^/\s:'"@]+)/gi;
+const CREDENTIALED_URL =
+  /[a-z][a-z0-9+.-]*:\/\/[^/\s:@]+:[^/\s@]+@(\[[0-9a-f:.]+\]|[^/\s:'"@`?#]+)/gi;
 
 export function findCredentialHosts(line: string): string[] {
   const pattern = new RegExp(CREDENTIALED_URL.source, CREDENTIALED_URL.flags);
