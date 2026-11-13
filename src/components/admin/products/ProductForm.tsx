@@ -96,6 +96,26 @@ export default function ProductForm({ product, categories, onSubmit, onCancel }:
   // sequence still equals the value recorded at the request.
   const selectionSeq = useRef(0);
   const aiRequestSeq = useRef(0);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const mainPictureChanged = !!selectedFile || formData.imageUrl !== savedImage.imageUrl;
+  const hasNewPicture = mainPictureChanged || formData.imageUrlEn !== savedImage.imageUrlEn;
+  const newMainPreview = selectedFile ? filePreviewUrl : formData.imageUrl || null;
+
+  const clearFileInput = () => {
+    setSelectedFile(null);
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  };
+
+  // "Вернуть прежнюю": any new pick (file, AI or library) is dropped; nothing is saved here.
+  const restoreSavedPicture = () => {
+    selectionSeq.current += 1;
+    clearFileInput();
+    setFormData((prev) => ({
+      ...prev,
+      imageUrl: savedImage.imageUrl,
+      imageUrlEn: savedImage.imageUrlEn,
+    }));
+  };
 
   useEffect(() => {
     if (!selectedFile) {
@@ -154,6 +174,12 @@ export default function ProductForm({ product, categories, onSubmit, onCancel }:
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
+    // FR-2: an unchecked custom-image box saves no picture; the stored file is not deleted.
+    if (!formData.isCustom) {
+      await onSubmit({ ...formData, imageUrl: '', imageUrlEn: null }, '');
+      return;
+    }
+
     let imageUrl = formData.imageUrl;
 
     if (selectedFile) {
@@ -185,7 +211,7 @@ export default function ProductForm({ product, categories, onSubmit, onCancel }:
       setUploading(false);
     }
 
-    await onSubmit(formData, imageUrl);
+    await onSubmit({ ...formData, imageUrl }, imageUrl);
   };
 
   const updateVariant = (index: number, key: keyof ProductVariant, value: string) => {
@@ -310,6 +336,8 @@ export default function ProductForm({ product, categories, onSubmit, onCancel }:
           )}
         </div>
 
+        {/* INV-1: starting AI is a selection action; its answer applies only if no other action
+            happened after it was requested. */}
         <EmojiPicker
           value={formData.emoji}
           onChange={(emoji) => setFormData({ ...formData, emoji })}
@@ -317,15 +345,24 @@ export default function ProductForm({ product, categories, onSubmit, onCancel }:
           productNameEn={formData.nameEn}
           productDescription={generationDescription}
           isRequired={!formData.isCustom}
-          onGenerateImage={(url) => setFormData({ ...formData, imageUrl: url, isCustom: true })}
+          onGenerateStart={() => {
+            selectionSeq.current += 1;
+            aiRequestSeq.current = selectionSeq.current;
+          }}
+          onGenerateImage={(url) => {
+            if (aiRequestSeq.current !== selectionSeq.current) return;
+            clearFileInput();
+            setFormData((prev) => ({ ...prev, imageUrl: url, isCustom: true }));
+          }}
           onSelectLibraryImage={({ imageUrl, imageUrlEn }) => {
+            selectionSeq.current += 1;
             // An English-only library picture fills the English field and keeps the main one.
             if (!imageUrl) {
-              setFormData({ ...formData, imageUrlEn });
+              setFormData((prev) => ({ ...prev, imageUrlEn }));
               return;
             }
-            setSelectedFile(null);
-            setFormData({ ...formData, imageUrl, imageUrlEn, isCustom: true });
+            clearFileInput();
+            setFormData((prev) => ({ ...prev, imageUrl, imageUrlEn, isCustom: true }));
           }}
         />
       </div>
@@ -361,6 +398,7 @@ export default function ProductForm({ product, categories, onSubmit, onCancel }:
               {t('productForm.uploadImage')}
             </label>
             <input
+              ref={fileInputRef}
               type="file"
               accept="image/*"
               onChange={handleFileChange}
@@ -371,30 +409,60 @@ export default function ProductForm({ product, categories, onSubmit, onCancel }:
                 {t('productForm.selectedFile', { name: selectedFile.name })}
               </p>
             )}
-            {formData.imageUrl && !selectedFile && (
-              <div className="mt-2">
-                <p className="text-sm text-gray-600">{t('productForm.currentImage')}</p>
-                <Image
-                  src={formData.imageUrl}
-                  alt="Current"
-                  width={64}
-                  height={64}
-                  className="w-16 h-16 object-contain mt-1"
-                  unoptimized
-                />
+            {hasNewPicture && (
+              <button
+                type="button"
+                onClick={restoreSavedPicture}
+                className="mt-2 text-sm text-blue-600 hover:text-blue-800 font-medium"
+              >
+                {t('productForm.restorePrevious')}
+              </button>
+            )}
+            {mainPictureChanged ? (
+              <div className="mt-2 flex flex-wrap gap-4">
+                {savedImage.imageUrl && (
+                  <div className="flex flex-col gap-1">
+                    <span className="text-sm text-gray-600">{t('shared.nowImage')}</span>
+                    <ImagePreviewButton
+                      src={savedImage.imageUrl}
+                      alt={t('productForm.currentImageAlt')}
+                      imgClassName="w-16 h-16"
+                    />
+                  </div>
+                )}
+                {newMainPreview && (
+                  <div className="flex flex-col gap-1">
+                    <span className="text-sm text-gray-600">{t('shared.newImage')}</span>
+                    <ImagePreviewButton
+                      src={newMainPreview}
+                      alt={t('productForm.newImageAlt')}
+                      imgClassName="w-16 h-16"
+                    />
+                  </div>
+                )}
               </div>
+            ) : (
+              formData.imageUrl && (
+                <div className="mt-2">
+                  <p className="text-sm text-gray-600">{t('productForm.currentImage')}</p>
+                  <ImagePreviewButton
+                    src={formData.imageUrl}
+                    alt={t('productForm.currentImageAlt')}
+                    className="mt-1"
+                    imgClassName="w-16 h-16"
+                  />
+                </div>
+              )
             )}
             {formData.imageUrlEn && (
               <div className="mt-2">
                 <p className="text-sm text-gray-600">{t('productForm.englishVersion')}</p>
                 <div className="flex items-center gap-3">
-                  <Image
+                  <ImagePreviewButton
                     src={formData.imageUrlEn}
-                    alt="English version"
-                    width={64}
-                    height={64}
-                    className="w-16 h-16 object-contain mt-1"
-                    unoptimized
+                    alt={t('productForm.englishVersionAlt')}
+                    className="mt-1"
+                    imgClassName="w-16 h-16"
                   />
                   <button
                     type="button"
