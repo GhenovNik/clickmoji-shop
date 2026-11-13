@@ -17,9 +17,7 @@ export function readTransferUrls(
   }
   if (missing.length > 0) {
     throw new Error(
-      `Cannot run migrate-data: missing or empty environment variable(s): ${missing.join(
-        ', '
-      )}. Set DB_TRANSFER_SOURCE_URL (source database) and DB_TRANSFER_TARGET_URL (target database).`
+      `Cannot run migrate-data: missing or empty environment variable(s): ${missing.join(', ')}.`
     );
   }
   return { source, target };
