@@ -20,5 +20,21 @@ export function safeCallbackUrl(value: string | null | undefined): string {
     return '/';
   }
   if (url.origin !== SITE_ORIGIN) return '/';
-  return url.pathname + url.search + url.hash;
+  const result = url.pathname + url.search + url.hash;
+  // The parser resolves dot segments after percent-decoding, so the result itself must be
+  // checked: it can begin with // or /\ even when the input did not.
+  if (result.startsWith('//') || result.startsWith('/\\')) return '/';
+  for (let i = 0; i < result.length; i++) {
+    const code = result.charCodeAt(i);
+    if (code <= 0x1f || code === 0x7f) return '/';
+  }
+  let reparsed: URL;
+  try {
+    reparsed = new URL(result, SITE_ORIGIN);
+  } catch {
+    return '/';
+  }
+  if (reparsed.origin !== SITE_ORIGIN) return '/';
+  if (reparsed.pathname + reparsed.search + reparsed.hash !== result) return '/';
+  return result;
 }
