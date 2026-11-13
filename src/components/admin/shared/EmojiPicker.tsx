@@ -1,7 +1,7 @@
 'use client';
 
 import Image from 'next/image';
-import { useState } from 'react';
+import { useId, useState } from 'react';
 import { useLocale, useTranslations } from 'next-intl';
 import { localizedName } from '@/lib/catalog-name';
 import {
@@ -17,6 +17,8 @@ interface EmojiPickerProps {
   productNameEn?: string;
   productDescription?: string;
   isRequired?: boolean;
+  // Called once a generation request is sent, before its answer can arrive.
+  onGenerateStart?: () => void;
   onGenerateImage?: (imageUrl: string) => void;
   onSelectLibraryImage?: (picture: Pick<LibraryPicture, 'imageUrl' | 'imageUrlEn'>) => void;
 }
@@ -34,11 +36,16 @@ export default function EmojiPicker({
   productNameEn,
   productDescription,
   isRequired = false,
+  onGenerateStart,
   onGenerateImage,
   onSelectLibraryImage,
 }: EmojiPickerProps) {
   const t = useTranslations('admin');
   const locale = useLocale();
+  // Each button's explanation is linked to it with aria-describedby (AGE-1620).
+  const suggestHintId = useId();
+  const generateHintId = useId();
+  const libraryHintId = useId();
   const [results, setResults] = useState<EmojiResult[]>([]);
   const [searching, setSearching] = useState(false);
   const [generating, setGenerating] = useState(false);
@@ -101,6 +108,7 @@ export default function EmojiPicker({
       return;
     }
 
+    onGenerateStart?.();
     setGenerating(true);
     try {
       // The server stores the generated picture in the emoji library at once and returns its URL.
@@ -151,35 +159,53 @@ export default function EmojiPicker({
           required={isRequired}
         />
         <div className={`grid gap-2 ${onSelectLibraryImage ? 'grid-cols-3' : 'grid-cols-2'}`}>
-          <button
-            type="button"
-            onClick={searchEmoji}
-            disabled={searching || !productName}
-            className="px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-lg font-semibold transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-sm"
-          >
-            {searching ? t('emojiPicker.searching') : t('emojiPicker.suggest')}
-          </button>
-          {onGenerateImage && (
+          <div className="flex flex-col gap-1">
             <button
               type="button"
-              onClick={generateAI}
-              disabled={generating || (!productNameEn && !productName)}
-              className="px-4 py-2 bg-gradient-to-r from-pink-600 to-purple-600 hover:from-pink-700 hover:to-purple-700 text-white rounded-lg font-semibold transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-sm"
-              title={t('emojiPicker.generateTitle')}
+              onClick={searchEmoji}
+              disabled={searching || !productName}
+              aria-describedby={suggestHintId}
+              className="px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-lg font-semibold transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-sm"
             >
-              {generating ? t('emojiPicker.generating') : '🎨 AI'}
+              {searching ? t('emojiPicker.searching') : t('emojiPicker.suggest')}
             </button>
+            <p id={suggestHintId} className="text-xs text-gray-500">
+              {t('emojiPicker.suggestHint')}
+            </p>
+          </div>
+          {onGenerateImage && (
+            <div className="flex flex-col gap-1">
+              <button
+                type="button"
+                onClick={generateAI}
+                disabled={generating || (!productNameEn && !productName)}
+                aria-describedby={generateHintId}
+                className="px-4 py-2 bg-gradient-to-r from-pink-600 to-purple-600 hover:from-pink-700 hover:to-purple-700 text-white rounded-lg font-semibold transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-sm"
+                title={t('emojiPicker.generateTitle')}
+              >
+                {generating ? t('emojiPicker.generating') : '🎨 AI'}
+              </button>
+              <p id={generateHintId} className="text-xs text-gray-500">
+                {t('emojiPicker.generateHint')}
+              </p>
+            </div>
           )}
           {onSelectLibraryImage && (
-            <button
-              type="button"
-              onClick={toggleLibrary}
-              aria-expanded={libraryOpen}
-              className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-semibold transition-colors text-sm"
-              title={t('emojiPicker.libraryTitle')}
-            >
-              {t('emojiPicker.library')}
-            </button>
+            <div className="flex flex-col gap-1">
+              <button
+                type="button"
+                onClick={toggleLibrary}
+                aria-expanded={libraryOpen}
+                aria-describedby={libraryHintId}
+                className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-semibold transition-colors text-sm"
+                title={t('emojiPicker.libraryTitle')}
+              >
+                {t('emojiPicker.library')}
+              </button>
+              <p id={libraryHintId} className="text-xs text-gray-500">
+                {t('emojiPicker.libraryHint')}
+              </p>
+            </div>
           )}
         </div>
       </div>
