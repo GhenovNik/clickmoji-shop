@@ -332,6 +332,44 @@ for (const height of [667, 812]) {
       expect(requests).toHaveLength(1);
     });
 
+    test('BulkImportModal inline 503 keeps BOTH footer buttons above navigation @smoke', async ({
+      page,
+    }, testInfo) => {
+      await mockModalAdmin(page);
+      const overload = 'Сервис распознавания сейчас перегружен, попробуйте через минуту';
+      const requests: unknown[] = [];
+      await page.route('**/api/products/bulk-import', async (route) => {
+        requests.push(route.request().postDataJSON());
+        await route.fulfill({
+          status: 503,
+          headers: { 'Retry-After': '60' },
+          json: { error: overload },
+        });
+      });
+      await page.goto('/admin/products');
+      const opener = page.getByRole('button', { name: /Массовый импорт/ });
+      const scrollY = await openModal(page, opener, bulkTitle);
+      const panel = modalPanel(page, bulkTitle);
+      await panel.getByRole('textbox').fill('Молоко');
+      const submit = panel.getByRole('button', { name: /Импортировать/ });
+      const cancel = panel.getByRole('button', { name: 'Отмена', exact: true });
+      await tapWithoutScroll(page, submit, scrollY);
+      await expect(panel.getByRole('alert')).toHaveText(overload);
+      await expectScrollUnchanged(page, scrollY, 'bulk import 503 response');
+      await screenshotModal(page, testInfo, 'bulk-import-error');
+      await expectButtonsReachable(page, [submit, cancel], scrollY);
+      await tapWithoutScroll(page, submit, scrollY);
+      await expect.poll(() => requests.length).toBe(2);
+      await expect(panel.getByRole('alert')).toHaveText(overload);
+      await expectScrollUnchanged(page, scrollY, 'bulk import 503 retry response');
+      await expectKeyboardFooter(page, [submit, cancel], scrollY);
+      await screenshotModal(page, testInfo, 'bulk-import-error-keyboard');
+      await tapWithoutScroll(page, cancel, scrollY);
+      await expect(page.getByRole('heading', { name: bulkTitle, exact: true })).toHaveCount(0);
+      await expectScrollUnchanged(page, scrollY, 'closing bulk import after 503');
+      await expect(page).toHaveURL('/admin/products');
+    });
+
     test('ProductMoveModal many products keep BOTH footer actions reachable @smoke', async ({
       page,
     }, testInfo) => {
