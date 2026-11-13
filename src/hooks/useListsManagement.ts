@@ -30,16 +30,16 @@ const deleteListAPI = async (listId: string) => {
 
 export function useListsManagement() {
   const router = useRouter();
-  const { data: session } = useSession();
+  const { status } = useSession();
   const queryClient = useQueryClient();
   const t = useTranslations('lists');
 
-  // Redirect if not authenticated (must be in useEffect for SSR)
+  // Redirect only a confirmed unauthenticated visitor (must be in useEffect for SSR)
   useEffect(() => {
-    if (!session?.user) {
+    if (status === 'unauthenticated') {
       router.push('/login');
     }
-  }, [session, router]);
+  }, [status, router]);
 
   // Query for fetching lists
   const { data: lists = [], isLoading: loading } = useListsQuery();

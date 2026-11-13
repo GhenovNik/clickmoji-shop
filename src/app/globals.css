@@ -3,6 +3,8 @@
 
 @layer base {
   :root {
+    --z-mobile-nav: 50;
+    --z-modal: 60;
     --background: 48 100% 98%;
     --foreground: 220 40% 12%;
 
@@ -106,6 +108,73 @@
 }
 
 @layer components {
+  .modal-overlay {
+    position: fixed;
+    z-index: var(--z-modal);
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100vh;
+    height: 100dvh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: max(1rem, env(safe-area-inset-top)) 1rem 1rem;
+    background: rgb(0 0 0 / 40%);
+    overscroll-behavior: contain;
+  }
+
+  .modal-panel {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    max-height: 100%;
+    min-height: 0;
+    overflow: hidden;
+    border-radius: 1rem;
+    background: white;
+    box-shadow: 0 20px 25px rgb(0 0 0 / 15%);
+  }
+
+  .modal-form {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  .modal-header {
+    flex-shrink: 0;
+    padding: 1rem 1.5rem;
+  }
+
+  .modal-body {
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding: 1rem 1.5rem;
+  }
+
+  .modal-footer {
+    flex-shrink: 0;
+    position: sticky;
+    bottom: 0;
+    padding: 1rem 1.5rem max(1rem, env(safe-area-inset-bottom));
+    border-top: 1px solid hsl(var(--border));
+    background: white;
+  }
+
+  @media (max-width: 639px) {
+    .modal-overlay-sheet {
+      align-items: flex-end;
+      padding: max(1rem, env(safe-area-inset-top)) 0 0;
+    }
+
+    .modal-panel-sheet {
+      border-radius: 1rem 1rem 0 0;
+    }
+  }
+
   .btn-primary {
     @apply bg-primary text-primary-foreground px-6 py-3 rounded-2xl font-semibold shadow-soft hover:shadow-clay active:scale-95 transition-all;
   }

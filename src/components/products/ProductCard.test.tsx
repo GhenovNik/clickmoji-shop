@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { fireEvent, screen } from '@testing-library/react';
+import { fireEvent, screen, waitFor } from '@testing-library/react';
 import ProductCard from '@/components/products/ProductCard';
 import FavoriteCard from '@/components/favorites/FavoriteCard';
 import ProductSelectionBar from '@/components/products/ProductSelectionBar';
@@ -90,6 +90,157 @@ describe('a product card', () => {
     expect(screen.getByRole('button', { name: 'Варианты · 1' })).toBeTruthy();
     expect(screen.getByTitle('Добавить в избранное')).toBeTruthy();
     expect(pictureSrc('Молоко')).toContain('milk-ru.png');
+  });
+});
+
+describe('the image placeholder of a product card', () => {
+  it('shows the product emoji as an aria-hidden placeholder until the picture loads', () => {
+    renderCard(product, 'ru');
+
+    const placeholder = screen.getByText('🥛');
+    expect(placeholder.getAttribute('aria-hidden')).toBe('true');
+    expect(screen.getByRole('img', { name: 'Молоко' })).toBeTruthy();
+  });
+
+  it('hides the placeholder and shows the picture once it loads', async () => {
+    renderCard(product, 'ru');
+
+    fireEvent.load(screen.getByRole('img', { name: 'Молоко' }));
+
+    // next/image delivers onLoad after img.decode() settles, so the swap is async.
+    await waitFor(() => expect(screen.queryByText('🥛')).toBeNull());
+    expect(screen.getByRole('img', { name: 'Молоко' })).toBeTruthy();
+  });
+
+  it('keeps the emoji and drops the broken picture when loading fails', () => {
+    renderCard(product, 'ru');
+
+    fireEvent.error(screen.getByRole('img', { name: 'Молоко' }));
+
+    expect(screen.getByText('🥛')).toBeTruthy();
+    expect(screen.queryByRole('img', { name: 'Молоко' })).toBeNull();
+  });
+
+  it('shows the emoji as before for a product without a picture', () => {
+    const withoutImage: Product = { ...product, imageUrl: null, imageUrlEn: null };
+    renderCard(withoutImage, 'ru');
+
+    expect(screen.getByText('🥛')).toBeTruthy();
+    expect(screen.queryByRole('img')).toBeNull();
+  });
+});
+
+describe('the image placeholder of a product card across a change of picture address', () => {
+  const addressA = product;
+  const addressB = { ...product, imageUrl: '/uploads/milk-ru-2.png' };
+
+  function renderCardRerenderable(item: Product) {
+    const handlers = {
+      onToggle: vi.fn(),
+      onSelectVariant: vi.fn(),
+      onToggleFavorite: vi.fn(),
+      onToggleVariantFavorite: vi.fn(),
+    };
+    const card = (next: Product) => (
+      <ProductCard
+        product={next}
+        isSelected={false}
+        isFavorite={false}
+        showFavorite
+        selectedVariantId={null}
+        favoriteVariantIds={new Set()}
+        {...handlers}
+      />
+    );
+    const utils = renderWithIntl(card(item), { locale: 'ru' });
+    return { ...utils, rerenderWith: (next: Product) => utils.rerender(card(next)) };
+  }
+
+  it('has opacity-0 until the picture loads and none afterwards (AC-7)', async () => {
+    renderCard(product, 'ru');
+
+    const img = screen.getByRole('img', { name: 'Молоко' });
+    expect(img.className).toContain('opacity-0');
+
+    fireEvent.load(img);
+
+    await waitFor(() =>
+      expect(screen.getByRole('img', { name: 'Молоко' }).className).not.toContain('opacity-0')
+    );
+    expect(screen.queryByText('🥛')).toBeNull();
+  });
+
+  it('returns to the placeholder for the new address after a load on the old one (AC-8)', async () => {
+    const { rerenderWith } = renderCardRerenderable(addressA);
+    fireEvent.load(screen.getByRole('img', { name: 'Молоко' }));
+    await waitFor(() => expect(screen.queryByText('🥛')).toBeNull());
+
+    rerenderWith(addressB);
+
+    const placeholder = screen.getByText('🥛');
+    expect(placeholder.getAttribute('aria-hidden')).toBe('true');
+    const img = screen.getByRole('img', { name: 'Молоко' });
+    expect(pictureSrc('Молоко')).toContain('milk-ru-2.png');
+    expect(img.className).toContain('opacity-0');
+
+    fireEvent.load(img);
+
+    await waitFor(() => expect(screen.queryByText('🥛')).toBeNull());
+    expect(screen.getByRole('img', { name: 'Молоко' }).className).not.toContain('opacity-0');
+  });
+
+  it('mounts and loads the new address after the old one failed (AC-9)', async () => {
+    const { rerenderWith } = renderCardRerenderable(addressA);
+    fireEvent.error(screen.getByRole('img', { name: 'Молоко' }));
+    expect(screen.queryByRole('img')).toBeNull();
+
+    rerenderWith(addressB);
+
+    expect(pictureSrc('Молоко')).toContain('milk-ru-2.png');
+    const img = screen.getByRole('img', { name: 'Молоко' });
+    expect(img.className).toContain('opacity-0');
+    expect(screen.getByText('🥛')).toBeTruthy();
+
+    fireEvent.load(img);
+
+    await waitFor(() => expect(screen.queryByText('🥛')).toBeNull());
+    expect(screen.getByRole('img', { name: 'Молоко' }).className).not.toContain('opacity-0');
+  });
+
+  it('shows the placeholder again when the address disappears and comes back (AC-10)', async () => {
+    const { rerenderWith } = renderCardRerenderable(addressA);
+    fireEvent.load(screen.getByRole('img', { name: 'Молоко' }));
+    await waitFor(() => expect(screen.queryByText('🥛')).toBeNull());
+
+    rerenderWith({ ...product, imageUrl: null });
+    expect(screen.getByText('🥛')).toBeTruthy();
+    expect(screen.queryByRole('img')).toBeNull();
+
+    rerenderWith(addressB);
+
+    expect(screen.getByText('🥛')).toBeTruthy();
+    const img = screen.getByRole('img', { name: 'Молоко' });
+    expect(img.className).toContain('opacity-0');
+
+    fireEvent.load(img);
+
+    await waitFor(() => expect(screen.queryByText('🥛')).toBeNull());
+    expect(screen.getByRole('img', { name: 'Молоко' }).className).not.toContain('opacity-0');
+  });
+
+  it('ignores a late load or error from the previous address after the switch (AC-11)', async () => {
+    const { rerenderWith } = renderCardRerenderable(addressA);
+    const stale = screen.getByRole('img', { name: 'Молоко' });
+
+    rerenderWith(addressB);
+
+    fireEvent.load(stale);
+    fireEvent.error(stale);
+
+    const img = screen.getByRole('img', { name: 'Молоко' });
+    expect(pictureSrc('Молоко')).toContain('milk-ru-2.png');
+    expect(img.className).toContain('opacity-0');
+    expect(screen.getByText('🥛')).toBeTruthy();
   });
 });
 

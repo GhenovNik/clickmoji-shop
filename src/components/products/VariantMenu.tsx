@@ -1,12 +1,12 @@
 'use client';
 
-import { useEffect, useRef } from 'react';
 import Image from 'next/image';
 import { useLocale, useTranslations } from 'next-intl';
 import type { Product } from '@/hooks/useProductSelection';
 import { localizedName } from '@/lib/catalog-name';
 import { productImageUrl } from '@/lib/product-image';
 import { productNameClassName } from './product-name';
+import Modal, { ModalBody, ModalFooter } from '@/components/ui/Modal';
 
 interface VariantMenuProps {
   product: Product;
@@ -35,77 +35,29 @@ export default function VariantMenu({
   const locale = useLocale();
   const productName = localizedName(product, locale);
   const productImage = product.isCustom ? productImageUrl(product, locale) : null;
-  const dialogRef = useRef<HTMLDivElement>(null);
-
-  // Focus belongs to the dialog's lifetime, not to changing callbacks or favorite state.
-  useEffect(() => {
-    const opener = document.activeElement;
-    dialogRef.current?.querySelector<HTMLButtonElement>('button')?.focus();
-    return () => {
-      if (opener instanceof HTMLElement && opener.isConnected) opener.focus();
-    };
-  }, []);
-
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onClose();
-      if (event.key !== 'Tab') return;
-
-      const dialog = dialogRef.current;
-      if (!dialog) return;
-      // All dialog actions are buttons. Read them on each keypress as favorites can rerender.
-      const buttons = dialog.querySelectorAll<HTMLButtonElement>(
-        'button:not(:disabled):not([tabindex="-1"])'
-      );
-      const first = buttons[0];
-      const last = buttons[buttons.length - 1];
-      if (!first) {
-        event.preventDefault();
-        dialog.focus();
-      } else if (!dialog.contains(document.activeElement)) {
-        event.preventDefault();
-        (event.shiftKey ? last : first).focus();
-      } else if (event.shiftKey && document.activeElement === first) {
-        event.preventDefault();
-        last.focus();
-      } else if (!event.shiftKey && document.activeElement === last) {
-        event.preventDefault();
-        first.focus();
-      }
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [onClose]);
 
   return (
-    // z-[60]: above the mobile navigation bar (z-50), which would otherwise cover the sheet.
-    <div
-      className="fixed inset-0 z-[60] flex items-end justify-center bg-black/40 sm:items-center sm:p-4"
-      onClick={onClose}
+    <Modal
+      label={t('variantsTitle', { name: productName })}
+      onClose={onClose}
+      sheet
+      className="sm:max-w-md"
     >
-      <div
-        ref={dialogRef}
-        role="dialog"
-        aria-modal="true"
-        aria-label={t('variantsTitle', { name: productName })}
-        tabIndex={-1}
-        className="w-full rounded-t-2xl bg-white p-4 pb-[max(2rem,env(safe-area-inset-bottom))] shadow-xl sm:max-w-md sm:rounded-2xl sm:pb-4"
-        onClick={(event) => event.stopPropagation()}
-      >
-        <div className="mb-4 flex items-center justify-between gap-3">
-          <h2 className="text-lg font-bold text-gray-900">
-            {t('variantsTitle', { name: productName })}
-          </h2>
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label={tCommon('close')}
-            className="text-2xl leading-none text-gray-400 hover:text-gray-600"
-          >
-            ×
-          </button>
-        </div>
+      <div className="modal-header flex items-center justify-between gap-3">
+        <h2 className="text-lg font-bold text-gray-900">
+          {t('variantsTitle', { name: productName })}
+        </h2>
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label={tCommon('close')}
+          className="text-2xl leading-none text-gray-400 hover:text-gray-600"
+        >
+          ×
+        </button>
+      </div>
 
+      <ModalBody>
         <div className="grid grid-cols-3 gap-3">
           {(product.variants ?? []).map((variant) => {
             const name = localizedName(variant, locale);
@@ -170,7 +122,16 @@ export default function VariantMenu({
             );
           })}
         </div>
-      </div>
-    </div>
+      </ModalBody>
+      <ModalFooter>
+        <button
+          type="button"
+          onClick={onClose}
+          className="w-full rounded-xl border px-4 py-3 font-semibold text-gray-700 hover:bg-gray-50"
+        >
+          {tCommon('cancel')}
+        </button>
+      </ModalFooter>
+    </Modal>
   );
 }
