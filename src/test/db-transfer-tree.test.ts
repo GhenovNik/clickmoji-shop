@@ -1,8 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-
-const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '::1', '[::1]']);
+import { findCredentialViolations } from './db-transfer-tree-scan';
 
 function trackedFiles(): string[] {
   const out = execFileSync('git', ['ls-files', 'scripts', 'src'], {
@@ -11,8 +10,6 @@ function trackedFiles(): string[] {
   });
   return out.split('\n').filter((line) => line.length > 0);
 }
-
-const CREDENTIALED_URL = /[a-z][a-z0-9+.-]*:\/\/[^/\s:@]+:[^/\s@]+@(\[[0-9a-f:.]+\]|[^/\s:'"@]+)/gi;
 
 function credentialViolations(): string[] {
   const violations: string[] = [];
@@ -26,11 +23,9 @@ function credentialViolations(): string[] {
     }
     const lines = text.split('\n');
     for (let i = 0; i < lines.length; i += 1) {
-      for (const match of lines[i].matchAll(CREDENTIALED_URL)) {
-        const host = match[1].toLowerCase();
-        if (!LOCAL_HOSTS.has(host)) {
-          violations.push(`${file}:${i + 1}`);
-        }
+      const count = findCredentialViolations(lines[i]).length;
+      for (let j = 0; j < count; j += 1) {
+        violations.push(`${file}:${i + 1}`);
       }
     }
   }
