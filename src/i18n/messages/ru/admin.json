@@ -10,7 +10,11 @@
     "loading": "Загрузка...",
     "saveChanges": "Сохранить изменения",
     "nameRu": "Название (RU)",
-    "nameEn": "Название (EN)"
+    "nameEn": "Название (EN)",
+    "openImageLarge": "Открыть крупно",
+    "largeImageTitle": "Просмотр картинки",
+    "nowImage": "Сейчас",
+    "newImage": "Новая"
   },
   "columns": {
     "icon": "Иконка",
@@ -76,7 +80,11 @@
     "uploading": "Загрузка...",
     "create": "Создать продукт",
     "englishVersion": "Английская версия (с надписями):",
-    "removeEnglishVersion": "Убрать английскую версию"
+    "removeEnglishVersion": "Убрать английскую версию",
+    "currentImageAlt": "Текущее изображение",
+    "englishVersionAlt": "Английская версия",
+    "newImageAlt": "Новая картинка",
+    "restorePrevious": "Вернуть прежнюю"
   },
   "bulkImport": {
     "enterNames": "Введите названия продуктов (по одному на строке)",
@@ -117,7 +125,10 @@
     "find": "Найти",
     "librarySearching": "Поиск…",
     "libraryEmpty": "В библиотеке ничего не найдено",
-    "generatedNotInLibrary": "⚠️ AI иконка сгенерирована, но не попала в библиотеку. Нажмите «Сохранить», чтобы не потерять её."
+    "generatedNotInLibrary": "⚠️ AI иконка сгенерирована, но не попала в библиотеку. Нажмите «Сохранить», чтобы не потерять её.",
+    "suggestHint": "Ищет обычный эмодзи по названию",
+    "generateHint": "Рисует новую картинку",
+    "libraryHint": "Ищет среди уже нарисованных"
   },
   "usersTable": {
     "roleAdmin": "Администратор",
@@ -153,7 +164,9 @@
     "uploadOwn": "Или загрузить собственное изображение",
     "fileOnSave": "Файл будет загружен при сохранении",
     "uploading": "⏳ Загрузка...",
-    "create": "Создать категорию"
+    "create": "Создать категорию",
+    "savedImageAlt": "Картинка категории",
+    "filePreviewAlt": "Превью выбранного файла"
   },
   "categoriesTable": {
     "manageProducts": "Товары",

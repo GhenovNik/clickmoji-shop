@@ -5,6 +5,7 @@ import { useState, useRef, useEffect } from 'react';
 import { useLocale, useTranslations } from 'next-intl';
 import { localizedName } from '@/lib/catalog-name';
 import EmojiPicker from '../shared/EmojiPicker';
+import ImagePreviewButton from '../shared/ImagePreviewButton';
 
 interface Product {
   id: string;
@@ -80,10 +81,31 @@ export default function ProductForm({ product, categories, onSubmit, onCancel }:
   });
 
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [filePreviewUrl, setFilePreviewUrl] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const [generationDescription, setGenerationDescription] = useState('');
   const dropdownRef = useRef<HTMLDivElement>(null);
+  // The saved picture is the baseline for FR-3: "Вернуть прежнюю" and an ignored late
+  // AI answer both fall back to it.
+  const [savedImage] = useState(() => ({
+    imageUrl: product?.imageUrl ?? '',
+    imageUrlEn: product?.imageUrlEn ?? (null as string | null),
+  }));
+  // INV-1: every selection action bumps the sequence; an AI answer applies only while the
+  // sequence still equals the value recorded at the request.
+  const selectionSeq = useRef(0);
+  const aiRequestSeq = useRef(0);
+
+  useEffect(() => {
+    if (!selectedFile) {
+      setFilePreviewUrl(null);
+      return;
+    }
+    const previewUrl = URL.createObjectURL(selectedFile);
+    setFilePreviewUrl(previewUrl);
+    return () => URL.revokeObjectURL(previewUrl);
+  }, [selectedFile]);
 
   // Close dropdown when clicking outside
   useEffect(() => {
@@ -104,6 +126,7 @@ export default function ProductForm({ product, categories, onSubmit, onCancel }:
       e.target.value = '';
       return;
     }
+    selectionSeq.current += 1;
     setSelectedFile(file);
   };
 
