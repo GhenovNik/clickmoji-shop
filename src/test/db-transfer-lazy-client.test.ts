@@ -1,17 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import { functionBody, readDbTransferSource } from './db-transfer-source';
+import { findTopLevelClientConstructionLines } from './db-transfer-top-level';
 
 const text = readDbTransferSource();
 
 describe('db-transfer shared client lifecycle (AC-7)', () => {
   it('AC-7: no client construction at module top level', () => {
-    const offenders = text
-      .split('\n')
-      .map((line, i) => ({ line, i }))
-      .filter(
-        ({ line }) => /new PrismaClient|createPrismaPgAdapter\(/.test(line) && !/^\s/.test(line)
-      )
-      .map(({ i }) => `scripts/db-transfer.ts:${i + 1}`);
+    const offenders = findTopLevelClientConstructionLines(text).map(
+      (line) => `scripts/db-transfer.ts:${line}`
+    );
     expect(offenders, offenders.join('\n')).toEqual([]);
   });
 
