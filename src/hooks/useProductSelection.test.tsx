@@ -165,6 +165,22 @@ describe('guest selection saved before sign-in', () => {
     view.unmount();
   });
 
+  it('keeps the stored marks when the catalogue fails to load (AC-4)', async () => {
+    const raw = JSON.stringify({ products: ['p1'], variants: { p1: 'v1' } });
+    window.sessionStorage.setItem(storageKey, raw);
+    fetchMock = vi.fn(async () => {
+      throw new Error('network down');
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const view = mount();
+    await waitFor(() => expect(view.result.current.loading).toBe(false));
+    expect(view.result.current.products).toHaveLength(0);
+    expect(view.result.current.selectedProducts.size).toBe(0);
+    expect(window.sessionStorage.getItem(storageKey)).toBe(raw);
+    view.unmount();
+  });
+
   it('saves without throwing when sessionStorage is unavailable (AC-7)', async () => {
     vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
       throw new Error('denied');

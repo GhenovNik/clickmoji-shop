@@ -125,7 +125,11 @@ export function useProductSelection(categoryId: string) {
   const restoredRef = useRef(false);
 
   // Query for products by category
-  const { data: products = [], isLoading: loading } = useQuery({
+  const {
+    data: products = [],
+    isLoading: loading,
+    isError: productsError,
+  } = useQuery({
     queryKey: queryKeys.categoryProducts(categoryId),
     queryFn: () => fetchProductsByCategoryAPI(categoryId),
     enabled: !!categoryId,
@@ -133,8 +137,10 @@ export function useProductSelection(categoryId: string) {
 
   // Restore the guest's marks once, after the catalogue arrives; anything the catalogue no
   // longer has is dropped, and the stored copy is deleted either way.
+  // A failed catalogue load must not consume the stored marks: they stay in storage for the
+  // next mount instead of being dropped by a restore against an empty catalogue.
   useEffect(() => {
-    if (restoredRef.current || !categoryId || loading) return;
+    if (restoredRef.current || !categoryId || loading || productsError) return;
     restoredRef.current = true;
     const key = selectionStorageKey(categoryId);
     let saved: SavedSelection | null = null;
@@ -155,7 +161,7 @@ export function useProductSelection(categoryId: string) {
     }
     setSelectedProducts(new Set(picked));
     setSelectedVariants(variants);
-  }, [categoryId, loading, products]);
+  }, [categoryId, loading, productsError, products]);
 
   // Query for favorites
   const { data: favoritesData = [] } = useQuery({
