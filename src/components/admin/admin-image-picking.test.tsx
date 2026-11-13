@@ -431,7 +431,7 @@ describe('AC-5 new picture from AI and library', () => {
     renderProductForm(savedProduct);
 
     fireEvent.click(screen.getByRole('button', { name: /библиотека/i }));
-    // The fixture name is 'ТолькоEN' with a Latin "EN", so the matcher must use Latin letters too.
+    // The fixture name mixes Cyrillic with a Latin "EN", so the matcher must use Latin letters too.
     fireEvent.click(await screen.findByRole('button', { name: /толькоen/i }));
 
     fireEvent.click(await screen.findByRole('button', { name: /вернуть прежнюю/i }));

@@ -86,7 +86,7 @@ export default function ProductForm({ product, categories, onSubmit, onCancel }:
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const [generationDescription, setGenerationDescription] = useState('');
   const dropdownRef = useRef<HTMLDivElement>(null);
-  // The saved picture is the baseline for FR-3: "Вернуть прежнюю" and an ignored late
+  // The saved picture is the baseline for FR-3: the revert action and an ignored late
   // AI answer both fall back to it.
   const [savedImage] = useState(() => ({
     imageUrl: product?.imageUrl ?? '',
@@ -106,7 +106,7 @@ export default function ProductForm({ product, categories, onSubmit, onCancel }:
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
-  // "Вернуть прежнюю": any new pick (file, AI or library) is dropped; nothing is saved here.
+  // Revert: any new pick (file, AI or library) is dropped; nothing is saved here.
   const restoreSavedPicture = () => {
     selectionSeq.current += 1;
     clearFileInput();
