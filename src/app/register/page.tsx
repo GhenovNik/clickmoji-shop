@@ -8,6 +8,7 @@ import {
   PASSWORD_MIN_LENGTH,
 } from '@/lib/validation/password';
 import { useRouter } from 'next/navigation';
+import { signIn } from 'next-auth/react';
 import Link from 'next/link';
 import { Eye, EyeOff } from 'lucide-react';
 
@@ -58,9 +59,22 @@ export default function RegisterPage() {
         return;
       }
 
-      router.push(
-        data.requiresEmailVerification ? '/login?registered=verify' : '/login?registered=auto'
-      );
+      if (data.requiresEmailVerification) {
+        router.push('/login?registered=verify');
+        return;
+      }
+
+      try {
+        const result = await signIn('credentials', { email, password, redirect: false });
+        if (result?.error) {
+          router.push('/login?registered=auto');
+          return;
+        }
+        router.push('/');
+        router.refresh();
+      } catch {
+        router.push('/login?registered=auto');
+      }
     } catch {
       setError(t('register.networkError'));
       setLoading(false);
