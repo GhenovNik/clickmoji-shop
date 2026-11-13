@@ -35,4 +35,24 @@ describe('safeCallbackUrl', () => {
   ])('keeps the site-relative path %j', (value) => {
     expect(safeCallbackUrl(value)).toBe(value);
   });
+
+  // AGE-1618 FR-3 AC-8: control characters anywhere in the value reject it, even though the
+  // WHATWG URL parser would strip them and land on an external host.
+  it.each([
+    ['tab', '/\t/evil.example'],
+    ['line feed', '/\n/evil.example'],
+    ['carriage return before backslash', '/\r\\evil.example'],
+    ['nul', '/\u0000x'],
+    ['delete', '/a\u007f'],
+  ])('rejects a control character (%s)', (_label, value) => {
+    expect(safeCallbackUrl(value)).toBe('/');
+  });
+
+  // AGE-1618 FR-3 AC-8: what the URL parser keeps of the site path is returned, nothing more.
+  it.each([
+    ['path with query and hash', '/categories/c1/products?x=1#h', '/categories/c1/products?x=1#h'],
+    ['percent-encoded slashes stay a site path', '/%2F%2Fx', '/%2F%2Fx'],
+  ])('keeps %s', (_label, value, expected) => {
+    expect(safeCallbackUrl(value)).toBe(expected);
+  });
 });

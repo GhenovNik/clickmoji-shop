@@ -47,6 +47,16 @@ const p2: Product = {
   variants: [{ id: 'v2', name: 'Копчёный', nameEn: 'Smoked', emoji: '' }],
   category,
 };
+const p3: Product = {
+  id: 'p3',
+  name: 'Кефир',
+  nameEn: 'Kefir',
+  emoji: '🥛',
+  isCustom: false,
+  imageUrl: null,
+  variants: [{ id: 'v3', name: 'Обезжиренный', nameEn: 'Skim', emoji: '' }],
+  category,
+};
 
 let queryClient: QueryClient;
 let fetchMock: ReturnType<typeof vi.fn>;
@@ -163,6 +173,63 @@ describe('guest selection saved before sign-in', () => {
     expect(view.result.current.selectedProducts.size).toBe(0);
     expect(view.result.current.selectedVariants).toEqual({});
     view.unmount();
+  });
+
+  // AGE-1618 FR-4 AC-9: a saved variant is restored only if it belongs to that product's
+  // variants in the loaded catalogue; otherwise the product is picked without a variant.
+  it('drops saved variants that are missing or owned by another product (AC-9)', async () => {
+    fetchMock = vi.fn(async (url: string) => {
+      if (url === '/api/products?categoryId=c1') return Response.json([p1, p2, p3]);
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    window.sessionStorage.setItem(
+      storageKey,
+      JSON.stringify({
+        products: ['p1', 'p2', 'p3'],
+        // vDeleted belongs to no product; v1 is p1's variant saved against p2; v3 is correct.
+        variants: { p1: 'vDeleted', p2: 'v1', p3: 'v3' },
+      })
+    );
+
+    const view = mount();
+    await waitFor(() =>
+      expect(view.result.current.selectedProducts).toEqual(new Set(['p1', 'p2', 'p3']))
+    );
+    expect(view.result.current.selectedVariants).toEqual({ p3: 'v3' });
+    expect(window.sessionStorage.getItem(storageKey)).toBeNull();
+    view.unmount();
+  });
+
+  // AGE-1618 FR-4 INV-1 AC-10: a failed catalogue keeps the stored marks; the next successful
+  // load restores them once and deletes the key.
+  it('restores the stored marks on the next successful load after a failure (AC-10)', async () => {
+    const raw = JSON.stringify({ products: ['p1', 'p2'], variants: { p1: 'v1' } });
+    window.sessionStorage.setItem(storageKey, raw);
+    fetchMock = vi.fn(async () => {
+      throw new Error('network down');
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const failed = mount();
+    await waitFor(() => expect(failed.result.current.loading).toBe(false));
+    expect(failed.result.current.selectedProducts.size).toBe(0);
+    expect(window.sessionStorage.getItem(storageKey)).toBe(raw);
+    failed.unmount();
+
+    fetchMock = vi.fn(async (url: string) => {
+      if (url === '/api/products?categoryId=c1') return Response.json([p1, p2]);
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const second = mount();
+    await waitFor(() =>
+      expect(second.result.current.selectedProducts).toEqual(new Set(['p1', 'p2']))
+    );
+    expect(second.result.current.selectedVariants).toEqual({ p1: 'v1' });
+    expect(window.sessionStorage.getItem(storageKey)).toBeNull();
+    second.unmount();
   });
 
   it('keeps the stored marks when the catalogue fails to load (AC-4)', async () => {

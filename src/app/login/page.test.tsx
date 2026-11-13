@@ -97,6 +97,66 @@ describe('the login page return address', () => {
     }
   );
 
+  // AGE-1618 FR-3 AC-8: the query arrives percent-encoded; the decoded value carries the
+  // control character, and both sign-in paths must fall back to /.
+  const encodedControlValues: [string, string][] = [
+    ['%2F%09%2Fevil.example', 'tab'],
+    ['%2F%0A%2Fevil.example', 'line feed'],
+    ['%2F%0D%5Cevil.example', 'carriage return before backslash'],
+    ['%2F%00x', 'nul'],
+    ['%2Fa%7F', 'delete'],
+  ];
+
+  it.each(encodedControlValues)(
+    'falls back to / for an encoded %s after a password sign-in (AC-8)',
+    async (encoded) => {
+      nav.search = new URLSearchParams(`callbackUrl=${encoded}`);
+      const { container } = renderWithIntl(<LoginPage />);
+      fillAndSubmit(container);
+
+      await waitFor(() => expect(nav.push).toHaveBeenCalledWith('/'));
+    }
+  );
+
+  it.each(encodedControlValues)(
+    'falls back to / for an encoded %s on Google sign-in (AC-8)',
+    async (encoded) => {
+      nav.search = new URLSearchParams(`callbackUrl=${encoded}`);
+      renderWithIntl(<LoginPage />);
+      const googleButton = await screen.findByRole('button', { name: 'Войти через Google' });
+      fireEvent.click(googleButton);
+
+      await waitFor(() =>
+        expect(nextauth.signIn).toHaveBeenCalledWith('google', { callbackUrl: '/' })
+      );
+    }
+  );
+
+  it.each([
+    ['%2Fcategories%2Fc1%2Fproducts%3Fx%3D1%23h', '/categories/c1/products?x=1#h'],
+    ['%2F%252F%252Fx', '/%2F%2Fx'],
+  ])('keeps the site path %s after a password sign-in (AC-8)', async (encoded, expected) => {
+    nav.search = new URLSearchParams(`callbackUrl=${encoded}`);
+    const { container } = renderWithIntl(<LoginPage />);
+    fillAndSubmit(container);
+
+    await waitFor(() => expect(nav.push).toHaveBeenCalledWith(expected));
+  });
+
+  it.each([
+    ['%2Fcategories%2Fc1%2Fproducts%3Fx%3D1%23h', '/categories/c1/products?x=1#h'],
+    ['%2F%252F%252Fx', '/%2F%2Fx'],
+  ])('keeps the site path %s on Google sign-in (AC-8)', async (encoded, expected) => {
+    nav.search = new URLSearchParams(`callbackUrl=${encoded}`);
+    renderWithIntl(<LoginPage />);
+    const googleButton = await screen.findByRole('button', { name: 'Войти через Google' });
+    fireEvent.click(googleButton);
+
+    await waitFor(() =>
+      expect(nextauth.signIn).toHaveBeenCalledWith('google', { callbackUrl: expected })
+    );
+  });
+
   it('falls back to / when the parameter is missing (AC-3)', async () => {
     nav.search = new URLSearchParams();
     const { container } = renderWithIntl(<LoginPage />);
