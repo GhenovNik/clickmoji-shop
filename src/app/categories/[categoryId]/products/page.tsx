@@ -51,6 +51,7 @@ function ProductsPageContent() {
     toggleFavorite,
     toggleVariantFavorite,
     addToList,
+    saveSelectionForLogin,
   } = useProductSelection(categoryId);
 
   const category = products[0]?.category;
@@ -124,6 +125,7 @@ function ProductsPageContent() {
         error={addError}
         isAuthenticated={isAuthenticated}
         onAddToList={addToList}
+        onBeforeLogin={saveSelectionForLogin}
       />
 
       {category && (
