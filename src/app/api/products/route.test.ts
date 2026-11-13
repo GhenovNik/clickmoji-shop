@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-// AGE-1618 В: the catalog order depends on the interface language, but only the order —
+// AGE-1618: the catalog order depends on the interface language, but only the order —
 // the response fields are the database rows untouched. Rows are fed in `name` order,
 // like Postgres returns them for `orderBy: { name: 'asc' }`.
 
