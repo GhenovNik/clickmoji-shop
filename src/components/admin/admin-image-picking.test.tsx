@@ -225,6 +225,18 @@ describe('AC-1 large image view', () => {
     expect(preview).toHaveFocus();
   });
 
+  it('category form: the dialog closes on Escape and returns focus to the preview', () => {
+    renderCategoryForm();
+
+    const preview = screen.getByRole('button', { name: /категори|картинк/i });
+    fireEvent.click(preview);
+    expect(screen.getByRole('dialog')).toBeTruthy();
+
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(preview).toHaveFocus();
+  });
+
   it('category form: a selected file shows a preview button that opens the large view', () => {
     const { container } = renderCategoryForm(null);
 
@@ -274,6 +286,7 @@ describe('AC-3 keeping the custom image', () => {
 describe('AC-4 reverting a file selection', () => {
   it('shows Сейчас/Новая and restores the saved picture on "Вернуть прежнюю"', async () => {
     const onSubmit = vi.fn(async () => undefined);
+    const { calls } = mockFetch([]);
     const { container } = renderProductForm(savedProduct, onSubmit);
 
     selectFile(container, 'file-b.png');
@@ -296,6 +309,7 @@ describe('AC-4 reverting a file selection', () => {
     const [data, imageUrl] = onSubmit.mock.calls[0]!;
     expect(data).toMatchObject({ imageUrl: 'https://utfs.io/f/old.webp' });
     expect(imageUrl).toBe('https://utfs.io/f/old.webp');
+    expect(calls.some(({ url }) => url.includes('/api/emoji/upload'))).toBe(false);
   });
 });
 
@@ -380,7 +394,12 @@ describe('AC-5 new picture from AI and library', () => {
 
     expect(screen.queryByText('Новая')).toBeNull();
     expect(screen.getByRole('button', { name: /текущее изображение/i })).toBeTruthy();
-    expect(screen.getByRole('button', { name: /английская версия/i })).toBeTruthy();
+    expect(
+      screen
+        .getByRole('button', { name: /английская версия/i })
+        .querySelector('img')
+        ?.getAttribute('src')
+    ).toContain('old-en.webp');
   });
 
   it('(d) English-only library pick: revert restores the previous imageUrlEn', async () => {

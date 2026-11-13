@@ -80,6 +80,24 @@ describe('useProducts update body', () => {
     expect(bodies.some((b) => /storage|delete/i.test(b))).toBe(false);
   });
 
+  it('AC-2: a stale picture passed with isCustom: false is still dropped from the update body', async () => {
+    const calls = stubFetch();
+    const { result } = renderHook(() => useProducts(), { wrapper: createWrapper() });
+
+    await act(async () => {
+      await result.current.updateProduct(
+        'p1',
+        { ...baseData, isCustom: false },
+        'https://utfs.io/f/old.webp'
+      );
+    });
+
+    const puts = putCalls(calls);
+    expect(puts).toHaveLength(1);
+    const body = JSON.parse(String(puts[0]!.init?.body));
+    expect(body).toMatchObject({ isCustom: false, imageUrl: null, imageUrlEn: null });
+  });
+
   it('AC-3: keeping the custom image sends the same body as before the change', async () => {
     const calls = stubFetch();
     const { result } = renderHook(() => useProducts(), { wrapper: createWrapper() });
@@ -100,6 +118,25 @@ describe('useProducts update body', () => {
       imageUrl: 'https://utfs.io/f/old.webp',
       imageUrlEn: 'https://utfs.io/f/old-en.webp',
     });
+  });
+
+  it('AC-2 (create): a stale picture passed with isCustom: false is dropped on create too', async () => {
+    const calls = stubFetch();
+    const { result } = renderHook(() => useProducts(), { wrapper: createWrapper() });
+
+    await act(async () => {
+      await result.current.createProduct(
+        { ...baseData, isCustom: false },
+        'https://utfs.io/f/old.webp'
+      );
+    });
+
+    const posts = calls.filter(
+      ({ url, init }) => url === '/api/products' && init?.method === 'POST'
+    );
+    expect(posts).toHaveLength(1);
+    const body = JSON.parse(String(posts[0]!.init?.body));
+    expect(body).toMatchObject({ isCustom: false, imageUrl: null, imageUrlEn: null });
   });
 
   it('AC-2 (create): creating a product with the checkbox unchecked sends nulls', async () => {
