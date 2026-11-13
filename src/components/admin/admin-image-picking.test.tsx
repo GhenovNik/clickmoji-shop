@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi, afterEach } from 'vitest';
-import { fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { renderWithIntl } from '@/test/intl';
 import { messages } from '@/i18n/messages';
 import ProductForm, {
@@ -101,6 +101,16 @@ function selectFile(container: HTMLElement, name = 'new.png') {
   const file = new File(['fake-image'], name, { type: 'image/png' });
   fireEvent.change(input, { target: { files: [file] } });
   return file;
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
 }
 
 function mockFetch(
@@ -269,6 +279,42 @@ describe('AC-2 unchecking the custom-image checkbox clears the picture', () => {
     const [data, imageUrl] = onSubmit.mock.calls[0]!;
     expect(data).toMatchObject({ isCustom: false, imageUrl: '', imageUrlEn: null });
     expect(imageUrl ?? '').toBe('');
+  });
+
+  it('F1: unchecking the checkbox cancels a pending AI answer (INV-1/FR-2)', async () => {
+    const generate = deferred<Response>();
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        calls.push({ url, init });
+        if (url === '/api/emoji/generate') return generate.promise;
+        return Promise.resolve(new Response('{}', { status: 500 }));
+      })
+    );
+    const onSubmit = submitMock();
+    renderProductForm(savedProduct, onSubmit);
+
+    fireEvent.click(screen.getByRole('button', { name: /AI/ }));
+    fireEvent.click(screen.getByRole('checkbox', { name: /кастомное изображение/i }));
+
+    await act(async () => {
+      generate.resolve(
+        new Response(JSON.stringify({ imageUrl: 'https://utfs.io/f/late.webp' }), { status: 200 })
+      );
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Сохранить изменения' }));
+    await waitFor(() => expect(onSubmit).toHaveBeenCalled());
+    const [data, imageUrl] = onSubmit.mock.calls[0]!;
+    expect(data).toMatchObject({ isCustom: false, imageUrlEn: null });
+    expect(data.imageUrl || null).toBeNull();
+    expect(imageUrl ?? '').toBe('');
+    expect(calls.some(({ url }) => url.includes('/api/emoji/upload'))).toBe(false);
+    expect(calls.some(({ url, init }) => /delete/i.test(url) || init?.method === 'DELETE')).toBe(
+      false
+    );
   });
 });
 
@@ -443,17 +489,89 @@ describe('AC-5 new picture from AI and library', () => {
   });
 });
 
-describe('AC-9 late AI responses are ignored', () => {
-  function deferred<T>() {
-    let resolve!: (value: T) => void;
-    let reject!: (reason?: unknown) => void;
-    const promise = new Promise<T>((res, rej) => {
-      resolve = res;
-      reject = rej;
-    });
-    return { promise, resolve, reject };
-  }
+describe('F2 comparison for the English version', () => {
+  it('an English-only library pick pairs the saved and the new EN picture', async () => {
+    mockFetch([
+      {
+        url: /\/api\/emoji\/library\?q=/,
+        body: {
+          items: [
+            {
+              id: 'x',
+              name: 'ТолькоEN',
+              nameEn: 'OnlyEN',
+              tags: [],
+              imageUrl: 'https://utfs.io/f/en-only.webp',
+              locale: 'en',
+              groupKey: 'g2',
+            },
+          ],
+        },
+      },
+    ]);
+    renderProductForm(savedProduct);
 
+    fireEvent.click(screen.getByRole('button', { name: /библиотека/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /толькоen/i }));
+
+    const nowLabel = await screen.findByText('Сейчас (EN)');
+    const newLabel = screen.getByText('Новая (EN)');
+    expect(nowLabel.parentElement!.querySelector('img')?.getAttribute('src')).toContain(
+      'old-en.webp'
+    );
+    expect(newLabel.parentElement!.querySelector('img')?.getAttribute('src')).toContain(
+      'en-only.webp'
+    );
+  });
+
+  it('a library pick with both versions pairs the main and the English pictures', async () => {
+    mockFetch([
+      {
+        url: /\/api\/emoji\/library\?q=/,
+        body: {
+          items: [
+            {
+              id: 'a',
+              name: 'БиблТест',
+              nameEn: 'LibTest',
+              tags: [],
+              imageUrl: 'https://utfs.io/f/lib.webp',
+              locale: null,
+              groupKey: 'g1',
+            },
+            {
+              id: 'b',
+              name: 'БиблТест',
+              nameEn: 'LibTest',
+              tags: [],
+              imageUrl: 'https://utfs.io/f/lib-en.webp',
+              locale: 'en',
+              groupKey: 'g1',
+            },
+          ],
+        },
+      },
+    ]);
+    renderProductForm(savedProduct);
+
+    fireEvent.click(screen.getByRole('button', { name: /библиотека/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /библтест/i }));
+
+    const now = screen.getByText('Сейчас');
+    const next = screen.getByText('Новая');
+    expect(now.parentElement!.querySelector('img')?.getAttribute('src')).toContain('old.webp');
+    expect(next.parentElement!.querySelector('img')?.getAttribute('src')).toContain('lib.webp');
+
+    const nowEn = screen.getByText('Сейчас (EN)');
+    const nextEn = screen.getByText('Новая (EN)');
+    expect(nowEn.parentElement!.querySelector('img')?.getAttribute('src')).toContain('old-en.webp');
+    expect(nextEn.parentElement!.querySelector('img')?.getAttribute('src')).toContain(
+      'lib-en.webp'
+    );
+  });
+});
+
+describe('AC-9 late AI responses are ignored', () => {
   it('file B selected, AI launched, revert, then the AI answer arrives — it is not applied', async () => {
     const generate = deferred<Response>();
     vi.stubGlobal(
@@ -471,10 +589,13 @@ describe('AC-9 late AI responses are ignored', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: /вернуть прежнюю/i }));
 
-    generate.resolve(
-      new Response(JSON.stringify({ imageUrl: 'https://utfs.io/f/c.webp' }), { status: 200 })
-    );
-    await waitFor(() => expect(window.alert).toHaveBeenCalled());
+    await act(async () => {
+      generate.resolve(
+        new Response(JSON.stringify({ imageUrl: 'https://utfs.io/f/c.webp' }), { status: 200 })
+      );
+    });
+    await waitFor(() => expect(screen.getByRole('button', { name: /AI/ })).toBeTruthy());
+    expect(window.alert).not.toHaveBeenCalled();
 
     expect(screen.queryByText('Новая')).toBeNull();
     expect(screen.getByRole('button', { name: /текущее изображение/i })).toBeTruthy();
@@ -525,10 +646,13 @@ describe('AC-9 late AI responses are ignored', () => {
     fireEvent.click(screen.getByRole('button', { name: /библиотека/i }));
     fireEvent.click(await screen.findByRole('button', { name: /библтест/i }));
 
-    generate.resolve(
-      new Response(JSON.stringify({ imageUrl: 'https://utfs.io/f/c.webp' }), { status: 200 })
-    );
-    await waitFor(() => expect(window.alert).toHaveBeenCalled());
+    await act(async () => {
+      generate.resolve(
+        new Response(JSON.stringify({ imageUrl: 'https://utfs.io/f/c.webp' }), { status: 200 })
+      );
+    });
+    await waitFor(() => expect(screen.getByRole('button', { name: /AI/ })).toBeTruthy());
+    expect(window.alert).not.toHaveBeenCalled();
 
     const newImg = screen.getByText('Новая').parentElement!.querySelector('img');
     expect(newImg?.getAttribute('src')).toContain('lib.webp');
@@ -537,6 +661,87 @@ describe('AC-9 late AI responses are ignored', () => {
     await waitFor(() => expect(onSubmit).toHaveBeenCalled());
     const [, imageUrl] = onSubmit.mock.calls[0]!;
     expect(imageUrl).toBe('https://utfs.io/f/lib.webp');
+  });
+
+  it('N1: a late AI error (ok: false) after a library pick shows no alert', async () => {
+    const generate = deferred<Response>();
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url: RequestInfo | URL) => {
+        const u = String(url);
+        if (u === '/api/emoji/generate') return generate.promise;
+        if (u.startsWith('/api/emoji/library')) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                items: [
+                  {
+                    id: 'a',
+                    name: 'БиблТест',
+                    nameEn: 'LibTest',
+                    tags: [],
+                    imageUrl: 'https://utfs.io/f/lib.webp',
+                    locale: null,
+                    groupKey: 'g1',
+                  },
+                ],
+              }),
+              { status: 200 }
+            )
+          );
+        }
+        return Promise.resolve(new Response('{}', { status: 500 }));
+      })
+    );
+    renderProductForm(savedProduct);
+
+    fireEvent.click(screen.getByRole('button', { name: /AI/ }));
+    fireEvent.click(screen.getByRole('button', { name: /библиотека/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /библтест/i }));
+
+    await act(async () => {
+      generate.resolve(new Response(JSON.stringify({ error: 'boom' }), { status: 500 }));
+    });
+    await waitFor(() => expect(screen.getByRole('button', { name: /AI/ })).toBeTruthy());
+    expect(window.alert).not.toHaveBeenCalled();
+  });
+
+  it('N1: a late AI exception after revert shows no alert', async () => {
+    const generate = deferred<Response>();
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url: RequestInfo | URL) => {
+        if (String(url) === '/api/emoji/generate') return generate.promise;
+        return Promise.resolve(new Response('{}', { status: 500 }));
+      })
+    );
+    const { container } = renderProductForm(savedProduct);
+
+    selectFile(container, 'file-b.png');
+    fireEvent.click(screen.getByRole('button', { name: /AI/ }));
+    fireEvent.click(await screen.findByRole('button', { name: /вернуть прежнюю/i }));
+
+    await act(async () => {
+      generate.reject(new Error('network down'));
+    });
+    await waitFor(() => expect(screen.getByRole('button', { name: /AI/ })).toBeTruthy());
+    expect(window.alert).not.toHaveBeenCalled();
+  });
+
+  it('N1: a current AI request still shows its alert', async () => {
+    mockFetch([
+      {
+        url: '/api/emoji/generate',
+        method: 'POST',
+        body: { imageUrl: 'https://utfs.io/f/ok.webp' },
+      },
+    ]);
+    renderProductForm(savedProduct);
+
+    fireEvent.click(screen.getByRole('button', { name: /AI/ }));
+
+    await waitFor(() => expect(window.alert).toHaveBeenCalled());
+    expect(screen.getByRole('button', { name: /AI/ })).toBeTruthy();
   });
 });
 
