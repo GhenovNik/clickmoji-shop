@@ -4,6 +4,7 @@ import { useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useLocale, useTranslations } from 'next-intl';
 import { localizedName } from '@/lib/catalog-name';
+import Modal, { ModalBody, ModalFooter } from '@/components/ui/Modal';
 
 interface AddProductModalProps {
   categoryId: string;
@@ -118,26 +119,33 @@ export default function AddProductModal({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50 p-4">
-      <div className="bg-white rounded-2xl shadow-xl max-w-md w-full p-6">
-        <div className="flex justify-between items-center mb-4">
-          <h2 className="text-2xl font-bold text-gray-900">{t('addProduct.title')}</h2>
-          <button
-            onClick={handleClose}
-            className="text-gray-400 hover:text-gray-600 text-2xl leading-none"
-          >
-            ×
-          </button>
-        </div>
+    <Modal
+      label={t('addProduct.title')}
+      onClose={handleClose}
+      closeDisabled={isCreating}
+      className="max-w-md"
+    >
+      <div className="modal-header flex justify-between items-center">
+        <h2 className="text-2xl font-bold text-gray-900">{t('addProduct.title')}</h2>
+        <button
+          onClick={handleClose}
+          disabled={isCreating}
+          aria-label={tCommon('close')}
+          className="text-gray-400 hover:text-gray-600 text-2xl leading-none"
+        >
+          ×
+        </button>
+      </div>
 
-        <p className="text-gray-600 mb-4">
-          {t.rich('addProduct.category', {
-            category: categoryName,
-            name: (chunks) => <span className="font-semibold">{chunks}</span>,
-          })}
-        </p>
+      <form onSubmit={handleSubmit} className="modal-form">
+        <ModalBody>
+          <p className="text-gray-600 mb-4">
+            {t.rich('addProduct.category', {
+              category: categoryName,
+              name: (chunks) => <span className="font-semibold">{chunks}</span>,
+            })}
+          </p>
 
-        <form onSubmit={handleSubmit}>
           <div className="mb-4">
             <label htmlFor="productName" className="block text-sm font-medium text-gray-700 mb-2">
               {t('addProduct.nameLabel')}
@@ -178,36 +186,35 @@ export default function AddProductModal({
               <li>• {t('addProduct.smartImage')}</li>
             </ul>
           </div>
-
-          <div className="flex gap-3">
-            <button
-              type="button"
-              onClick={handleClose}
-              disabled={isCreating}
-              className="flex-1 px-4 py-3 border-2 border-gray-300 text-gray-700 rounded-lg font-semibold hover:bg-gray-50 transition-colors disabled:opacity-50"
-            >
-              {tCommon('cancel')}
-            </button>
-            <button
-              type="submit"
-              disabled={isCreating || !productName.trim()}
-              className="flex-1 px-4 py-3 bg-gradient-to-r from-purple-500 to-indigo-600 hover:from-purple-600 hover:to-indigo-700 text-white rounded-lg font-semibold transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
-            >
-              {isCreating ? (
-                <>
-                  <span className="animate-spin">⏳</span>
-                  <span>{t('addProduct.creating')}</span>
-                </>
-              ) : (
-                <>
-                  <span>✨</span>
-                  <span>{t('addProduct.create')}</span>
-                </>
-              )}
-            </button>
-          </div>
-        </form>
-      </div>
-    </div>
+        </ModalBody>
+        <ModalFooter className="flex gap-3">
+          <button
+            type="button"
+            onClick={handleClose}
+            disabled={isCreating}
+            className="flex-1 px-4 py-3 border-2 border-gray-300 text-gray-700 rounded-lg font-semibold hover:bg-gray-50 transition-colors disabled:opacity-50"
+          >
+            {tCommon('cancel')}
+          </button>
+          <button
+            type="submit"
+            disabled={isCreating || !productName.trim()}
+            className="flex-1 px-4 py-3 bg-gradient-to-r from-purple-500 to-indigo-600 hover:from-purple-600 hover:to-indigo-700 text-white rounded-lg font-semibold transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+          >
+            {isCreating ? (
+              <>
+                <span className="animate-spin">⏳</span>
+                <span>{t('addProduct.creating')}</span>
+              </>
+            ) : (
+              <>
+                <span>✨</span>
+                <span>{t('addProduct.create')}</span>
+              </>
+            )}
+          </button>
+        </ModalFooter>
+      </form>
+    </Modal>
   );
 }

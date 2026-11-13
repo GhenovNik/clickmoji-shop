@@ -8,6 +8,7 @@ import { useProducts } from '@/hooks/admin/useProducts';
 import ProductForm, { FormData } from '@/components/admin/products/ProductForm';
 import ProductsTable from '@/components/admin/products/ProductsTable';
 import BulkImportModal from '@/components/admin/products/BulkImportModal';
+import { openModalFromTrigger } from '@/components/ui/Modal';
 import { TableRowSkeleton } from '@/components/ui/Skeleton';
 
 interface Category {
@@ -132,7 +133,7 @@ export default function AdminProductsPage() {
             </h1>
             <div className="flex flex-col sm:flex-row gap-3">
               <button
-                onClick={() => setShowBulkImport(true)}
+                onClick={openModalFromTrigger(() => setShowBulkImport(true))}
                 className="flex-1 sm:flex-none bg-purple-600 hover:bg-purple-700 text-white px-6 py-2 rounded-lg font-semibold transition-colors whitespace-nowrap"
               >
                 {t('productsPage.bulkImport')}

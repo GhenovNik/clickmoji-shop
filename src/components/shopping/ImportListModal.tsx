@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useLocale, useTranslations } from 'next-intl';
 import { useImportListText, type ImportResults } from '@/hooks/useListMutations';
+import Modal, { ModalBody, ModalFooter } from '@/components/ui/Modal';
 
 interface ImportListModalProps {
   listId: string;
@@ -26,6 +27,7 @@ export default function ImportListModal({
   const importMutation = useImportListText();
   const isImporting = importMutation.isPending;
   const t = useTranslations('lists');
+  const tCommon = useTranslations('common');
   const locale = useLocale();
 
   useEffect(
@@ -112,21 +114,27 @@ export default function ImportListModal({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50 p-4">
-      <div className="bg-white rounded-2xl shadow-xl max-w-2xl w-full p-6 max-h-[90vh] overflow-y-auto">
-        <div className="flex justify-between items-center mb-4">
-          <h2 className="text-2xl font-bold text-gray-900">{t('importModal.title')}</h2>
-          <button
-            onClick={handleClose}
-            disabled={isImporting}
-            className="text-gray-400 hover:text-gray-600 text-2xl leading-none"
-          >
-            ×
-          </button>
-        </div>
+    <Modal
+      label={t('importModal.title')}
+      onClose={handleClose}
+      closeDisabled={isImporting}
+      className="max-w-2xl"
+    >
+      <div className="modal-header flex justify-between items-center">
+        <h2 className="text-2xl font-bold text-gray-900">{t('importModal.title')}</h2>
+        <button
+          onClick={handleClose}
+          disabled={isImporting}
+          aria-label={tCommon('close')}
+          className="text-gray-400 hover:text-gray-600 text-2xl leading-none"
+        >
+          ×
+        </button>
+      </div>
 
-        {!result ? (
-          <form onSubmit={handleSubmit}>
+      {!result ? (
+        <form onSubmit={handleSubmit} className="modal-form">
+          <ModalBody>
             {reviewingFailed && (
               <p role="status" className="text-sm text-amber-800 mb-3">
                 {t('importModal.retryFailedHint')}
@@ -142,7 +150,7 @@ export default function ImportListModal({
                 onChange={(e) => setText(e.target.value)}
                 placeholder={t('importModal.textPlaceholder')}
                 className="w-full px-4 py-3 border-2 border-gray-300 rounded-lg focus:border-blue-500 focus:outline-none text-gray-900 font-mono text-sm"
-                rows={12}
+                rows={6}
                 autoFocus
                 disabled={isImporting}
               />
@@ -166,37 +174,38 @@ export default function ImportListModal({
                 <li>• {t('importModal.aiCreate')}</li>
               </ul>
             </div>
-
-            <div className="flex gap-3">
-              <button
-                type="button"
-                onClick={handleClose}
-                disabled={isImporting}
-                className="flex-1 px-4 py-3 border-2 border-gray-300 text-gray-700 rounded-lg font-semibold hover:bg-gray-50 transition-colors disabled:opacity-50"
-              >
-                {t('importModal.cancel')}
-              </button>
-              <button
-                type="submit"
-                disabled={isImporting || !text.trim()}
-                className="flex-1 px-4 py-3 bg-gradient-to-r from-purple-500 to-indigo-600 hover:from-purple-600 hover:to-indigo-700 text-white rounded-lg font-semibold transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
-              >
-                {isImporting ? (
-                  <>
-                    <span className="animate-spin">⏳</span>
-                    <span>{t('importModal.importing')}</span>
-                  </>
-                ) : (
-                  <>
-                    <span>✨</span>
-                    <span>{t('importModal.import')}</span>
-                  </>
-                )}
-              </button>
-            </div>
-          </form>
-        ) : (
-          <div className="space-y-4">
+          </ModalBody>
+          <ModalFooter className="flex gap-3">
+            <button
+              type="button"
+              onClick={handleClose}
+              disabled={isImporting}
+              className="flex-1 px-4 py-3 border-2 border-gray-300 text-gray-700 rounded-lg font-semibold hover:bg-gray-50 transition-colors disabled:opacity-50"
+            >
+              {t('importModal.cancel')}
+            </button>
+            <button
+              type="submit"
+              disabled={isImporting || !text.trim()}
+              className="flex-1 px-4 py-3 bg-gradient-to-r from-purple-500 to-indigo-600 hover:from-purple-600 hover:to-indigo-700 text-white rounded-lg font-semibold transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+            >
+              {isImporting ? (
+                <>
+                  <span className="animate-spin">⏳</span>
+                  <span>{t('importModal.importing')}</span>
+                </>
+              ) : (
+                <>
+                  <span>✨</span>
+                  <span>{t('importModal.import')}</span>
+                </>
+              )}
+            </button>
+          </ModalFooter>
+        </form>
+      ) : (
+        <>
+          <ModalBody className="space-y-4">
             <div className="bg-green-50 border border-green-200 rounded-lg p-4">
               <p
                 role="status"
@@ -281,7 +290,8 @@ export default function ImportListModal({
                 </div>
               </div>
             )}
-
+          </ModalBody>
+          <ModalFooter>
             {result.failed.length ? (
               <button
                 type="button"
@@ -295,9 +305,9 @@ export default function ImportListModal({
                 {t('importModal.closingIn', { seconds: 3 })}
               </p>
             )}
-          </div>
-        )}
-      </div>
-    </div>
+          </ModalFooter>
+        </>
+      )}
+    </Modal>
   );
 }
