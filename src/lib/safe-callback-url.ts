@@ -1,9 +1,24 @@
-// The return address after sign-in stays on this site: one leading slash, never a
-// scheme-relative or backslash-relative path, so the browser cannot be sent off-site.
+// The return address after sign-in stays on this site: one leading slash, no control
+// characters (the WHATWG parser silently strips them and would land off-site), and the
+// parsed address must keep the site's origin. The base origin is fixed, not environmental:
+// only same-origin comparison uses it, so its value never leaks into the returned path.
+const SITE_ORIGIN = 'http://localhost';
+
 export function safeCallbackUrl(value: string | null | undefined): string {
   if (!value) return '/';
   if (!value.startsWith('/')) return '/';
   if (value.startsWith('//')) return '/';
   if (value.startsWith('/\\')) return '/';
-  return value;
+  for (let i = 0; i < value.length; i++) {
+    const code = value.charCodeAt(i);
+    if (code <= 0x1f || code === 0x7f) return '/';
+  }
+  let url: URL;
+  try {
+    url = new URL(value, SITE_ORIGIN);
+  } catch {
+    return '/';
+  }
+  if (url.origin !== SITE_ORIGIN) return '/';
+  return url.pathname + url.search + url.hash;
 }

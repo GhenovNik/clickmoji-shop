@@ -155,9 +155,18 @@ export function useProductSelection(categoryId: string) {
     const picked = [...new Set(saved.products)].filter((id) => catalogIds.has(id));
     if (picked.length === 0) return;
     const pickedSet = new Set(picked);
+    const variantIdsByProduct = new Map(
+      products.map((product) => [
+        product.id,
+        new Set((product.variants ?? []).map((variant) => variant.id)),
+      ])
+    );
     const variants: Record<string, string> = {};
     for (const [productId, variantId] of Object.entries(saved.variants)) {
-      if (pickedSet.has(productId)) variants[productId] = variantId;
+      // A variant that is gone or belongs to another product leaves the product picked bare.
+      if (pickedSet.has(productId) && variantIdsByProduct.get(productId)?.has(variantId)) {
+        variants[productId] = variantId;
+      }
     }
     setSelectedProducts(new Set(picked));
     setSelectedVariants(variants);
