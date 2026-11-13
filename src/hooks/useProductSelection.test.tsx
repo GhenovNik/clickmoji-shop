@@ -5,6 +5,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { NextIntlClientProvider } from 'next-intl';
 import { messages } from '@/i18n/messages';
 import { useProductSelection, type Product } from './useProductSelection';
+import { queryKeys } from '@/lib/query-keys';
 
 // AGE-1618 AC-4..AC-7: a guest's marks are saved before the trip to /login and restored
 // once afterwards, only for products that are in the loaded catalogue.
@@ -201,9 +202,10 @@ describe('guest selection saved before sign-in', () => {
     view.unmount();
   });
 
-  // AGE-1618 FR-4 INV-1 AC-10: a failed catalogue keeps the stored marks; the next successful
-  // load restores them once and deletes the key.
-  it('restores the stored marks on the next successful load after a failure (AC-10)', async () => {
+  // AGE-1618 FR-4 INV-1 AC-10: a failed catalogue keeps the stored marks; the same mounted
+  // hook restores them once when a refetch makes the load succeed, and a further refetch does
+  // not pick the marks up again.
+  it('restores the stored marks once on refetch after a failure, then not again (AC-10)', async () => {
     const raw = JSON.stringify({ products: ['p1', 'p2'], variants: { p1: 'v1' } });
     window.sessionStorage.setItem(storageKey, raw);
     fetchMock = vi.fn(async () => {
@@ -211,11 +213,10 @@ describe('guest selection saved before sign-in', () => {
     });
     vi.stubGlobal('fetch', fetchMock);
 
-    const failed = mount();
-    await waitFor(() => expect(failed.result.current.loading).toBe(false));
-    expect(failed.result.current.selectedProducts.size).toBe(0);
+    const view = mount();
+    await waitFor(() => expect(view.result.current.loading).toBe(false));
+    expect(view.result.current.selectedProducts.size).toBe(0);
     expect(window.sessionStorage.getItem(storageKey)).toBe(raw);
-    failed.unmount();
 
     fetchMock = vi.fn(async (url: string) => {
       if (url === '/api/products?categoryId=c1') return Response.json([p1, p2]);
@@ -223,13 +224,24 @@ describe('guest selection saved before sign-in', () => {
     });
     vi.stubGlobal('fetch', fetchMock);
 
-    const second = mount();
+    await act(async () => {
+      await queryClient.invalidateQueries({ queryKey: queryKeys.categoryProducts('c1') });
+    });
     await waitFor(() =>
-      expect(second.result.current.selectedProducts).toEqual(new Set(['p1', 'p2']))
+      expect(view.result.current.selectedProducts).toEqual(new Set(['p1', 'p2']))
     );
-    expect(second.result.current.selectedVariants).toEqual({ p1: 'v1' });
+    expect(view.result.current.selectedVariants).toEqual({ p1: 'v1' });
     expect(window.sessionStorage.getItem(storageKey)).toBeNull();
-    second.unmount();
+
+    act(() => view.result.current.toggleProduct(p1));
+    expect(view.result.current.selectedProducts).toEqual(new Set(['p2']));
+
+    await act(async () => {
+      await queryClient.invalidateQueries({ queryKey: queryKeys.categoryProducts('c1') });
+    });
+    expect(view.result.current.selectedProducts).toEqual(new Set(['p2']));
+    expect(view.result.current.selectedVariants).toEqual({});
+    view.unmount();
   });
 
   it('keeps the stored marks when the catalogue fails to load (AC-4)', async () => {

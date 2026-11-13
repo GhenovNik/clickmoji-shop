@@ -157,6 +157,53 @@ describe('the login page return address', () => {
     );
   });
 
+  // AGE-1618 FR-3 AC-11: the decoded value resolves dot segments after percent-decoding, so
+  // the value handed to the router or Google can start with // even though the input did not.
+  // URLSearchParams here stands in for the browser: it decodes percent-encoding the same way.
+  const ac11Values: [string, string][] = [
+    ['/..//evil.example', '/'],
+    ['/a/..//evil.example', '/'],
+    ['/%2e%2e//evil.example', '/'],
+    ['/a/..\\/evil.example', '/'],
+    ['/a/%2E%2E/%2Fevil.example', '/%2Fevil.example'],
+  ];
+
+  const expectSiteLocal = (value: string) => {
+    expect(value.startsWith('//')).toBe(false);
+    expect(value.startsWith('/\\')).toBe(false);
+    const reparsed = new URL(value, 'http://localhost');
+    expect(reparsed.origin).toBe('http://localhost');
+    expect(reparsed.pathname + reparsed.search + reparsed.hash).toBe(value);
+  };
+
+  it.each(ac11Values)(
+    'keeps a site-local result for %j after a password sign-in (AC-11)',
+    async (callbackUrl, expected) => {
+      nav.search = new URLSearchParams({ callbackUrl });
+      const { container } = renderWithIntl(<LoginPage />);
+      fillAndSubmit(container);
+
+      await waitFor(() => expect(nav.push).toHaveBeenCalledWith(expected));
+      expectSiteLocal(nav.push.mock.calls[0][0] as string);
+    }
+  );
+
+  it.each(ac11Values)(
+    'keeps a site-local result for %j on Google sign-in (AC-11)',
+    async (callbackUrl, expected) => {
+      nav.search = new URLSearchParams({ callbackUrl });
+      renderWithIntl(<LoginPage />);
+      const googleButton = await screen.findByRole('button', { name: 'Войти через Google' });
+      fireEvent.click(googleButton);
+
+      await waitFor(() =>
+        expect(nextauth.signIn).toHaveBeenCalledWith('google', { callbackUrl: expected })
+      );
+      const passed = nextauth.signIn.mock.calls[0][1] as { callbackUrl: string };
+      expectSiteLocal(passed.callbackUrl);
+    }
+  );
+
   it('falls back to / when the parameter is missing (AC-3)', async () => {
     nav.search = new URLSearchParams();
     const { container } = renderWithIntl(<LoginPage />);
