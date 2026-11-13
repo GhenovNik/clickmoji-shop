@@ -31,7 +31,7 @@ export default function MobileNav() {
   }
 
   return (
-    <nav className="fixed bottom-0 left-0 right-0 bg-white/80 backdrop-blur-lg border-t border-border px-4 pb-safe-bottom z-50 sm:hidden">
+    <nav className="fixed bottom-0 left-0 right-0 bg-white/80 backdrop-blur-lg border-t border-border px-4 pb-safe-bottom z-(--z-mobile-nav) sm:hidden">
       <div className="flex justify-between items-center h-16 max-w-md mx-auto">
         {navItems.map((item) => {
           const isFavoritesRoute = pathname.startsWith('/categories/favorites');

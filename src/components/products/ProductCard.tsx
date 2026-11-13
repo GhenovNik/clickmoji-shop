@@ -8,6 +8,7 @@ import { localizedName } from '@/lib/catalog-name';
 import { productImageUrl } from '@/lib/product-image';
 import { productNameClassName } from './product-name';
 import VariantMenu from './VariantMenu';
+import { openModalFromTrigger } from '@/components/ui/Modal';
 
 // Owns the load lifecycle of exactly one picture address. ProductCard keys this component by
 // the address, so a new address remounts it and a late load/error from the previous address
@@ -129,7 +130,7 @@ export default function ProductCard({
       {variants.length > 0 && (
         <button
           type="button"
-          onClick={() => setVariantsOpen(true)}
+          onClick={openModalFromTrigger(() => setVariantsOpen(true))}
           aria-haspopup="dialog"
           className={`
             absolute -bottom-2 left-1/2 -translate-x-1/2 max-w-full truncate rounded-full border

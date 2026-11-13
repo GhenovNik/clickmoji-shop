@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { useTranslations } from 'next-intl';
+import Modal, { ModalBody, ModalFooter } from '@/components/ui/Modal';
 
 interface CreateListModalProps {
   onClose: () => void;
@@ -31,9 +32,14 @@ export default function CreateListModal({ onClose, onCreate }: CreateListModalPr
   };
 
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-      <div className="bg-white rounded-2xl p-6 max-w-md w-full">
-        <h2 className="text-2xl font-bold mb-4 text-gray-900">{t('createModal.title')}</h2>
+    <Modal
+      label={t('createModal.title')}
+      onClose={onClose}
+      closeDisabled={creating}
+      className="max-w-md"
+    >
+      <h2 className="modal-header text-2xl font-bold text-gray-900">{t('createModal.title')}</h2>
+      <ModalBody>
         <input
           type="text"
           value={name}
@@ -43,25 +49,25 @@ export default function CreateListModal({ onClose, onCreate }: CreateListModalPr
           className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 mb-4 text-gray-900"
           autoFocus
         />
-        <div className="flex gap-4">
-          <button
-            onClick={() => {
-              onClose();
-              setName('');
-            }}
-            className="flex-1 px-6 py-3 bg-red-500 hover:bg-red-600 text-white rounded-xl font-semibold transition-colors"
-          >
-            {t('createModal.cancel')}
-          </button>
-          <button
-            onClick={handleCreate}
-            disabled={creating || !name.trim()}
-            className="flex-1 bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-xl font-semibold transition-colors disabled:opacity-50"
-          >
-            {creating ? t('createModal.creating') : t('createModal.create')}
-          </button>
-        </div>
-      </div>
-    </div>
+      </ModalBody>
+      <ModalFooter className="flex gap-4">
+        <button
+          onClick={() => {
+            onClose();
+            setName('');
+          }}
+          className="flex-1 px-6 py-3 bg-red-500 hover:bg-red-600 text-white rounded-xl font-semibold transition-colors"
+        >
+          {t('createModal.cancel')}
+        </button>
+        <button
+          onClick={handleCreate}
+          disabled={creating || !name.trim()}
+          className="flex-1 bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-xl font-semibold transition-colors disabled:opacity-50"
+        >
+          {creating ? t('createModal.creating') : t('createModal.create')}
+        </button>
+      </ModalFooter>
+    </Modal>
   );
 }

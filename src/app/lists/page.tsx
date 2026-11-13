@@ -7,6 +7,7 @@ import { useTranslations } from 'next-intl';
 import { useListsManagement } from '@/hooks/useListsManagement';
 import ListCard from '@/components/lists/ListCard';
 import CreateListModal from '@/components/lists/CreateListModal';
+import { openModalFromTrigger } from '@/components/ui/Modal';
 
 export default function ListsPage() {
   const { data: session } = useSession();
@@ -37,7 +38,7 @@ export default function ListsPage() {
         ))}
 
         <button
-          onClick={() => setShowCreateModal(true)}
+          onClick={openModalFromTrigger(() => setShowCreateModal(true))}
           className="rounded-2xl border border-dashed border-slate-300 p-6 flex flex-col items-center justify-center gap-3 min-h-[160px] bg-white/90 hover:border-primary hover:bg-white shadow-sm hover:shadow-md group transition-all"
         >
           <div className="w-12 h-12 rounded-full bg-primary/10 flex items-center justify-center group-hover:bg-primary group-hover:text-white transition-colors">

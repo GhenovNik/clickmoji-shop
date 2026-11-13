@@ -14,6 +14,7 @@ import { useProductSelection } from '@/hooks/useProductSelection';
 import ProductCard from '@/components/products/ProductCard';
 import ProductSelectionBar from '@/components/products/ProductSelectionBar';
 import AddProductModal from '@/components/products/AddProductModal';
+import { openModalFromTrigger } from '@/components/ui/Modal';
 import { ProductCardSkeleton } from '@/components/ui/Skeleton';
 
 function ProductsPageContent() {
@@ -78,7 +79,7 @@ function ProductsPageContent() {
 
           {isAuthenticated && (
             <button
-              onClick={() => setIsModalOpen(true)}
+              onClick={openModalFromTrigger(() => setIsModalOpen(true))}
               className="mt-4 bg-gradient-to-r from-purple-500 to-indigo-600 hover:from-purple-600 hover:to-indigo-700 text-white px-6 py-2 rounded-lg font-semibold transition-all flex items-center gap-2 mx-auto"
             >
               <span className="text-xl">+</span>
