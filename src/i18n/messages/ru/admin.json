@@ -14,7 +14,9 @@
     "openImageLarge": "Открыть крупно",
     "largeImageTitle": "Просмотр картинки",
     "nowImage": "Сейчас",
-    "newImage": "Новая"
+    "newImage": "Новая",
+    "nowEnglishImage": "Сейчас (EN)",
+    "newEnglishImage": "Новая (EN)"
   },
   "columns": {
     "icon": "Иконка",

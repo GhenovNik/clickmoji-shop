@@ -14,7 +14,9 @@
     "openImageLarge": "Open larger",
     "largeImageTitle": "Image preview",
     "nowImage": "Now",
-    "newImage": "New"
+    "newImage": "New",
+    "nowEnglishImage": "Now (EN)",
+    "newEnglishImage": "New (EN)"
   },
   "columns": {
     "icon": "Icon",

@@ -98,7 +98,8 @@ export default function ProductForm({ product, categories, onSubmit, onCancel }:
   const aiRequestSeq = useRef(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const mainPictureChanged = !!selectedFile || formData.imageUrl !== savedImage.imageUrl;
-  const hasNewPicture = mainPictureChanged || formData.imageUrlEn !== savedImage.imageUrlEn;
+  const englishPictureChanged = formData.imageUrlEn !== savedImage.imageUrlEn;
+  const hasNewPicture = mainPictureChanged || englishPictureChanged;
   const newMainPreview = selectedFile ? filePreviewUrl : formData.imageUrl || null;
 
   const clearFileInput = () => {
@@ -348,6 +349,7 @@ export default function ProductForm({ product, categories, onSubmit, onCancel }:
           onGenerateStart={() => {
             selectionSeq.current += 1;
             aiRequestSeq.current = selectionSeq.current;
+            return () => aiRequestSeq.current === selectionSeq.current;
           }}
           onGenerateImage={(url) => {
             if (aiRequestSeq.current !== selectionSeq.current) return;
@@ -386,7 +388,13 @@ export default function ProductForm({ product, categories, onSubmit, onCancel }:
           <input
             type="checkbox"
             checked={formData.isCustom}
-            onChange={(e) => setFormData({ ...formData, isCustom: e.target.checked })}
+            onChange={(e) => {
+              const checked = e.target.checked;
+              // A checkbox change is a picture selection action too: a pending AI answer must not
+              // turn the custom image back on (INV-1/FR-2).
+              selectionSeq.current += 1;
+              setFormData((prev) => ({ ...prev, isCustom: checked }));
+            }}
             className="w-4 h-4"
           />
           <span className="text-sm font-medium text-gray-700">{t('productForm.customImage')}</span>
@@ -454,25 +462,59 @@ export default function ProductForm({ product, categories, onSubmit, onCancel }:
                 </div>
               )
             )}
-            {formData.imageUrlEn && (
-              <div className="mt-2">
-                <p className="text-sm text-gray-600">{t('productForm.englishVersion')}</p>
-                <div className="flex items-center gap-3">
-                  <ImagePreviewButton
-                    src={formData.imageUrlEn}
-                    alt={t('productForm.englishVersionAlt')}
-                    className="mt-1"
-                    imgClassName="w-16 h-16"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setFormData({ ...formData, imageUrlEn: null })}
-                    className="text-sm text-red-600 hover:text-red-800"
-                  >
-                    {t('productForm.removeEnglishVersion')}
-                  </button>
-                </div>
+            {englishPictureChanged ? (
+              <div className="mt-2 flex flex-wrap gap-4">
+                {savedImage.imageUrlEn && (
+                  <div className="flex flex-col gap-1">
+                    <span className="text-sm text-gray-600">{t('shared.nowEnglishImage')}</span>
+                    <ImagePreviewButton
+                      src={savedImage.imageUrlEn}
+                      alt={t('productForm.englishVersionAlt')}
+                      imgClassName="w-16 h-16"
+                    />
+                  </div>
+                )}
+                {formData.imageUrlEn && (
+                  <div className="flex flex-col gap-1">
+                    <span className="text-sm text-gray-600">{t('shared.newEnglishImage')}</span>
+                    <div className="flex items-center gap-3">
+                      <ImagePreviewButton
+                        src={formData.imageUrlEn}
+                        alt={t('productForm.newImageAlt')}
+                        imgClassName="w-16 h-16"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setFormData((prev) => ({ ...prev, imageUrlEn: null }))}
+                        className="text-sm text-red-600 hover:text-red-800"
+                      >
+                        {t('productForm.removeEnglishVersion')}
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
+            ) : (
+              formData.imageUrlEn && (
+                <div className="mt-2">
+                  <p className="text-sm text-gray-600">{t('productForm.englishVersion')}</p>
+                  <div className="flex items-center gap-3">
+                    <ImagePreviewButton
+                      src={formData.imageUrlEn}
+                      alt={t('productForm.englishVersionAlt')}
+                      className="mt-1"
+                      imgClassName="w-16 h-16"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setFormData({ ...formData, imageUrlEn: null })}
+                      className="text-sm text-red-600 hover:text-red-800"
+                    >
+                      {t('productForm.removeEnglishVersion')}
+                    </button>
+                  </div>
+                </div>
+              )
             )}
           </div>
         )}

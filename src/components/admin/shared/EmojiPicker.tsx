@@ -17,8 +17,9 @@ interface EmojiPickerProps {
   productNameEn?: string;
   productDescription?: string;
   isRequired?: boolean;
-  // Called once a generation request is sent, before its answer can arrive.
-  onGenerateStart?: () => void;
+  // Called once a generation request is sent, before its answer can arrive. It may return a
+  // check that tells whether this request is still the latest picture selection (AGE-1620).
+  onGenerateStart?: () => (() => boolean) | void;
   onGenerateImage?: (imageUrl: string) => void;
   onSelectLibraryImage?: (picture: Pick<LibraryPicture, 'imageUrl' | 'imageUrlEn'>) => void;
 }
@@ -108,7 +109,8 @@ export default function EmojiPicker({
       return;
     }
 
-    onGenerateStart?.();
+    const stillCurrent = onGenerateStart?.();
+    const isCurrent = () => (stillCurrent ? stillCurrent() : true);
     setGenerating(true);
     try {
       // The server stores the generated picture in the emoji library at once and returns its URL.
@@ -126,19 +128,21 @@ export default function EmojiPicker({
       const generateData = await generateRes.json();
 
       if (!generateRes.ok || !generateData.imageUrl) {
-        alert(generateData.error || t('emojiPicker.generateFailed'));
+        if (isCurrent()) alert(generateData.error || t('emojiPicker.generateFailed'));
         return;
       }
 
       onGenerateImage?.(generateData.imageUrl);
-      alert(
-        generateData.libraryRecorded === false
-          ? t('emojiPicker.generatedNotInLibrary')
-          : t('emojiPicker.generated')
-      );
+      if (isCurrent()) {
+        alert(
+          generateData.libraryRecorded === false
+            ? t('emojiPicker.generatedNotInLibrary')
+            : t('emojiPicker.generated')
+        );
+      }
     } catch (error) {
       console.error('Error generating AI emoji:', error);
-      alert(t('emojiPicker.generateFailed'));
+      if (isCurrent()) alert(t('emojiPicker.generateFailed'));
     } finally {
       setGenerating(false);
     }
