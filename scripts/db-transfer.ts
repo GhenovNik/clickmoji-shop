@@ -2,6 +2,7 @@ import { PrismaClient } from '@prisma/client';
 import { readFileSync, existsSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { createPrismaPgAdapter } from '../src/lib/prisma-adapter';
+import { readTransferUrls } from './db-transfer-config';
 
 const prisma = new PrismaClient({
   adapter: createPrismaPgAdapter(),
@@ -100,16 +101,13 @@ async function importToLocal() {
 }
 
 async function migrateData() {
+  const urls = readTransferUrls(process.env);
   const localDb = new PrismaClient({
-    adapter: createPrismaPgAdapter(
-      'postgresql://postgres:postgres@localhost:5432/clickmoji_shop?schema=public'
-    ),
+    adapter: createPrismaPgAdapter(urls.source),
   });
 
   const productionDb = new PrismaClient({
-    adapter: createPrismaPgAdapter(
-      'postgresql://neondb_owner:npg_YxyufN96DJmS@ep-muddy-paper-af7zs84y-pooler.c-2.us-west-2.aws.neon.tech/neondb?sslmode=require'
-    ),
+    adapter: createPrismaPgAdapter(urls.target),
   });
 
   try {
