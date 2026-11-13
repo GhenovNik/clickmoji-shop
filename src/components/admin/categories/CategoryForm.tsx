@@ -1,10 +1,10 @@
 'use client';
 
-import Image from 'next/image';
 import { useEffect, useState } from 'react';
 import { useTranslations } from 'next-intl';
 import { useUploadThing } from '@/lib/uploadthing';
 import EmojiPicker from '../shared/EmojiPicker';
+import ImagePreviewButton from '../shared/ImagePreviewButton';
 
 interface Category {
   id: string;
@@ -193,13 +193,11 @@ export default function CategoryForm({
       {formData.imageUrl && !selectedFile && (
         <div className="mt-2 p-3 bg-gradient-to-br from-purple-50 to-pink-50 rounded-lg border border-purple-200">
           <div className="flex items-center gap-3">
-            <Image
+            <ImagePreviewButton
               src={formData.imageUrl}
-              alt="AI Generated Icon"
-              width={64}
-              height={64}
-              className="w-16 h-16 object-contain bg-white rounded-lg p-2 shadow-sm"
-              unoptimized
+              alt={t('categoryForm.savedImageAlt')}
+              className="shrink-0"
+              imgClassName="w-16 h-16 bg-white rounded-lg p-2 shadow-sm"
             />
             <div className="flex-1">
               <p className="text-sm font-medium text-purple-900">{t('categoryForm.aiIcon')}</p>
@@ -232,13 +230,11 @@ export default function CategoryForm({
         {selectedFile && selectedFilePreview && (
           <div className="mt-2 p-3 bg-blue-50 rounded-lg border border-blue-200">
             <div className="flex items-center gap-3">
-              <Image
+              <ImagePreviewButton
                 src={selectedFilePreview}
-                alt="Preview"
-                width={64}
-                height={64}
-                className="w-16 h-16 object-contain bg-gray-50 rounded-lg p-2 shadow-sm"
-                unoptimized
+                alt={t('categoryForm.filePreviewAlt')}
+                className="shrink-0"
+                imgClassName="w-16 h-16 bg-gray-50 rounded-lg p-2 shadow-sm"
               />
               <div className="flex-1">
                 <p className="text-sm font-medium text-gray-900">{selectedFile.name}</p>
