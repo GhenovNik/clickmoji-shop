@@ -252,6 +252,7 @@ Execute using `tsx`:
 - Lists: `npx tsx scripts/db-lists.ts --help`
 - Files: `npx tsx scripts/db-files.ts --help`
 - Transfer: `npx tsx scripts/db-transfer.ts --help`
+  - `migrate-data` requires `DB_TRANSFER_SOURCE_URL` (source database) and `DB_TRANSFER_TARGET_URL` (target database); neither has a default value.
 
 ## Deploy
 
