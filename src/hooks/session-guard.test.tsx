@@ -31,6 +31,28 @@ const listBody = [
   },
 ];
 
+const favoriteBody = [
+  {
+    id: 'fav-1',
+    productId: 'prod-1',
+    product: {
+      id: 'prod-1',
+      name: 'Товар',
+      nameEn: 'Product',
+      emoji: '😀',
+      isCustom: false,
+      imageUrl: null,
+      category: {
+        id: 'cat-1',
+        name: 'Категория',
+        emoji: '🏷️',
+        isCustom: false,
+        imageUrl: null,
+      },
+    },
+  },
+];
+
 let queryClient: QueryClient;
 let fetchMock: ReturnType<typeof vi.fn>;
 
@@ -51,7 +73,7 @@ beforeEach(() => {
   });
   fetchMock = vi.fn(async (url: string) => {
     if (url === '/api/lists') return Response.json(listBody);
-    if (url === '/api/favorites') return Response.json([]);
+    if (url === '/api/favorites') return Response.json(favoriteBody);
     throw new Error(`Unexpected request: ${url}`);
   });
   vi.stubGlobal('fetch', fetchMock);
@@ -69,24 +91,42 @@ describe('useListsManagement session guard', () => {
     expect(router.push).not.toHaveBeenCalled();
   });
 
-  it('does not redirect after loading resolves to authenticated, and fetches lists', async () => {
-    const { rerender } = renderHook(() => useListsManagement(), { wrapper });
+  it('does not redirect or fetch while loading, then fetches lists and receives data once authenticated', async () => {
+    const { result, rerender } = renderHook(() => useListsManagement(), { wrapper });
     expect(router.push).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
 
     auth.data = { user: { id: 'user-b' } };
     auth.status = 'authenticated';
     rerender();
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/lists'));
+    await waitFor(() => expect(result.current.lists).toEqual(listBody));
     expect(router.push).not.toHaveBeenCalled();
   });
 
-  it('redirects to /login when the visitor is unauthenticated', async () => {
+  it('calls push exactly once for unauthenticated, even after repeated renders at the same status', async () => {
     auth.data = null;
     auth.status = 'unauthenticated';
-    renderHook(() => useListsManagement(), { wrapper });
+    const { rerender } = renderHook(() => useListsManagement(), { wrapper });
 
     await waitFor(() => expect(router.push).toHaveBeenCalledWith('/login'));
+    rerender();
+    rerender();
+    expect(router.push).toHaveBeenCalledTimes(1);
+  });
+
+  it('calls push exactly once when loading transitions to unauthenticated', async () => {
+    const { rerender } = renderHook(() => useListsManagement(), { wrapper });
+    expect(router.push).not.toHaveBeenCalled();
+
+    auth.data = null;
+    auth.status = 'unauthenticated';
+    rerender();
+
+    await waitFor(() => expect(router.push).toHaveBeenCalledWith('/login'));
+    rerender();
+    expect(router.push).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -97,23 +137,41 @@ describe('useFavorites session guard', () => {
     expect(router.push).not.toHaveBeenCalled();
   });
 
-  it('does not redirect after loading resolves to authenticated, and fetches favorites', async () => {
-    const { rerender } = renderHook(() => useFavorites(), { wrapper });
+  it('does not redirect or fetch while loading, then fetches favorites and receives data once authenticated', async () => {
+    const { result, rerender } = renderHook(() => useFavorites(), { wrapper });
     expect(router.push).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
 
     auth.data = { user: { id: 'user-b' } };
     auth.status = 'authenticated';
     rerender();
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/favorites'));
+    await waitFor(() => expect(result.current.favorites).toEqual(favoriteBody));
     expect(router.push).not.toHaveBeenCalled();
   });
 
-  it('redirects to /login when the visitor is unauthenticated', async () => {
+  it('calls push exactly once for unauthenticated, even after repeated renders at the same status', async () => {
     auth.data = null;
     auth.status = 'unauthenticated';
-    renderHook(() => useFavorites(), { wrapper });
+    const { rerender } = renderHook(() => useFavorites(), { wrapper });
 
     await waitFor(() => expect(router.push).toHaveBeenCalledWith('/login'));
+    rerender();
+    rerender();
+    expect(router.push).toHaveBeenCalledTimes(1);
+  });
+
+  it('calls push exactly once when loading transitions to unauthenticated', async () => {
+    const { rerender } = renderHook(() => useFavorites(), { wrapper });
+    expect(router.push).not.toHaveBeenCalled();
+
+    auth.data = null;
+    auth.status = 'unauthenticated';
+    rerender();
+
+    await waitFor(() => expect(router.push).toHaveBeenCalledWith('/login'));
+    rerender();
+    expect(router.push).toHaveBeenCalledTimes(1);
   });
 });
