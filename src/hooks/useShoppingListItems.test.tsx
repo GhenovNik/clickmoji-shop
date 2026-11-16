@@ -159,8 +159,8 @@ function currentItem(itemId = 'item-1') {
 }
 
 const rollbackCount = () =>
-  setQueryDataSpy.mock.calls.filter((call) => {
-    const [queryKey, value] = call as unknown as [readonly unknown[], unknown];
+  setQueryDataSpy.mock.calls.filter((call: unknown) => {
+    const [queryKey, value] = call as [readonly unknown[], unknown];
     return Array.isArray(queryKey) && queryKey[0] === 'list' && value === rollbackWitness;
   }).length;
 
