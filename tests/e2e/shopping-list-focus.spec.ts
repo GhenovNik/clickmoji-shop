@@ -15,19 +15,30 @@ test.describe('Purchase focus across held network requests', () => {
           const state = await mockAuthenticatedShopping(page, [item]);
           const pageErrors: string[] = [];
           page.on('pageerror', (error) => pageErrors.push(error.message));
+          const terminalErrors: string[] = [];
+          page.on('console', (message) => {
+            if (
+              message.type() === 'error' &&
+              message.text().includes('Error toggling purchased item:')
+            ) {
+              terminalErrors.push(message.text());
+            }
+          });
+          const putBodies: unknown[] = [];
           let capturePut!: (route: Route) => void;
           const heldPut = new Promise<Route>((resolve) => {
             capturePut = resolve;
           });
           let firstPutHeld = false;
           await page.route(`**/api/lists/${E2E_LIST_ID}/items/${item.id}`, (route) => {
+            putBodies.push(route.request().postDataJSON());
             if (!firstPutHeld) {
               firstPutHeld = true;
               capturePut(route);
               return;
             }
             // The N1 retry budget re-issues the same PUT at 1s/2s/4s; answer retries
-            // like the held attempt so the terminal settle and refetch can fire.
+            // like the held attempt so the retry budget reaches its terminal result.
             if (outcome === '503') {
               void route.fulfill({ status: 503, json: { error: 'Synthetic unavailable' } });
             } else if (outcome === 'abort') {
@@ -68,11 +79,18 @@ test.describe('Purchase focus across held network requests', () => {
           } else {
             await put.abort('aborted');
           }
-          await expect
-            .poll(() => state.listRequests, { timeout: 12_000 })
-            .toBeGreaterThan(readsBeforeResponse);
-          const expected = outcome === 'success' ? !initiallyPurchased : initiallyPurchased;
-          await expect(toggle).toHaveAttribute('aria-pressed', String(expected));
+          if (outcome === 'success') {
+            await expect
+              .poll(() => state.listRequests, { timeout: 12_000 })
+              .toBeGreaterThan(readsBeforeResponse);
+            expect(putBodies).toEqual([{ isPurchased: !initiallyPurchased }]);
+          } else {
+            await expect.poll(() => terminalErrors.length, { timeout: 12_000 }).toBe(1);
+            expect(putBodies).toEqual(
+              Array.from({ length: 4 }, () => ({ isPurchased: !initiallyPurchased }))
+            );
+          }
+          await expect(toggle).toHaveAttribute('aria-pressed', String(!initiallyPurchased));
           await expect(moveFocus ? neighbour : toggle).toBeFocused();
           expect(pageErrors).toEqual([]);
         });
