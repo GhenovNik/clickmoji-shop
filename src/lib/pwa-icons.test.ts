@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
-import sharp from 'sharp';
+import sharp, { type Metadata, type OutputInfo } from 'sharp';
 import { describe, expect, it } from 'vitest';
 
 // Static PWA icon contract (AGE-1637): the manifest, the Apple touch icon and the
@@ -34,7 +34,7 @@ function assertFileExists(relativePath: string) {
   }
 }
 
-function assertPng(metadata: sharp.Metadata, relativePath: string) {
+function assertPng(metadata: Metadata, relativePath: string) {
   if (metadata.format !== 'png') {
     throw new Error(`${relativePath} decodes as ${String(metadata.format)}, expected png`);
   }
@@ -59,7 +59,7 @@ async function decodePng(relativePath: string) {
   return { data, info, metadata };
 }
 
-function assertOpaque(data: Buffer, info: sharp.OutputInfo, label: string) {
+function assertOpaque(data: Buffer, info: OutputInfo, label: string) {
   if (info.channels !== 4) {
     throw new Error(`${label} has ${info.channels} channels after ensureAlpha(), expected 4`);
   }
@@ -84,7 +84,7 @@ function assertAppleMarker(source: string) {
 
 function svgIconUrls(manifest: { icons?: Array<{ src?: string }> }, layoutSource: string) {
   const manifestUrls = (manifest.icons ?? []).map((icon) => icon.src);
-  const layoutIconMatch = layoutSource.match(/icons:\s*\{[^}]*\}/s);
+  const layoutIconMatch = layoutSource.match(/icons:\s*\{[^}]*\}/);
   const layoutUrls = layoutIconMatch
     ? [...layoutIconMatch[0].matchAll(/'(\/[^']+)'/g)].map((match) => match[1])
     : [];
