@@ -70,6 +70,7 @@ let serverState: ListData;
 let journal: JournalEntry[];
 let active: Map<string, number>;
 let maxActive: Map<string, number>;
+let releasePending: Array<() => void>;
 let queues: Map<string, Queued[]>;
 let queryClient: QueryClient;
 let rollbackWitness: ListData | undefined;
@@ -120,7 +121,10 @@ function stubFetch() {
       try {
         const next = queues.get(key(method, url))?.shift();
         if (next?.kind === 'deferred') {
-          const response = await next.response;
+          const cleanup = new Promise<Response>((resolve) => {
+            releasePending.push(() => resolve(new Response(null, { status: 499 })));
+          });
+          const response = await Promise.race([next.response, cleanup]);
           if (
             method === 'PUT' &&
             response.status >= 200 &&
@@ -248,6 +252,7 @@ beforeEach(() => {
   journal = [];
   active = new Map();
   maxActive = new Map();
+  releasePending = [];
   queues = new Map();
   onlineManager.setOnline(true);
   queryClient = new QueryClient({
@@ -260,6 +265,7 @@ beforeEach(() => {
 
 afterEach(() => {
   queryClient.clear();
+  for (const release of releasePending) release();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
   onlineManager.setOnline(true);
@@ -970,7 +976,11 @@ describe('purchase intent baseline ownership', () => {
     void startToggle(result);
     await step(0);
     expect(currentItem().isPurchased).toBe(false);
-    rendered.unmount();
+    const heldRead = new Promise<Response>(() => {});
+    enqueue('GET', LIST_URL, [
+      { kind: 'deferred', response: heldRead },
+      { kind: 'deferred', response: heldRead },
+    ]);
     release(new Response('{}', { status: 200 }));
     await step(0);
     expect(putJournal().map((entry) => entry.body)).toEqual([
@@ -1223,7 +1233,11 @@ describe('purchase intent already-started ACK', () => {
       expect(currentItem().isPurchased).toBe(false);
       expect(putJournal()).toHaveLength(attempt);
       expect(maxActive.get(PUT_URL)).toBe(1);
-      rendered.unmount();
+      const heldRead = new Promise<Response>(() => {});
+      enqueue('GET', LIST_URL, [
+        { kind: 'deferred', response: heldRead },
+        { kind: 'deferred', response: heldRead },
+      ]);
       release(new Response('{}', { status: 200 }));
       await step(10);
       expect(putJournal().map((entry) => entry.body)).toEqual([
@@ -1302,7 +1316,11 @@ describe('purchase intent re-arm ownership', () => {
     await step(0);
     expect(currentItem().isPurchased).toBe(false);
     expect(putJournal()).toHaveLength(5);
-    rendered.unmount();
+    const heldRead = new Promise<Response>(() => {});
+    enqueue('GET', LIST_URL, [
+      { kind: 'deferred', response: heldRead },
+      { kind: 'deferred', response: heldRead },
+    ]);
     release(new Response('{}', { status: 200 }));
     await step(10);
     expect(putJournal().map((entry) => entry.body)).toEqual([
