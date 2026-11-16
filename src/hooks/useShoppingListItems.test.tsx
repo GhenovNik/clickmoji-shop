@@ -1293,6 +1293,51 @@ describe('purchase intent per-item read generations', () => {
 });
 
 describe('neighbor mutation rollback ownership', () => {
+  it('an older failed note cannot overwrite a newer note', async () => {
+    let releaseOld!: (response: Response) => void;
+    let releaseNew!: (response: Response) => void;
+    const old = new Promise<Response>((resolve) => {
+      releaseOld = resolve;
+    });
+    const newer = new Promise<Response>((resolve) => {
+      releaseNew = resolve;
+    });
+    const url = '/api/lists/list-1/items/item-2';
+    enqueue('PUT', url, [
+      { kind: 'deferred', response: old },
+      { kind: 'deferred', response: newer },
+    ]);
+    const { result } = await renderList();
+    void result.current.updateNote('item-2', 'old').catch(() => {});
+    await step(0);
+    void result.current.updateNote('item-2', 'new').catch(() => {});
+    await step(0);
+    enqueue('GET', LIST_URL, [{ kind: 'deferred', response: new Promise<Response>(() => {}) }]);
+    releaseOld(new Response('denied', { status: 500 }));
+    await step(10);
+    expect(currentItem('item-2').note).toBe('new');
+    releaseNew(Response.json({}));
+  });
+
+  it('a failed delete restores its row with the current purchase overlay', async () => {
+    let releaseDelete!: (response: Response) => void;
+    const deletion = new Promise<Response>((resolve) => {
+      releaseDelete = resolve;
+    });
+    enqueue('PUT', PUT_URL, [putReject(), putReject(), putReject(), putReject()]);
+    enqueue('DELETE', PUT_URL, [{ kind: 'deferred', response: deletion }]);
+    const { result } = await renderList();
+    void startToggle(result);
+    await step(0);
+    for (const delay of [1000, 2000, 4000]) await step(delay);
+    void result.current.removeItem('item-1').catch(() => {});
+    await step(0);
+    enqueue('GET', LIST_URL, [{ kind: 'deferred', response: new Promise<Response>(() => {}) }]);
+    releaseDelete(new Response('denied', { status: 500 }));
+    await step(10);
+    expect(currentItem().isPurchased).toBe(true);
+  });
+
   it.each(['note', 'delete'] as const)(
     'failed %s preserves newer purchase and its next absolute body',
     async (kind) => {
