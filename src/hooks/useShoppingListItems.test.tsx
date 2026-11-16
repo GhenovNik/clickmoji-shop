@@ -1263,7 +1263,11 @@ describe('purchase intent per-item read generations', () => {
       releaseLater = resolve;
     });
     enqueue('PUT', PUT_URL, [putRespond(200, '{}')]);
-    enqueue('PUT', '/api/lists/list-1/items/item-2', [putRespond(200, '{}')]);
+    let releaseB!: (response: Response) => void;
+    const pendingB = new Promise<Response>((resolve) => {
+      releaseB = resolve;
+    });
+    enqueue('PUT', '/api/lists/list-1/items/item-2', [{ kind: 'deferred', response: pendingB }]);
     const { result } = await renderList();
     enqueue('GET', LIST_URL, [
       { kind: 'deferred', response: read },
@@ -1279,18 +1283,103 @@ describe('purchase intent per-item read generations', () => {
     staleB.items[0].note = 'A handoff';
     releaseRead(Response.json(staleB));
     await step(10);
-    if (currentItem('item-1').note === 'A handoff') {
-      expect(currentItem('item-1').isPurchased).toBe(false);
-    } else {
-      expect(currentItem('item-1').isPurchased).toBe(true);
-    }
+    expect(currentItem('item-1').note).toBe('A handoff');
+    expect(currentItem('item-1').isPurchased).toBe(false);
     expect(currentItem('item-2').isPurchased).toBe(false);
     expect(putJournal()).toHaveLength(2);
+    releaseB(Response.json({}));
     releaseLater(Response.json(serverState));
   });
 });
 
+describe('neighbor mutation rollback ownership', () => {
+  it.each(['note', 'delete'] as const)(
+    'failed %s preserves newer purchase and its next absolute body',
+    async (kind) => {
+      let releaseNeighbor!: (response: Response) => void;
+      let releasePurchase!: (response: Response) => void;
+      const neighbor = new Promise<Response>((resolve) => {
+        releaseNeighbor = resolve;
+      });
+      const purchase = new Promise<Response>((resolve) => {
+        releasePurchase = resolve;
+      });
+      const otherUrl = '/api/lists/list-1/items/item-2';
+      enqueue('PUT', PUT_URL, [
+        putReject(),
+        putReject(),
+        putReject(),
+        putReject(),
+        { kind: 'deferred', response: purchase },
+        putRespond(200, '{}'),
+      ]);
+      enqueue(kind === 'note' ? 'PUT' : 'DELETE', otherUrl, [
+        { kind: 'deferred', response: neighbor },
+      ]);
+      const { result } = await renderList();
+      void startToggle(result);
+      await step(0);
+      for (const delay of [1000, 2000, 4000]) await step(delay);
+      const pending =
+        kind === 'note'
+          ? result.current.updateNote('item-2', 'edit')
+          : result.current.removeItem('item-2');
+      void pending.catch(() => {});
+      await step(0);
+      void startToggle(result);
+      await step(0);
+      const held = new Promise<Response>(() => {});
+      enqueue('GET', LIST_URL, [
+        { kind: 'deferred', response: held },
+        { kind: 'deferred', response: held },
+      ]);
+      releaseNeighbor(new Response('denied', { status: 500 }));
+      await step(10);
+      expect(currentItem().isPurchased).toBe(false);
+      expect(currentItem('item-2').note).toBe(null);
+      void startToggle(result);
+      await step(0);
+      releasePurchase(new Response('{}', { status: 200 }));
+      await step(10);
+      expect(
+        putJournal()
+          .filter((entry) => entry.url === PUT_URL)
+          .map((entry) => entry.body)
+      ).toEqual([
+        ...Array.from({ length: 4 }, () => ({ isPurchased: true })),
+        { isPurchased: false },
+        { isPurchased: true },
+      ]);
+    }
+  );
+});
+
 describe('purchase intent re-arm ownership', () => {
+  it('unsent re-arm loses ownership before the actual fetch', async () => {
+    enqueue('PUT', PUT_URL, [
+      putReject(),
+      putReject(),
+      putReject(),
+      putReject(),
+      putRespond(200, '{}'),
+    ]);
+    const { result } = await renderProviderList();
+    void startToggle(result);
+    await step(0);
+    for (const delay of [1000, 2000, 4000]) await step(delay);
+    act(() => {
+      onlineManager.setOnline(false);
+      onlineManager.setOnline(true);
+      void startToggle(result);
+    });
+    await step(10);
+    await step(10_000);
+    expect(putJournal().map((entry) => entry.body)).toEqual([
+      ...Array.from({ length: 4 }, () => ({ isPurchased: true })),
+      { isPurchased: false },
+    ]);
+  });
+
   it('F8: an in-flight re-arm ACK settles before the new revision and updates its rollback baseline', async () => {
     let release!: (response: Response) => void;
     const response = new Promise<Response>((resolve) => {
