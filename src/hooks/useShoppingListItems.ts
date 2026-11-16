@@ -1,6 +1,6 @@
 'use client';
 
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { useRouter } from 'next/navigation';
 import { useTranslations } from 'next-intl';
 import { queryKeys } from '@/lib/query-keys';
@@ -75,6 +75,14 @@ const removeItemAPI = async ({ listId, itemId }: { listId: string; itemId: strin
   return response.json();
 };
 
+const rollbackOwners = new WeakMap<QueryClient, Map<string, symbol>>();
+
+function owners(client: QueryClient) {
+  let result = rollbackOwners.get(client);
+  if (!result) rollbackOwners.set(client, (result = new Map()));
+  return result;
+}
+
 export function useShoppingListItems(listId: string) {
   const router = useRouter();
   const queryClient = useQueryClient();
@@ -112,23 +120,30 @@ export function useShoppingListItems(listId: string) {
     onMutate: async ({ itemId }) => {
       await queryClient.cancelQueries({ queryKey: queryKeys.list(listId) });
       const previousList = queryClient.getQueryData<ListData>(queryKeys.list(listId));
-
+      const index = previousList?.items.findIndex((item) => item.id === itemId) ?? -1;
+      const row = index >= 0 ? previousList?.items[index] : undefined;
+      const key = JSON.stringify([listId, itemId, 'delete']);
+      const owner = Symbol();
+      owners(queryClient).set(key, owner);
+      queryClient.setQueryData<ListData>(
+        queryKeys.list(listId),
+        (old) => old && { ...old, items: old.items.filter((item) => item.id !== itemId) }
+      );
+      return { row, index, key, owner };
+    },
+    onError: (_err, _variables, context) => {
+      if (!context?.row || owners(queryClient).get(context.key) !== context.owner) return;
       queryClient.setQueryData<ListData>(queryKeys.list(listId), (old) => {
-        if (!old) return old;
-        return {
-          ...old,
-          items: old.items.filter((i) => i.id !== itemId),
-        };
+        if (!old || old.items.some((item) => item.id === context.row!.id)) return old;
+        const items = [...old.items];
+        items.splice(context.index, 0, intentStore.overlay(listId, context.row!));
+        return { ...old, items };
       });
-
-      return { previousList };
     },
-    onError: (err, variables, context) => {
-      if (context?.previousList) {
-        queryClient.setQueryData(queryKeys.list(listId), context.previousList);
+    onSettled: (_data, _error, _variables, context) => {
+      if (context && owners(queryClient).get(context.key) === context.owner) {
+        owners(queryClient).delete(context.key);
       }
-    },
-    onSettled: () => {
       queryClient.invalidateQueries({ queryKey: queryKeys.list(listId) });
     },
   });
@@ -138,24 +153,41 @@ export function useShoppingListItems(listId: string) {
     mutationFn: updateNoteAPI,
     onMutate: async ({ itemId, note }) => {
       await queryClient.cancelQueries({ queryKey: queryKeys.list(listId) });
-      const previousList = queryClient.getQueryData<ListData>(queryKeys.list(listId));
-
-      queryClient.setQueryData<ListData>(queryKeys.list(listId), (old) => {
-        if (!old) return old;
-        return {
-          ...old,
-          items: old.items.map((i) => (i.id === itemId ? { ...i, note } : i)),
-        };
-      });
-
-      return { previousList };
+      const previous = queryClient
+        .getQueryData<ListData>(queryKeys.list(listId))
+        ?.items.find((item) => item.id === itemId);
+      const key = JSON.stringify([listId, itemId, 'note']);
+      const owner = Symbol();
+      owners(queryClient).set(key, owner);
+      queryClient.setQueryData<ListData>(
+        queryKeys.list(listId),
+        (old) =>
+          old && {
+            ...old,
+            items: old.items.map((item) => (item.id === itemId ? { ...item, note } : item)),
+          }
+      );
+      return { previous, key, owner };
     },
-    onError: (err, variables, context) => {
-      if (context?.previousList) {
-        queryClient.setQueryData(queryKeys.list(listId), context.previousList);
+    onError: (_err, { itemId, note }, context) => {
+      if (!context?.previous || owners(queryClient).get(context.key) !== context.owner) return;
+      queryClient.setQueryData<ListData>(
+        queryKeys.list(listId),
+        (old) =>
+          old && {
+            ...old,
+            items: old.items.map((item) =>
+              item.id === itemId && item.note === note
+                ? { ...item, note: context.previous!.note }
+                : item
+            ),
+          }
+      );
+    },
+    onSettled: (_data, _error, _variables, context) => {
+      if (context && owners(queryClient).get(context.key) === context.owner) {
+        owners(queryClient).delete(context.key);
       }
-    },
-    onSettled: () => {
       queryClient.invalidateQueries({ queryKey: queryKeys.list(listId) });
     },
   });

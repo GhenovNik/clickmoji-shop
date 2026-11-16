@@ -187,7 +187,9 @@ export class PurchaseIntentStore {
     });
     const intent: Intent = {
       revision: ++this.revision,
-      desired: !row.isPurchased,
+      desired: !(item && item.current.state !== 'permanent'
+        ? item.current.desired
+        : row.isPurchased),
       epoch: this.epoch,
       cancelled: false,
       state: 'queued',
@@ -214,6 +216,11 @@ export class PurchaseIntentStore {
     item.wake?.();
     this.run(listId, itemId, item);
     return promise;
+  }
+
+  overlay(listId: string, row: ListData['items'][number]) {
+    const intent = this.lists.get(listId)?.get(row.id)?.current;
+    return intent && intent.state !== 'permanent' ? { ...row, isPurchased: intent.desired } : row;
   }
 
   private write(listId: string, itemId: string, value: boolean) {
@@ -254,13 +261,20 @@ export class PurchaseIntentStore {
         item.active = intent;
         let failure: unknown;
         for (let attempt = 0; attempt < 4; attempt++) {
-          if (!this.valid(intent) || (attempt > 0 && item.current !== intent)) break;
+          if (
+            !this.valid(intent) ||
+            ((intent.cycles > 0 || attempt > 0) && item.current !== intent)
+          )
+            break;
           intent.state = 'delivering';
           try {
             let response: Response;
             try {
               response = await intent.execute(() => {
-                if (!this.valid(intent) || (attempt > 0 && item.current !== intent)) {
+                if (
+                  !this.valid(intent) ||
+                  ((intent.cycles > 0 || attempt > 0) && item.current !== intent)
+                ) {
                   throw new Error('Intent no longer owns dispatch');
                 }
                 return fetch(`/api/lists/${listId}/items/${itemId}`, {
