@@ -312,7 +312,9 @@ describe('togglePurchased retry/ACK contract (N1)', () => {
     expect(rollbackCount()).toBe(0);
     expect(currentItem().isPurchased).toBe(true);
     expect(invalidateSpy).toHaveBeenCalledWith(
-      expect.objectContaining({ queryKey: queryKeys.list('list-1') })
+      expect.objectContaining({ queryKey: queryKeys.list('list-1') }),
+      // Ordinary refresh after a write: it must not cancel a running read (AGE-1649).
+      expect.objectContaining({ cancelRefetch: false })
     );
 
     await done;
@@ -352,7 +354,9 @@ describe('togglePurchased retry/ACK contract (N1)', () => {
     expect(rollbackCount()).toBe(0);
     expect(currentItem().isPurchased).toBe(true);
     expect(invalidateSpy).toHaveBeenCalledWith(
-      expect.objectContaining({ queryKey: queryKeys.list('list-1') })
+      expect.objectContaining({ queryKey: queryKeys.list('list-1') }),
+      // Ordinary refresh after a write: it must not cancel a running read (AGE-1649).
+      expect.objectContaining({ cancelRefetch: false })
     );
 
     await done;
@@ -447,7 +451,9 @@ describe('togglePurchased retry/ACK contract (N1)', () => {
       expect(rollbackCount()).toBe(0);
       expect(currentItem().isPurchased).toBe(true);
       expect(invalidateSpy).toHaveBeenCalledWith(
-        expect.objectContaining({ queryKey: queryKeys.list('list-1') })
+        expect.objectContaining({ queryKey: queryKeys.list('list-1') }),
+        // Ordinary refresh after a write: it must not cancel a running read (AGE-1649).
+        expect.objectContaining({ cancelRefetch: false })
       );
 
       await done;
@@ -898,5 +904,28 @@ describe('row lock and terminal reload (AGE-1649)', () => {
       releasePost(putRespond(200, '{}'));
       await Promise.all([complete, toggle]);
     });
+  });
+
+  it('ACK refresh: a read that started before the write is not joined; the row reads again after it settles', async () => {
+    enqueue('PUT', PUT_URL, [putRespond(200, '{"isPurchased":true}')]);
+    const { result } = await renderList();
+    // An ordinary read starts before the write and is held (the mount read has settled).
+    const releaseOldRead = holdNext('GET', LIST_URL);
+    void queryClient.invalidateQueries({ queryKey: queryKeys.list('list-1') });
+    await step(0);
+    expect(getCount()).toBe(2);
+
+    const done = startToggle(result);
+    await step(0);
+    expect(putJournal()).toHaveLength(1);
+    // The ACK refresh waits for the held read; it does not return that read's result.
+    expect(getCount()).toBe(2);
+
+    releaseOldRead();
+    await step(10_000);
+    await done;
+    expect(putJournal()).toHaveLength(1);
+    // The row's own fresh read starts after the held one settles.
+    expect(getCount()).toBe(3);
   });
 });
