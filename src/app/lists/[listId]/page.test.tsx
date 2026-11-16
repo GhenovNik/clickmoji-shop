@@ -318,11 +318,17 @@ describe('row lock while a request is in flight (AGE-1649)', () => {
     const editor = screen.queryByPlaceholderText('Заметка к товару...') as HTMLInputElement | null;
     expect.soft(editor?.disabled).toBe(true);
 
+    // The first submit reaches the wire; the mutation dispatches it after its async pre-step.
+    await waitFor(() => expect(notePuts(control)).toHaveLength(1));
+
     // Blur, Enter and the save button cannot start a second note request.
     fireEvent.blur(input);
     fireEvent.keyDown(input, { key: 'Enter' });
     const save = screen.queryByRole('button', { name: 'Ок' });
     if (save) fireEvent.click(save);
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
     expect(notePuts(control)).toHaveLength(1);
 
     serverItems = [{ ...milk, note: 'к ужину' }];
