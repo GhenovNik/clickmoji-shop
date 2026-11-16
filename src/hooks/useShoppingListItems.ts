@@ -39,6 +39,27 @@ export type ListData = {
   items: Item[];
 };
 
+// Typed PUT delivery outcome: status === null means the fetch rejected before
+// a response arrived (transport); a number is the HTTP status received.
+class TogglePurchasedError extends Error {
+  readonly status: number | null;
+
+  constructor(status: number | null, options?: { cause?: unknown }) {
+    super(
+      status === null ? 'Network request failed' : `Request failed with status ${status}`,
+      options
+    );
+    this.name = 'TogglePurchasedError';
+    this.status = status;
+  }
+}
+
+const isRetryablePutStatus = (status: number) =>
+  status === 408 || status === 429 || (status >= 500 && status <= 599);
+
+const isTogglePurchasedError = (error: unknown): error is TogglePurchasedError =>
+  error instanceof TogglePurchasedError;
+
 // API functions
 const fetchListAPI = async (listId: string): Promise<ListData> => {
   const response = await fetch(`/api/lists/${listId}`);
@@ -55,13 +76,21 @@ const togglePurchasedAPI = async ({
   itemId: string;
   isPurchased: boolean;
 }) => {
-  const response = await fetch(`/api/lists/${listId}/items/${itemId}`, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ isPurchased }),
-  });
-  if (!response.ok) throw new Error('Failed to toggle item');
-  return response.json();
+  let response: Response;
+  try {
+    response = await fetch(`/api/lists/${listId}/items/${itemId}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ isPurchased }),
+    });
+  } catch (error) {
+    throw new TogglePurchasedError(null, { cause: error });
+  }
+  // Any 2xx acknowledges delivery; the body is not required to parse.
+  if (response.status >= 200 && response.status < 300) {
+    return { success: true };
+  }
+  throw new TogglePurchasedError(response.status);
 };
 
 const updateNoteAPI = async ({
@@ -115,6 +144,11 @@ export function useShoppingListItems(listId: string) {
   // Mutation for toggling purchased status with optimistic updates
   const toggleMutation = useMutation({
     mutationFn: togglePurchasedAPI,
+    retry: (failureCount, error) =>
+      failureCount < 3 &&
+      isTogglePurchasedError(error) &&
+      (error.status === null || isRetryablePutStatus(error.status)),
+    retryDelay: (failureCount) => [1000, 2000, 4000][Math.min(failureCount, 2)],
     onMutate: async ({ itemId, isPurchased }) => {
       // Cancel outgoing refetches
       await queryClient.cancelQueries({ queryKey: queryKeys.list(listId) });
