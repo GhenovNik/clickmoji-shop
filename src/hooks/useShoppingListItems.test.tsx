@@ -645,8 +645,8 @@ describe('purchase intent independent checkpoints', () => {
     toggle(result, 'item-2');
     await step(0);
     expect(bodies(otherUrl)).toEqual([{ isPurchased: false }]);
-    expect(bodies()).toEqual([{ isPurchased: true }]);
     expect(maxActive.get(PUT_URL)).toBe(1);
+    expect(bodies()).toEqual([{ isPurchased: true }]);
     expect(active.get(PUT_URL)).toBe(1);
     expect(active.get(otherUrl)).toBe(1);
     first.release(new Response('{}', { status: 200 }));
@@ -689,6 +689,7 @@ describe('purchase intent independent checkpoints', () => {
     await step(0);
     toggle(result, 'item-1');
     await step(0);
+    expect(bodies()).toEqual([{ isPurchased: true }, { isPurchased: false }]);
     await step(10_000);
     expect(bodies()).toEqual([{ isPurchased: true }, { isPurchased: false }]);
     expect(currentItem().isPurchased).toBe(false);
