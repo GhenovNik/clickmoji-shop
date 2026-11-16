@@ -1349,6 +1349,28 @@ describe('neighbor mutation rollback ownership', () => {
     releaseNew(Response.json({}));
   });
 
+  it('an older failed note cannot undo a newer identical note', async () => {
+    let releaseOld!: (response: Response) => void;
+    const old = new Promise<Response>((resolve) => {
+      releaseOld = resolve;
+    });
+    const newer = new Promise<Response>(() => {});
+    const url = '/api/lists/list-1/items/item-2';
+    enqueue('PUT', url, [
+      { kind: 'deferred', response: old },
+      { kind: 'deferred', response: newer },
+    ]);
+    const { result } = await renderList();
+    void result.current.updateNote('item-2', 'same').catch(() => {});
+    await step(0);
+    void result.current.updateNote('item-2', 'same').catch(() => {});
+    await step(0);
+    enqueue('GET', LIST_URL, [{ kind: 'deferred', response: new Promise<Response>(() => {}) }]);
+    releaseOld(new Response('denied', { status: 500 }));
+    await step(10);
+    expect(currentItem('item-2').note).toBe('same');
+  });
+
   it('a failed delete restores its row with the current purchase overlay', async () => {
     let releaseDelete!: (response: Response) => void;
     const deletion = new Promise<Response>((resolve) => {
@@ -1365,6 +1387,9 @@ describe('neighbor mutation rollback ownership', () => {
     enqueue('GET', LIST_URL, [{ kind: 'deferred', response: new Promise<Response>(() => {}) }]);
     releaseDelete(new Response('denied', { status: 500 }));
     await step(10);
+    expect(
+      queryClient.getQueryData<ListData>(queryKeys.list('list-1'))?.items.map((item) => item.id)
+    ).toContain('item-1');
     expect(currentItem().isPurchased).toBe(true);
   });
 
