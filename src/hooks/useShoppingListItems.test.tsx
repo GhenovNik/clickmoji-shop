@@ -214,8 +214,12 @@ describe('togglePurchased retry/ACK contract (N1)', () => {
     await step(1);
     expect(putJournal()).toHaveLength(4);
 
-    await done;
+    await step(10_000);
     expect(putJournal()).toHaveLength(4);
+    expect(currentItem().isPurchased).toBe(false);
+    expect(rollbackCount()).toBe(1);
+
+    await done;
     for (const entry of putJournal()) {
       expect(entry.body).toEqual({ isPurchased: true });
     }
@@ -234,7 +238,7 @@ describe('togglePurchased retry/ACK contract (N1)', () => {
     await step(0);
     await step(1000);
     await step(2000);
-    await done;
+    await step(10_000);
 
     expect(putJournal()).toHaveLength(3);
     expect(rollbackCount()).toBe(0);
@@ -242,6 +246,9 @@ describe('togglePurchased retry/ACK contract (N1)', () => {
     expect(invalidateSpy).toHaveBeenCalledWith(
       expect.objectContaining({ queryKey: queryKeys.list('list-1') })
     );
+
+    await done;
+    expect(putJournal()).toHaveLength(3);
 
     await step(10_000);
     expect(putJournal()).toHaveLength(3);
@@ -271,11 +278,16 @@ describe('togglePurchased retry/ACK contract (N1)', () => {
     await step(0);
     await step(1000);
     await step(2000);
-    await done;
+    await step(10_000);
 
     expect(putJournal()).toHaveLength(expectedPuts);
     expect(rollbackCount()).toBe(0);
     expect(currentItem().isPurchased).toBe(true);
+    expect(invalidateSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ queryKey: queryKeys.list('list-1') })
+    );
+
+    await done;
 
     await step(10_000);
     expect(putJournal()).toHaveLength(expectedPuts);
@@ -298,11 +310,13 @@ describe('togglePurchased retry/ACK contract (N1)', () => {
       await step(1000);
       await step(2000);
       await step(4000);
-      await done;
+      await step(10_000);
 
       expect(putJournal()).toHaveLength(4);
       expect(currentItem().isPurchased).toBe(false);
       expect(rollbackCount()).toBe(1);
+
+      await done;
 
       await step(10_000);
       expect(putJournal()).toHaveLength(4);
@@ -325,11 +339,14 @@ describe('togglePurchased retry/ACK contract (N1)', () => {
 
       await step(0);
       await step(10_000);
-      await done;
 
       expect(putJournal()).toHaveLength(1);
       expect(currentItem().isPurchased).toBe(false);
       expect(rollbackCount()).toBe(1);
+
+      await done;
+
+      expect(putJournal()).toHaveLength(1);
     }
   );
 
@@ -346,11 +363,15 @@ describe('togglePurchased retry/ACK contract (N1)', () => {
 
       await step(0);
       await step(10_000);
-      await done;
 
       expect(putJournal()).toHaveLength(1);
       expect(rollbackCount()).toBe(0);
       expect(currentItem().isPurchased).toBe(true);
+      expect(invalidateSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ queryKey: queryKeys.list('list-1') })
+      );
+
+      await done;
     }
   );
 
@@ -367,6 +388,8 @@ describe('togglePurchased retry/ACK contract (N1)', () => {
     expect(putJournal()).toHaveLength(1);
     await step(10_000);
     expect(putJournal()).toHaveLength(1);
+    expect(currentItem().isPurchased).toBe(true);
+    expect(rollbackCount()).toBe(0);
 
     await act(async () => {
       onlineManager.setOnline(true);
@@ -384,12 +407,40 @@ describe('togglePurchased retry/ACK contract (N1)', () => {
     await step(1);
     expect(putJournal()).toHaveLength(4);
 
+    await step(10_000);
+    expect(putJournal()).toHaveLength(4);
+    expect(currentItem().isPurchased).toBe(false);
+    expect(rollbackCount()).toBe(1);
+
     await done;
     expect(putJournal()).toHaveLength(4);
     expect(rollbackCount()).toBe(1);
     expect(currentItem().isPurchased).toBe(false);
-
-    await step(10_000);
-    expect(putJournal()).toHaveLength(4);
   });
+
+  it.each([
+    { name: 'transport reject then HTTP 401', second: () => putRespond(401, 'unauthorized') },
+    { name: 'transport reject then HTTP 302', second: () => putRespond(302, 'redirect') },
+  ])(
+    'FR-1 neighbor: $name — exactly two PUTs with the same body, one terminal rollback, no extra PUT',
+    async ({ second }) => {
+      enqueue('PUT', PUT_URL, [putReject(), second()]);
+      const { result } = await renderList();
+      const done = startToggle(result);
+
+      await step(0);
+      await step(1000);
+      await step(10_000);
+
+      expect(putJournal()).toHaveLength(2);
+      for (const entry of putJournal()) {
+        expect(entry.body).toEqual({ isPurchased: true });
+      }
+      expect(currentItem().isPurchased).toBe(false);
+      expect(rollbackCount()).toBe(1);
+
+      await done;
+      expect(putJournal()).toHaveLength(2);
+    }
+  );
 });
