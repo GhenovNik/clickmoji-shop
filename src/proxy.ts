@@ -18,6 +18,9 @@ const publicRoutes = [
   '/sw.js',
   '/offline.html',
   '/icon.svg',
+  '/icons/icon-192.png',
+  '/icons/icon-512.png',
+  '/apple-touch-icon.png',
   '/robots.txt',
   '/sitemap.xml',
 ];
@@ -95,6 +98,6 @@ export default async function proxy(request: NextRequest) {
 
 export const config = {
   matcher: [
-    '/((?!_next/static|_next/image|favicon.ico|icon.svg|manifest.json|sw.js|offline.html|robots.txt|sitemap.xml).*)',
+    '/((?!_next/static|_next/image|favicon.ico|icon.svg|manifest.json|sw.js|offline.html|robots.txt|sitemap.xml|icons/icon-192\\.png$|icons/icon-512\\.png$|apple-touch-icon\\.png$).*)',
   ],
 };

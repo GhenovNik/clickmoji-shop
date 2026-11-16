@@ -40,15 +40,11 @@ function assertPng(metadata: sharp.Metadata, relativePath: string) {
   }
 }
 
-function assertSizes(
-  decoded: { width: number; height: number },
-  declared: string,
-  label: string,
-) {
+function assertSizes(decoded: { width: number; height: number }, declared: string, label: string) {
   const [declaredWidth, declaredHeight] = declared.split('x').map(Number);
   if (decoded.width !== declaredWidth || decoded.height !== declaredHeight) {
     throw new Error(
-      `sizes mismatch for ${label}: declared ${declared} vs decoded ${decoded.width}x${decoded.height}`,
+      `sizes mismatch for ${label}: declared ${declared} vs decoded ${decoded.width}x${decoded.height}`
     );
   }
 }
@@ -59,10 +55,7 @@ async function decodePng(relativePath: string) {
   const image = sharp(buffer);
   const metadata = await image.metadata();
   assertPng(metadata, relativePath);
-  const { data, info } = await image
-    .ensureAlpha()
-    .raw()
-    .toBuffer({ resolveWithObject: true });
+  const { data, info } = await image.ensureAlpha().raw().toBuffer({ resolveWithObject: true });
   return { data, info, metadata };
 }
 
@@ -160,7 +153,7 @@ describe('static PWA icons', () => {
     const { data, info, metadata } = await decodePng(APPLE_ICON);
     if (metadata.width !== 180 || metadata.height !== 180) {
       throw new Error(
-        `apple-touch-icon.png decodes as ${metadata.width}x${metadata.height}, expected 180x180`,
+        `apple-touch-icon.png decodes as ${metadata.width}x${metadata.height}, expected 180x180`
       );
     }
     assertOpaque(data, info, APPLE_ICON);
@@ -189,7 +182,12 @@ describe('static PWA icons', () => {
     for (const asset of ['/icons/icon-192.png', '/icons/icon-512.png', '/apple-touch-icon.png']) {
       expect(proxy).toContain(`'${asset}'`);
     }
-    for (const tail of ['icons/icon-192\\.png$', 'icons/icon-512\\.png$', 'apple-touch-icon\\.png$']) {
+    // Raw source of the matcher string: dots escaped, path end anchored.
+    for (const tail of [
+      String.raw`icons/icon-192\\.png$`,
+      String.raw`icons/icon-512\\.png$`,
+      String.raw`apple-touch-icon\\.png$`,
+    ]) {
       expect(proxy, `matcher lacks ${tail}`).toContain(tail);
     }
     expect(proxy).not.toContain("'/icons/'");
@@ -216,7 +214,7 @@ describe('static PWA icons', () => {
       ]);
       expect(
         committedRaw.equals(renderedRaw),
-        `${relativePath} is not pixel-identical to a fresh render from ${SVG_PATH}`,
+        `${relativePath} is not pixel-identical to a fresh render from ${SVG_PATH}`
       ).toBe(true);
     }
   });
@@ -234,13 +232,13 @@ describe('static PWA icons', () => {
       .toBuffer();
     const metadata = await sharp(fixture).metadata();
     expect(() =>
-      assertSizes({ width: metadata.width!, height: metadata.height! }, '512x512', 'fixture'),
+      assertSizes({ width: metadata.width!, height: metadata.height! }, '512x512', 'fixture')
     ).toThrow(/declared 512x512 vs decoded 200x200/);
   });
 
   it('F-4: the existence oracle fails for a missing icon file', () => {
     expect(() => assertFileExists('public/icons/__definitely-missing__.png')).toThrow(
-      /missing file/,
+      /missing file/
     );
   });
 
@@ -281,7 +279,8 @@ describe('static PWA icons', () => {
   });
 
   it('F-6: source without the apple marker fails the layout oracle', () => {
-    const withoutApple = "export const metadata = {\n  icons: {\n    icon: '/icon.svg',\n  },\n};\n";
+    const withoutApple =
+      "export const metadata = {\n  icons: {\n    icon: '/icon.svg',\n  },\n};\n";
     expect(() => assertAppleMarker(withoutApple)).toThrow(/apple:/);
   });
 
@@ -298,7 +297,7 @@ describe('static PWA icons', () => {
       .toBuffer();
     const metadata = await sharp(fixture).metadata();
     expect(() =>
-      assertSizes({ width: metadata.width!, height: metadata.height! }, '512x512', 'fixture'),
+      assertSizes({ width: metadata.width!, height: metadata.height! }, '512x512', 'fixture')
     ).toThrow(/declared 512x512 vs decoded 384x384/);
   });
 

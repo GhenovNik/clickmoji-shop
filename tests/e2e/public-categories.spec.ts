@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import sharp from 'sharp';
 import { e2eCategory, mockPublicCatalog } from './fixtures/auth';
 
 test.describe('Public categories flows', () => {
@@ -33,6 +34,63 @@ test.describe('Public categories flows', () => {
 
       expect(response.status(), `${path} should not redirect to sign-in`).toBe(200);
       expect(response.headers()['content-type']).toMatch(contentType);
+    }
+  });
+
+  test('fresh-install icon chain resolves for anonymous users @smoke', async ({ request }) => {
+    const page = await request.get('/');
+    expect(page.status()).toBe(200);
+    const html = await page.text();
+
+    const linkHref = (rel: string) => {
+      const match = html.match(new RegExp(`<link[^>]+rel="${rel}"[^>]+href="([^"]+)"`));
+      return match?.[1];
+    };
+
+    const manifestHref = linkHref('manifest');
+    const appleHref = linkHref('apple-touch-icon');
+
+    // Validate extracted links before any fetch so this test can never leave the isolated origin.
+    expect(manifestHref, 'built HTML links a same-origin manifest').toBe('/manifest.json');
+    expect(appleHref, 'built HTML links a same-origin apple-touch-icon').toBe(
+      '/apple-touch-icon.png'
+    );
+
+    const manifestResponse = await request.get(manifestHref as string, { maxRedirects: 0 });
+    expect(manifestResponse.status()).toBe(200);
+    expect(manifestResponse.headers()['content-type']).toMatch(
+      /application\/manifest\+json|application\/json/
+    );
+    const manifest = (await manifestResponse.json()) as {
+      icons: Array<{ src: string; type?: string; sizes?: string }>;
+    };
+    const pngIcons = manifest.icons.filter((icon) => icon.type === 'image/png');
+    expect(pngIcons.map((icon) => icon.src).sort()).toEqual([
+      '/icons/icon-192.png',
+      '/icons/icon-512.png',
+    ]);
+
+    const expectedPng = /^\/icons\/icon-(192|512)\.png$/;
+    const targets = [...pngIcons.map((icon) => icon.src), appleHref as string];
+    for (const target of targets) {
+      const allowed = expectedPng.test(target) || target === '/apple-touch-icon.png';
+      expect(allowed, `${target} is not a known same-origin icon path`).toBe(true);
+      const response = await request.get(target, { maxRedirects: 0 });
+      expect(response.status(), `${target} should not redirect to sign-in`).toBe(200);
+      expect(response.headers()['content-type']).toMatch(/image\/png/);
+      const body = await response.body();
+      const decoded = await sharp(body).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+      expect(decoded.info.channels, `${target} decodes to 4 channels`).toBe(4);
+    }
+
+    for (const nearMatch of [
+      '/icons/icon-192.png/extra',
+      '/icons/icon-512.pngx',
+      '/apple-touch-icon.png/extra',
+    ]) {
+      const response = await request.get(nearMatch, { maxRedirects: 0 });
+      expect(response.status(), `${nearMatch} must keep the auth redirect`).toBe(307);
+      expect(response.headers()['location']).toContain('/login');
     }
   });
 
