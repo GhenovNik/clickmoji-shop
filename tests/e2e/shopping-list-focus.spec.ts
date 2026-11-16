@@ -19,8 +19,25 @@ test.describe('Purchase focus across held network requests', () => {
           const heldPut = new Promise<Route>((resolve) => {
             capturePut = resolve;
           });
+          let firstPutHeld = false;
           await page.route(`**/api/lists/${E2E_LIST_ID}/items/${item.id}`, (route) => {
-            capturePut(route);
+            if (!firstPutHeld) {
+              firstPutHeld = true;
+              capturePut(route);
+              return;
+            }
+            // The N1 retry budget re-issues the same PUT at 1s/2s/4s; answer retries
+            // like the held attempt so the terminal settle and refetch can fire.
+            if (outcome === '503') {
+              void route.fulfill({ status: 503, json: { error: 'Synthetic unavailable' } });
+            } else if (outcome === 'abort') {
+              void route.abort('aborted');
+            } else {
+              void route.fulfill({
+                status: 200,
+                json: { ...item, isPurchased: !initiallyPurchased },
+              });
+            }
           });
           await page.goto(`/lists/${E2E_LIST_ID}`);
           const toggle = page.getByRole('button', { name: 'Куплено: Молоко', exact: true });
@@ -51,7 +68,9 @@ test.describe('Purchase focus across held network requests', () => {
           } else {
             await put.abort('aborted');
           }
-          await expect.poll(() => state.listRequests).toBeGreaterThan(readsBeforeResponse);
+          await expect
+            .poll(() => state.listRequests, { timeout: 12_000 })
+            .toBeGreaterThan(readsBeforeResponse);
           const expected = outcome === 'success' ? !initiallyPurchased : initiallyPurchased;
           await expect(toggle).toHaveAttribute('aria-pressed', String(expected));
           await expect(moveFocus ? neighbour : toggle).toBeFocused();

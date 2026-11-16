@@ -141,62 +141,73 @@ describe('a list with items', () => {
 for (const initiallyPurchased of [false, true]) {
   describe(`purchase focus (initially purchased: ${initiallyPurchased})`, () => {
     for (const outcome of ['success', '503', 'abort'] as const) {
-      it.each([false, true])(`${outcome}, user moved focus: %s`, async (moveFocus) => {
-        serverItems = [{ ...milk, isPurchased: initiallyPurchased }];
-        let resolvePut!: (response: Response) => void;
-        let rejectPut!: (error: Error) => void;
-        const heldPut = new Promise<Response>((resolve, reject) => {
-          resolvePut = resolve;
-          rejectPut = reject;
-        });
-        vi.stubGlobal(
-          'fetch',
-          vi.fn((url: string, init?: RequestInit) => {
-            if (init?.method === 'PUT' && url === '/api/lists/list-1/items/item-1') return heldPut;
-            if (!init?.method && url === '/api/lists/list-1') {
-              listRequests += 1;
-              return Promise.resolve(
-                Response.json({ id: 'list-1', name: 'Покупки', items: serverItems })
-              );
+      it.each([false, true])(
+        `${outcome}, user moved focus: %s`,
+        async (moveFocus) => {
+          serverItems = [{ ...milk, isPurchased: initiallyPurchased }];
+          let resolvePut!: (response: Response) => void;
+          let rejectPut!: (error: Error) => void;
+          const heldPut = new Promise<Response>((resolve, reject) => {
+            resolvePut = resolve;
+            rejectPut = reject;
+          });
+          vi.stubGlobal(
+            'fetch',
+            vi.fn((url: string, init?: RequestInit) => {
+              if (init?.method === 'PUT' && url === '/api/lists/list-1/items/item-1')
+                return heldPut;
+              if (!init?.method && url === '/api/lists/list-1') {
+                listRequests += 1;
+                return Promise.resolve(
+                  Response.json({ id: 'list-1', name: 'Покупки', items: serverItems })
+                );
+              }
+              throw new Error(`Unexpected fetch: ${url}`);
+            })
+          );
+          const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+          const { queryClient } = renderPage();
+          const original = await screen.findByRole('button', { name: 'Куплено: Молоко' });
+          const getToggle = () => screen.getByRole('button', { name: 'Куплено: Молоко' });
+          original.focus();
+          fireEvent.click(original);
+          await waitFor(() =>
+            expect(getToggle()).toHaveAttribute('aria-pressed', String(!initiallyPurchased))
+          );
+          // The real page and hook have committed the optimistic move, but PUT is still held.
+          expect(queryClient.isMutating()).toBe(1);
+          expect(getToggle()).not.toBe(original);
+          expect(getToggle()).toHaveFocus();
+          const neighbour = screen.getByRole('button', { name: /Импорт из текста/ });
+          if (moveFocus) neighbour.focus();
+          const readsBeforeResponse = listRequests;
+          await act(async () => {
+            if (outcome === 'success') {
+              serverItems = [{ ...milk, isPurchased: !initiallyPurchased }];
+              resolvePut(Response.json(serverItems[0]));
+            } else if (outcome === '503') {
+              resolvePut(Response.json({}, { status: 503 }));
+            } else {
+              rejectPut(new DOMException('Request aborted', 'AbortError'));
             }
-            throw new Error(`Unexpected fetch: ${url}`);
-          })
-        );
-        const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
-        const { queryClient } = renderPage();
-        const original = await screen.findByRole('button', { name: 'Куплено: Молоко' });
-        const getToggle = () => screen.getByRole('button', { name: 'Куплено: Молоко' });
-        original.focus();
-        fireEvent.click(original);
-        await waitFor(() =>
-          expect(getToggle()).toHaveAttribute('aria-pressed', String(!initiallyPurchased))
-        );
-        // The real page and hook have committed the optimistic move, but PUT is still held.
-        expect(queryClient.isMutating()).toBe(1);
-        expect(getToggle()).not.toBe(original);
-        expect(getToggle()).toHaveFocus();
-        const neighbour = screen.getByRole('button', { name: /Импорт из текста/ });
-        if (moveFocus) neighbour.focus();
-        const readsBeforeResponse = listRequests;
-        await act(async () => {
-          if (outcome === 'success') {
-            serverItems = [{ ...milk, isPurchased: !initiallyPurchased }];
-            resolvePut(Response.json(serverItems[0]));
-          } else if (outcome === '503') {
-            resolvePut(Response.json({}, { status: 503 }));
-          } else {
-            rejectPut(new DOMException('Request aborted', 'AbortError'));
-          }
-          await heldPut.catch(() => undefined);
-        });
-        await waitFor(() => expect(queryClient.isMutating()).toBe(0));
-        await waitFor(() => expect(listRequests).toBeGreaterThan(readsBeforeResponse));
-        const expected = outcome === 'success' ? !initiallyPurchased : initiallyPurchased;
-        await waitFor(() => expect(getToggle()).toHaveAttribute('aria-pressed', String(expected)));
-        expect(moveFocus ? neighbour : getToggle()).toHaveFocus();
-        if (outcome !== 'success') expect(consoleError).toHaveBeenCalled();
-        queryClient.clear();
-      });
+            await heldPut.catch(() => undefined);
+          });
+          // N1 contract: a retryable PUT failure is retried at 1s/2s/4s before the terminal
+          // rollback; waitFor polls the predicate, so the timeout is an upper bound.
+          await waitFor(() => expect(queryClient.isMutating()).toBe(0), { timeout: 10000 });
+          await waitFor(() => expect(listRequests).toBeGreaterThan(readsBeforeResponse));
+          const expected = outcome === 'success' ? !initiallyPurchased : initiallyPurchased;
+          await waitFor(() =>
+            expect(getToggle()).toHaveAttribute('aria-pressed', String(expected))
+          );
+          expect(moveFocus ? neighbour : getToggle()).toHaveFocus();
+          if (outcome !== 'success') expect(consoleError).toHaveBeenCalled();
+          queryClient.clear();
+          // The terminal rollback lands after the full retry budget;
+          // the test timeout stays above it.
+        },
+        12000
+      );
     }
   });
 }
