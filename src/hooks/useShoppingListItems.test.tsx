@@ -4,6 +4,7 @@ import { act, renderHook } from '@testing-library/react';
 import { QueryClient, QueryClientProvider, onlineManager } from '@tanstack/react-query';
 import { NextIntlClientProvider } from 'next-intl';
 import { messages } from '@/i18n/messages';
+import { queryKeys } from '@/lib/query-keys';
 import { useShoppingListItems, type ListData } from './useShoppingListItems';
 
 const router = vi.hoisted(() => ({ push: vi.fn(), refresh: vi.fn() }));
@@ -143,7 +144,7 @@ const step = (ms: number) =>
 async function renderList() {
   const rendered = renderHook(() => useShoppingListItems('list-1'), { wrapper });
   await step(0);
-  rollbackWitness = queryClient.getQueryData<ListData>(['list', 'list-1']);
+  rollbackWitness = queryClient.getQueryData<ListData>(queryKeys.list('list-1'));
   return rendered;
 }
 
@@ -152,7 +153,7 @@ function startToggle(result: { current: { togglePurchased: (itemId: string) => P
 }
 
 function currentItem(itemId = 'item-1') {
-  const data = queryClient.getQueryData<ListData>(['list', 'list-1']);
+  const data = queryClient.getQueryData<ListData>(queryKeys.list('list-1'));
   const item = data?.items.find((candidate) => candidate.id === itemId);
   if (!item) throw new Error(`item ${itemId} not in cache`);
   return item;
@@ -239,7 +240,7 @@ describe('togglePurchased retry/ACK contract (N1)', () => {
     expect(rollbackCount()).toBe(0);
     expect(currentItem().isPurchased).toBe(true);
     expect(invalidateSpy).toHaveBeenCalledWith(
-      expect.objectContaining({ queryKey: ['list', 'list-1'] })
+      expect.objectContaining({ queryKey: queryKeys.list('list-1') })
     );
 
     await step(10_000);
