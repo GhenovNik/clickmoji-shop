@@ -1,8 +1,11 @@
+const listPrefix = () => ['list'] as const;
+
 // React Query keys for server state, in one place so that a mutation and the queries it changes
 // cannot drift apart. Prefix keys (`products()`, `search()`) match every query below them.
 export const queryKeys = {
   lists: () => ['lists'] as const,
-  list: (listId: string) => ['list', listId] as const,
+  listPrefix,
+  list: (listId: string) => [...listPrefix(), listId] as const,
   history: () => ['history'] as const,
   favorites: () => ['favorites'] as const,
   categories: () => ['categories'] as const,

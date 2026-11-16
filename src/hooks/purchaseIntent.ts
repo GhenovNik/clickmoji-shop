@@ -129,7 +129,7 @@ export class PurchaseIntentStore {
       this.lists.clear();
       this.resettingSession = true;
       try {
-        this.client.removeQueries({ queryKey: ['list'] });
+        this.client.removeQueries({ queryKey: queryKeys.listPrefix() });
       } finally {
         this.resettingSession = false;
       }
