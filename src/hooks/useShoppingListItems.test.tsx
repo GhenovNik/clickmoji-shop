@@ -1293,6 +1293,36 @@ describe('purchase intent per-item read generations', () => {
 });
 
 describe('neighbor mutation rollback ownership', () => {
+  it('the next tap uses the live overlay even if cache purchase data is stale', async () => {
+    enqueue('PUT', PUT_URL, [
+      putReject(),
+      putReject(),
+      putReject(),
+      putReject(),
+      putRespond(200, '{}'),
+    ]);
+    const { result } = await renderList();
+    void startToggle(result);
+    await step(0);
+    for (const delay of [1000, 2000, 4000]) await step(delay);
+    queryClient.setQueryData<ListData>(
+      queryKeys.list('list-1'),
+      (old) =>
+        old && {
+          ...old,
+          items: old.items.map((item) =>
+            item.id === 'item-1' ? { ...item, isPurchased: false } : item
+          ),
+        }
+    );
+    void startToggle(result);
+    await step(10);
+    expect(putJournal().map((entry) => entry.body)).toEqual([
+      ...Array.from({ length: 4 }, () => ({ isPurchased: true })),
+      { isPurchased: false },
+    ]);
+  });
+
   it('an older failed note cannot overwrite a newer note', async () => {
     let releaseOld!: (response: Response) => void;
     let releaseNew!: (response: Response) => void;
