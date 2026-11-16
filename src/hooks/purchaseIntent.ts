@@ -47,6 +47,7 @@ export class PurchaseIntentStore {
   private lists = new Map<string, Map<string, ItemState>>();
   private online = onlineManager.isOnline();
   private resettingSession = false;
+  private providerActive = false;
   private unsubscribeOnline?: () => void;
   private unsubscribeCache?: () => void;
 
@@ -73,6 +74,7 @@ export class PurchaseIntentStore {
     this.unsubscribeCache = this.client.getQueryCache().subscribe((event) => {
       if (
         !this.resettingSession &&
+        !this.providerActive &&
         event.type === 'removed' &&
         event.query.queryKey[0] === 'list'
       ) {
@@ -95,7 +97,13 @@ export class PurchaseIntentStore {
     });
   }
 
+  retainProvider() {
+    this.providerActive = true;
+    this.activate();
+  }
+
   dispose() {
+    this.providerActive = false;
     this.unsubscribeOnline?.();
     this.unsubscribeOnline = undefined;
     this.unsubscribeCache?.();

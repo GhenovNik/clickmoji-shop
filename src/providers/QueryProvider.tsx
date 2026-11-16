@@ -11,7 +11,11 @@ function SessionObserver({ client }: { client: QueryClient }) {
   useEffect(() => {
     purchaseIntentStore(client).observeSession(status, data?.user?.id ?? null);
   }, [client, data?.user?.id, status]);
-  useEffect(() => () => purchaseIntentStore(client).dispose(), [client]);
+  useEffect(() => {
+    const store = purchaseIntentStore(client);
+    store.retainProvider();
+    return () => store.dispose();
+  }, [client]);
   return null;
 }
 
