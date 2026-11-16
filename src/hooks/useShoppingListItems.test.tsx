@@ -2031,3 +2031,48 @@ describe('purchase intent session cache fence', () => {
     expect(putJournal()).toHaveLength(1);
   });
 });
+
+describe('purchase intent cache eviction', () => {
+  it('F1: an exhausted intent survives query eviction while the provider stays mounted', async () => {
+    enqueue('PUT', PUT_URL, [putReject(), putReject(), putReject(), putReject()]);
+    let client!: QueryClient;
+    function Witness() {
+      client = useQueryClient();
+      return null;
+    }
+    function Consumer() {
+      const { items, togglePurchased } = useShoppingListItems('list-1');
+      return (
+        <button
+          onClick={() => {
+            void togglePurchased('item-1').catch(() => {});
+          }}
+        >
+          {String(items[0]?.isPurchased)}
+        </button>
+      );
+    }
+    function Tree({ visible }: { visible: boolean }) {
+      return (
+        <NextIntlClientProvider locale="ru" messages={messages.ru} timeZone="UTC">
+          <Providers>
+            <Witness />
+            {visible && <Consumer />}
+          </Providers>
+        </NextIntlClientProvider>
+      );
+    }
+    const view = render(<Tree visible />);
+    await step(10);
+    fireEvent.click(screen.getByRole('button', { name: 'false' }));
+    await step(0);
+    for (const delay of [1000, 2000, 4000]) await step(delay);
+    expect(screen.getByRole('button').textContent).toBe('true');
+    view.rerender(<Tree visible={false} />);
+    client.removeQueries({ queryKey: queryKeys.list('list-1') });
+    view.rerender(<Tree visible />);
+    await step(10);
+    expect(screen.getByRole('button').textContent).toBe('true');
+    expect(putJournal()).toHaveLength(4);
+  });
+});
