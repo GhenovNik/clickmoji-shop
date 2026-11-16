@@ -47,7 +47,9 @@ const makeListData = (): ListData => ({
 
 type JournalEntry = { method: string; url: string; body: unknown };
 type Queued =
-  { kind: 'reject'; error: unknown } | { kind: 'respond'; status: number; body: string | null };
+  | { kind: 'reject'; error: unknown }
+  | { kind: 'respond'; status: number; body: string | null }
+  | { kind: 'deferred'; response: Promise<Response> };
 
 const LIST_URL = '/api/lists/list-1';
 const PUT_URL = '/api/lists/list-1/items/item-1';
@@ -92,6 +94,7 @@ function stubFetch() {
       journal.push({ method, url, body });
 
       const next = queues.get(key(method, url))?.shift();
+      if (next?.kind === 'deferred') return await next.response;
       if (next?.kind === 'reject') {
         throw next.error;
       }
@@ -443,4 +446,75 @@ describe('togglePurchased retry/ACK contract (N1)', () => {
       expect(putJournal()).toHaveLength(2);
     }
   );
+});
+
+describe('purchase intent contract (AGE-1646)', () => {
+  it.each([2, 3, 4])('F8: already-started attempt #%i settles before the next revision starts', async (attempt) => {
+    let release!: (response: Response) => void;
+    const response = new Promise<Response>((resolve) => { release = resolve; });
+    enqueue('PUT', PUT_URL, [
+      ...Array.from({ length: attempt - 1 }, () => putRespond(500, '{}')),
+      { kind: 'deferred', response },
+      putRespond(200, '{}'),
+    ]);
+    const { result } = await renderList();
+    void startToggle(result);
+    await step(0);
+    for (const delay of [1000, 2000, 4000].slice(0, attempt - 1)) await step(delay);
+    expect(putJournal()).toHaveLength(attempt);
+    void startToggle(result);
+    await step(0);
+    expect(currentItem().isPurchased).toBe(false);
+    expect(putJournal()).toHaveLength(attempt);
+    release(new Response('{}', { status: 500 }));
+    await step(0);
+    expect(putJournal().map((entry) => entry.body)).toEqual([
+      ...Array.from({ length: attempt }, () => ({ isPurchased: true })),
+      { isPurchased: false },
+    ]);
+    await step(10_000);
+    expect(putJournal()).toHaveLength(attempt + 1);
+  });
+
+  it('F1: exhausted transport retains the desired value without further PUTs', async () => {
+    enqueue('PUT', PUT_URL, [putReject(), putReject(), putReject(), putReject()]);
+    const { result } = await renderList();
+    const done = startToggle(result);
+    await step(0);
+    await step(1000);
+    await step(2000);
+    await step(4000);
+    await done;
+    expect(putJournal()).toHaveLength(4);
+    expect(currentItem().isPurchased).toBe(true);
+    await step(10_000);
+    expect(putJournal()).toHaveLength(4);
+  });
+
+  it('F4: two synchronous taps send distinct absolute values in FIFO order', async () => {
+    enqueue('PUT', PUT_URL, [putRespond(200, '{}'), putRespond(200, '{}')]);
+    const { result } = await renderList();
+    act(() => {
+      void startToggle(result);
+      void startToggle(result);
+    });
+    await step(0);
+    expect(putJournal().map((entry) => entry.body)).toEqual([
+      { isPurchased: true },
+      { isPurchased: false },
+    ]);
+  });
+
+  it('F7: 205 with an empty body acknowledges the PUT', async () => {
+    enqueue('PUT', PUT_URL, [putRespond(205, null)]);
+    const { result } = await renderList();
+    const done = startToggle(result);
+    await step(0);
+    await done;
+    expect(putJournal()).toHaveLength(1);
+    expect(currentItem().isPurchased).toBe(true);
+    expect(rollbackCount()).toBe(0);
+    await step(10_000);
+    expect(putJournal()).toHaveLength(1);
+  });
 });
