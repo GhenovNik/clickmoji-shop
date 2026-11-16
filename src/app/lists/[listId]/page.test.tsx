@@ -193,9 +193,7 @@ for (const initiallyPurchased of [false, true]) {
             await heldPut.catch(() => undefined);
           });
           // N1 contract: a retryable PUT failure is retried at 1s/2s/4s before the terminal
-          // rollback. Measured terminal-rollback time from the held response: 7008-7014 ms
-          // (n1-ci2-fix-timing.log); waitFor polls a predicate, so this is an upper bound, not a
-          // fixed delay. The assertion itself is unchanged.
+          // rollback; waitFor polls the predicate, so the timeout is an upper bound.
           await waitFor(() => expect(queryClient.isMutating()).toBe(0), { timeout: 10000 });
           await waitFor(() => expect(listRequests).toBeGreaterThan(readsBeforeResponse));
           const expected = outcome === 'success' ? !initiallyPurchased : initiallyPurchased;
@@ -205,8 +203,8 @@ for (const initiallyPurchased of [false, true]) {
           expect(moveFocus ? neighbour : getToggle()).toHaveFocus();
           if (outcome !== 'success') expect(consoleError).toHaveBeenCalled();
           queryClient.clear();
-          // The terminal rollback lands ~7s after the held response (measured 7008-7014 ms);
-          // keep the test timeout above that instead of weakening the assertions.
+          // The terminal rollback lands after the full retry budget;
+          // the test timeout stays above it.
         },
         12000
       );
