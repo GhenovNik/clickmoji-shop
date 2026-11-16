@@ -178,7 +178,10 @@ for (const initiallyPurchased of [false, true]) {
           // The real page and hook have committed the optimistic move, but PUT is still held.
           expect(queryClient.isMutating()).toBe(1);
           expect(getToggle()).not.toBe(original);
-          expect(getToggle()).toHaveFocus();
+          // AGE-1649: a disabled control cannot hold focus, so the busy row's toggle is not
+          // focused. Focus is not stolen; it returns to the toggle when the row unlocks (below).
+          expect(getToggle()).toBeDisabled();
+          expect(getToggle()).not.toHaveFocus();
           const neighbour = screen.getByRole('button', { name: /Импорт из текста/ });
           if (moveFocus) neighbour.focus();
           const readsBeforeResponse = listRequests;
