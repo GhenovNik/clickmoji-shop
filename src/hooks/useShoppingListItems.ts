@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { useTranslations } from 'next-intl';
 import { queryKeys } from '@/lib/query-keys';
 import { useCompleteList } from '@/hooks/useListMutations';
+import { purchaseIntentStore } from '@/hooks/purchaseIntent';
 
 export type Item = {
   id: string;
@@ -39,58 +40,10 @@ export type ListData = {
   items: Item[];
 };
 
-// Typed PUT delivery outcome: status === null means the fetch rejected before
-// a response arrived (transport); a number is the HTTP status received.
-class TogglePurchasedError extends Error {
-  readonly status: number | null;
-
-  constructor(status: number | null, options?: { cause?: unknown }) {
-    super(
-      status === null ? 'Network request failed' : `Request failed with status ${status}`,
-      options
-    );
-    this.name = 'TogglePurchasedError';
-    this.status = status;
-  }
-}
-
-const isRetryablePutStatus = (status: number) =>
-  status === 408 || status === 429 || (status >= 500 && status <= 599);
-
-const isTogglePurchasedError = (error: unknown): error is TogglePurchasedError =>
-  error instanceof TogglePurchasedError;
-
-// API functions
 const fetchListAPI = async (listId: string): Promise<ListData> => {
   const response = await fetch(`/api/lists/${listId}`);
   if (!response.ok) throw new Error('Failed to fetch list');
   return response.json();
-};
-
-const togglePurchasedAPI = async ({
-  listId,
-  itemId,
-  isPurchased,
-}: {
-  listId: string;
-  itemId: string;
-  isPurchased: boolean;
-}) => {
-  let response: Response;
-  try {
-    response = await fetch(`/api/lists/${listId}/items/${itemId}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ isPurchased }),
-    });
-  } catch (error) {
-    throw new TogglePurchasedError(null, { cause: error });
-  }
-  // Any 2xx acknowledges delivery; the body is not required to parse.
-  if (response.status >= 200 && response.status < 300) {
-    return { success: true };
-  }
-  throw new TogglePurchasedError(response.status);
 };
 
 const updateNoteAPI = async ({
@@ -126,6 +79,7 @@ export function useShoppingListItems(listId: string) {
   const router = useRouter();
   const queryClient = useQueryClient();
   const t = useTranslations('lists');
+  const intentStore = purchaseIntentStore(queryClient);
 
   // Query for fetching list
   const {
@@ -134,48 +88,22 @@ export function useShoppingListItems(listId: string) {
     refetch: fetchListItems,
   } = useQuery({
     queryKey: queryKeys.list(listId),
-    queryFn: () => fetchListAPI(listId),
+    queryFn: async () => {
+      const read = intentStore.beginRead(listId);
+      return intentStore.tagRead(await fetchListAPI(listId), read);
+    },
+    structuralSharing: (old, data) =>
+      intentStore.applyRead(old as ListData | undefined, data as ListData),
     enabled: !!listId,
   });
 
   const items = list?.items || [];
   const completeMutation = useCompleteList();
 
-  // Mutation for toggling purchased status with optimistic updates
   const toggleMutation = useMutation({
-    mutationFn: togglePurchasedAPI,
-    retry: (failureCount, error) =>
-      failureCount < 3 &&
-      isTogglePurchasedError(error) &&
-      (error.status === null || isRetryablePutStatus(error.status)),
-    retryDelay: (failureCount) => [1000, 2000, 4000][Math.min(failureCount, 2)],
-    onMutate: async ({ itemId, isPurchased }) => {
-      // Cancel outgoing refetches
-      await queryClient.cancelQueries({ queryKey: queryKeys.list(listId) });
-
-      // Snapshot previous value
-      const previousList = queryClient.getQueryData<ListData>(queryKeys.list(listId));
-
-      // Optimistically update
-      queryClient.setQueryData<ListData>(queryKeys.list(listId), (old) => {
-        if (!old) return old;
-        return {
-          ...old,
-          items: old.items.map((i) => (i.id === itemId ? { ...i, isPurchased } : i)),
-        };
-      });
-
-      return { previousList };
-    },
-    onError: (err, variables, context) => {
-      // Rollback on error
-      if (context?.previousList) {
-        queryClient.setQueryData(queryKeys.list(listId), context.previousList);
-      }
-    },
-    onSettled: () => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.list(listId) });
-    },
+    mutationFn: ({ dispatch }: { dispatch: () => Promise<Response> }) => dispatch(),
+    networkMode: 'online',
+    retry: false,
   });
 
   // Mutation for removing item with optimistic updates
@@ -233,16 +161,8 @@ export function useShoppingListItems(listId: string) {
   });
 
   // Wrapper functions to maintain API compatibility
-  const togglePurchased = async (itemId: string) => {
-    const item = items.find((i) => i.id === itemId);
-    if (!item) return;
-
-    await toggleMutation.mutateAsync({
-      listId,
-      itemId,
-      isPurchased: !item.isPurchased,
-    });
-  };
+  const togglePurchased = (itemId: string) =>
+    intentStore.toggle(listId, itemId, (dispatch) => toggleMutation.mutateAsync({ dispatch }));
 
   const removeItem = async (itemId: string) => {
     await removeMutation.mutateAsync({ listId, itemId });
