@@ -192,19 +192,22 @@ for (const initiallyPurchased of [false, true]) {
             }
             await heldPut.catch(() => undefined);
           });
-          // N1 contract: a retryable PUT failure is retried at 1s/2s/4s before the terminal
-          // rollback; waitFor polls the predicate, so the timeout is an upper bound.
-          await waitFor(() => expect(queryClient.isMutating()).toBe(0), { timeout: 10000 });
-          await waitFor(() => expect(listRequests).toBeGreaterThan(readsBeforeResponse));
-          const expected = outcome === 'success' ? !initiallyPurchased : initiallyPurchased;
+          // The optimistic intent remains visible after the retry budget is exhausted.
+          if (outcome === 'success') {
+            await waitFor(() => expect(queryClient.isMutating()).toBe(0), { timeout: 10000 });
+            await waitFor(() => expect(listRequests).toBeGreaterThan(readsBeforeResponse));
+          } else {
+            await waitFor(() => expect(consoleError).toHaveBeenCalled(), { timeout: 10000 });
+            expect(queryClient.isMutating()).toBe(0);
+          }
+          const expected = !initiallyPurchased;
           await waitFor(() =>
             expect(getToggle()).toHaveAttribute('aria-pressed', String(expected))
           );
           expect(moveFocus ? neighbour : getToggle()).toHaveFocus();
           if (outcome !== 'success') expect(consoleError).toHaveBeenCalled();
           queryClient.clear();
-          // The terminal rollback lands after the full retry budget;
-          // the test timeout stays above it.
+          // The terminal result arrives after the full retry budget.
         },
         12000
       );

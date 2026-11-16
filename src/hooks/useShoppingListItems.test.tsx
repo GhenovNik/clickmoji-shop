@@ -273,7 +273,7 @@ afterEach(() => {
 });
 
 describe('togglePurchased retry/ACK contract (N1)', () => {
-  it('AC-1: four transport rejects keep the optimistic value, then exactly one BASE rollback after the 4th attempt', async () => {
+  it('AC-1: four transport rejects keep the optimistic value, then retains the exhausted intent after the 4th attempt', async () => {
     enqueue('PUT', PUT_URL, [putReject(), putReject(), putReject(), putReject()]);
     const { result } = await renderList();
     const done = startToggle(result);
@@ -301,15 +301,15 @@ describe('togglePurchased retry/ACK contract (N1)', () => {
 
     await step(10_000);
     expect(putJournal()).toHaveLength(4);
-    expect(currentItem().isPurchased).toBe(false);
-    expect(rollbackCount()).toBe(1);
+    expect(currentItem().isPurchased).toBe(true);
+    expect(rollbackCount()).toBe(0);
 
     await done;
     for (const entry of putJournal()) {
       expect(entry.body).toEqual({ isPurchased: true });
     }
-    expect(currentItem().isPurchased).toBe(false);
-    expect(rollbackCount()).toBe(1);
+    expect(currentItem().isPurchased).toBe(true);
+    expect(rollbackCount()).toBe(0);
 
     await step(10_000);
     expect(putJournal()).toHaveLength(4);
@@ -385,7 +385,7 @@ describe('togglePurchased retry/ACK contract (N1)', () => {
     { name: 'HTTP 500', queued: () => putRespond(500, 'internal error') },
     { name: 'HTTP 503', queued: () => putRespond(503, 'service unavailable') },
   ])(
-    'AC-4 retryable: $name exhausts the budget of 4 PUTs, then one BASE rollback',
+    'AC-4 retryable: $name exhausts the budget of 4 PUTs, then retains the exhausted intent',
     async ({ queued }) => {
       enqueue('PUT', PUT_URL, [queued(), queued(), queued(), queued()]);
       const { result } = await renderList();
@@ -398,8 +398,8 @@ describe('togglePurchased retry/ACK contract (N1)', () => {
       await step(10_000);
 
       expect(putJournal()).toHaveLength(4);
-      expect(currentItem().isPurchased).toBe(false);
-      expect(rollbackCount()).toBe(1);
+      expect(currentItem().isPurchased).toBe(true);
+      expect(rollbackCount()).toBe(0);
 
       await done;
 
@@ -416,7 +416,7 @@ describe('togglePurchased retry/ACK contract (N1)', () => {
     { name: 'HTTP 422', status: 422 },
     { name: 'HTTP 302 (fail-closed, out of class)', status: 302 },
   ])(
-    'AC-4 permanent: $name yields exactly one PUT, no retry, one BASE rollback',
+    'AC-4 permanent: $name yields exactly one PUT, no retry, own-item baseline rollback',
     async ({ status }) => {
       enqueue('PUT', PUT_URL, [putRespond(status, 'error')]);
       const { result } = await renderList();
@@ -427,7 +427,7 @@ describe('togglePurchased retry/ACK contract (N1)', () => {
 
       expect(putJournal()).toHaveLength(1);
       expect(currentItem().isPurchased).toBe(false);
-      expect(rollbackCount()).toBe(1);
+      expect(rollbackCount()).toBe(0);
 
       await done;
 
@@ -494,20 +494,20 @@ describe('togglePurchased retry/ACK contract (N1)', () => {
 
     await step(10_000);
     expect(putJournal()).toHaveLength(4);
-    expect(currentItem().isPurchased).toBe(false);
-    expect(rollbackCount()).toBe(1);
+    expect(currentItem().isPurchased).toBe(true);
+    expect(rollbackCount()).toBe(0);
 
     await done;
     expect(putJournal()).toHaveLength(4);
-    expect(rollbackCount()).toBe(1);
-    expect(currentItem().isPurchased).toBe(false);
+    expect(rollbackCount()).toBe(0);
+    expect(currentItem().isPurchased).toBe(true);
   });
 
   it.each([
     { name: 'transport reject then HTTP 401', second: () => putRespond(401, 'unauthorized') },
     { name: 'transport reject then HTTP 302', second: () => putRespond(302, 'redirect') },
   ])(
-    'FR-1 neighbor: $name — exactly two PUTs with the same body, one terminal rollback, no extra PUT',
+    'FR-1 neighbor: $name — exactly two PUTs with the same body, own-item terminal rollback, no extra PUT',
     async ({ second }) => {
       enqueue('PUT', PUT_URL, [putReject(), second()]);
       const { result } = await renderList();
@@ -522,7 +522,7 @@ describe('togglePurchased retry/ACK contract (N1)', () => {
         expect(entry.body).toEqual({ isPurchased: true });
       }
       expect(currentItem().isPurchased).toBe(false);
-      expect(rollbackCount()).toBe(1);
+      expect(rollbackCount()).toBe(0);
 
       await done;
       expect(putJournal()).toHaveLength(2);
@@ -1971,5 +1971,63 @@ describe('purchase intent QueryClient baseline isolation', () => {
     releaseRead(Response.json(serverState));
     second.unmount();
     other.clear();
+  });
+});
+
+describe('purchase intent session cache fence', () => {
+  it('F6: a new epoch does not reuse an abandoned optimistic value', async () => {
+    let client!: QueryClient;
+    let release!: (response: Response) => void;
+    const response = new Promise<Response>((resolve) => {
+      release = resolve;
+    });
+    enqueue('PUT', PUT_URL, [{ kind: 'deferred', response }]);
+    function Witness() {
+      client = useQueryClient();
+      const { data } = useSession();
+      return <span data-testid="epoch-user">{data?.user?.id ?? 'none'}</span>;
+    }
+    function Consumer() {
+      const { items, togglePurchased } = useShoppingListItems('list-1');
+      return (
+        <button
+          onClick={() => {
+            void togglePurchased('item-1').catch(() => {});
+          }}
+        >
+          {String(items[0]?.isPurchased)}
+        </button>
+      );
+    }
+    function Tree({ visible }: { visible: boolean }) {
+      return (
+        <NextIntlClientProvider locale="ru" messages={messages.ru} timeZone="UTC">
+          <Providers>
+            <Witness />
+            {visible && <Consumer />}
+          </Providers>
+        </NextIntlClientProvider>
+      );
+    }
+    const view = render(<Tree visible />);
+    await step(10);
+    fireEvent.click(screen.getByRole('button', { name: 'false' }));
+    await step(0);
+    expect(client.getQueryData<ListData>(queryKeys.list('list-1'))?.items[0].isPurchased).toBe(
+      true
+    );
+    view.rerender(<Tree visible={false} />);
+    vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible');
+    sessionResponse = { user: { id: 'user-b' }, expires: '2099-01-01T00:00:00.000Z' };
+    act(() => document.dispatchEvent(new Event('visibilitychange')));
+    await step(10);
+    expect(screen.getByTestId('epoch-user').textContent).toBe('user-b');
+    view.rerender(<Tree visible />);
+    await step(10);
+    expect(screen.getByRole('button').textContent).toBe('false');
+    release(new Response('{}', { status: 200 }));
+    await step(10);
+    expect(screen.getByRole('button').textContent).toBe('false');
+    expect(putJournal()).toHaveLength(1);
   });
 });
