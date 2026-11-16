@@ -5,7 +5,8 @@ import { QueryClient, QueryClientProvider, onlineManager } from '@tanstack/react
 import { NextIntlClientProvider } from 'next-intl';
 import { messages } from '@/i18n/messages';
 import { queryKeys } from '@/lib/query-keys';
-import { useShoppingListItems, type ListData } from './useShoppingListItems';
+import { useShoppingListItems, type Item, type ListData } from './useShoppingListItems';
+import { useImportListText } from './useListMutations';
 
 const router = vi.hoisted(() => ({ push: vi.fn(), refresh: vi.fn() }));
 vi.mock('next/navigation', () => ({ useRouter: () => router }));
@@ -47,10 +48,20 @@ const makeListData = (): ListData => ({
 
 type JournalEntry = { method: string; url: string; body: unknown };
 type Queued =
-  { kind: 'reject'; error: unknown } | { kind: 'respond'; status: number; body: string | null };
+  | { kind: 'reject'; error: unknown }
+  | { kind: 'respond'; status: number; body: string | null }
+  // Held until the test releases it; the released entry is then served as usual.
+  | { kind: 'gate'; gate: Promise<Queued> }
+  // Serve through the default handler (GET returns the current server state).
+  | { kind: 'serve' };
 
 const LIST_URL = '/api/lists/list-1';
 const PUT_URL = '/api/lists/list-1/items/item-1';
+const ITEM2_URL = '/api/lists/list-1/items/item-2';
+const HISTORY_URL = '/api/history';
+const IMPORT_URL = '/api/lists/import-text';
+const SERVER_NOTE = 'заметка с сервера';
+const SERVE: Queued = { kind: 'serve' };
 
 let serverState: ListData;
 let journal: JournalEntry[];
@@ -66,6 +77,16 @@ function enqueue(method: string, url: string, queued: Queued[]) {
   queues.set(key(method, url), [...(queues.get(key(method, url)) ?? []), ...queued]);
 }
 
+// Holds the next request to `method url` until the test releases it.
+function holdNext(method: string, url: string) {
+  let release!: (queued: Queued) => void;
+  const gate = new Promise<Queued>((resolve) => {
+    release = resolve;
+  });
+  enqueue(method, url, [{ kind: 'gate', gate }]);
+  return (queued: Queued = SERVE) => release(queued);
+}
+
 const putReject = (): Queued => ({ kind: 'reject', error: new TypeError('fetch failed') });
 const putRespond = (status: number, body: string | null): Queued => ({
   kind: 'respond',
@@ -73,7 +94,37 @@ const putRespond = (status: number, body: string | null): Queued => ({
   body,
 });
 
-const putJournal = () => journal.filter((entry) => entry.method === 'PUT');
+const methodJournal = (method: string) => journal.filter((entry) => entry.method === method);
+const putJournal = () => methodJournal('PUT');
+const deleteUrls = () => methodJournal('DELETE').map((entry) => entry.url);
+const getCount = () => methodJournal('GET').length;
+const noteWrites = () =>
+  putJournal().filter(
+    (entry) => typeof entry.body === 'object' && entry.body !== null && 'note' in entry.body
+  );
+
+function applyServerWrite(method: string, url: string, body: unknown, status: number) {
+  const itemId = /\/items\/([^/]+)$/.exec(url)?.[1];
+  if (!itemId) return;
+  if (method === 'PUT' && status >= 200 && status < 300 && body && typeof body === 'object') {
+    const patch = body as { isPurchased?: unknown };
+    if (typeof patch.isPurchased === 'boolean') {
+      const isPurchased = patch.isPurchased;
+      serverState = {
+        ...serverState,
+        items: serverState.items.map((item) =>
+          item.id === itemId ? { ...item, isPurchased } : item
+        ),
+      };
+    }
+  }
+  if (method === 'DELETE' && status >= 200 && status < 300) {
+    serverState = {
+      ...serverState,
+      items: serverState.items.filter((item) => item.id !== itemId),
+    };
+  }
+}
 
 function stubFetch() {
   vi.stubGlobal(
@@ -91,30 +142,14 @@ function stubFetch() {
       }
       journal.push({ method, url, body });
 
-      const next = queues.get(key(method, url))?.shift();
+      let next = queues.get(key(method, url))?.shift();
+      while (next?.kind === 'gate') next = await next.gate;
+      if (next?.kind === 'serve') next = undefined;
       if (next?.kind === 'reject') {
         throw next.error;
       }
       if (next?.kind === 'respond') {
-        if (
-          method === 'PUT' &&
-          next.status >= 200 &&
-          next.status < 300 &&
-          body &&
-          typeof body === 'object'
-        ) {
-          const itemId = /\/items\/([^/]+)$/.exec(url)?.[1];
-          const patch = body as { isPurchased?: unknown };
-          if (itemId && typeof patch.isPurchased === 'boolean') {
-            const isPurchased = patch.isPurchased;
-            serverState = {
-              ...serverState,
-              items: serverState.items.map((item) =>
-                item.id === itemId ? { ...item, isPurchased } : item
-              ),
-            };
-          }
-        }
+        applyServerWrite(method, url, body, next.status);
         return new Response(next.body, { status: next.status });
       }
       if (method === 'GET') {
@@ -152,11 +187,37 @@ function startToggle(result: { current: { togglePurchased: (itemId: string) => P
   return result.current.togglePurchased('item-1').catch((error: unknown) => error);
 }
 
+const settle = (promise: Promise<unknown>) =>
+  promise.then(
+    () => undefined,
+    (error: unknown) => error
+  );
+
 function currentItem(itemId = 'item-1') {
   const data = queryClient.getQueryData<ListData>(queryKeys.list('list-1'));
   const item = data?.items.find((candidate) => candidate.id === itemId);
   if (!item) throw new Error(`item ${itemId} not in cache`);
   return item;
+}
+
+const hasItem = (itemId = 'item-1') =>
+  queryClient
+    .getQueryData<ListData>(queryKeys.list('list-1'))
+    ?.items.some((candidate) => candidate.id === itemId) ?? false;
+
+function setServerItem(itemId: string, patch: Partial<Item>) {
+  serverState = {
+    ...serverState,
+    items: serverState.items.map((item) => (item.id === itemId ? { ...item, ...patch } : item)),
+  };
+}
+
+function spyDialogs() {
+  return {
+    alert: vi.spyOn(window, 'alert').mockImplementation(() => undefined),
+    confirm: vi.spyOn(window, 'confirm').mockReturnValue(true),
+    error: vi.spyOn(console, 'error').mockImplementation(() => undefined),
+  };
 }
 
 const rollbackCount = () =>
@@ -188,9 +249,10 @@ afterEach(() => {
 });
 
 describe('togglePurchased retry/ACK contract (N1)', () => {
-  it('AC-1: four transport rejects keep the optimistic value, then exactly one BASE rollback after the 4th attempt', async () => {
+  it('AC-1: four transport rejects keep the optimistic value until the terminal reload settles; no snapshot restore', async () => {
     enqueue('PUT', PUT_URL, [putReject(), putReject(), putReject(), putReject()]);
     const { result } = await renderList();
+    const releaseReload = holdNext('GET', LIST_URL);
     const done = startToggle(result);
 
     await step(0);
@@ -216,15 +278,21 @@ describe('togglePurchased retry/ACK contract (N1)', () => {
 
     await step(10_000);
     expect(putJournal()).toHaveLength(4);
-    expect(currentItem().isPurchased).toBe(false);
-    expect(rollbackCount()).toBe(1);
+    // Held terminal witness: the reload is in flight, so the value is still the optimistic one
+    // and the cache was never set back to the pre-toggle snapshot.
+    expect.soft(currentItem().isPurchased).toBe(true);
+    expect.soft(rollbackCount()).toBe(0);
 
+    setServerItem('item-1', { note: SERVER_NOTE });
+    releaseReload();
     await done;
     for (const entry of putJournal()) {
       expect(entry.body).toEqual({ isPurchased: true });
     }
+    // Distinct final GET marker: the note exists only on the server, not in the snapshot.
     expect(currentItem().isPurchased).toBe(false);
-    expect(rollbackCount()).toBe(1);
+    expect(currentItem().note).toBe(SERVER_NOTE);
+    expect.soft(rollbackCount()).toBe(0);
 
     await step(10_000);
     expect(putJournal()).toHaveLength(4);
@@ -300,10 +368,11 @@ describe('togglePurchased retry/ACK contract (N1)', () => {
     { name: 'HTTP 500', queued: () => putRespond(500, 'internal error') },
     { name: 'HTTP 503', queued: () => putRespond(503, 'service unavailable') },
   ])(
-    'AC-4 retryable: $name exhausts the budget of 4 PUTs, then one BASE rollback',
+    'AC-4 retryable: $name exhausts the budget of 4 PUTs; the terminal reload replaces the optimistic value',
     async ({ queued }) => {
       enqueue('PUT', PUT_URL, [queued(), queued(), queued(), queued()]);
       const { result } = await renderList();
+      const releaseReload = holdNext('GET', LIST_URL);
       const done = startToggle(result);
 
       await step(0);
@@ -313,10 +382,15 @@ describe('togglePurchased retry/ACK contract (N1)', () => {
       await step(10_000);
 
       expect(putJournal()).toHaveLength(4);
-      expect(currentItem().isPurchased).toBe(false);
-      expect(rollbackCount()).toBe(1);
+      expect.soft(currentItem().isPurchased).toBe(true);
+      expect.soft(rollbackCount()).toBe(0);
 
+      setServerItem('item-1', { note: SERVER_NOTE });
+      releaseReload();
       await done;
+
+      expect(currentItem().note).toBe(SERVER_NOTE);
+      expect.soft(rollbackCount()).toBe(0);
 
       await step(10_000);
       expect(putJournal()).toHaveLength(4);
@@ -331,22 +405,27 @@ describe('togglePurchased retry/ACK contract (N1)', () => {
     { name: 'HTTP 422', status: 422 },
     { name: 'HTTP 302 (fail-closed, out of class)', status: 302 },
   ])(
-    'AC-4 permanent: $name yields exactly one PUT, no retry, one BASE rollback',
+    'AC-4 permanent: $name yields exactly one PUT, no retry, and the terminal reload replaces the optimistic value',
     async ({ status }) => {
       enqueue('PUT', PUT_URL, [putRespond(status, 'error')]);
       const { result } = await renderList();
+      const releaseReload = holdNext('GET', LIST_URL);
       const done = startToggle(result);
 
       await step(0);
       await step(10_000);
 
       expect(putJournal()).toHaveLength(1);
-      expect(currentItem().isPurchased).toBe(false);
-      expect(rollbackCount()).toBe(1);
+      expect.soft(currentItem().isPurchased).toBe(true);
+      expect.soft(rollbackCount()).toBe(0);
 
+      setServerItem('item-1', { note: SERVER_NOTE });
+      releaseReload();
       await done;
 
       expect(putJournal()).toHaveLength(1);
+      expect(currentItem().note).toBe(SERVER_NOTE);
+      expect.soft(rollbackCount()).toBe(0);
     }
   );
 
@@ -378,6 +457,7 @@ describe('togglePurchased retry/ACK contract (N1)', () => {
   it('AC-5: first reject pauses offline during backoff; online resumes the same cycle with the remaining budget', async () => {
     enqueue('PUT', PUT_URL, [putReject(), putReject(), putReject(), putReject()]);
     const { result } = await renderList();
+    const releaseReload = holdNext('GET', LIST_URL);
     const done = startToggle(result);
 
     await step(0);
@@ -409,23 +489,26 @@ describe('togglePurchased retry/ACK contract (N1)', () => {
 
     await step(10_000);
     expect(putJournal()).toHaveLength(4);
-    expect(currentItem().isPurchased).toBe(false);
-    expect(rollbackCount()).toBe(1);
+    expect.soft(currentItem().isPurchased).toBe(true);
+    expect.soft(rollbackCount()).toBe(0);
 
+    setServerItem('item-1', { note: SERVER_NOTE });
+    releaseReload();
     await done;
     expect(putJournal()).toHaveLength(4);
-    expect(rollbackCount()).toBe(1);
-    expect(currentItem().isPurchased).toBe(false);
+    expect(currentItem().note).toBe(SERVER_NOTE);
+    expect.soft(rollbackCount()).toBe(0);
   });
 
   it.each([
     { name: 'transport reject then HTTP 401', second: () => putRespond(401, 'unauthorized') },
     { name: 'transport reject then HTTP 302', second: () => putRespond(302, 'redirect') },
   ])(
-    'FR-1 neighbor: $name — exactly two PUTs with the same body, one terminal rollback, no extra PUT',
+    'FR-1 neighbor: $name — exactly two PUTs with the same body, the terminal reload replaces the optimistic value, no extra PUT',
     async ({ second }) => {
       enqueue('PUT', PUT_URL, [putReject(), second()]);
       const { result } = await renderList();
+      const releaseReload = holdNext('GET', LIST_URL);
       const done = startToggle(result);
 
       await step(0);
@@ -436,11 +519,384 @@ describe('togglePurchased retry/ACK contract (N1)', () => {
       for (const entry of putJournal()) {
         expect(entry.body).toEqual({ isPurchased: true });
       }
-      expect(currentItem().isPurchased).toBe(false);
-      expect(rollbackCount()).toBe(1);
+      expect.soft(currentItem().isPurchased).toBe(true);
+      expect.soft(rollbackCount()).toBe(0);
 
+      setServerItem('item-1', { note: SERVER_NOTE });
+      releaseReload();
       await done;
       expect(putJournal()).toHaveLength(2);
+      expect(currentItem().note).toBe(SERVER_NOTE);
     }
   );
+});
+
+describe('row lock and terminal reload (AGE-1649)', () => {
+  it('AC-1: a second same-tick toggle of a row whose PUT is in flight sends no request', async () => {
+    const releasePut = holdNext('PUT', PUT_URL);
+    const { result } = await renderList();
+
+    const first = startToggle(result);
+    const second = settle(result.current.togglePurchased('item-1'));
+    await step(0);
+
+    expect(putJournal()).toHaveLength(1);
+
+    await act(async () => {
+      releasePut(putRespond(200, '{"isPurchased":true}'));
+      await Promise.all([first, second]);
+    });
+    expect(putJournal()).toHaveLength(1);
+  });
+
+  it('AC-1: removing a row whose PUT is in flight sends no DELETE', async () => {
+    const releasePut = holdNext('PUT', PUT_URL);
+    const { result } = await renderList();
+
+    const first = startToggle(result);
+    await step(0);
+    const removal = settle(result.current.removeItem('item-1'));
+    await step(0);
+
+    expect(methodJournal('DELETE')).toHaveLength(0);
+
+    await act(async () => {
+      releasePut(putRespond(200, '{"isPurchased":true}'));
+      await Promise.all([first, removal]);
+    });
+  });
+
+  it('AC-1: a note save on a row whose PUT is in flight sends no note PUT', async () => {
+    const releasePut = holdNext('PUT', PUT_URL);
+    const { result } = await renderList();
+
+    const first = startToggle(result);
+    await step(0);
+    const noteSave = settle(result.current.updateNote('item-1', 'срочно'));
+    await step(0);
+
+    expect(noteWrites()).toHaveLength(0);
+
+    await act(async () => {
+      releasePut(putRespond(200, '{"isPurchased":true}'));
+      await Promise.all([first, noteSave]);
+    });
+  });
+
+  it('AC-1: clear-all while a row is busy sends no DELETE for any row', async () => {
+    spyDialogs();
+    const releasePut = holdNext('PUT', PUT_URL);
+    const { result } = await renderList();
+
+    const first = startToggle(result);
+    await step(0);
+    const clear = settle(result.current.clearAll());
+    await step(0);
+
+    expect(methodJournal('DELETE')).toHaveLength(0);
+
+    await act(async () => {
+      releasePut(putRespond(200, '{"isPurchased":true}'));
+      await Promise.all([first, clear]);
+    });
+  });
+
+  it('AC-1 neighbour: a row that is not busy still accepts its own toggle while another row is in flight', async () => {
+    const releasePut = holdNext('PUT', PUT_URL);
+    enqueue('PUT', ITEM2_URL, [putRespond(200, '{"isPurchased":false}')]);
+    const { result } = await renderList();
+
+    const first = startToggle(result);
+    await step(0);
+    const neighbour = settle(result.current.togglePurchased('item-2'));
+    await step(0);
+
+    expect(
+      journal.filter((entry) => entry.url === ITEM2_URL && entry.method === 'PUT')
+    ).toHaveLength(1);
+
+    await act(async () => {
+      releasePut(putRespond(200, '{"isPurchased":true}'));
+      await Promise.all([first, neighbour]);
+    });
+  });
+
+  it('AC-6: during a clear-all batch a second clear-all, a toggle and a remove of a batch row send no requests', async () => {
+    const dialogs = spyDialogs();
+    const releaseFirstDelete = holdNext('DELETE', PUT_URL);
+    enqueue('DELETE', ITEM2_URL, [putRespond(200, '{}')]);
+    const { result } = await renderList();
+
+    const firstClear = settle(result.current.clearAll());
+    await step(0);
+    expect(deleteUrls()).toEqual([PUT_URL]);
+
+    const secondClear = settle(result.current.clearAll());
+    const toggleBatchRow = settle(result.current.togglePurchased('item-2'));
+    const removeBatchRow = settle(result.current.removeItem('item-2'));
+    await step(0);
+
+    expect(deleteUrls()).toEqual([PUT_URL]);
+    expect(putJournal()).toHaveLength(0);
+
+    await act(async () => {
+      releaseFirstDelete(putRespond(200, '{}'));
+      await Promise.all([firstClear, secondClear, toggleBatchRow, removeBatchRow]);
+    });
+  });
+
+  it('AC-6: a clear-all batch of two rows reserves both rows and issues the DELETEs one at a time', async () => {
+    const dialogs = spyDialogs();
+    const releaseFirstDelete = holdNext('DELETE', PUT_URL);
+    enqueue('DELETE', ITEM2_URL, [putRespond(200, '{}')]);
+    const { result } = await renderList();
+    const getsBefore = getCount();
+
+    const clear = settle(result.current.clearAll());
+    await step(0);
+
+    expect(deleteUrls()).toEqual([PUT_URL]);
+    const toggleSecond = settle(result.current.togglePurchased('item-2'));
+    await step(0);
+    expect(putJournal()).toHaveLength(0);
+
+    await act(async () => {
+      releaseFirstDelete(putRespond(200, '{}'));
+      await Promise.all([clear, toggleSecond]);
+    });
+    expect(dialogs.alert).toHaveBeenCalledTimes(0);
+    expect(getCount() - getsBefore).toBe(1);
+  });
+
+  it('AC-6 all success: a 404 on the first row counts as success; the batch ends with one final refresh only', async () => {
+    const dialogs = spyDialogs();
+    const releaseFirstDelete = holdNext('DELETE', PUT_URL);
+    enqueue('DELETE', ITEM2_URL, [putRespond(200, '{}')]);
+    const { result } = await renderList();
+    const getsBefore = getCount();
+    // The list shows item-1, but the server no longer has it, so its DELETE answers 404.
+    serverState = { ...serverState, items: serverState.items.filter((i) => i.id !== 'item-1') };
+
+    const clear = settle(result.current.clearAll());
+    await step(0);
+    expect(deleteUrls()).toEqual([PUT_URL]);
+
+    await act(async () => {
+      releaseFirstDelete(putRespond(404, 'gone'));
+      await clear;
+    });
+
+    expect(deleteUrls()).toEqual([PUT_URL, ITEM2_URL]);
+    expect(getCount() - getsBefore).toBe(1);
+    expect(hasItem('item-1')).toBe(false);
+    expect(hasItem('item-2')).toBe(false);
+    expect(dialogs.alert).toHaveBeenCalledTimes(0);
+  });
+
+  it('AC-6 failure: [A,B,C] with B failing sends no DELETE for C, one final refresh, server rows kept, one message and one log', async () => {
+    const dialogs = spyDialogs();
+    serverState = {
+      ...serverState,
+      items: [
+        ...serverState.items,
+        {
+          ...serverState.items[1],
+          id: 'item-3',
+          product: { ...serverState.items[1].product, id: 'prod-3', name: 'Сыр' },
+        },
+      ],
+    };
+    enqueue('DELETE', PUT_URL, [putRespond(200, '{}')]);
+    enqueue('DELETE', ITEM2_URL, [putRespond(500, 'boom')]);
+    const { result } = await renderList();
+    const getsBefore = getCount();
+
+    await settle(result.current.clearAll());
+
+    expect(deleteUrls()).toEqual([PUT_URL, ITEM2_URL]);
+    expect(getCount() - getsBefore).toBe(1);
+    expect(hasItem('item-1')).toBe(false);
+    expect(hasItem('item-2')).toBe(true);
+    expect(hasItem('item-3')).toBe(true);
+    expect(dialogs.alert).toHaveBeenCalledTimes(1);
+    expect(dialogs.alert).toHaveBeenCalledWith('Не удалось выполнить действие');
+    expect(dialogs.error).toHaveBeenCalledTimes(1);
+  });
+
+  it('AC-6 single failure: a failed DELETE keeps the row visible while in flight and shows the server row after the reload', async () => {
+    const dialogs = spyDialogs();
+    const releaseDelete = holdNext('DELETE', PUT_URL);
+    const { result } = await renderList();
+    const releaseReload = holdNext('GET', LIST_URL);
+
+    const removal = settle(result.current.removeItem('item-1'));
+    await step(0);
+    // A pending remove stays visible with its indicator; it is not hidden optimistically.
+    expect.soft(hasItem('item-1')).toBe(true);
+
+    releaseDelete(putRespond(500, 'boom'));
+    await step(0);
+    // The reload is in flight: the row is still there and no message is shown yet.
+    expect(hasItem('item-1')).toBe(true);
+    expect(dialogs.alert).toHaveBeenCalledTimes(0);
+
+    releaseReload();
+    await removal;
+    expect(hasItem('item-1')).toBe(true);
+    expect(dialogs.alert).toHaveBeenCalledTimes(1);
+    expect(dialogs.alert).toHaveBeenCalledWith('Не удалось выполнить действие');
+    expect(dialogs.error).toHaveBeenCalledTimes(1);
+  });
+
+  it('AC-3: the row stays locked until the reload settles; server values show; one message, one log; then unlock', async () => {
+    const dialogs = spyDialogs();
+    enqueue('PUT', PUT_URL, [
+      putReject(),
+      putReject(),
+      putReject(),
+      putReject(),
+      putRespond(200, '{"isPurchased":false}'),
+    ]);
+    const { result } = await renderList();
+    const releaseReload = holdNext('GET', LIST_URL);
+    const done = startToggle(result);
+
+    await step(0);
+    await step(1000);
+    await step(2000);
+    await step(4000);
+    await step(10_000);
+    expect(putJournal()).toHaveLength(4);
+
+    // While the reload is in flight the row accepts nothing new.
+    await settle(result.current.togglePurchased('item-1'));
+    await settle(result.current.removeItem('item-1'));
+    await settle(result.current.updateNote('item-1', 'x'));
+    await settle(result.current.clearAll());
+    expect.soft(putJournal()).toHaveLength(4);
+    expect.soft(methodJournal('DELETE')).toHaveLength(0);
+
+    setServerItem('item-1', { isPurchased: true, note: SERVER_NOTE });
+    releaseReload();
+    await done;
+
+    expect(currentItem().isPurchased).toBe(true);
+    expect(currentItem().note).toBe(SERVER_NOTE);
+    expect(dialogs.alert).toHaveBeenCalledTimes(1);
+    expect(dialogs.alert).toHaveBeenCalledWith('Не удалось выполнить действие');
+    expect(dialogs.error).toHaveBeenCalledTimes(1);
+
+    // Unlock: after the cycle ends the row accepts a new request.
+    await settle(result.current.togglePurchased('item-1'));
+    expect(putJournal()).toHaveLength(5);
+  });
+
+  it('AC-7: production retry 1 with two failed reload GETs: no third GET, cache unchanged by the failure, unlock, one log and one message', async () => {
+    const dialogs = spyDialogs();
+    queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: 1, staleTime: 5 * 60 * 1000 } },
+    });
+    const releasePut = holdNext('PUT', PUT_URL);
+    const { result } = await renderList();
+    enqueue('GET', LIST_URL, [putRespond(500, 'boom'), putRespond(500, 'boom')]);
+    const done = startToggle(result);
+    await step(0);
+    const before = { ...currentItem() };
+    expect(before.isPurchased).toBe(true);
+
+    await act(async () => {
+      releasePut(putRespond(401, 'unauthorized'));
+      await Promise.resolve();
+    });
+    await step(60_000);
+    await step(120_000);
+    await done;
+
+    const after = { ...currentItem() };
+    // The failed reload leaves the current display as it was: not the old snapshot.
+    expect.soft(after).toEqual(before);
+    expect.soft(after.isPurchased).toBe(true);
+    // Exactly the mount GET plus two failed reload GETs (retry 1); no third, no fallback 200.
+    expect(getCount()).toBe(3);
+    expect(dialogs.error).toHaveBeenCalledTimes(1);
+    expect(dialogs.alert).toHaveBeenCalledTimes(1);
+    expect(dialogs.alert).toHaveBeenCalledWith('Не удалось обновить список');
+
+    enqueue('PUT', PUT_URL, [putRespond(200, '{"isPurchased":true}')]);
+    await settle(result.current.togglePurchased('item-1'));
+    expect(putJournal()).toHaveLength(2);
+  });
+
+  it('N2: an import invalidation must not cancel the held required reload of this list', async () => {
+    const dialogs = spyDialogs();
+    enqueue('PUT', PUT_URL, [putRespond(401, 'unauthorized')]);
+    enqueue('POST', IMPORT_URL, [
+      putRespond(
+        200,
+        JSON.stringify({ results: { added: [], created: [], skipped: [], failed: [] } })
+      ),
+    ]);
+    const rendered = renderHook(
+      () => ({ list: useShoppingListItems('list-1'), importer: useImportListText() }),
+      { wrapper }
+    );
+    await step(0);
+    const releaseReload = holdNext('GET', LIST_URL);
+    const done = settle(rendered.result.current.list.togglePurchased('item-1'));
+    await step(0);
+
+    // Mount GET plus the held required reload.
+    expect(getCount()).toBe(2);
+    const getsBeforeImport = getCount();
+
+    await act(async () => {
+      await rendered.result.current.importer.mutateAsync({ listId: 'list-1', text: 'Молоко' });
+    });
+    await step(0);
+
+    // The import refresh must not start another list read over the held required reload.
+    expect(getCount()).toBe(getsBeforeImport);
+
+    setServerItem('item-1', { note: SERVER_NOTE });
+    releaseReload();
+    await done;
+    expect(currentItem().note).toBe(SERVER_NOTE);
+    expect(dialogs.alert).toHaveBeenCalledWith('Не удалось выполнить действие');
+  });
+
+  it('complete vs row: a row whose PUT is in flight blocks completeList (no history POST)', async () => {
+    enqueue('POST', HISTORY_URL, [putRespond(200, '{}')]);
+    const releasePut = holdNext('PUT', PUT_URL);
+    const { result } = await renderList();
+
+    const first = startToggle(result);
+    await step(0);
+    const complete = settle(result.current.completeList());
+    await step(0);
+
+    expect(methodJournal('POST')).toHaveLength(0);
+
+    await act(async () => {
+      releasePut(putRespond(200, '{"isPurchased":true}'));
+      await Promise.all([first, complete]);
+    });
+  });
+
+  it('complete vs row: a held completeList blocks a toggle of any row (no PUT)', async () => {
+    const releasePost = holdNext('POST', HISTORY_URL);
+    const { result } = await renderList();
+
+    const complete = settle(result.current.completeList());
+    await step(0);
+    expect(methodJournal('POST')).toHaveLength(1);
+
+    const toggle = settle(result.current.togglePurchased('item-2'));
+    await step(0);
+    expect(putJournal()).toHaveLength(0);
+
+    await act(async () => {
+      releasePost(putRespond(200, '{}'));
+      await Promise.all([complete, toggle]);
+    });
+  });
 });
