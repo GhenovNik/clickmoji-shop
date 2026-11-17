@@ -2,7 +2,7 @@
 
 import { useMutation, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { useTranslations } from 'next-intl';
-import { changedBy, queryKeys } from '@/lib/query-keys';
+import { changedBy } from '@/lib/query-keys';
 import { refreshQueryCache } from '@/lib/refresh-query-cache';
 
 // Mutations that change more than one cached entity. Each invalidates the keys listed for it in
@@ -43,19 +43,9 @@ export function useImportListText() {
     },
     onSuccess: (data, { listId }) => {
       // Preserve the import endpoint's real added/created/failed report even if refetch fails.
+      // The list-key policy of refreshQueryCache keeps a running required reload alive (AGE-1649).
       const keys = changedBy.importText(listId, data.results.created.length > 0);
-      const listKey = JSON.stringify(queryKeys.list(listId));
-      // The list read yields to a running required reload of the same list (AGE-1649): it must
-      // not cancel that read. Other keys refresh exactly as before.
-      refreshQueryCache(
-        queryClient,
-        keys.filter((key) => JSON.stringify(key) !== listKey)
-      );
-      refreshQueryCache(
-        queryClient,
-        keys.filter((key) => JSON.stringify(key) === listKey),
-        { cancelRefetch: false }
-      );
+      refreshQueryCache(queryClient, keys);
     },
   });
 }
