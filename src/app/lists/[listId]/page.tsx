@@ -26,8 +26,18 @@ export default function ShoppingListPage({ params }: { params: Promise<{ listId:
   const locale = useLocale();
   const { rememberFocus, registerTarget } = useShoppingListFocus();
 
-  const { list, items, loading, togglePurchased, removeItem, updateNote, clearAll, completeList } =
-    useShoppingListItems(listId);
+  const {
+    list,
+    items,
+    loading,
+    togglePurchased,
+    removeItem,
+    updateNote,
+    clearAll,
+    completeList,
+    isItemBusy,
+    isListBusy,
+  } = useShoppingListItems(listId);
 
   const handleToggle = async (itemId: string) => {
     try {
@@ -150,6 +160,7 @@ export default function ShoppingListPage({ params }: { params: Promise<{ listId:
                         <ShoppingListItem
                           key={item.id}
                           item={item}
+                          busy={isItemBusy(item.id)}
                           onToggle={handleToggle}
                           toggleButtonRef={(node) => registerTarget(item.id, node)}
                           onToggleFocus={(event) => rememberFocus(item.id, event.currentTarget)}
@@ -179,6 +190,7 @@ export default function ShoppingListPage({ params }: { params: Promise<{ listId:
                         <ShoppingListItem
                           key={item.id}
                           item={item}
+                          busy={isItemBusy(item.id)}
                           onToggle={handleToggle}
                           toggleButtonRef={(node) => registerTarget(item.id, node)}
                           onToggleFocus={(event) => rememberFocus(item.id, event.currentTarget)}
@@ -196,7 +208,8 @@ export default function ShoppingListPage({ params }: { params: Promise<{ listId:
               <div className="mb-6">
                 <button
                   onClick={completeList}
-                  className="w-full bg-green-600 hover:bg-green-700 text-white px-8 py-4 rounded-xl font-bold text-lg transition-colors shadow-lg"
+                  disabled={isListBusy}
+                  className="w-full bg-green-600 hover:bg-green-700 text-white px-8 py-4 rounded-xl font-bold text-lg transition-colors shadow-lg disabled:opacity-60 disabled:cursor-wait"
                 >
                   {t('listPage.completePurchase')}
                 </button>
@@ -217,7 +230,8 @@ export default function ShoppingListPage({ params }: { params: Promise<{ listId:
                 {items.length > 0 && (
                   <button
                     onClick={clearAll}
-                    className="bg-red-500 hover:bg-red-600 text-white px-6 py-3 rounded-xl font-semibold transition-colors"
+                    disabled={isListBusy}
+                    className="bg-red-500 hover:bg-red-600 text-white px-6 py-3 rounded-xl font-semibold transition-colors disabled:opacity-60 disabled:cursor-wait"
                   >
                     {t('listPage.clearAll')}
                   </button>

@@ -1,6 +1,7 @@
 'use client';
 
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useRef, useState } from 'react';
+import { notifyManager, useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useRouter } from 'next/navigation';
 import { useTranslations } from 'next-intl';
 import { queryKeys } from '@/lib/query-keys';
@@ -111,6 +112,8 @@ const updateNoteAPI = async ({
   return response.json();
 };
 
+// 404 means the row is already gone on the server; any 2xx is an ACK without a body, so a
+// committed delete is never reported as a failure because its body did not parse.
 const removeItemAPI = async ({ listId, itemId }: { listId: string; itemId: string }) => {
   const response = await fetch(`/api/lists/${listId}/items/${itemId}`, {
     method: 'DELETE',
@@ -119,13 +122,14 @@ const removeItemAPI = async ({ listId, itemId }: { listId: string; itemId: strin
     return { success: true };
   }
   if (!response.ok) throw new Error('Failed to remove item');
-  return response.json();
+  return { success: true };
 };
 
 export function useShoppingListItems(listId: string) {
   const router = useRouter();
   const queryClient = useQueryClient();
   const t = useTranslations('lists');
+  const queryKey = queryKeys.list(listId);
 
   // Query for fetching list
   const {
@@ -133,7 +137,7 @@ export function useShoppingListItems(listId: string) {
     isLoading: loading,
     refetch: fetchListItems,
   } = useQuery({
-    queryKey: queryKeys.list(listId),
+    queryKey,
     queryFn: () => fetchListAPI(listId),
     enabled: !!listId,
   });
@@ -141,7 +145,86 @@ export function useShoppingListItems(listId: string) {
   const items = list?.items || [];
   const completeMutation = useCompleteList();
 
-  // Mutation for toggling purchased status with optimistic updates
+  // Row locks. The ref is what the guards read, synchronously and before any await; the state
+  // only re-renders the busy controls. A locked row accepts no second request until its cycle
+  // (writes, retries and the server read that follows) has settled.
+  const lockedRef = useRef(new Set<string>());
+  const [busyIds, setBusyIds] = useState<ReadonlySet<string>>(() => new Set());
+
+  // Busy state is published through the query client's scheduler, the same path its own cache
+  // notifications take, so a lock taken outside a render commit does not update React directly.
+  const publishBusy = () => {
+    notifyManager.schedule(() => setBusyIds(new Set(lockedRef.current)));
+  };
+
+  const lockRows = (itemIds: readonly string[]): boolean => {
+    if (itemIds.length === 0 || itemIds.some((itemId) => lockedRef.current.has(itemId))) {
+      return false;
+    }
+    for (const itemId of itemIds) lockedRef.current.add(itemId);
+    publishBusy();
+    return true;
+  };
+
+  const unlockRows = (itemIds: readonly string[]) => {
+    for (const itemId of itemIds) lockedRef.current.delete(itemId);
+    publishBusy();
+  };
+
+  // Required server read after a failed cycle. A read already running is joined and waited for
+  // (never cancelled), then one fresh read starts. The cache keeps its current value on failure.
+  const readListRequired = async (): Promise<{ ok: true } | { ok: false; error: unknown }> => {
+    const read = () =>
+      queryClient.fetchQuery({
+        queryKey,
+        queryFn: () => fetchListAPI(listId),
+        staleTime: 0,
+      });
+    if (queryClient.isFetching({ queryKey, exact: true }) > 0) {
+      await read().catch(() => undefined);
+    }
+    try {
+      await read();
+      return { ok: true };
+    } catch (error) {
+      return { ok: false, error };
+    }
+  };
+
+  // Ordinary refresh after a committed write. It never cancels a running read, but a read that
+  // is already running may predate this write, so it settles first and the refresh reads again.
+  const refreshAfterWrite = async () => {
+    if (queryClient.isFetching({ queryKey, exact: true }) > 0) {
+      await queryClient
+        .fetchQuery({ queryKey, queryFn: () => fetchListAPI(listId), staleTime: 0 })
+        .catch(() => undefined);
+    }
+    await queryClient.invalidateQueries({ queryKey }, { cancelRefetch: false });
+  };
+
+  // One message and one log per failed cycle; the message names what the user now sees.
+  const reportFailedCycle = async (cause: unknown) => {
+    const reload = await readListRequired();
+    console.error('List item action failed:', {
+      cause,
+      reloadError: reload.ok ? null : reload.error,
+    });
+    alert(t(reload.ok ? 'listItems.rowFailed' : 'listItems.reloadFailed'));
+  };
+
+  const runRowAction = async (itemIds: string[], action: () => Promise<void>) => {
+    if (!lockRows(itemIds)) return;
+    try {
+      await action();
+    } catch (error) {
+      await reportFailedCycle(error);
+    } finally {
+      unlockRows(itemIds);
+    }
+  };
+
+  // Mutation for toggling purchased status with optimistic updates. No snapshot is kept:
+  // a failed cycle is replaced by the server read, never rolled back.
   const toggleMutation = useMutation({
     mutationFn: togglePurchasedAPI,
     retry: (failureCount, error) =>
@@ -149,119 +232,71 @@ export function useShoppingListItems(listId: string) {
       isTogglePurchasedError(error) &&
       (error.status === null || isRetryablePutStatus(error.status)),
     retryDelay: (failureCount) => [1000, 2000, 4000][Math.min(failureCount, 2)],
-    onMutate: async ({ itemId, isPurchased }) => {
-      // Cancel outgoing refetches
-      await queryClient.cancelQueries({ queryKey: queryKeys.list(listId) });
-
-      // Snapshot previous value
-      const previousList = queryClient.getQueryData<ListData>(queryKeys.list(listId));
-
-      // Optimistically update
-      queryClient.setQueryData<ListData>(queryKeys.list(listId), (old) => {
+    onMutate: ({ itemId, isPurchased }) => {
+      queryClient.setQueryData<ListData>(queryKey, (old) => {
         if (!old) return old;
         return {
           ...old,
           items: old.items.map((i) => (i.id === itemId ? { ...i, isPurchased } : i)),
         };
       });
-
-      return { previousList };
-    },
-    onError: (err, variables, context) => {
-      // Rollback on error
-      if (context?.previousList) {
-        queryClient.setQueryData(queryKeys.list(listId), context.previousList);
-      }
-    },
-    onSettled: () => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.list(listId) });
     },
   });
 
-  // Mutation for removing item with optimistic updates
-  const removeMutation = useMutation({
-    mutationFn: removeItemAPI,
-    onMutate: async ({ itemId }) => {
-      await queryClient.cancelQueries({ queryKey: queryKeys.list(listId) });
-      const previousList = queryClient.getQueryData<ListData>(queryKeys.list(listId));
-
-      queryClient.setQueryData<ListData>(queryKeys.list(listId), (old) => {
-        if (!old) return old;
-        return {
-          ...old,
-          items: old.items.filter((i) => i.id !== itemId),
-        };
-      });
-
-      return { previousList };
-    },
-    onError: (err, variables, context) => {
-      if (context?.previousList) {
-        queryClient.setQueryData(queryKeys.list(listId), context.previousList);
-      }
-    },
-    onSettled: () => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.list(listId) });
-    },
-  });
-
-  // Mutation for updating note with optimistic updates
-  const updateNoteMutation = useMutation({
-    mutationFn: updateNoteAPI,
-    onMutate: async ({ itemId, note }) => {
-      await queryClient.cancelQueries({ queryKey: queryKeys.list(listId) });
-      const previousList = queryClient.getQueryData<ListData>(queryKeys.list(listId));
-
-      queryClient.setQueryData<ListData>(queryKeys.list(listId), (old) => {
-        if (!old) return old;
-        return {
-          ...old,
-          items: old.items.map((i) => (i.id === itemId ? { ...i, note } : i)),
-        };
-      });
-
-      return { previousList };
-    },
-    onError: (err, variables, context) => {
-      if (context?.previousList) {
-        queryClient.setQueryData(queryKeys.list(listId), context.previousList);
-      }
-    },
-    onSettled: () => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.list(listId) });
-    },
-  });
-
-  // Wrapper functions to maintain API compatibility
+  // Wrapper functions to maintain API compatibility. They settle after the row's cycle and
+  // never reject: a failed cycle is reported here, once.
   const togglePurchased = async (itemId: string) => {
     const item = items.find((i) => i.id === itemId);
     if (!item) return;
 
-    await toggleMutation.mutateAsync({
-      listId,
-      itemId,
-      isPurchased: !item.isPurchased,
+    await runRowAction([itemId], async () => {
+      await toggleMutation.mutateAsync({
+        listId,
+        itemId,
+        isPurchased: !item.isPurchased,
+      });
+      await refreshAfterWrite();
     });
   };
 
   const removeItem = async (itemId: string) => {
-    await removeMutation.mutateAsync({ listId, itemId });
+    await runRowAction([itemId], async () => {
+      await removeItemAPI({ listId, itemId });
+      await refreshAfterWrite();
+    });
   };
 
   const updateNote = async (itemId: string, note: string) => {
-    await updateNoteMutation.mutateAsync({ listId, itemId, note });
+    await runRowAction([itemId], async () => {
+      await updateNoteAPI({ listId, itemId, note });
+      await refreshAfterWrite();
+    });
   };
 
   const clearAll = async () => {
-    if (!confirm(t('listItems.clearConfirm'))) return;
-    for (const item of items) {
-      await removeItem(item.id);
+    const itemIds = items.map((item) => item.id);
+    if (!lockRows(itemIds)) return;
+    try {
+      if (!confirm(t('listItems.clearConfirm'))) return;
+      try {
+        // Sequential on purpose: the first failure stops the batch, so later rows are not sent.
+        for (const itemId of itemIds) {
+          await removeItemAPI({ listId, itemId });
+        }
+      } catch (error) {
+        await reportFailedCycle(error);
+        return;
+      }
+      await refreshAfterWrite();
+    } finally {
+      unlockRows(itemIds);
     }
   };
 
   const completeList = async () => {
-    // A second tap while the first request runs would only get "List is empty" back.
-    if (items.length === 0 || completeMutation.isPending) return;
+    // Every row is locked while the request runs: no row write can overlap the completion.
+    const itemIds = items.map((item) => item.id);
+    if (!lockRows(itemIds)) return;
 
     try {
       await completeMutation.mutateAsync(listId);
@@ -269,6 +304,8 @@ export function useShoppingListItems(listId: string) {
     } catch (error) {
       console.error('Error completing list:', error);
       alert(t('listItems.completeFailed'));
+    } finally {
+      unlockRows(itemIds);
     }
   };
 
@@ -281,5 +318,7 @@ export function useShoppingListItems(listId: string) {
     updateNote,
     clearAll,
     completeList,
+    isItemBusy: (itemId: string) => busyIds.has(itemId),
+    isListBusy: busyIds.size > 0,
   };
 }

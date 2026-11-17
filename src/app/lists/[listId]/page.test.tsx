@@ -26,6 +26,7 @@ const { default: ShoppingListPage } = await import('@/app/lists/[listId]/page');
 type Item = {
   id: string;
   isPurchased: boolean;
+  note?: string | null;
   product: {
     id: string;
     name: string;
@@ -177,7 +178,10 @@ for (const initiallyPurchased of [false, true]) {
           // The real page and hook have committed the optimistic move, but PUT is still held.
           expect(queryClient.isMutating()).toBe(1);
           expect(getToggle()).not.toBe(original);
-          expect(getToggle()).toHaveFocus();
+          // AGE-1649: a disabled control cannot hold focus, so the busy row's toggle is not
+          // focused. Focus is not stolen; it returns to the toggle when the row unlocks (below).
+          expect(getToggle()).toBeDisabled();
+          expect(getToggle()).not.toHaveFocus();
           const neighbour = screen.getByRole('button', { name: /Импорт из текста/ });
           if (moveFocus) neighbour.focus();
           const readsBeforeResponse = listRequests;
@@ -211,3 +215,151 @@ for (const initiallyPurchased of [false, true]) {
     }
   });
 }
+
+const bread: Item = {
+  id: 'item-2',
+  isPurchased: false,
+  product: {
+    id: 'bread',
+    name: 'Хлеб',
+    emoji: '🍞',
+    isCustom: false,
+    imageUrl: null,
+    category: { name: 'Выпечка', emoji: '🥐', order: 2 },
+  },
+};
+
+type RowControl = {
+  puts: Array<{ url: string; body: unknown }>;
+  releasePut: (response: Response) => void;
+  holdReload: () => void;
+  releaseReload: () => void;
+};
+
+// The row's one PUT is held until the test answers it. The list GET is held only once armed,
+// so the mount read is never delayed.
+function stubRowFetch(): RowControl {
+  let answerPut!: (response: Response) => void;
+  const heldPut = new Promise<Response>((resolve) => {
+    answerPut = resolve;
+  });
+  let reloadGate: Promise<void> | null = null;
+  let openReload!: () => void;
+  const control: RowControl = {
+    puts: [],
+    releasePut: (response) => answerPut(response),
+    holdReload: () => {
+      reloadGate = new Promise<void>((resolve) => {
+        openReload = resolve;
+      });
+    },
+    releaseReload: () => openReload(),
+  };
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (url: string, init?: RequestInit) => {
+      const method = init?.method ?? 'GET';
+      if (method === 'PUT' && url === '/api/lists/list-1/items/item-1') {
+        control.puts.push({ url, body: JSON.parse(String(init?.body)) });
+        return heldPut;
+      }
+      if (method === 'GET' && url === '/api/lists/list-1') {
+        listRequests += 1;
+        if (reloadGate) await reloadGate;
+        return Response.json({ id: 'list-1', name: 'Покупки', items: serverItems });
+      }
+      throw new Error(`unexpected fetch ${method} ${url}`);
+    })
+  );
+  return control;
+}
+
+const notePuts = (control: RowControl) =>
+  control.puts.filter(
+    (put) => typeof put.body === 'object' && put.body !== null && 'note' in put.body
+  );
+
+describe('row lock while a request is in flight (AGE-1649)', () => {
+  it('AC-1: while a toggle is in flight its row is busy and its controls are disabled; clear-all is unavailable; a neighbour stays enabled', async () => {
+    serverItems = [milk, bread];
+    const control = stubRowFetch();
+    renderPage();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Куплено: Молоко' }));
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Куплено: Молоко' })).toHaveAttribute(
+        'aria-pressed',
+        'true'
+      )
+    );
+
+    const busyRow = screen.getByRole('button', { name: 'Куплено: Молоко' }).closest('.group');
+    expect.soft(busyRow?.getAttribute('aria-busy')).toBe('true');
+    expect.soft(screen.getByRole('button', { name: 'Куплено: Молоко' })).toBeDisabled();
+    expect.soft(screen.getByRole('button', { name: 'Удалить товар: Молоко' })).toBeDisabled();
+    expect.soft(screen.getByRole('button', { name: 'Очистить всё' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Куплено: Хлеб' })).toBeEnabled();
+
+    await act(async () =>
+      control.releasePut(new Response('{"isPurchased":true}', { status: 200 }))
+    );
+  });
+
+  it('AC-5: a note save is one submit; the editor stays open and disabled until the server answers, then closes', async () => {
+    serverItems = [milk];
+    const control = stubRowFetch();
+    renderPage();
+
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Редактировать комментарий: Молоко' })
+    );
+    const input = await screen.findByPlaceholderText('Заметка к товару...');
+    fireEvent.change(input, { target: { value: 'к ужину' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+
+    // While the save is in flight the editor is still open and its input is disabled.
+    const editor = screen.queryByPlaceholderText('Заметка к товару...') as HTMLInputElement | null;
+    expect.soft(editor?.disabled).toBe(true);
+
+    // The first submit reaches the wire; the mutation dispatches it after its async pre-step.
+    await waitFor(() => expect(notePuts(control)).toHaveLength(1));
+
+    // Blur, Enter and the save button cannot start a second note request.
+    fireEvent.blur(input);
+    fireEvent.keyDown(input, { key: 'Enter' });
+    const save = screen.queryByRole('button', { name: 'Ок' });
+    if (save) fireEvent.click(save);
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+    expect(notePuts(control)).toHaveLength(1);
+
+    serverItems = [{ ...milk, note: 'к ужину' }];
+    await act(async () => control.releasePut(new Response('{}', { status: 200 })));
+    await waitFor(() => expect(screen.queryByPlaceholderText('Заметка к товару...')).toBeNull());
+    expect(await screen.findByText('к ужину')).toBeTruthy();
+  });
+
+  it('AC-5: a failed note save keeps the editor disabled through the reload, then closes it', async () => {
+    serverItems = [milk];
+    const control = stubRowFetch();
+    renderPage();
+
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Редактировать комментарий: Молоко' })
+    );
+    const input = await screen.findByPlaceholderText('Заметка к товару...');
+    fireEvent.change(input, { target: { value: 'к ужину' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+
+    control.holdReload();
+    await act(async () => control.releasePut(new Response('{}', { status: 401 })));
+    await waitFor(() => expect(listRequests).toBeGreaterThan(1));
+
+    const editor = screen.queryByPlaceholderText('Заметка к товару...') as HTMLInputElement | null;
+    expect.soft(editor?.disabled).toBe(true);
+
+    control.releaseReload();
+    await waitFor(() => expect(screen.queryByPlaceholderText('Заметка к товару...')).toBeNull());
+  });
+});

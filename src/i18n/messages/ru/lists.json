@@ -83,7 +83,9 @@
   },
   "listItems": {
     "clearConfirm": "Удалить все товары из списка?",
-    "completeFailed": "Не удалось завершить список"
+    "completeFailed": "Не удалось завершить список",
+    "rowFailed": "Не удалось выполнить действие",
+    "reloadFailed": "Не удалось обновить список"
   },
   "importMutation": {
     "failed": "Ошибка при импорте списка"
