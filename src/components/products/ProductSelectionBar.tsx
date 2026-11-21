@@ -50,7 +50,7 @@ export default function ProductSelectionBar({
   if (count === 0) return null;
 
   return (
-    <div className="fixed sm:bottom-0 bottom-16 left-0 right-0 bg-white border-t border-gray-200 p-4 shadow-lg z-40 pb-safe-bottom">
+    <div className="fixed bottom-above-mobile-nav sm:bottom-0 left-0 right-0 bg-white border-t border-gray-200 py-4 px-safe-4 sm:pb-safe-4 shadow-lg z-40">
       {error && (
         <p role="alert" className="max-w-4xl mx-auto text-red-500 text-sm mb-2">
           {error}

@@ -1,4 +1,4 @@
-import type { Metadata } from 'next';
+import type { Metadata, Viewport } from 'next';
 import { NextIntlClientProvider } from 'next-intl';
 import { getLocale, getTranslations } from 'next-intl/server';
 import { Rubik, Nunito } from 'next/font/google';
@@ -56,8 +56,9 @@ export const metadata: Metadata = {
   },
 };
 
-export const viewport = {
+export const viewport: Viewport = {
   themeColor: '#4f46e5',
+  viewportFit: 'cover',
 };
 
 export default async function RootLayout({
@@ -70,12 +71,12 @@ export default async function RootLayout({
   return (
     <html lang={locale}>
       <body
-        className={`${bodyFont.variable} ${headingFont.variable} antialiased bg-background pb-20 sm:pb-0`}
+        className={`${bodyFont.variable} ${headingFont.variable} antialiased bg-background pb-mobile-nav-clearance sm:pb-safe-bottom`}
       >
         <NextIntlClientProvider>
           <Providers>
             <PwaRegister />
-            <header className="fixed top-0 left-0 right-0 h-16 bg-white/50 backdrop-blur-md z-40 px-4 flex items-center justify-between border-b border-border/50 sm:sticky">
+            <header className="fixed top-0 left-0 right-0 h-safe-header pt-safe-header bg-white/50 backdrop-blur-md z-40 px-safe-4 flex items-center justify-between border-b border-border/50 sm:sticky">
               <Link
                 href="/"
                 aria-label={t('home')}
@@ -90,7 +91,9 @@ export default async function RootLayout({
               </Link>
               <UserMenu />
             </header>
-            <main className="pt-20 px-4 max-w-7xl mx-auto min-h-screen">{children}</main>
+            <main className="pt-safe-main sm:pt-20 px-safe-4 max-w-7xl mx-auto min-h-screen">
+              {children}
+            </main>
             <MobileNav />
           </Providers>
         </NextIntlClientProvider>

@@ -1,6 +1,39 @@
 @config "../../tailwind.config.ts";
 @import 'tailwindcss';
 
+@utility pb-safe-bottom {
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+@utility pb-mobile-nav-clearance {
+  padding-bottom: calc(5rem + env(safe-area-inset-bottom));
+}
+
+@utility pt-safe-header {
+  padding-top: env(safe-area-inset-top);
+}
+
+@utility h-safe-header {
+  height: calc(4rem + env(safe-area-inset-top));
+}
+
+@utility pt-safe-main {
+  padding-top: calc(5rem + env(safe-area-inset-top));
+}
+
+@utility px-safe-4 {
+  padding-left: max(1rem, env(safe-area-inset-left));
+  padding-right: max(1rem, env(safe-area-inset-right));
+}
+
+@utility bottom-above-mobile-nav {
+  bottom: calc(4rem + 1px + env(safe-area-inset-bottom));
+}
+
+@utility pb-safe-4 {
+  padding-bottom: max(1rem, env(safe-area-inset-bottom));
+}
+
 @layer base {
   :root {
     --z-mobile-nav: 50;
@@ -119,7 +152,8 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    padding: max(1rem, env(safe-area-inset-top)) 1rem 1rem;
+    padding: max(1rem, env(safe-area-inset-top)) max(1rem, env(safe-area-inset-right))
+      max(1rem, env(safe-area-inset-bottom)) max(1rem, env(safe-area-inset-left));
     background: rgb(0 0 0 / 40%);
     overscroll-behavior: contain;
   }
@@ -167,7 +201,8 @@
   @media (max-width: 639px) {
     .modal-overlay-sheet {
       align-items: flex-end;
-      padding: max(1rem, env(safe-area-inset-top)) 0 0;
+      padding: max(1rem, env(safe-area-inset-top)) env(safe-area-inset-right) 0
+        env(safe-area-inset-left);
     }
 
     .modal-panel-sheet {
