@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, screen, waitFor } from '@testing-library/react';
+import { renderWithIntl } from '@/test/intl';
 
 // The modal's request goes to the real route handler: a payload field the route does not read
 // must surface as a failed move, not only as a changed status code.
@@ -84,7 +85,7 @@ describe('ProductMoveModal -> POST /api/products/move-category', () => {
     const onMoveComplete = vi.fn();
     const onClose = vi.fn();
 
-    render(
+    renderWithIntl(
       <ProductMoveModal
         category={dairy}
         products={products}
