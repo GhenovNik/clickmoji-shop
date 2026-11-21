@@ -444,7 +444,7 @@ for (const height of [667, 812]) {
       await dialog.accept();
       await action;
       await expect(page.getByRole('heading', { name: moveTitle })).toHaveCount(0);
-      expect(requests).toEqual([{ productIds: ['move-0'], targetCategoryId: target.id }]);
+      expect(requests).toEqual([{ productIds: ['move-0'], newCategoryId: target.id }]);
       await expectScrollUnchanged(page, scrollY, 'move response / close');
       await openModal(page, opener, moveTitle);
       await screenshotModal(page, testInfo, 'product-move-close');
