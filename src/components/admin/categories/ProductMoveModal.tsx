@@ -71,7 +71,7 @@ export default function ProductMoveModal({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           productIds: selectedProductIds,
-          targetCategoryId,
+          newCategoryId: targetCategoryId,
         }),
       });
 
