@@ -107,6 +107,13 @@ export default function ProductForm({ product, categories, onSubmit, onCancel }:
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
+  // Deleting the English picture is a selection action: a pending AI answer must not replace
+  // the main picture or report its result (AGE-1626).
+  const removeEnglishPicture = () => {
+    selectionSeq.current += 1;
+    setFormData((prev) => ({ ...prev, imageUrlEn: null }));
+  };
+
   // Revert: any new pick (file, AI or library) is dropped; nothing is saved here.
   const restoreSavedPicture = () => {
     selectionSeq.current += 1;
@@ -485,7 +492,7 @@ export default function ProductForm({ product, categories, onSubmit, onCancel }:
                       />
                       <button
                         type="button"
-                        onClick={() => setFormData((prev) => ({ ...prev, imageUrlEn: null }))}
+                        onClick={removeEnglishPicture}
                         className="text-sm text-red-600 hover:text-red-800"
                       >
                         {t('productForm.removeEnglishVersion')}
@@ -507,7 +514,7 @@ export default function ProductForm({ product, categories, onSubmit, onCancel }:
                     />
                     <button
                       type="button"
-                      onClick={() => setFormData({ ...formData, imageUrlEn: null })}
+                      onClick={removeEnglishPicture}
                       className="text-sm text-red-600 hover:text-red-800"
                     >
                       {t('productForm.removeEnglishVersion')}
