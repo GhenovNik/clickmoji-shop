@@ -1,4 +1,5 @@
 // @vitest-environment node
+import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import sharp, { type Metadata, type OutputInfo } from 'sharp';
@@ -14,6 +15,8 @@ const read = (relativePath: string) => readFileSync(path.join(root, relativePath
 const readBinary = (relativePath: string) => readFileSync(path.join(root, relativePath));
 
 const SVG_PATH = 'public/icon.svg';
+// Pinned SHA-256 of the committed public/icon.svg bytes (AGE-1643).
+const EXPECTED_SVG_SHA256 = 'e041418c3df8d33d789c3bb49fd678ac012617ef2f3e23c40dd5cfb5a22a63a6';
 const ICON_192 = 'public/icons/icon-192.png';
 const ICON_512 = 'public/icons/icon-512.png';
 const APPLE_ICON = 'public/apple-touch-icon.png';
@@ -27,6 +30,10 @@ const EXPECTED_ICON_URLS = [
   '/icons/icon-512.png',
   '/apple-touch-icon.png',
 ];
+
+function sha256(bytes: Buffer) {
+  return createHash('sha256').update(bytes).digest('hex');
+}
 
 function assertFileExists(relativePath: string) {
   if (!existsSync(path.join(root, relativePath))) {
@@ -165,9 +172,11 @@ describe('static PWA icons', () => {
   });
 
   it('INV-1: icon.svg is unchanged and keeps its viewBox', () => {
-    const svg = read(SVG_PATH);
+    const svgBytes = readBinary(SVG_PATH);
+    const svg = svgBytes.toString('utf8');
     expect(svg).toContain('viewBox="0 0 512 512"');
     expect(svg).toMatch(/^<svg[\s>]/);
+    expect(sha256(svgBytes)).toBe(EXPECTED_SVG_SHA256);
   });
 
   it('AC-4/F-8: manifest name, short_name, start_url and display are unchanged', () => {
@@ -314,5 +323,12 @@ describe('static PWA icons', () => {
       .toBuffer();
     const metadata = await sharp(fixture).metadata();
     expect(() => assertPng(metadata, 'icon-512.png')).toThrow(/expected png/);
+  });
+
+  it('F-9: a valid color mutation in icon.svg fails the pinned SHA-256 oracle', () => {
+    const mutatedSvg = read(SVG_PATH).replace('#4f46e5', '#4338ca');
+    expect(mutatedSvg).toContain('viewBox="0 0 512 512"');
+    expect(mutatedSvg).toMatch(/^<svg[\s>]/);
+    expect(sha256(Buffer.from(mutatedSvg, 'utf8'))).not.toBe(EXPECTED_SVG_SHA256);
   });
 });
