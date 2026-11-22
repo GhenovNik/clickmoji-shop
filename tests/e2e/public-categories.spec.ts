@@ -1,6 +1,42 @@
-import { test, expect } from '@playwright/test';
+import { createServer, type Server } from 'node:http';
+import type { AddressInfo } from 'node:net';
+import { test, expect, type APIRequestContext } from '@playwright/test';
 import sharp from 'sharp';
 import { e2eCategory, mockPublicCatalog } from './fixtures/auth';
+
+// Fetch the root document without following redirects and require HTTP 200 before reading HTML.
+async function fetchRootWithoutRedirects(request: APIRequestContext, targetUrl = '/') {
+  const response = await request.get(targetUrl, { maxRedirects: 0 });
+  expect(response.status(), `${targetUrl} should return 200 without following redirects`).toBe(200);
+  return response;
+}
+
+function listenLoopback(server: Server): Promise<string> {
+  return new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', () => {
+      const address = server.address() as AddressInfo | null;
+      if (!address) {
+        reject(new Error('Loopback server did not bind to an address'));
+        return;
+      }
+      resolve(`http://127.0.0.1:${address.port}`);
+    });
+  });
+}
+
+function closeServer(server: Server): Promise<void> {
+  return new Promise((resolve, reject) => {
+    server.closeAllConnections?.();
+    server.close((error) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve();
+    });
+  });
+}
 
 test.describe('Public categories flows', () => {
   test.beforeEach(async ({ page }) => {
@@ -38,8 +74,7 @@ test.describe('Public categories flows', () => {
   });
 
   test('fresh-install icon chain resolves for anonymous users @smoke', async ({ request }) => {
-    const page = await request.get('/');
-    expect(page.status()).toBe(200);
+    const page = await fetchRootWithoutRedirects(request);
     const html = await page.text();
 
     const linkHref = (rel: string) => {
@@ -132,5 +167,38 @@ test.describe('Public categories flows', () => {
     await productCard.click();
 
     await expect(page.getByRole('link', { name: /Войти и добавить/ })).toBeVisible();
+  });
+});
+
+test.describe('Root redirect guard', () => {
+  test('first GET / rejects 3xx redirects before reading HTML and never hits redirect target @smoke', async ({
+    request,
+  }) => {
+    let originRequests = 0;
+    let destinationRequests = 0;
+
+    const destinationServer = createServer((_req, res) => {
+      destinationRequests += 1;
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+      res.end(
+        '<!doctype html><html><head><link rel="manifest" href="/manifest.json"><link rel="apple-touch-icon" href="/apple-touch-icon.png"></head></html>'
+      );
+    });
+    const destinationBaseUrl = await listenLoopback(destinationServer);
+
+    const originServer = createServer((_req, res) => {
+      originRequests += 1;
+      res.writeHead(307, { location: `${destinationBaseUrl}/` });
+      res.end();
+    });
+    const originBaseUrl = await listenLoopback(originServer);
+
+    try {
+      await expect(fetchRootWithoutRedirects(request, `${originBaseUrl}/`)).rejects.toThrow(/307/);
+      expect(originRequests).toBe(1);
+      expect(destinationRequests).toBe(0);
+    } finally {
+      await Promise.all([closeServer(originServer), closeServer(destinationServer)]);
+    }
   });
 });
