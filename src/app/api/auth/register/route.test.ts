@@ -36,6 +36,14 @@ const EXPECTED_STARTERS = [
   { name: 'Urgent', isActive: false, userId: 'user-1' },
 ];
 
+const EXPECTED_RU_STARTERS = [
+  { name: 'Основной', isActive: true, userId: 'user-1' },
+  { name: 'На выходные', isActive: false, userId: 'user-1' },
+  { name: 'Праздники', isActive: false, userId: 'user-1' },
+  { name: 'Для вечеринки', isActive: false, userId: 'user-1' },
+  { name: 'Срочное', isActive: false, userId: 'user-1' },
+];
+
 function register(locale = 'en') {
   return POST(
     new Request('http://localhost/api/auth/register', {
@@ -64,5 +72,13 @@ describe('POST /api/auth/register', () => {
     expect(response.status).toBe(201);
     expect(doubles.createManyLists).toHaveBeenCalledTimes(1);
     expect(doubles.createManyLists).toHaveBeenCalledWith({ data: EXPECTED_STARTERS });
+  });
+
+  it('creates Russian starter names for NEXT_LOCALE=ru', async () => {
+    const response = await register('ru');
+
+    expect(response.status).toBe(201);
+    expect(doubles.createManyLists).toHaveBeenCalledTimes(1);
+    expect(doubles.createManyLists).toHaveBeenCalledWith({ data: EXPECTED_RU_STARTERS });
   });
 });
