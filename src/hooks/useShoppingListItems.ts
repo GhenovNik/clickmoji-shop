@@ -3,6 +3,7 @@
 import { useCallback, useSyncExternalStore } from 'react';
 import {
   notifyManager,
+  QueryObserver,
   useQuery,
   useMutation,
   useQueryClient,
@@ -273,6 +274,14 @@ export function useShoppingListItems(listId: string) {
     applyConfirmed?: () => void
   ): Promise<{ ok: true } | { ok: false; error: unknown }> => {
     await prepareFollowUpRead(applyConfirmed);
+    // Keep a disabled observer subscribed for the duration of the required read so unmounting the
+    // page cannot drop observer count to zero and cancel TanStack Query retries.
+    const observer = new QueryObserver(queryClient, {
+      queryKey,
+      queryFn: () => fetchListAPI(listId),
+      enabled: false,
+    });
+    const unsubscribe = observer.subscribe(() => undefined);
     try {
       await queryClient.fetchQuery({
         queryKey,
@@ -282,6 +291,8 @@ export function useShoppingListItems(listId: string) {
       return { ok: true };
     } catch (error) {
       return { ok: false, error };
+    } finally {
+      unsubscribe();
     }
   };
 
