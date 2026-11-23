@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, type FocusEventHandler, type Ref } from 'react';
+import { useRef, useState, type FocusEventHandler, type Ref } from 'react';
 import Image from 'next/image';
 import { useLocale, useTranslations } from 'next-intl';
 import type { Item } from '@/hooks/useShoppingListItems';
@@ -11,15 +11,18 @@ import { X, MessageSquarePlus, Check } from 'lucide-react';
 
 interface ShoppingListItemProps {
   item: Item;
+  // A row with a request in flight (its writes, retries and the server read after them).
+  busy?: boolean;
   onToggle: (itemId: string) => void | Promise<void>;
-  onRemove: (itemId: string) => void;
-  onUpdateNote?: (itemId: string, note: string) => void;
+  onRemove: (itemId: string) => void | Promise<void>;
+  onUpdateNote?: (itemId: string, note: string) => void | Promise<void>;
   toggleButtonRef?: Ref<HTMLButtonElement>;
   onToggleFocus?: FocusEventHandler<HTMLButtonElement>;
 }
 
 export default function ShoppingListItem({
   item,
+  busy = false,
   onToggle,
   onRemove,
   onUpdateNote,
@@ -27,18 +30,40 @@ export default function ShoppingListItem({
   onToggleFocus,
 }: ShoppingListItemProps) {
   const [isEditingNote, setIsEditingNote] = useState(false);
+  const [isSavingNote, setIsSavingNote] = useState(false);
   const [isNoteExpanded, setIsNoteExpanded] = useState(false);
   const [noteValue, setNoteValue] = useState(item.note || '');
+  // Blur, Enter and the save button may all fire for one edit; only the first starts a save.
+  const noteSaveRef = useRef(false);
   const t = useTranslations('lists');
   const locale = useLocale();
   const productName = localizedName(item.product, locale);
   const imageUrl = productImageUrl(item.product, locale);
 
+  // The editor stays open and disabled until the save settles (including a failed save's
+  // server read), then closes.
+  const saveNote = async () => {
+    if (noteSaveRef.current) return;
+    noteSaveRef.current = true;
+    setIsSavingNote(true);
+    try {
+      await onUpdateNote?.(item.id, noteValue);
+    } finally {
+      noteSaveRef.current = false;
+      setIsSavingNote(false);
+      setIsEditingNote(false);
+    }
+  };
+
+  const editorDisabled = busy || isSavingNote;
+
   return (
     <div
+      aria-busy={busy || undefined}
       className={cn(
         'relative group grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-2 p-4 rounded-2xl bg-white border-2 border-border/50 shadow-sm transition-all',
-        item.isPurchased && 'bg-muted/40 border-transparent opacity-80'
+        item.isPurchased && 'bg-muted/40 border-transparent opacity-80',
+        busy && 'ring-2 ring-primary/40'
       )}
     >
       {/* Main Content (Left) */}
@@ -86,12 +111,13 @@ export default function ShoppingListItem({
         {onUpdateNote && !isEditingNote && !item.isPurchased && (
           <button
             type="button"
+            disabled={busy}
             aria-label={t('item.editNote', { name: productName })}
             onClick={(e) => {
               e.stopPropagation();
               setIsEditingNote(true);
             }}
-            className="p-2 text-muted-foreground hover:text-primary hover:bg-primary/5 rounded-full transition-colors"
+            className="p-2 text-muted-foreground hover:text-primary hover:bg-primary/5 rounded-full transition-colors disabled:opacity-50 disabled:pointer-events-none"
           >
             <MessageSquarePlus size={20} />
           </button>
@@ -99,12 +125,13 @@ export default function ShoppingListItem({
 
         <button
           type="button"
+          disabled={busy}
           aria-label={t('item.remove', { name: productName })}
           onClick={(e) => {
             e.stopPropagation();
-            onRemove(item.id);
+            void onRemove(item.id);
           }}
-          className="p-2 text-muted-foreground hover:text-destructive hover:bg-destructive/10 rounded-full transition-colors opacity-0 group-hover:opacity-100 sm:opacity-100"
+          className="p-2 text-muted-foreground hover:text-destructive hover:bg-destructive/10 rounded-full transition-colors opacity-0 group-hover:opacity-100 sm:opacity-100 disabled:opacity-50 disabled:pointer-events-none"
         >
           <X size={20} />
         </button>
@@ -112,11 +139,12 @@ export default function ShoppingListItem({
         <button
           type="button"
           ref={toggleButtonRef}
+          disabled={busy}
           onFocus={onToggleFocus}
           aria-label={t('item.purchased', { name: productName })}
           aria-pressed={item.isPurchased}
           onClick={() => onToggle(item.id)}
-          className="flex items-center justify-center min-w-11 min-h-11 rounded-full cursor-pointer touch-manipulation focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2"
+          className="flex items-center justify-center min-w-11 min-h-11 rounded-full cursor-pointer touch-manipulation focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 disabled:cursor-wait disabled:opacity-60"
         >
           <span
             aria-hidden="true"
@@ -162,15 +190,14 @@ export default function ShoppingListItem({
           <input
             type="text"
             value={noteValue}
+            disabled={editorDisabled}
             onChange={(e) => setNoteValue(e.target.value)}
             onBlur={() => {
-              onUpdateNote?.(item.id, noteValue);
-              setIsEditingNote(false);
+              void saveNote();
             }}
             onKeyDown={(e) => {
               if (e.key === 'Enter') {
-                onUpdateNote?.(item.id, noteValue);
-                setIsEditingNote(false);
+                void saveNote();
               }
               if (e.key === 'Escape') {
                 setNoteValue(item.note || '');
@@ -178,14 +205,15 @@ export default function ShoppingListItem({
               }
             }}
             placeholder={t('item.notePlaceholder')}
-            className="flex-1 px-4 py-2 text-sm bg-muted border-none rounded-xl focus:ring-2 focus:ring-primary outline-none"
+            className="flex-1 px-4 py-2 text-sm bg-muted border-none rounded-xl focus:ring-2 focus:ring-primary outline-none disabled:opacity-60"
             autoFocus
           />
           <button
-            className="px-4 py-2 text-sm font-bold bg-primary text-primary-foreground rounded-xl"
+            type="button"
+            disabled={editorDisabled}
+            className="px-4 py-2 text-sm font-bold bg-primary text-primary-foreground rounded-xl disabled:opacity-60"
             onClick={() => {
-              onUpdateNote?.(item.id, noteValue);
-              setIsEditingNote(false);
+              void saveNote();
             }}
           >
             {t('item.noteSave')}

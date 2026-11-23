@@ -1,13 +1,15 @@
 import '@testing-library/jest-dom/vitest';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, screen, waitFor } from '@testing-library/react';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { QueryClient, QueryClientProvider, onlineManager } from '@tanstack/react-query';
 import { renderWithIntl } from '@/test/intl';
+import { queryKeys } from '@/lib/query-keys';
 import ProductsPage from '@/app/categories/[categoryId]/products/page';
 import FavoritesPage from '@/app/categories/favorites/page';
 import ProductSearch from '@/components/ProductSearch';
 import FavoritesSection from '@/components/FavoritesSection';
 import AddProductModal from '@/components/products/AddProductModal';
+import { useShoppingListItems } from '@/hooks/useShoppingListItems';
 
 const mocks = vi.hoisted(() => ({
   activeListId: 'list-1' as string | null,
@@ -84,6 +86,10 @@ beforeEach(() => {
     throw new Error(`Unexpected fetch: ${url}`);
   });
   vi.stubGlobal('fetch', fetchMock);
+});
+
+afterEach(() => {
+  onlineManager.setOnline(true);
 });
 
 function renderUI(ui: React.ReactElement) {
@@ -741,6 +747,281 @@ describe.each(paths)('%s post-success housekeeping', (path) => {
     }
   );
 });
+
+describe('list-key refresh (AGE-1649)', () => {
+  const addedItem = {
+    id: 'item-1',
+    isPurchased: false,
+    note: null,
+    product: {
+      id: product.id,
+      name: product.name,
+      nameEn: product.nameEn,
+      emoji: product.emoji,
+      isCustom: false,
+      imageUrl: null,
+      imageUrlEn: null,
+      category: { name: 'Молочное', nameEn: 'Dairy', emoji: '🥛', order: 1 },
+    },
+    variant: null,
+  };
+
+  it('keeps a held list read running when the mounted search adds a product, then fetches the added item', async () => {
+    let serverList = { id: 'list-1', name: 'Список', items: [] as Array<typeof addedItem> };
+    addResponse = async () => {
+      serverList = { ...serverList, items: [addedItem] };
+      return json({ createdItems: [{ id: 'item-1' }] });
+    };
+    const listReads: Array<() => void> = [];
+    const baseFetch = fetchMock as unknown as (
+      url: string,
+      init?: RequestInit
+    ) => Promise<Response>;
+    fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === '/api/lists/list-1' && !init?.method) {
+        const snapshot = structuredClone(serverList);
+        return new Promise((resolve) => listReads.push(() => resolve(json(snapshot))));
+      }
+      return baseFetch(url, init);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const view = renderUI(
+      <>
+        <ProductSearch />
+        <ListReadHarness />
+      </>
+    );
+    const invalidateSpy = vi.spyOn(view.client, 'invalidateQueries');
+    await vi.waitFor(() => expect(listReads).toHaveLength(1));
+    act(() => {
+      listReads[0]();
+    });
+    await vi.waitFor(() =>
+      expect(view.client.getQueryData(queryKeys.list('list-1'))).toBeDefined()
+    );
+
+    // The required reload of a failed row cycle holds a read of the same list key.
+    const requiredRead = view.client.fetchQuery({
+      queryKey: queryKeys.list('list-1'),
+      queryFn: () => fetch('/api/lists/list-1').then((res) => res.json()),
+      staleTime: 0,
+    });
+    const readOutcome = requiredRead.then(
+      () => 'settled',
+      () => 'cancelled'
+    );
+    await vi.waitFor(() => expect(listReads).toHaveLength(2));
+
+    fireEvent.change(screen.getByPlaceholderText('Search products...'), {
+      target: { value: 'milk' },
+    });
+    await screen.findByText('Milk');
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'skimmed' } });
+    fireEvent.click(screen.getByRole('button', { name: /Milk/ }));
+    await waitFor(() => expect(invalidateSpy).toHaveBeenCalledTimes(2));
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    // The add's ordinary list-key invalidation must not start another read over the held one.
+    expect(listReads).toHaveLength(2);
+    expect(invalidateSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ queryKey: queryKeys.list('list-1') }),
+      expect.objectContaining({ cancelRefetch: false })
+    );
+
+    act(() => {
+      listReads[1]();
+    });
+    expect(await readOutcome).toBe('settled');
+
+    // A fresh read starts after the held read settles and delivers the added item to cache and UI.
+    await vi.waitFor(() => expect(listReads).toHaveLength(3));
+    act(() => {
+      listReads[2]();
+    });
+    await vi.waitFor(() => {
+      expect(screen.getByTestId('list-items')).toHaveTextContent('1');
+      expect(
+        (view.client.getQueryData(queryKeys.list('list-1')) as typeof serverList | undefined)?.items
+      ).toHaveLength(1);
+    });
+    view.unmount();
+  });
+
+  it('keeps a held list read running when mounted favorites adds a product, then fetches the added item', async () => {
+    let serverList = { id: 'list-1', name: 'Список', items: [] as Array<typeof addedItem> };
+    addResponse = async () => {
+      serverList = { ...serverList, items: [addedItem] };
+      return json({ createdItems: [{ id: 'item-1' }] });
+    };
+    const listReads: Array<() => void> = [];
+    const baseFetch = fetchMock as unknown as (
+      url: string,
+      init?: RequestInit
+    ) => Promise<Response>;
+    fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === '/api/lists/list-1' && !init?.method) {
+        const snapshot = structuredClone(serverList);
+        return new Promise((resolve) => listReads.push(() => resolve(json(snapshot))));
+      }
+      return baseFetch(url, init);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const view = renderUI(
+      <>
+        <FavoritesSection />
+        <ListReadHarness />
+      </>
+    );
+    await vi.waitFor(() => expect(listReads).toHaveLength(1));
+    act(() => {
+      listReads[0]();
+    });
+    await vi.waitFor(() =>
+      expect(view.client.getQueryData(queryKeys.list('list-1'))).toBeDefined()
+    );
+
+    const requiredRead = view.client.fetchQuery({
+      queryKey: queryKeys.list('list-1'),
+      queryFn: () => fetch('/api/lists/list-1').then((res) => res.json()),
+      staleTime: 0,
+    });
+    const readOutcome = requiredRead.then(
+      () => 'settled',
+      () => 'cancelled'
+    );
+    await vi.waitFor(() => expect(listReads).toHaveLength(2));
+
+    fireEvent.click(await screen.findByTitle('Skimmed'));
+    expect(await screen.findByRole('status')).toHaveTextContent('Item added to the list');
+    expect(listReads).toHaveLength(2);
+
+    act(() => {
+      listReads[1]();
+    });
+    expect(await readOutcome).toBe('settled');
+
+    await vi.waitFor(() => expect(listReads).toHaveLength(3));
+    act(() => {
+      listReads[2]();
+    });
+    await vi.waitFor(() => {
+      expect(screen.getByTestId('list-items')).toHaveTextContent('1');
+      expect(
+        (view.client.getQueryData(queryKeys.list('list-1')) as typeof serverList | undefined)?.items
+      ).toHaveLength(1);
+    });
+    view.unmount();
+  });
+
+  it('keeps a paused list retryer running with populated cache and retry 1, then delivers the added item to cache and mounted UI', async () => {
+    const secondItem = { ...addedItem, id: 'item-2' };
+    let serverList = { id: 'list-1', name: 'Список', items: [addedItem] };
+    addResponse = async () => {
+      serverList = { ...serverList, items: [addedItem, secondItem] };
+      return json({ createdItems: [{ id: 'item-2' }] });
+    };
+    const listReads: Array<{ resolve: () => void; reject: (err: Error) => void }> = [];
+    const baseFetch = fetchMock as unknown as (
+      url: string,
+      init?: RequestInit
+    ) => Promise<Response>;
+    fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === '/api/lists/list-1' && !init?.method) {
+        const snapshot = structuredClone(serverList);
+        return new Promise((resolve, reject) =>
+          listReads.push({
+            resolve: () => resolve(json(snapshot)),
+            reject: () => resolve(json({ error: 'temp' }, 500)),
+          })
+        );
+      }
+      return baseFetch(url, init);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const client = new QueryClient({
+      defaultOptions: {
+        queries: { retry: 1, retryDelay: 0, staleTime: 5 * 60 * 1000 },
+        mutations: { retry: false },
+      },
+    });
+    const view = renderWithIntl(
+      <QueryClientProvider client={client}>
+        <ProductSearch />
+        <ListReadHarness />
+      </QueryClientProvider>,
+      { locale: 'en' }
+    );
+
+    await vi.waitFor(() => expect(listReads).toHaveLength(1));
+    act(() => listReads[0].resolve());
+    await vi.waitFor(() => expect(screen.getByTestId('list-items')).toHaveTextContent('1'));
+
+    let resolveAdd!: (res: Response) => void;
+    addResponse = () =>
+      new Promise((resolve) => {
+        serverList = { ...serverList, items: [addedItem, secondItem] };
+        resolveAdd = resolve;
+      });
+
+    fireEvent.change(screen.getByPlaceholderText('Search products...'), {
+      target: { value: 'milk' },
+    });
+    await screen.findByText('Milk');
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'skimmed' } });
+    fireEvent.click(screen.getByRole('button', { name: /Milk/ }));
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith('/api/lists/list-1/items', expect.anything())
+    );
+
+    void client.invalidateQueries({ queryKey: queryKeys.list('list-1') });
+    await vi.waitFor(() => expect(listReads).toHaveLength(2));
+
+    onlineManager.setOnline(false);
+    act(() => listReads[1].reject(new Error('temp')));
+    await vi.waitFor(() =>
+      expect(
+        client.getQueryCache().find({ queryKey: queryKeys.list('list-1') })?.state.fetchStatus
+      ).toBe('paused')
+    );
+
+    // The in-flight add receives its 200 ACK while the list retryer is paused offline.
+    await act(async () => {
+      resolveAdd(json({ createdItems: [{ id: 'item-2' }] }));
+      await Promise.resolve();
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    // Old paused retryer was not cancelled while offline.
+    expect(listReads).toHaveLength(2);
+
+    onlineManager.setOnline(true);
+    await vi.waitFor(() => expect(listReads).toHaveLength(3));
+    act(() => listReads[2].reject(new Error('retry fail')));
+
+    await vi.waitFor(() => expect(listReads).toHaveLength(4));
+    act(() => listReads[3].resolve());
+
+    await vi.waitFor(() => {
+      expect(screen.getByTestId('list-items')).toHaveTextContent('2');
+      expect(
+        (client.getQueryData(queryKeys.list('list-1')) as typeof serverList | undefined)?.items
+      ).toHaveLength(2);
+    });
+    view.unmount();
+  });
+});
+
+function ListReadHarness() {
+  const { items } = useShoppingListItems('list-1');
+  return <div data-testid="list-items">{items.length}</div>;
+}
 
 describe('catalog create feedback (not a list add)', () => {
   it.each(['callback throws', 'callback rejects', 'refresh throws'] as const)(
