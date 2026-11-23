@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test, type BrowserContext } from '@playwright/test';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import {
@@ -23,15 +23,16 @@ test('mobile variant selection adds to the list without visiting history @smoke'
   });
   await new Promise<void>((resolve) => proxy.listen(0, '127.0.0.1', resolve));
   const port = (proxy.address() as AddressInfo).port;
-  const context = await browser.newContext({
-    baseURL: 'http://localhost:3000',
-    locale: 'ru-RU',
-    hasTouch: true,
-    viewport: { width: 375, height: 812 },
-    serviceWorkers: 'block',
-    proxy: { server: `http://127.0.0.1:${port}`, bypass: 'localhost,127.0.0.1' },
-  });
+  let context: BrowserContext | undefined;
   try {
+    context = await browser.newContext({
+      baseURL: 'http://localhost:3000',
+      locale: 'ru-RU',
+      hasTouch: true,
+      viewport: { width: 375, height: 812 },
+      serviceWorkers: 'block',
+      proxy: { server: `http://127.0.0.1:${port}`, bypass: '<-loopback>,localhost,127.0.0.1' },
+    });
     const page = await context.newPage();
     const visits: string[] = [];
     page.on('framenavigated', (frame) => {
@@ -50,6 +51,11 @@ test('mobile variant selection adds to the list without visiting history @smoke'
     );
     await page.goto('/redirect-probe').catch(() => null);
     expect(proxyRequests).toContain('http://outside.invalid/redirect-probe');
+    await page.route('**/link-local-probe', (route) =>
+      route.fulfill({ status: 302, headers: { location: 'http://169.254.0.0/probe' } })
+    );
+    await page.goto('/link-local-probe', { timeout: 3000 }).catch(() => null);
+    expect(proxyRequests).toContain('http://169.254.0.0/probe');
     const popup = await context.newPage();
     await popup.goto('http://outside.invalid/popup').catch(() => null);
     expect(blocked).toContain('http://outside.invalid/popup');
@@ -113,9 +119,12 @@ test('mobile variant selection adds to the list without visiting history @smoke'
     expect(payloads).toEqual([{ items: [{ productId: apple.id, variantId: variant.id }] }]);
     expect(visits).not.toContain('/history');
   } finally {
-    await context.close();
-    await new Promise<void>((resolve, reject) =>
-      proxy.close((error) => (error ? reject(error) : resolve()))
-    );
+    try {
+      await context?.close();
+    } finally {
+      await new Promise<void>((resolve, reject) =>
+        proxy.close((error) => (error ? reject(error) : resolve()))
+      );
+    }
   }
 });
