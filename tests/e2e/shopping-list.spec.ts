@@ -165,6 +165,7 @@ test.describe('Shopping list smoke flows', () => {
       expect(state.items[0].isPurchased).toBe(false);
 
       await page.getByRole('button', { name: 'Удалить товар: Молоко' }).tap();
+      await page.getByRole('button', { name: 'Удалить', exact: true }).tap();
       await expect.poll(() => state.items).toEqual([]);
       await expect(page.getByRole('heading', { name: 'E2E список пуст' })).toBeVisible();
       expect(state.updateItemRequests).toHaveLength(1);

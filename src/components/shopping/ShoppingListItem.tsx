@@ -1,6 +1,6 @@
 'use client';
 
-import { useRef, useState, type FocusEventHandler, type Ref } from 'react';
+import { useEffect, useRef, useState, type FocusEventHandler, type Ref } from 'react';
 import Image from 'next/image';
 import { useLocale, useTranslations } from 'next-intl';
 import type { Item } from '@/hooks/useShoppingListItems';
@@ -8,7 +8,7 @@ import type { ShoppingView } from '@/hooks/useShoppingListPresentation';
 import { localizedName } from '@/lib/catalog-name';
 import { productImageUrl } from '@/lib/product-image';
 import { cn } from '@/lib/utils';
-import { X, MessageSquarePlus, Check } from 'lucide-react';
+import { X, MoreHorizontal, MessageSquarePlus, Check } from 'lucide-react';
 
 interface ShoppingListItemProps {
   item: Item;
@@ -34,6 +34,9 @@ export default function ShoppingListItem({
 }: ShoppingListItemProps) {
   const [isEditingNote, setIsEditingNote] = useState(false);
   const [isSavingNote, setIsSavingNote] = useState(false);
+  const [isConfirmingRemoval, setIsConfirmingRemoval] = useState(false);
+  const cancelRemovalRef = useRef<HTMLButtonElement>(null);
+  const swipeStart = useRef<{ x: number; y: number; id: number } | null>(null);
   const [isNoteExpanded, setIsNoteExpanded] = useState(false);
   const [noteValue, setNoteValue] = useState(item.note || '');
   // Blur, Enter and the save button may all fire for one edit; only the first starts a save.
@@ -42,6 +45,10 @@ export default function ShoppingListItem({
   const locale = useLocale();
   const productName = localizedName(item.product, locale);
   const imageUrl = productImageUrl(item.product, locale);
+
+  useEffect(() => {
+    if (isConfirmingRemoval) cancelRemovalRef.current?.focus();
+  }, [isConfirmingRemoval]);
 
   // The editor stays open and disabled until the save settles (including a failed save's
   // server read), then closes.
@@ -65,6 +72,28 @@ export default function ShoppingListItem({
       data-testid="shopping-item"
       data-item-id={item.id}
       aria-busy={busy || undefined}
+      onTouchStart={(event) => {
+        swipeStart.current = null;
+        if (busy || isEditingNote || isConfirmingRemoval || event.touches.length !== 1) return;
+        if ((event.target as Element).closest('button, input, a')) return;
+        const touch = event.touches[0];
+        swipeStart.current = { x: touch.clientX, y: touch.clientY, id: touch.identifier };
+      }}
+      onTouchCancel={() => {
+        swipeStart.current = null;
+      }}
+      onTouchEnd={(event) => {
+        const start = swipeStart.current;
+        swipeStart.current = null;
+        if (!start || busy || event.touches.length !== 0) return;
+        const touch = Array.from(event.changedTouches).find(
+          (entry) => entry.identifier === start.id
+        );
+        if (!touch) return;
+        const dx = touch.clientX - start.x;
+        const dy = touch.clientY - start.y;
+        if (dx <= -60 && Math.abs(dx) > Math.abs(dy) * 2) setIsConfirmingRemoval(true);
+      }}
       className={cn(
         'relative group grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-x-1 min-h-14 px-2 py-1 rounded-xl bg-white border border-border/50 shadow-sm transition-colors',
         item.isPurchased && 'bg-green-50/80 border-green-100',
@@ -149,14 +178,15 @@ export default function ShoppingListItem({
           aria-label={t('item.remove', { name: productName })}
           onClick={(e) => {
             e.stopPropagation();
-            void onRemove(item.id);
+            setIsConfirmingRemoval(true);
           }}
           className={cn(
             'flex items-center justify-center w-6 h-6 text-muted-foreground/60 hover:text-destructive hover:bg-destructive/10 rounded-full transition-colors disabled:opacity-50 disabled:pointer-events-none',
             view === 'grid' && 'col-start-1 row-start-2'
           )}
         >
-          <X size={14} />
+          <X size={14} className="hidden sm:block" />
+          <MoreHorizontal size={16} className="sm:hidden" />
         </button>
 
         <button
@@ -210,6 +240,35 @@ export default function ShoppingListItem({
             {item.note}
           </span>
         </button>
+      )}
+
+      {isConfirmingRemoval && (
+        <div
+          role="group"
+          aria-label={t('item.removeConfirm')}
+          className="absolute inset-0 z-20 flex items-center justify-end gap-2 rounded-xl bg-white px-2 shadow-md"
+        >
+          <span className="mr-auto text-sm font-semibold">{t('item.removeConfirm')}</span>
+          <button
+            ref={cancelRemovalRef}
+            type="button"
+            className="min-h-11 px-2 text-sm"
+            onClick={() => setIsConfirmingRemoval(false)}
+          >
+            {t('item.removeCancel')}
+          </button>
+          <button
+            type="button"
+            disabled={busy}
+            className="min-h-11 rounded-lg bg-red-600 px-3 text-sm text-white disabled:opacity-50"
+            onClick={() => {
+              setIsConfirmingRemoval(false);
+              void onRemove(item.id);
+            }}
+          >
+            {t('item.removeConfirmAction')}
+          </button>
+        </div>
       )}
 
       {/* Note Editor Overlay */}

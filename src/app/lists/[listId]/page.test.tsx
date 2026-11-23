@@ -792,6 +792,7 @@ describe('F3/F5 page regressions (AGE-1649)', () => {
 
     getPhase = 'fail';
     fireEvent.click(screen.getByRole('button', { name: 'Удалить товар: Масло' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Удалить' }));
     await waitFor(() => expect(screen.queryByText('Масло')).toBeNull());
     expect(screen.getByText('Молоко')).toBeTruthy();
 
