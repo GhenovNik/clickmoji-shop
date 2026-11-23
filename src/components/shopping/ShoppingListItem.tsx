@@ -1,6 +1,13 @@
 'use client';
 
-import { useEffect, useRef, useState, type FocusEventHandler, type Ref } from 'react';
+import {
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type FocusEventHandler,
+  type Ref,
+} from 'react';
 import Image from 'next/image';
 import { useLocale, useTranslations } from 'next-intl';
 import type { Item } from '@/hooks/useShoppingListItems';
@@ -36,6 +43,8 @@ export default function ShoppingListItem({
   const [isSavingNote, setIsSavingNote] = useState(false);
   const [isConfirmingRemoval, setIsConfirmingRemoval] = useState(false);
   const cancelRemovalRef = useRef<HTMLButtonElement>(null);
+  const removeButtonRef = useRef<HTMLButtonElement>(null);
+  const restoreRemoveFocus = useRef(false);
   const swipeStart = useRef<{ x: number; y: number; id: number } | null>(null);
   const [isNoteExpanded, setIsNoteExpanded] = useState(false);
   const [noteValue, setNoteValue] = useState(item.note || '');
@@ -48,6 +57,13 @@ export default function ShoppingListItem({
 
   useEffect(() => {
     if (isConfirmingRemoval) cancelRemovalRef.current?.focus();
+  }, [isConfirmingRemoval]);
+
+  useLayoutEffect(() => {
+    if (!isConfirmingRemoval && restoreRemoveFocus.current) {
+      restoreRemoveFocus.current = false;
+      removeButtonRef.current?.focus();
+    }
   }, [isConfirmingRemoval]);
 
   // The editor stays open and disabled until the save settles (including a failed save's
@@ -152,6 +168,8 @@ export default function ShoppingListItem({
 
       {/* Right side actions */}
       <div
+        inert={isConfirmingRemoval}
+        aria-hidden={isConfirmingRemoval || undefined}
         className={cn(
           'col-start-3 row-start-1 row-span-2 flex items-center',
           view === 'grid' && 'grid grid-cols-[24px_44px] grid-rows-2'
@@ -174,6 +192,7 @@ export default function ShoppingListItem({
 
         <button
           type="button"
+          ref={removeButtonRef}
           disabled={busy}
           aria-label={t('item.remove', { name: productName })}
           onClick={(e) => {
@@ -219,6 +238,8 @@ export default function ShoppingListItem({
       {item.note && !isEditingNote && (
         <button
           type="button"
+          inert={isConfirmingRemoval}
+          aria-hidden={isConfirmingRemoval || undefined}
           aria-expanded={isNoteExpanded}
           onClick={() => setIsNoteExpanded((expanded) => !expanded)}
           className={cn(
@@ -253,7 +274,10 @@ export default function ShoppingListItem({
             ref={cancelRemovalRef}
             type="button"
             className="min-h-11 px-2 text-sm"
-            onClick={() => setIsConfirmingRemoval(false)}
+            onClick={() => {
+              restoreRemoveFocus.current = true;
+              setIsConfirmingRemoval(false);
+            }}
           >
             {t('item.removeCancel')}
           </button>

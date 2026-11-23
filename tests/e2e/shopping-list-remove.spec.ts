@@ -39,6 +39,10 @@ test.describe('mobile item removal', () => {
         row.getByRole('button', { name: 'Редактировать комментарий: Молоко' })
       ).toHaveCount(0);
       await expect(row.getByRole('button', { name: /Развернуть комментарий/ })).toHaveCount(0);
+      await row
+        .locator('[aria-label="Куплено: Молоко"]')
+        .evaluate((element: HTMLElement) => element.focus());
+      await expect(cancel).toBeFocused();
       await page.keyboard.press('Shift+Tab');
       expect(await row.evaluate((element) => element.contains(document.activeElement))).toBe(false);
       expect(state.updateItemRequests).toEqual([]);
@@ -46,8 +50,14 @@ test.describe('mobile item removal', () => {
       await page.keyboard.press('Tab');
       await expect(row.getByRole('button', { name: 'Удалить', exact: true })).toBeFocused();
       await page.keyboard.press('Tab');
+      await expect(
+        page.getByRole('button', { name: 'Редактировать комментарий: Хлеб' })
+      ).toBeFocused();
+      await page.keyboard.press('Tab');
+      await expect(page.getByRole('button', { name: 'Удалить товар: Хлеб' })).toBeFocused();
+      await page.keyboard.press('Tab');
       const neighbour = page.getByRole('button', { name: 'Куплено: Хлеб' });
-      await neighbour.focus();
+      await expect(neighbour).toBeFocused();
       await page.keyboard.press('Enter');
       await expect.poll(() => state.updateItemRequests.length).toBe(1);
       expect(state.updateItemRequests[0].itemId).toBe('neighbour');
