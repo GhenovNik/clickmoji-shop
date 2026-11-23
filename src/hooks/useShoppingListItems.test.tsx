@@ -1477,3 +1477,232 @@ describe('F3/F4/F5 regressions (AGE-1649)', () => {
     expect(dialogs.alert).toHaveBeenCalledWith('Не удалось обновить список');
   });
 });
+
+describe('F5/F6 exact CODE r3 orders and ACK-before/after-GET coverage (AGE-1649)', () => {
+  const makeExtraItem = (id: string, name: string): Item => ({
+    id,
+    isPurchased: false,
+    note: null,
+    product: {
+      id: `prod-${id}`,
+      name,
+      emoji: '🧀',
+      isCustom: false,
+      imageUrl: null,
+      category: { name: 'Молочные продукты', emoji: '🧀', order: 1 },
+    },
+    variant: null,
+  });
+
+  const retryOneClient = () =>
+    new QueryClient({
+      defaultOptions: { queries: { retry: 1, retryDelay: 0, staleTime: 5 * 60 * 1000 } },
+    });
+
+  it('F5 exact CODE r3: DELETE A 200 -> old GET [A,B,C] settles -> DELETE B 500 -> two failed final GETs keep [B,C], no DELETE C, unlock, one log and reloadFailed', async () => {
+    const dialogs = spyDialogs();
+    queryClient = retryOneClient();
+    serverState = {
+      ...serverState,
+      items: [...serverState.items, makeExtraItem('item-3', 'Сыр')],
+    };
+    const oldSnapshot = JSON.stringify(serverState);
+    const { result } = await renderList();
+
+    const releaseOldGet = holdNext('GET', LIST_URL);
+    void queryClient.invalidateQueries({ queryKey: queryKeys.list('list-1') });
+    await step(0);
+    expect(getCount()).toBe(2);
+
+    enqueue('DELETE', PUT_URL, [putRespond(200, '{}')]);
+    const releaseDeleteB = holdNext('DELETE', ITEM2_URL);
+    const clearDone = settle(result.current.clearAll());
+    await step(0);
+
+    expect(deleteUrls()).toEqual([PUT_URL, ITEM2_URL]);
+    expect(hasItem('item-1')).toBe(false);
+
+    releaseOldGet(putRespond(200, oldSnapshot));
+    await step(0);
+    expect(
+      queryClient.getQueryCache().find({ queryKey: queryKeys.list('list-1') })?.state.fetchStatus
+    ).toBe('idle');
+
+    enqueue('GET', LIST_URL, [putRespond(500, 'boom'), putRespond(500, 'boom')]);
+    releaseDeleteB(putRespond(500, 'boom'));
+    await step(0);
+    await step(0);
+    await clearDone;
+    await step(1);
+
+    expect(deleteUrls()).toEqual([PUT_URL, ITEM2_URL]);
+    expect(getCount()).toBe(4);
+    expect(hasItem('item-1')).toBe(false);
+    expect(hasItem('item-2')).toBe(true);
+    expect(hasItem('item-3')).toBe(true);
+    expect(rollbackCount()).toBe(0);
+    expect(dialogs.error).toHaveBeenCalledTimes(1);
+    expect(dialogs.alert).toHaveBeenCalledTimes(1);
+    expect(dialogs.alert).toHaveBeenCalledWith('Не удалось обновить список');
+    expect(result.current.isListBusy).toBe(false);
+    expect(result.current.isItemBusy('item-2')).toBe(false);
+  });
+
+  it('F5 exact CODE r3: DELETE A 200 -> old GET [A,B,C] settles -> DELETE B 500 -> successful final GET remains source of data', async () => {
+    const dialogs = spyDialogs();
+    queryClient = retryOneClient();
+    serverState = {
+      ...serverState,
+      items: [...serverState.items, makeExtraItem('item-3', 'Сыр')],
+    };
+    const oldSnapshot = JSON.stringify(serverState);
+    const { result } = await renderList();
+
+    const releaseOldGet = holdNext('GET', LIST_URL);
+    void queryClient.invalidateQueries({ queryKey: queryKeys.list('list-1') });
+    await step(0);
+    expect(getCount()).toBe(2);
+
+    enqueue('DELETE', PUT_URL, [putRespond(200, '{}')]);
+    const releaseDeleteB = holdNext('DELETE', ITEM2_URL);
+    const clearDone = settle(result.current.clearAll());
+    await step(0);
+
+    releaseOldGet(putRespond(200, oldSnapshot));
+    await step(0);
+
+    setServerItem('item-3', { note: SERVER_NOTE });
+    releaseDeleteB(putRespond(500, 'boom'));
+    await step(0);
+    await clearDone;
+    await step(1);
+
+    expect(deleteUrls()).toEqual([PUT_URL, ITEM2_URL]);
+    expect(getCount()).toBe(3);
+    expect(hasItem('item-1')).toBe(false);
+    expect(hasItem('item-2')).toBe(true);
+    expect(currentItem('item-3').note).toBe(SERVER_NOTE);
+    expect(dialogs.error).toHaveBeenCalledTimes(1);
+    expect(dialogs.alert).toHaveBeenCalledTimes(1);
+    expect(dialogs.alert).toHaveBeenCalledWith('Не удалось выполнить действие');
+    expect(result.current.isListBusy).toBe(false);
+  });
+
+  it('F6 exact CODE r3: old GET returns false before PUT 204, then two failed fresh GETs keep true in cache and unlock', async () => {
+    const dialogs = spyDialogs();
+    queryClient = retryOneClient();
+    const { result } = await renderList();
+
+    const releaseOldGet = holdNext('GET', LIST_URL);
+    void queryClient.invalidateQueries({ queryKey: queryKeys.list('list-1') });
+    await step(0);
+    expect(getCount()).toBe(2);
+
+    const releasePut = holdNext('PUT', PUT_URL);
+    const toggleDone = startToggle(result);
+    await step(0);
+    expect(putJournal()).toHaveLength(1);
+    expect(currentItem('item-1').isPurchased).toBe(true);
+    expect(result.current.isItemBusy('item-1')).toBe(true);
+
+    // Old GET resolves with isPurchased=false before PUT 204 returns, leaving the query idle.
+    releaseOldGet(putRespond(200, JSON.stringify(makeListData())));
+    await step(0);
+    expect(
+      queryClient.getQueryCache().find({ queryKey: queryKeys.list('list-1') })?.state.fetchStatus
+    ).toBe('idle');
+
+    enqueue('GET', LIST_URL, [putRespond(500, 'boom'), putRespond(500, 'boom')]);
+    releasePut(putRespond(204, null));
+    await step(0);
+    await step(0);
+    await toggleDone;
+    await step(1);
+
+    expect(putJournal()).toHaveLength(1);
+    expect(putJournal()[0]?.body).toEqual({ isPurchased: true });
+    expect(getCount()).toBe(4);
+    expect(currentItem('item-1').isPurchased).toBe(true);
+    expect(rollbackCount()).toBe(0);
+    expect(dialogs.alert).not.toHaveBeenCalled();
+    expect(dialogs.error).not.toHaveBeenCalled();
+    expect(result.current.isItemBusy('item-1')).toBe(false);
+
+    enqueue('PUT', PUT_URL, [putRespond(204, null)]);
+    await settle(result.current.togglePurchased('item-1'));
+    expect(putJournal()).toHaveLength(2);
+  });
+
+  it('F6 controlled order: PUT 204 settles before held old GET returns false, then two failed fresh GETs keep true and unlock', async () => {
+    const dialogs = spyDialogs();
+    queryClient = retryOneClient();
+    const { result } = await renderList();
+
+    const releaseOldGet = holdNext('GET', LIST_URL);
+    void queryClient.invalidateQueries({ queryKey: queryKeys.list('list-1') });
+    await step(0);
+    expect(getCount()).toBe(2);
+
+    const releasePut = holdNext('PUT', PUT_URL);
+    const toggleDone = startToggle(result);
+    await step(0);
+    expect(putJournal()).toHaveLength(1);
+
+    releasePut(putRespond(204, null));
+    await step(0);
+    expect(getCount()).toBe(2);
+    expect(result.current.isItemBusy('item-1')).toBe(true);
+
+    enqueue('GET', LIST_URL, [putRespond(500, 'boom'), putRespond(500, 'boom')]);
+    releaseOldGet(putRespond(200, JSON.stringify(makeListData())));
+    await step(0);
+    await step(0);
+    await toggleDone;
+    await step(1);
+
+    expect(putJournal()).toHaveLength(1);
+    expect(getCount()).toBe(4);
+    expect(currentItem('item-1').isPurchased).toBe(true);
+    expect(rollbackCount()).toBe(0);
+    expect(dialogs.alert).not.toHaveBeenCalled();
+    expect(result.current.isItemBusy('item-1')).toBe(false);
+  });
+
+  it('F6 successful fresh GET: old GET returns false before PUT 204, then successful fresh GET applies server response', async () => {
+    const dialogs = spyDialogs();
+    queryClient = retryOneClient();
+    const { result } = await renderList();
+
+    const releaseOldGet = holdNext('GET', LIST_URL);
+    void queryClient.invalidateQueries({ queryKey: queryKeys.list('list-1') });
+    await step(0);
+    expect(getCount()).toBe(2);
+
+    const releasePut = holdNext('PUT', PUT_URL);
+    const toggleDone = startToggle(result);
+    await step(0);
+
+    releaseOldGet(putRespond(200, JSON.stringify(makeListData())));
+    await step(0);
+
+    const freshServerList: ListData = {
+      ...makeListData(),
+      items: [
+        { ...makeListData().items[0], isPurchased: false, note: SERVER_NOTE },
+        makeListData().items[1],
+      ],
+    };
+    enqueue('GET', LIST_URL, [putRespond(200, JSON.stringify(freshServerList))]);
+    releasePut(putRespond(204, null));
+    await step(0);
+    await toggleDone;
+    await step(1);
+
+    expect(putJournal()).toHaveLength(1);
+    expect(getCount()).toBe(3);
+    expect(currentItem('item-1').isPurchased).toBe(false);
+    expect(currentItem('item-1').note).toBe(SERVER_NOTE);
+    expect(dialogs.alert).not.toHaveBeenCalled();
+    expect(result.current.isItemBusy('item-1')).toBe(false);
+  });
+});

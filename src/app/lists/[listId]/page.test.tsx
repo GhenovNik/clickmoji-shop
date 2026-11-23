@@ -602,3 +602,284 @@ describe('F3/F5 page regressions (AGE-1649)', () => {
     expect(screen.getByText('Сыр')).toBeTruthy();
   });
 });
+
+describe('F5/F6 page regressions (AGE-1649)', () => {
+  const cheese: Item = {
+    id: 'item-3',
+    isPurchased: false,
+    product: {
+      id: 'cheese',
+      name: 'Сыр',
+      emoji: '🧀',
+      isCustom: false,
+      imageUrl: null,
+      category: { name: 'Молочное', emoji: '🥛', order: 1 },
+    },
+  };
+
+  type QueuedFetch =
+    { kind: 'response'; response: () => Response } | { kind: 'gate'; gate: Promise<Response> };
+
+  function stubControlledListFetch() {
+    const queues = new Map<string, QueuedFetch[]>();
+    const puts: Array<{ url: string; body: unknown }> = [];
+    const deletes: string[] = [];
+    let getMode: 'ok' | 'fail' = 'ok';
+
+    const routeKey = (method: string, url: string) => `${method} ${url}`;
+    const hold = (method: string, url: string) => {
+      let release!: (response: Response) => void;
+      const gate = new Promise<Response>((resolve) => {
+        release = resolve;
+      });
+      const k = routeKey(method, url);
+      queues.set(k, [...(queues.get(k) ?? []), { kind: 'gate', gate }]);
+      return release;
+    };
+    const queueResponse = (method: string, url: string, response: () => Response) => {
+      const k = routeKey(method, url);
+      queues.set(k, [...(queues.get(k) ?? []), { kind: 'response', response }]);
+    };
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string, init?: RequestInit) => {
+        const method = init?.method ?? 'GET';
+        if (method === 'GET' && url === '/api/lists/list-1') {
+          listRequests += 1;
+        } else if (method === 'PUT') {
+          puts.push({ url, body: JSON.parse(String(init?.body)) });
+        } else if (method === 'DELETE') {
+          deletes.push(url);
+        }
+
+        const next = queues.get(routeKey(method, url))?.shift();
+        if (next?.kind === 'gate') return next.gate;
+        if (next?.kind === 'response') return next.response();
+        if (method === 'GET' && url === '/api/lists/list-1') {
+          if (getMode === 'fail') return Response.json({ error: 'boom' }, { status: 500 });
+          return Response.json({ id: 'list-1', name: 'Покупки', items: serverItems });
+        }
+        throw new Error(`unexpected fetch ${method} ${url}`);
+      })
+    );
+
+    return {
+      puts,
+      deletes,
+      hold,
+      queueResponse,
+      setGetMode: (mode: 'ok' | 'fail') => {
+        getMode = mode;
+      },
+    };
+  }
+
+  const makeRetryOneClient = () =>
+    new QueryClient({
+      defaultOptions: { queries: { staleTime: 5 * 60 * 1000, retry: 1, retryDelay: 0 } },
+    });
+
+  it('F5 exact CODE r3 page: DELETE A 200 -> old GET [A,B,C] settles -> DELETE B 500 -> two failed final GETs keep [B,C] in cache and UI and unlock', async () => {
+    serverItems = [milk, bread, cheese];
+    const control = stubControlledListFetch();
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    const alertSpy = vi.spyOn(window, 'alert').mockImplementation(() => undefined);
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    const retryClient = makeRetryOneClient();
+    renderPage(retryClient);
+    expect(await screen.findByText('Молоко')).toBeTruthy();
+    expect(listRequests).toBe(1);
+
+    const releaseOldGet = control.hold('GET', '/api/lists/list-1');
+    act(() => {
+      void retryClient.invalidateQueries({ queryKey: queryKeys.list('list-1') });
+    });
+    await waitFor(() => expect(listRequests).toBe(2));
+
+    control.queueResponse('DELETE', '/api/lists/list-1/items/item-1', () => Response.json({}));
+    const releaseDeleteB = control.hold('DELETE', '/api/lists/list-1/items/item-2');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Очистить всё' }));
+    await waitFor(() =>
+      expect(control.deletes).toEqual([
+        '/api/lists/list-1/items/item-1',
+        '/api/lists/list-1/items/item-2',
+      ])
+    );
+    await waitFor(() => expect(screen.queryByText('Молоко')).toBeNull());
+    expect(screen.getByRole('button', { name: 'Очистить всё' })).toBeDisabled();
+
+    // Old GET finishes with [A,B,C] while DELETE B is still held; query returns to idle.
+    await act(async () => {
+      releaseOldGet(Response.json({ id: 'list-1', name: 'Покупки', items: [milk, bread, cheese] }));
+    });
+    await waitFor(() =>
+      expect(
+        retryClient.getQueryCache().find({ queryKey: queryKeys.list('list-1') })?.state.fetchStatus
+      ).toBe('idle')
+    );
+
+    control.setGetMode('fail');
+    await act(async () => {
+      releaseDeleteB(Response.json({ error: 'boom' }, { status: 500 }));
+    });
+
+    await waitFor(() => expect(alertSpy).toHaveBeenCalledWith('Не удалось обновить список'));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Очистить всё' })).toBeEnabled());
+
+    expect(control.deletes).toEqual([
+      '/api/lists/list-1/items/item-1',
+      '/api/lists/list-1/items/item-2',
+    ]);
+    expect(listRequests).toBe(4);
+    expect(errorSpy).toHaveBeenCalledTimes(1);
+    const cached = retryClient.getQueryData<{ items: Item[] }>(queryKeys.list('list-1'));
+    expect(cached?.items.map((item) => item.id)).toEqual(['item-2', 'item-3']);
+    expect(screen.queryByText('Молоко')).toBeNull();
+    expect(screen.getByText('Хлеб')).toBeTruthy();
+    expect(screen.getByText('Сыр')).toBeTruthy();
+    const breadToggle = screen.getByRole('button', { name: 'Куплено: Хлеб' });
+    expect(breadToggle).toBeEnabled();
+    expect(breadToggle.closest('.group')?.getAttribute('aria-busy')).toBeNull();
+  });
+
+  it('F6 exact CODE r3 page: old GET returns false before PUT 204, then two failed fresh GETs keep true in cache and aria-pressed="true" and unlock', async () => {
+    serverItems = [milk, bread];
+    const control = stubControlledListFetch();
+    const alertSpy = vi.spyOn(window, 'alert').mockImplementation(() => undefined);
+
+    const retryClient = makeRetryOneClient();
+    renderPage(retryClient);
+    expect(await screen.findByRole('button', { name: 'Куплено: Молоко' })).toHaveAttribute(
+      'aria-pressed',
+      'false'
+    );
+
+    const releaseOldGet = control.hold('GET', '/api/lists/list-1');
+    act(() => {
+      void retryClient.invalidateQueries({ queryKey: queryKeys.list('list-1') });
+    });
+    await waitFor(() => expect(listRequests).toBe(2));
+
+    const releasePut = control.hold('PUT', '/api/lists/list-1/items/item-1');
+    fireEvent.click(screen.getByRole('button', { name: 'Куплено: Молоко' }));
+    await waitFor(() => expect(control.puts).toHaveLength(1));
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Куплено: Молоко' })).toBeDisabled()
+    );
+
+    await act(async () => {
+      releaseOldGet(Response.json({ id: 'list-1', name: 'Покупки', items: [milk, bread] }));
+    });
+    await waitFor(() =>
+      expect(
+        retryClient.getQueryCache().find({ queryKey: queryKeys.list('list-1') })?.state.fetchStatus
+      ).toBe('idle')
+    );
+
+    control.setGetMode('fail');
+    await act(async () => {
+      releasePut(new Response(null, { status: 204 }));
+    });
+
+    await waitFor(() => expect(listRequests).toBe(4));
+    const milkToggle = screen.getByRole('button', { name: 'Куплено: Молоко' });
+    await waitFor(() => expect(milkToggle).toBeEnabled());
+
+    expect(control.puts).toEqual([
+      { url: '/api/lists/list-1/items/item-1', body: { isPurchased: true } },
+    ]);
+    const cached = retryClient.getQueryData<{ items: Item[] }>(queryKeys.list('list-1'));
+    expect(cached?.items.find((item) => item.id === 'item-1')?.isPurchased).toBe(true);
+    expect(milkToggle).toHaveAttribute('aria-pressed', 'true');
+    expect(milkToggle.closest('.group')?.getAttribute('aria-busy')).toBeNull();
+    expect(alertSpy).not.toHaveBeenCalled();
+  });
+
+  it('F6 page ACK before held old GET: PUT 204 before old GET returns false, then two failed fresh GETs keep aria-pressed="true" and unlock', async () => {
+    serverItems = [milk, bread];
+    const control = stubControlledListFetch();
+
+    const retryClient = makeRetryOneClient();
+    renderPage(retryClient);
+    expect(await screen.findByRole('button', { name: 'Куплено: Молоко' })).toHaveAttribute(
+      'aria-pressed',
+      'false'
+    );
+
+    const releaseOldGet = control.hold('GET', '/api/lists/list-1');
+    act(() => {
+      void retryClient.invalidateQueries({ queryKey: queryKeys.list('list-1') });
+    });
+    await waitFor(() => expect(listRequests).toBe(2));
+
+    const releasePut = control.hold('PUT', '/api/lists/list-1/items/item-1');
+    fireEvent.click(screen.getByRole('button', { name: 'Куплено: Молоко' }));
+    await waitFor(() => expect(control.puts).toHaveLength(1));
+
+    await act(async () => {
+      releasePut(new Response(null, { status: 204 }));
+    });
+    expect(listRequests).toBe(2);
+    expect(screen.getByRole('button', { name: 'Куплено: Молоко' })).toBeDisabled();
+
+    control.setGetMode('fail');
+    await act(async () => {
+      releaseOldGet(Response.json({ id: 'list-1', name: 'Покупки', items: [milk, bread] }));
+    });
+
+    await waitFor(() => expect(listRequests).toBe(4));
+    const milkToggle = screen.getByRole('button', { name: 'Куплено: Молоко' });
+    await waitFor(() => expect(milkToggle).toBeEnabled());
+
+    const cached = retryClient.getQueryData<{ items: Item[] }>(queryKeys.list('list-1'));
+    expect(cached?.items.find((item) => item.id === 'item-1')?.isPurchased).toBe(true);
+    expect(milkToggle).toHaveAttribute('aria-pressed', 'true');
+    expect(milkToggle.closest('.group')?.getAttribute('aria-busy')).toBeNull();
+  });
+
+  it('F6 page successful fresh GET: old GET returns false before PUT 204, then successful fresh GET updates UI from server', async () => {
+    serverItems = [milk, bread];
+    const control = stubControlledListFetch();
+
+    const retryClient = makeRetryOneClient();
+    renderPage(retryClient);
+    expect(await screen.findByRole('button', { name: 'Куплено: Молоко' })).toHaveAttribute(
+      'aria-pressed',
+      'false'
+    );
+
+    const releaseOldGet = control.hold('GET', '/api/lists/list-1');
+    act(() => {
+      void retryClient.invalidateQueries({ queryKey: queryKeys.list('list-1') });
+    });
+    await waitFor(() => expect(listRequests).toBe(2));
+
+    const releasePut = control.hold('PUT', '/api/lists/list-1/items/item-1');
+    fireEvent.click(screen.getByRole('button', { name: 'Куплено: Молоко' }));
+    await waitFor(() => expect(control.puts).toHaveLength(1));
+
+    await act(async () => {
+      releaseOldGet(Response.json({ id: 'list-1', name: 'Покупки', items: [milk, bread] }));
+    });
+    await waitFor(() =>
+      expect(
+        retryClient.getQueryCache().find({ queryKey: queryKeys.list('list-1') })?.state.fetchStatus
+      ).toBe('idle')
+    );
+
+    serverItems = [{ ...milk, isPurchased: true, note: 'серверная заметка' }, bread];
+    await act(async () => {
+      releasePut(new Response(null, { status: 204 }));
+    });
+
+    await waitFor(() => expect(listRequests).toBe(3));
+    expect(await screen.findByText('серверная заметка')).toBeTruthy();
+    const milkToggle = screen.getByRole('button', { name: 'Куплено: Молоко' });
+    await waitFor(() => expect(milkToggle).toBeEnabled());
+    expect(milkToggle).toHaveAttribute('aria-pressed', 'true');
+    expect(control.puts).toHaveLength(1);
+  });
+});
