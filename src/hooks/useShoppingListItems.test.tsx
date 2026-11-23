@@ -1706,3 +1706,232 @@ describe('F5/F6 exact CODE r3 orders and ACK-before/after-GET coverage (AGE-1649
     expect(result.current.isItemBusy('item-1')).toBe(false);
   });
 });
+
+describe('F7 malformed list GET shape and empty items regressions (AGE-1649)', () => {
+  const retryOneClient = () =>
+    new QueryClient({
+      defaultOptions: { queries: { retry: 1, retryDelay: 0, staleTime: 5 * 60 * 1000 } },
+    });
+
+  it.each([
+    ['items: null', JSON.stringify({ id: 'list-1', name: 'Список', items: null })],
+    ['missing items', JSON.stringify({ id: 'list-1', name: 'Список' })],
+    ['items object', JSON.stringify({ id: 'list-1', name: 'Список', items: {} })],
+    ['items string', JSON.stringify({ id: 'list-1', name: 'Список', items: 'invalid' })],
+    ['top-level null', JSON.stringify(null)],
+    ['top-level array', JSON.stringify([])],
+  ])(
+    'F7: rejects %s before cache write, triggers retry:1, preserves cache on 500 and applies valid retry',
+    async (_label, malformedBody) => {
+      queryClient = retryOneClient();
+      const { result } = await renderList();
+
+      // 1) Malformed attempt 1 followed by 500 retry keeps existing valid cache.
+      enqueue('GET', LIST_URL, [
+        putRespond(200, malformedBody),
+        putRespond(500, JSON.stringify({ error: 'boom' })),
+      ]);
+      await act(async () => {
+        await queryClient.invalidateQueries({ queryKey: queryKeys.list('list-1') });
+      });
+      await step(1);
+
+      expect(getCount()).toBe(3);
+      expect(Array.isArray(result.current.items)).toBe(true);
+      expect(currentItem('item-1').product.name).toBe('Молоко');
+      expect(hasItem('item-2')).toBe(true);
+
+      // 2) Malformed attempt 1 followed by valid retry applies the fresh server response.
+      setServerItem('item-1', { note: SERVER_NOTE });
+      enqueue('GET', LIST_URL, [putRespond(200, malformedBody)]);
+      await act(async () => {
+        await queryClient.invalidateQueries({ queryKey: queryKeys.list('list-1') });
+      });
+      await step(1);
+
+      expect(getCount()).toBe(5);
+      expect(currentItem('item-1').note).toBe(SERVER_NOTE);
+    }
+  );
+
+  it('F7: accepts valid items:[] as server response and protects it from malformed GET + 500', async () => {
+    queryClient = retryOneClient();
+    const { result } = await renderList();
+
+    enqueue('GET', LIST_URL, [
+      putRespond(200, JSON.stringify({ id: 'list-1', name: 'Список', items: [] })),
+    ]);
+    await act(async () => {
+      await queryClient.invalidateQueries({ queryKey: queryKeys.list('list-1') });
+    });
+    await step(1);
+
+    expect(getCount()).toBe(2);
+    expect(result.current.items).toEqual([]);
+    expect(queryClient.getQueryData<ListData>(queryKeys.list('list-1'))?.items).toEqual([]);
+
+    enqueue('GET', LIST_URL, [
+      putRespond(200, JSON.stringify({ id: 'list-1', name: 'Список', items: null })),
+      putRespond(500, JSON.stringify({ error: 'boom' })),
+    ]);
+    await act(async () => {
+      await queryClient.invalidateQueries({ queryKey: queryKeys.list('list-1') });
+    });
+    await step(1);
+
+    expect(getCount()).toBe(4);
+    expect(result.current.items).toEqual([]);
+    expect(queryClient.getQueryData<ListData>(queryKeys.list('list-1'))?.items).toEqual([]);
+  });
+
+  it('F7: old GET 200 {items:null} before PUT 204 retries before ACK, preserves A=true through two 500 final GETs, and unlocks without TypeError or alert', async () => {
+    const dialogs = spyDialogs();
+    queryClient = retryOneClient();
+    const { result } = await renderList();
+
+    const releaseOldGet1 = holdNext('GET', LIST_URL);
+    void queryClient.invalidateQueries({ queryKey: queryKeys.list('list-1') });
+    await step(0);
+    expect(getCount()).toBe(2);
+
+    const releasePut = holdNext('PUT', PUT_URL);
+    const toggleDone = startToggle(result);
+    await step(0);
+    expect(putJournal()).toHaveLength(1);
+    expect(currentItem('item-1').isPurchased).toBe(true);
+    expect(result.current.isItemBusy('item-1')).toBe(true);
+
+    // Old GET attempt 1 returns malformed 200 {items:null}; rejected before cache and retried before ACK.
+    const releaseOldGetRetry = holdNext('GET', LIST_URL);
+    releaseOldGet1(putRespond(200, JSON.stringify({ id: 'list-1', name: 'Список', items: null })));
+    await step(0);
+
+    expect(getCount()).toBe(3);
+    expect(Array.isArray(queryClient.getQueryData<ListData>(queryKeys.list('list-1'))?.items)).toBe(
+      true
+    );
+    expect(currentItem('item-1').isPurchased).toBe(true);
+    expect(result.current.isItemBusy('item-1')).toBe(true);
+
+    // Finish the old GET cycle with 500 before PUT 204 arrives.
+    releaseOldGetRetry(putRespond(500, JSON.stringify({ error: 'boom' })));
+    await step(0);
+    expect(
+      queryClient.getQueryCache().find({ queryKey: queryKeys.list('list-1') })?.state.fetchStatus
+    ).toBe('idle');
+    expect(currentItem('item-1').isPurchased).toBe(true);
+
+    enqueue('GET', LIST_URL, [
+      putRespond(500, JSON.stringify({ error: 'boom' })),
+      putRespond(500, JSON.stringify({ error: 'boom' })),
+    ]);
+    releasePut(putRespond(204, null));
+    await step(0);
+    await step(0);
+    await toggleDone;
+    await step(1);
+
+    expect(putJournal()).toHaveLength(1);
+    expect(putJournal()[0]?.body).toEqual({ isPurchased: true });
+    expect(getCount()).toBe(5);
+    expect(currentItem('item-1').isPurchased).toBe(true);
+    expect(rollbackCount()).toBe(0);
+    expect(dialogs.alert).not.toHaveBeenCalled();
+    expect(dialogs.error).not.toHaveBeenCalled();
+    expect(result.current.isItemBusy('item-1')).toBe(false);
+    expect(journal.map(({ method, url }) => [method, url])).toEqual([
+      ['GET', LIST_URL],
+      ['GET', LIST_URL],
+      ['PUT', PUT_URL],
+      ['GET', LIST_URL],
+      ['GET', LIST_URL],
+      ['GET', LIST_URL],
+    ]);
+  });
+
+  it('F7: old GET 200 {items:null} whose retry returns valid stale false before PUT 204 still preserves A=true through two 500 final GETs', async () => {
+    const dialogs = spyDialogs();
+    queryClient = retryOneClient();
+    const { result } = await renderList();
+
+    const releaseOldGet1 = holdNext('GET', LIST_URL);
+    void queryClient.invalidateQueries({ queryKey: queryKeys.list('list-1') });
+    await step(0);
+
+    const releasePut = holdNext('PUT', PUT_URL);
+    const toggleDone = startToggle(result);
+    await step(0);
+
+    const releaseOldGetRetry = holdNext('GET', LIST_URL);
+    releaseOldGet1(putRespond(200, JSON.stringify({ id: 'list-1', name: 'Список', items: null })));
+    await step(0);
+    expect(getCount()).toBe(3);
+
+    releaseOldGetRetry(putRespond(200, JSON.stringify(makeListData())));
+    await step(0);
+    expect(
+      queryClient.getQueryCache().find({ queryKey: queryKeys.list('list-1') })?.state.fetchStatus
+    ).toBe('idle');
+
+    enqueue('GET', LIST_URL, [
+      putRespond(500, JSON.stringify({ error: 'boom' })),
+      putRespond(500, JSON.stringify({ error: 'boom' })),
+    ]);
+    releasePut(putRespond(204, null));
+    await step(0);
+    await step(0);
+    await toggleDone;
+    await step(1);
+
+    expect(putJournal()).toHaveLength(1);
+    expect(getCount()).toBe(5);
+    expect(currentItem('item-1').isPurchased).toBe(true);
+    expect(dialogs.alert).not.toHaveBeenCalled();
+    expect(dialogs.error).not.toHaveBeenCalled();
+    expect(result.current.isItemBusy('item-1')).toBe(false);
+  });
+
+  it('F7: required reload after failed write rejects malformed 200 with retry:1 and accepts valid items:[] on retry', async () => {
+    const dialogs = spyDialogs();
+    queryClient = retryOneClient();
+    const { result } = await renderList();
+
+    // 1) Failed PUT 401 -> required GET returns malformed 200 then 500 -> preserves cache and alerts reloadFailed.
+    enqueue('PUT', PUT_URL, [putRespond(401, JSON.stringify({ error: 'unauthorized' }))]);
+    enqueue('GET', LIST_URL, [
+      putRespond(200, JSON.stringify({ id: 'list-1', name: 'Список', items: null })),
+      putRespond(500, JSON.stringify({ error: 'boom' })),
+    ]);
+
+    const firstDone = settle(result.current.togglePurchased('item-1'));
+    await step(0);
+    await step(0);
+    await firstDone;
+    await step(1);
+
+    expect(getCount()).toBe(3);
+    expect(hasItem('item-1')).toBe(true);
+    expect(result.current.isItemBusy('item-1')).toBe(false);
+    expect(dialogs.error).toHaveBeenCalledTimes(1);
+    expect(dialogs.alert).toHaveBeenLastCalledWith('Не удалось обновить список');
+
+    // 2) Failed PUT 401 -> required GET returns malformed 200 then valid items:[] -> applies [] and alerts rowFailed.
+    enqueue('PUT', PUT_URL, [putRespond(401, JSON.stringify({ error: 'unauthorized' }))]);
+    enqueue('GET', LIST_URL, [
+      putRespond(200, JSON.stringify({ id: 'list-1', name: 'Список' })),
+      putRespond(200, JSON.stringify({ id: 'list-1', name: 'Список', items: [] })),
+    ]);
+
+    const secondDone = settle(result.current.togglePurchased('item-1'));
+    await step(0);
+    await step(0);
+    await secondDone;
+    await step(1);
+
+    expect(getCount()).toBe(5);
+    expect(result.current.items).toEqual([]);
+    expect(result.current.isItemBusy('item-1')).toBe(false);
+    expect(dialogs.error).toHaveBeenCalledTimes(2);
+    expect(dialogs.alert).toHaveBeenLastCalledWith('Не удалось выполнить действие');
+  });
+});
