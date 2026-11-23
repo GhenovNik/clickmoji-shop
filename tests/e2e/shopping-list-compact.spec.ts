@@ -136,7 +136,7 @@ async function attachEvidence(
   }
 }
 
-for (const width of [375, 1440]) {
+for (const width of [375, 1280, 1440]) {
   test.describe(`Compact shopping at ${width}px`, () => {
     test.use({
       viewport: { width, height: width === 375 ? 812 : 1000 },
