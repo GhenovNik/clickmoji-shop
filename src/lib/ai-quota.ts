@@ -7,7 +7,8 @@ import type { Locale } from '@/i18n/config';
 // shares it. The hourly `checkRateLimit` limits stay in front of it; without Upstash they are
 // counted per instance and reset on a cold start, so on their own they do not bound spend.
 //
-// One unit is one call to a paid provider; it is reserved right before that call. The window is
+// A text unit is one successful logical operation (including retries/fallback and parsing);
+// text-ai-call compensates failed operations. Images keep one unit per paid attempt. The window is
 // the UTC calendar day. Routes that take units:
 // - POST /api/lists/import-text: 1 (text analysis)
 // - POST /api/products/smart-create: 1 (text analysis) + 1 (custom image, only when needed)
@@ -83,14 +84,15 @@ export async function reserveAiCall({
  */
 export async function enforceAiQuota(
   user: { id: string; role: Role },
-  locale: Locale = 'ru'
+  locale: Locale = 'ru',
+  now = new Date()
 ): Promise<Response | null> {
   const t = getServerTranslator(locale);
   let decision: AiQuotaDecision;
   try {
-    decision = await reserveAiCall({ userId: user.id, role: user.role });
-  } catch (error) {
-    console.error('AI quota check failed, refusing the paid call:', error);
+    decision = await reserveAiCall({ userId: user.id, role: user.role, now });
+  } catch {
+    console.error('AI quota check failed, refusing the paid call:', 'quota_reservation_failed');
     return NextResponse.json({ error: t('api.aiQuota.unavailable') }, { status: 503 });
   }
 

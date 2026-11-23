@@ -4,8 +4,11 @@ import { localizedName } from '@/lib/catalog-name';
 import { prisma } from '@/lib/prisma';
 import { requireAdmin } from '@/lib/auth-guards';
 import { checkRateLimit, getRequestLocale, rateLimitResponse } from '@/lib/auth-security';
-import { enforceAiQuota } from '@/lib/ai-quota';
+import { runTextAiCall } from '@/lib/text-ai-call';
+import { textAiErrorCode } from '@/lib/services/text-ai-errors';
 import { processProductBatch, type ProcessedProduct } from '@/lib/services/ai-products';
+
+export const maxDuration = 60;
 
 export async function POST(request: Request) {
   try {
@@ -53,19 +56,11 @@ export async function POST(request: Request) {
       );
     }
 
-    // One unit of the administrator's daily AI budget for the batch analysis (one provider call).
-    const quotaResponse = await enforceAiQuota(session.user, getRequestLocale(request));
-    if (quotaResponse) return quotaResponse;
-
-    const {
-      products: processedProducts,
-      promptVersion,
-      model,
-    } = await processProductBatch({
-      apiKey,
-      productNames,
-      categories,
-    });
+    const analysis = await runTextAiCall(session.user, getRequestLocale(request), () =>
+      processProductBatch({ apiKey, productNames, categories })
+    );
+    if (analysis instanceof Response) return analysis;
+    const { products: processedProducts, promptVersion, model } = analysis;
 
     // Match categories and insert products
     const results = {
@@ -132,8 +127,8 @@ export async function POST(request: Request) {
           category: localizedName(category, getRequestLocale(request)),
         });
       } catch (error) {
-        // The raw error stays in the server log; the report gets a translated reason.
-        console.error('Error importing a product:', error);
+        // Log only an allowlisted code, never prompts or upstream error details.
+        console.error('Error importing a product:', textAiErrorCode(error));
         results.failed.push({
           product,
           reason: await apiText(request, 'importEntryFailed'),
@@ -152,7 +147,7 @@ export async function POST(request: Request) {
       results,
     });
   } catch (error) {
-    console.error('Error in bulk import:', error);
+    console.error('Error in bulk import:', textAiErrorCode(error));
     return NextResponse.json(
       { error: await apiText(request, 'importProductsFailed') },
       { status: 500 }

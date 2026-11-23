@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, type FocusEventHandler, type Ref } from 'react';
+import { useRef, useState, type FocusEventHandler, type Ref } from 'react';
 import Image from 'next/image';
 import { useLocale, useTranslations } from 'next-intl';
 import type { Item } from '@/hooks/useShoppingListItems';
@@ -12,9 +12,11 @@ import { X, MessageSquarePlus, Check } from 'lucide-react';
 
 interface ShoppingListItemProps {
   item: Item;
+  // A row with a request in flight (its writes, retries and the server read after them).
+  busy?: boolean;
   onToggle: (itemId: string) => void | Promise<void>;
-  onRemove: (itemId: string) => void;
-  onUpdateNote?: (itemId: string, note: string) => void;
+  onRemove: (itemId: string) => void | Promise<void>;
+  onUpdateNote?: (itemId: string, note: string) => void | Promise<void>;
   toggleButtonRef?: Ref<HTMLButtonElement>;
   onToggleFocus?: FocusEventHandler<HTMLButtonElement>;
   view?: ShoppingView;
@@ -22,6 +24,7 @@ interface ShoppingListItemProps {
 
 export default function ShoppingListItem({
   item,
+  busy = false,
   onToggle,
   onRemove,
   onUpdateNote,
@@ -30,22 +33,44 @@ export default function ShoppingListItem({
   view = 'list',
 }: ShoppingListItemProps) {
   const [isEditingNote, setIsEditingNote] = useState(false);
+  const [isSavingNote, setIsSavingNote] = useState(false);
   const [isNoteExpanded, setIsNoteExpanded] = useState(false);
   const [noteValue, setNoteValue] = useState(item.note || '');
+  // Blur, Enter and the save button may all fire for one edit; only the first starts a save.
+  const noteSaveRef = useRef(false);
   const t = useTranslations('lists');
   const locale = useLocale();
   const productName = localizedName(item.product, locale);
   const imageUrl = productImageUrl(item.product, locale);
 
+  // The editor stays open and disabled until the save settles (including a failed save's
+  // server read), then closes.
+  const saveNote = async () => {
+    if (noteSaveRef.current) return;
+    noteSaveRef.current = true;
+    setIsSavingNote(true);
+    try {
+      await onUpdateNote?.(item.id, noteValue);
+    } finally {
+      noteSaveRef.current = false;
+      setIsSavingNote(false);
+      setIsEditingNote(false);
+    }
+  };
+
+  const editorDisabled = busy || isSavingNote;
+
   return (
     <div
       data-testid="shopping-item"
       data-item-id={item.id}
+      aria-busy={busy || undefined}
       className={cn(
         'relative group grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-x-1 min-h-14 px-2 py-1 rounded-xl bg-white border border-border/50 shadow-sm transition-colors',
         item.isPurchased && 'bg-green-50/80 border-green-100',
         view === 'grid' && 'px-1',
-        view === 'grid' && isNoteExpanded && 'col-span-full'
+        view === 'grid' && isNoteExpanded && 'col-span-full',
+        busy && 'ring-2 ring-primary/40'
       )}
     >
       {/* Main Content (Left) */}
@@ -106,12 +131,13 @@ export default function ShoppingListItem({
         {onUpdateNote && !isEditingNote && !item.isPurchased && (
           <button
             type="button"
+            disabled={busy}
             aria-label={t('item.editNote', { name: productName })}
             onClick={(e) => {
               e.stopPropagation();
               setIsEditingNote(true);
             }}
-            className="flex items-center justify-center w-6 h-6 text-muted-foreground hover:text-primary hover:bg-primary/5 rounded-full transition-colors"
+            className="flex items-center justify-center w-6 h-6 text-muted-foreground hover:text-primary hover:bg-primary/5 rounded-full transition-colors disabled:opacity-50 disabled:pointer-events-none"
           >
             <MessageSquarePlus size={16} />
           </button>
@@ -119,13 +145,14 @@ export default function ShoppingListItem({
 
         <button
           type="button"
+          disabled={busy}
           aria-label={t('item.remove', { name: productName })}
           onClick={(e) => {
             e.stopPropagation();
-            onRemove(item.id);
+            void onRemove(item.id);
           }}
           className={cn(
-            'flex items-center justify-center w-6 h-6 text-muted-foreground/60 hover:text-destructive hover:bg-destructive/10 rounded-full transition-colors',
+            'flex items-center justify-center w-6 h-6 text-muted-foreground/60 hover:text-destructive hover:bg-destructive/10 rounded-full transition-colors disabled:opacity-50 disabled:pointer-events-none',
             view === 'grid' && 'col-start-1 row-start-2'
           )}
         >
@@ -135,12 +162,13 @@ export default function ShoppingListItem({
         <button
           type="button"
           ref={toggleButtonRef}
+          disabled={busy}
           onFocus={onToggleFocus}
           aria-label={t('item.purchased', { name: productName })}
           aria-pressed={item.isPurchased}
           onClick={() => onToggle(item.id)}
           className={cn(
-            'flex items-center justify-center min-w-11 min-h-11 rounded-full cursor-pointer touch-manipulation focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2',
+            'flex items-center justify-center min-w-11 min-h-11 rounded-full cursor-pointer touch-manipulation focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 disabled:cursor-wait disabled:opacity-60',
             view === 'grid' && 'col-start-2 row-start-1 row-span-2'
           )}
         >
@@ -193,15 +221,14 @@ export default function ShoppingListItem({
           <input
             type="text"
             value={noteValue}
+            disabled={editorDisabled}
             onChange={(e) => setNoteValue(e.target.value)}
             onBlur={() => {
-              onUpdateNote?.(item.id, noteValue);
-              setIsEditingNote(false);
+              void saveNote();
             }}
             onKeyDown={(e) => {
               if (e.key === 'Enter') {
-                onUpdateNote?.(item.id, noteValue);
-                setIsEditingNote(false);
+                void saveNote();
               }
               if (e.key === 'Escape') {
                 setNoteValue(item.note || '');
@@ -210,14 +237,15 @@ export default function ShoppingListItem({
             }}
             placeholder={t('item.notePlaceholder')}
             aria-label={t('item.editNote', { name: productName })}
-            className="min-w-0 flex-1 px-2 py-2 text-sm bg-muted border-none rounded-xl focus:ring-2 focus:ring-primary outline-none"
+            className="min-w-0 flex-1 px-2 py-2 text-sm bg-muted border-none rounded-xl focus:ring-2 focus:ring-primary outline-none disabled:opacity-60"
             autoFocus
           />
           <button
-            className="px-2 py-2 text-sm font-bold bg-primary text-primary-foreground rounded-xl"
+            type="button"
+            disabled={editorDisabled}
+            className="px-2 py-2 text-sm font-bold bg-primary text-primary-foreground rounded-xl disabled:opacity-60"
             onClick={() => {
-              onUpdateNote?.(item.id, noteValue);
-              setIsEditingNote(false);
+              void saveNote();
             }}
           >
             {t('item.noteSave')}

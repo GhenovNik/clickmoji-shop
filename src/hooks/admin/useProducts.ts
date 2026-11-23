@@ -37,6 +37,13 @@ interface ProductInput {
   variants?: Array<Partial<ProductVariant>>;
 }
 
+// The picture is kept only while the custom-image flag is on. An unchecked flag clears both
+// addresses whatever picture is passed; the stored files are not deleted (AGE-1620).
+const pictureFields = (data: ProductInput, imageUrl?: string) =>
+  data.isCustom
+    ? { isCustom: true, imageUrl: imageUrl || null }
+    : { isCustom: false, imageUrl: null, imageUrlEn: null };
+
 // API functions
 const fetchProductsAPI = async (): Promise<Product[]> => {
   const res = await fetch('/api/products');
@@ -50,8 +57,7 @@ const createProductAPI = async (data: ProductInput, imageUrl?: string) => {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       ...data,
-      isCustom: data.isCustom || !!imageUrl,
-      imageUrl: imageUrl || null,
+      ...pictureFields(data, imageUrl),
       variants: data.variants || [],
     }),
   });
@@ -65,8 +71,7 @@ const updateProductAPI = async (id: string, data: ProductInput, imageUrl?: strin
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       ...data,
-      isCustom: data.isCustom || !!imageUrl,
-      imageUrl: imageUrl || null,
+      ...pictureFields(data, imageUrl),
       variants: data.variants || [],
     }),
   });

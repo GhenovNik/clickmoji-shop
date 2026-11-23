@@ -94,7 +94,11 @@ describe('text services pass the resolved model to the SDK', () => {
 
       expect(sdk.calls).toHaveLength(1);
       expect(sdk.calls[0]?.model).toBe('gemini-3.8-flash');
-      expect(sdk.calls[0]?.config).toEqual({ responseMimeType: 'application/json' });
+      expect(sdk.calls[0]?.config).toMatchObject({
+        responseMimeType: 'application/json',
+        httpOptions: { timeout: 8_000, retryOptions: { attempts: 1 } },
+        abortSignal: { aborted: false },
+      });
       expect(result.model).toBe('gemini-3.8-flash');
     });
 

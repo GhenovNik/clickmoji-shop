@@ -10,7 +10,13 @@
     "loading": "Loading...",
     "saveChanges": "Save changes",
     "nameRu": "Name (RU)",
-    "nameEn": "Name (EN)"
+    "nameEn": "Name (EN)",
+    "openImageLarge": "Open larger",
+    "largeImageTitle": "Image preview",
+    "nowImage": "Now",
+    "newImage": "New",
+    "nowEnglishImage": "Now (EN)",
+    "newEnglishImage": "New (EN)"
   },
   "columns": {
     "icon": "Icon",
@@ -76,7 +82,11 @@
     "uploading": "Uploading...",
     "create": "Create product",
     "englishVersion": "English version (with labels):",
-    "removeEnglishVersion": "Remove the English version"
+    "removeEnglishVersion": "Remove the English version",
+    "currentImageAlt": "Current image",
+    "englishVersionAlt": "English version",
+    "newImageAlt": "New picture",
+    "restorePrevious": "Restore previous"
   },
   "bulkImport": {
     "enterNames": "Enter product names (one per line)",
@@ -117,7 +127,10 @@
     "find": "Search",
     "librarySearching": "Searching…",
     "libraryEmpty": "Nothing found in the library",
-    "generatedNotInLibrary": "⚠️ AI icon generated but not saved to the library. Click \"Save\" so it is not lost."
+    "generatedNotInLibrary": "⚠️ AI icon generated but not saved to the library. Click \"Save\" so it is not lost.",
+    "suggestHint": "Finds a regular emoji by name",
+    "generateHint": "Draws a new picture",
+    "libraryHint": "Searches among already drawn pictures"
   },
   "usersTable": {
     "roleAdmin": "Administrator",
@@ -153,7 +166,9 @@
     "uploadOwn": "Or upload your own image",
     "fileOnSave": "The file is uploaded when you save",
     "uploading": "⏳ Uploading...",
-    "create": "Create category"
+    "create": "Create category",
+    "savedImageAlt": "Category image",
+    "filePreviewAlt": "Preview of the selected file"
   },
   "categoriesTable": {
     "manageProducts": "Products",

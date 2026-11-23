@@ -43,7 +43,9 @@ export function useImportListText() {
     },
     onSuccess: (data, { listId }) => {
       // Preserve the import endpoint's real added/created/failed report even if refetch fails.
-      refreshQueryCache(queryClient, changedBy.importText(listId, data.results.created.length > 0));
+      // The list-key policy of refreshQueryCache keeps a running required reload alive (AGE-1649).
+      const keys = changedBy.importText(listId, data.results.created.length > 0);
+      refreshQueryCache(queryClient, keys);
     },
   });
 }
@@ -73,7 +75,7 @@ export function useRestoreHistory() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: async ({ historyId, name }: { historyId: string; name: string }) => {
+    mutationFn: async ({ historyId, name }: { historyId: string; name?: string }) => {
       const response = await fetch(`/api/history/${historyId}/restore`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

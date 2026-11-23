@@ -88,7 +88,9 @@
   },
   "listItems": {
     "clearConfirm": "Remove all items from the list?",
-    "completeFailed": "Could not finish the list"
+    "completeFailed": "Could not finish the list",
+    "rowFailed": "Could not complete the action",
+    "reloadFailed": "Could not refresh the list"
   },
   "importMutation": {
     "failed": "Could not import the list"

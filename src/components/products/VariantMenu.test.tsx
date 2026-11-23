@@ -123,16 +123,19 @@ describe('VariantMenu keyboard lifecycle', () => {
     expect(document.activeElement).toBe(buttons[buttons.length - 1]);
   });
 
-  it('traps both directions when the close button is the only action', () => {
+  it('traps both directions between header close and footer cancel without variants', () => {
     renderWithIntl(<MenuHarness item={{ ...product, variants: [] }} />, { locale: 'en' });
     openMenu();
     const close = screen.getByRole('button', { name: 'Close' });
+    const cancel = screen.getByRole('button', { name: 'Cancel' });
 
     close.focus();
-    expect(pressTab(close)).toBe(false);
+    expect(pressTab(close)).toBe(true);
+    cancel.focus();
+    expect(pressTab(cancel)).toBe(false);
     expect(document.activeElement).toBe(close);
     expect(pressTab(close, true)).toBe(false);
-    expect(document.activeElement).toBe(close);
+    expect(document.activeElement).toBe(cancel);
   });
 
   it('preserves focus across rerenders and restores the original opener on final close', () => {

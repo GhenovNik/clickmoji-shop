@@ -28,8 +28,10 @@ describe('UploadThing security contract', () => {
 
     expect(packageJson.dependencies?.uploadthing).toMatch(/^\^7\./);
     expect(packageJson.dependencies?.['@uploadthing/react']).toMatch(/^\^7\./);
-    expect(packageJson.overrides?.effect).toBe('3.21.4');
-    expect(packageLock.packages['node_modules/effect']?.version).toBe('3.21.4');
+    expect(packageJson.overrides?.effect).toBe('3.22.1');
+    expect(packageLock.packages['node_modules/effect']?.version).toBe('3.22.1');
+    expect(packageJson.overrides?.['@effect/platform']).toBe('0.97.1');
+    expect(packageLock.packages['node_modules/@effect/platform']?.version).toBe('0.97.1');
   });
 
   it('keeps the UploadThing API surfaces covered by the follow-up issue', () => {

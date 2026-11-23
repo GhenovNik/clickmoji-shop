@@ -9,10 +9,14 @@ import {
   rateLimitResponse,
 } from '@/lib/auth-security';
 import { enforceAiQuota } from '@/lib/ai-quota';
+import { runTextAiCall } from '@/lib/text-ai-call';
+import { textAiErrorCode } from '@/lib/services/text-ai-errors';
 import { analyzeSmartProduct } from '@/lib/services/ai-products';
 import { generateAndUploadEmojiAsset } from '@/lib/services/emoji-assets';
 import { recordEmojiLibraryItem } from '@/lib/services/emoji-library';
 import { summarizeEmojiGenerationFailure } from '@/lib/services/emoji-errors';
+
+export const maxDuration = 60;
 
 export async function POST(request: Request) {
   const locale = getRequestLocale(request);
@@ -71,20 +75,11 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: t('api.products.noCategories') }, { status: 400 });
     }
 
-    // One unit of the shared daily AI budget for the text analysis.
-    const quotaResponse = await enforceAiQuota(dbUser, locale);
-    if (quotaResponse) return quotaResponse;
-
-    const {
-      result: aiResult,
-      promptVersion,
-      model,
-    } = await analyzeSmartProduct({
-      apiKey,
-      productName,
-      categoryId,
-      categories,
-    });
+    const analysis = await runTextAiCall(dbUser, locale, () =>
+      analyzeSmartProduct({ apiKey, productName, categoryId, categories })
+    );
+    if (analysis instanceof Response) return analysis;
+    const { result: aiResult, promptVersion, model } = analysis;
 
     // Find the category
     const category = categories.find(
@@ -202,10 +197,7 @@ export async function POST(request: Request) {
       message: t('api.products.created'),
     });
   } catch (error) {
-    // Not an image-generation failure: the generation above is caught and swallowed, so nothing of a
-    // provider reaches this log. A Prisma, text analysis or request parsing failure is logged with
-    // its class and message again, as before.
-    console.error('Error in smart product creation:', error);
+    console.error('Error in smart product creation:', textAiErrorCode(error));
     return NextResponse.json({ error: t('api.products.createFailed') }, { status: 500 });
   }
 }

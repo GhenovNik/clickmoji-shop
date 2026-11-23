@@ -29,12 +29,15 @@ const historyItem = (id: string, productId: string | null, variantId: string | n
   isPurchased: true,
 });
 
-function restore(historyId = 'history-b') {
+function restore(
+  historyId = 'history-b',
+  body: { name?: string } = { name: 'Список от 1 октября' }
+) {
   return POST(
     new Request(`http://localhost/api/history/${historyId}/restore`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ name: 'Список от 1 октября' }),
+      body: JSON.stringify(body),
     }),
     { params: Promise.resolve({ historyId }) }
   );
@@ -78,6 +81,46 @@ beforeEach(() => {
 });
 
 describe('POST /api/history/[historyId]/restore', () => {
+  it('uses the saved name when the client omits name', async () => {
+    holder.db.state.lists = [];
+
+    const response = await restore('history-b', {});
+
+    expect(response.status).toBe(200);
+    const { listId } = await response.json();
+    expect(holder.db.state.lists).toEqual([
+      expect.objectContaining({ id: listId, name: 'Покупки', isActive: false }),
+    ]);
+  });
+
+  it('allows repeated restoration beside an active namesake without renaming or activating it', async () => {
+    const first = await restore('history-b', {});
+    const second = await restore('history-b', {});
+
+    expect(first.status).toBe(200);
+    expect(second.status).toBe(200);
+    const firstBody = await first.json();
+    const secondBody = await second.json();
+    expect(firstBody.listId).not.toBe(secondBody.listId);
+    expect(holder.db.state.lists).toEqual([
+      expect.objectContaining({ id: 'list-b', name: 'Покупки', isActive: true }),
+      expect.objectContaining({ id: firstBody.listId, name: 'Покупки', isActive: false }),
+      expect.objectContaining({ id: secondBody.listId, name: 'Покупки', isActive: false }),
+    ]);
+  });
+
+  it('accepts the client fallback for an unnamed legacy snapshot', async () => {
+    holder.db.state.histories[0].listName = '';
+
+    const response = await restore();
+
+    expect(response.status).toBe(200);
+    const { listId } = await response.json();
+    expect(holder.db.state.lists.find((list) => list.id === listId)?.name).toBe(
+      'Список от 1 октября'
+    );
+  });
+
   it('leaves no list behind when inserting the items fails', async () => {
     holder.db.hooks.beforeItemInsert = (row) => {
       if (row.productId === 'bread') throw new Error('connection reset');

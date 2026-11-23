@@ -1,6 +1,6 @@
 'use client';
 
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useSession } from 'next-auth/react';
 import { useRouter } from 'next/navigation';
@@ -69,6 +69,34 @@ const removeFavoriteAPI = async (target: FavoriteTarget) => {
   return res.json();
 };
 
+// A guest marks products, signs in, and lands back here; the marks live under this key in
+// sessionStorage just long enough for the round trip.
+const selectionStorageKey = (categoryId: string) => `product-selection:${categoryId}`;
+
+type SavedSelection = { products: string[]; variants: Record<string, string> };
+
+function readSavedSelection(raw: string | null): SavedSelection | null {
+  if (raw === null) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return null;
+  const { products, variants } = parsed as { products?: unknown; variants?: unknown };
+  if (!Array.isArray(products) || products.some((id) => typeof id !== 'string')) return null;
+  const cleanVariants: Record<string, string> = {};
+  if (variants !== undefined) {
+    if (typeof variants !== 'object' || variants === null || Array.isArray(variants)) return null;
+    for (const [productId, variantId] of Object.entries(variants)) {
+      if (typeof variantId !== 'string') return null;
+      cleanVariants[productId] = variantId;
+    }
+  }
+  return { products, variants: cleanVariants };
+}
+
 const addToListAPI = async (
   listId: string,
   items: { productId: string; variantId?: string | null }[]
@@ -94,13 +122,55 @@ export function useProductSelection(categoryId: string) {
   const [adding, setAdding] = useState(false);
   const [addError, setAddError] = useState('');
   const addPending = useRef(false);
+  const restoredRef = useRef(false);
 
   // Query for products by category
-  const { data: products = [], isLoading: loading } = useQuery({
+  const {
+    data: products = [],
+    isLoading: loading,
+    isError: productsError,
+  } = useQuery({
     queryKey: queryKeys.categoryProducts(categoryId),
     queryFn: () => fetchProductsByCategoryAPI(categoryId),
     enabled: !!categoryId,
   });
+
+  // Restore the guest's marks once, after the catalogue arrives; anything the catalogue no
+  // longer has is dropped, and the stored copy is deleted either way.
+  // A failed catalogue load must not consume the stored marks: they stay in storage for the
+  // next mount instead of being dropped by a restore against an empty catalogue.
+  useEffect(() => {
+    if (restoredRef.current || !categoryId || loading || productsError) return;
+    restoredRef.current = true;
+    const key = selectionStorageKey(categoryId);
+    let saved: SavedSelection | null = null;
+    try {
+      saved = readSavedSelection(window.sessionStorage.getItem(key));
+      window.sessionStorage.removeItem(key);
+    } catch {
+      return;
+    }
+    if (!saved) return;
+    const catalogIds = new Set(products.map((product) => product.id));
+    const picked = [...new Set(saved.products)].filter((id) => catalogIds.has(id));
+    if (picked.length === 0) return;
+    const pickedSet = new Set(picked);
+    const variantIdsByProduct = new Map(
+      products.map((product) => [
+        product.id,
+        new Set((product.variants ?? []).map((variant) => variant.id)),
+      ])
+    );
+    const variants: Record<string, string> = {};
+    for (const [productId, variantId] of Object.entries(saved.variants)) {
+      // A variant that is gone or belongs to another product leaves the product picked bare.
+      if (pickedSet.has(productId) && variantIdsByProduct.get(productId)?.has(variantId)) {
+        variants[productId] = variantId;
+      }
+    }
+    setSelectedProducts(new Set(picked));
+    setSelectedVariants(variants);
+  }, [categoryId, loading, productsError, products]);
 
   // Query for favorites
   const { data: favoritesData = [] } = useQuery({
@@ -133,6 +203,22 @@ export function useProductSelection(categoryId: string) {
       queryClient.invalidateQueries({ queryKey: queryKeys.favorites() });
     },
   });
+
+  const saveSelectionForLogin = () => {
+    if (!categoryId) return;
+    const variants: Record<string, string> = {};
+    for (const [productId, variantId] of Object.entries(selectedVariants)) {
+      if (typeof variantId === 'string') variants[productId] = variantId;
+    }
+    try {
+      window.sessionStorage.setItem(
+        selectionStorageKey(categoryId),
+        JSON.stringify({ products: [...selectedProducts], variants })
+      );
+    } catch {
+      // Storage unavailable: the guest signs in without their marks rather than crashing.
+    }
+  };
 
   const toggleProduct = (product: Product) => {
     setSelectedProducts((prev) => {
@@ -256,5 +342,6 @@ export function useProductSelection(categoryId: string) {
     toggleFavorite,
     toggleVariantFavorite,
     addToList,
+    saveSelectionForLogin,
   };
 }

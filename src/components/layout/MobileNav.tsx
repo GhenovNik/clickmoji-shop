@@ -31,7 +31,7 @@ export default function MobileNav() {
   }
 
   return (
-    <nav className="fixed bottom-0 left-0 right-0 bg-white/80 backdrop-blur-lg border-t border-border px-4 pb-safe-bottom z-50 sm:hidden">
+    <nav className="fixed bottom-0 left-0 right-0 bg-white/80 backdrop-blur-lg border-t border-border px-safe-4 pb-safe-bottom z-(--z-mobile-nav) sm:hidden">
       <div className="flex justify-between items-center h-16 max-w-md mx-auto">
         {navItems.map((item) => {
           const isFavoritesRoute = pathname.startsWith('/categories/favorites');
@@ -49,11 +49,11 @@ export default function MobileNav() {
               key={item.href}
               href={item.href}
               className={cn(
-                'flex flex-col items-center justify-center flex-1 h-full gap-1 transition-all',
-                isActive ? 'text-primary scale-110' : 'text-muted-foreground'
+                'flex flex-col items-center justify-center flex-1 h-full gap-1 transition-colors',
+                isActive ? 'text-primary' : 'text-muted-foreground'
               )}
             >
-              <div className="relative">
+              <div className={cn('relative transition-transform', isActive && 'scale-110')}>
                 <Icon size={24} strokeWidth={isActive ? 2.5 : 2} />
                 {isActive && (
                   <div className="absolute -top-1 -right-1 w-2 h-2 bg-secondary rounded-full" />

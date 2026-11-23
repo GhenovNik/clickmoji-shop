@@ -3,6 +3,7 @@ import { apiText } from '@/lib/api-messages';
 import { prisma } from '@/lib/prisma';
 import { requireUser } from '@/lib/auth-guards';
 import { getRequestLocale, getServerTranslator } from '@/lib/auth-security';
+import { starterListData } from '@/lib/starter-lists';
 
 // POST /api/lists/init - create starter lists when the account has none, named in the
 // language of the request.
@@ -13,31 +14,32 @@ export async function POST(request: Request) {
     if (guard instanceof Response) return guard;
     const { session } = guard;
 
-    // Do not duplicate lists for initialized accounts.
-    const existingLists = await prisma.list.findMany({
-      where: {
-        userId: session.user.id,
-      },
+    // Two overlapping requests must not both create the starter set. Lock the caller's user row
+    // first: a second transaction waits on it and, at Read Committed, reads the lists committed
+    // by the first one after the lock is released.
+    const created = await prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM users WHERE id = ${session.user.id} FOR UPDATE`;
+
+      // Do not duplicate lists for initialized accounts.
+      const existingLists = await tx.list.findMany({
+        where: {
+          userId: session.user.id,
+        },
+      });
+
+      if (existingLists.length > 0) return false;
+
+      // Create the starter lists.
+      await tx.list.createMany({
+        data: starterListData(t, session.user.id),
+      });
+
+      return true;
     });
 
-    if (existingLists.length > 0) {
+    if (!created) {
       return NextResponse.json({ message: await apiText(request, 'listsAlreadyExist') });
     }
-
-    // Create the starter lists.
-    const defaultLists = [
-      { name: t('api.lists.defaultNames.week'), isActive: true },
-      { name: t('api.lists.defaultNames.party'), isActive: false },
-      { name: t('api.lists.defaultNames.weekend'), isActive: false },
-      { name: t('api.lists.defaultNames.survival'), isActive: false },
-    ];
-
-    await prisma.list.createMany({
-      data: defaultLists.map((list) => ({
-        ...list,
-        userId: session.user.id,
-      })),
-    });
 
     const lists = await prisma.list.findMany({
       where: {

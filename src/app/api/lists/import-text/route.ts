@@ -9,7 +9,8 @@ import {
   getServerTranslator,
   rateLimitResponse,
 } from '@/lib/auth-security';
-import { enforceAiQuota } from '@/lib/ai-quota';
+import { runTextAiCall } from '@/lib/text-ai-call';
+import { textAiErrorCode } from '@/lib/services/text-ai-errors';
 import {
   parseShoppingListText,
   type CatalogProductPromptEntry,
@@ -22,6 +23,8 @@ import {
   selectCatalogForPrompt,
   splitProductNameAndNote,
 } from '@/lib/product-name';
+
+export const maxDuration = 60;
 
 type CatalogProduct = CatalogProductPromptEntry & { categoryId: string };
 
@@ -114,21 +117,11 @@ export async function POST(request: Request) {
 
     const promptCatalog = selectCatalogForPrompt(catalog, text);
 
-    // One unit of the shared daily AI budget, taken only when the provider is about to be called.
-    const quotaResponse = await enforceAiQuota(session.user, locale);
-    if (quotaResponse) return quotaResponse;
-
-    const {
-      products: parsedProducts,
-      invalid: invalidEntries,
-      promptVersion,
-      model,
-    } = await parseShoppingListText({
-      apiKey,
-      text,
-      categories,
-      catalog: promptCatalog,
-    });
+    const analysis = await runTextAiCall(session.user, locale, () =>
+      parseShoppingListText({ apiKey, text, categories, catalog: promptCatalog })
+    );
+    if (analysis instanceof Response) return analysis;
+    const { products: parsedProducts, invalid: invalidEntries, promptVersion, model } = analysis;
 
     if (!Array.isArray(parsedProducts) || parsedProducts.length === 0) {
       return NextResponse.json(
@@ -247,8 +240,8 @@ export async function POST(request: Request) {
           note,
         });
       } catch (error) {
-        // The raw error stays in the server log; the shopper gets a translated reason.
-        console.error('Error importing a list entry:', error);
+        // Log only an allowlisted code, never prompts or upstream error details.
+        console.error('Error importing a list entry:', textAiErrorCode(error));
         results.failed.push(failedEntry(product, t('api.import.entryFailed')));
       }
     }
@@ -265,7 +258,7 @@ export async function POST(request: Request) {
       results,
     });
   } catch (error) {
-    console.error('Error importing list:', error);
+    console.error('Error importing list:', textAiErrorCode(error));
     return NextResponse.json({ error: t('api.import.importFailed') }, { status: 500 });
   }
 }

@@ -15,6 +15,7 @@ import ShoppingListItem from '@/components/shopping/ShoppingListItem';
 import ShoppingListEmptyState from '@/components/shopping/ShoppingListEmptyState';
 import ProductSearch from '@/components/ProductSearch';
 import ImportListModal from '@/components/shopping/ImportListModal';
+import { openModalFromTrigger } from '@/components/ui/Modal';
 
 export default function ShoppingListPage({ params }: { params: Promise<{ listId: string }> }) {
   const router = useRouter();
@@ -27,8 +28,18 @@ export default function ShoppingListPage({ params }: { params: Promise<{ listId:
   const { rememberFocus, registerTarget, isFocusTarget } = useShoppingListFocus();
   const { view, collapsed, setView, toggleGroup, expandGroups } = useShoppingListPresentation();
 
-  const { list, items, loading, togglePurchased, removeItem, updateNote, clearAll, completeList } =
-    useShoppingListItems(listId);
+  const {
+    list,
+    items,
+    loading,
+    togglePurchased,
+    removeItem,
+    updateNote,
+    clearAll,
+    completeList,
+    isItemBusy,
+    isListBusy,
+  } = useShoppingListItems(listId);
 
   const handleToggle = async (itemId: string) => {
     const item = items.find((entry) => entry.id === itemId);
@@ -43,7 +54,7 @@ export default function ShoppingListPage({ params }: { params: Promise<{ listId:
     try {
       await togglePurchased(itemId);
     } catch (error) {
-      // The mutation hook has already rolled the cache back. Consume the rejected
+      // The mutation hook has already reconciled the cache. Consume the rejected
       // UI action; focus follows DOM commits, never the network promise.
       console.error('Error toggling purchased item:', error);
     }
@@ -126,6 +137,7 @@ export default function ShoppingListPage({ params }: { params: Promise<{ listId:
               key={item.id}
               item={item}
               view={groupView}
+              busy={isItemBusy(item.id)}
               onToggle={handleToggle}
               toggleButtonRef={(node) => registerTarget(item.id, node)}
               onToggleFocus={(event) => rememberFocus(item.id, event.currentTarget)}
@@ -180,7 +192,7 @@ export default function ShoppingListPage({ params }: { params: Promise<{ listId:
 
                 <button
                   type="button"
-                  onClick={() => setIsImportModalOpen(true)}
+                  onClick={openModalFromTrigger(() => setIsImportModalOpen(true))}
                   className="shrink-0 w-28 sm:w-auto min-h-11 bg-gradient-to-r from-green-500 to-teal-600 hover:from-green-600 hover:to-teal-700 text-white px-2 sm:px-4 py-1 rounded-xl text-xs sm:text-sm font-semibold transition-all flex items-center justify-center gap-1"
                 >
                   <span>📋</span>
@@ -251,7 +263,8 @@ export default function ShoppingListPage({ params }: { params: Promise<{ listId:
               <div className="mb-6">
                 <button
                   onClick={completeList}
-                  className="w-full bg-green-600 hover:bg-green-700 text-white px-8 py-4 rounded-xl font-bold text-lg transition-colors shadow-lg"
+                  disabled={isListBusy}
+                  className="w-full bg-green-600 hover:bg-green-700 text-white px-8 py-4 rounded-xl font-bold text-lg transition-colors shadow-lg disabled:opacity-60 disabled:cursor-wait"
                 >
                   {t('listPage.completePurchase')}
                 </button>
@@ -272,7 +285,8 @@ export default function ShoppingListPage({ params }: { params: Promise<{ listId:
                 {items.length > 0 && (
                   <button
                     onClick={clearAll}
-                    className="flex-1 bg-red-500 hover:bg-red-600 text-white px-2 py-3 rounded-xl text-sm font-semibold transition-colors"
+                    disabled={isListBusy}
+                    className="flex-1 bg-red-500 hover:bg-red-600 text-white px-2 py-3 rounded-xl text-sm font-semibold transition-colors disabled:opacity-60 disabled:cursor-wait"
                   >
                     {t('listPage.clearAll')}
                   </button>

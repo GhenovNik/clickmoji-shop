@@ -6,6 +6,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { Eye, EyeOff } from 'lucide-react';
 import { useTranslations } from 'next-intl';
+import { safeCallbackUrl } from '@/lib/safe-callback-url';
 
 function LoginForm() {
   const t = useTranslations('auth');
@@ -22,6 +23,7 @@ function LoginForm() {
   const registered = searchParams.get('registered');
   const verified = searchParams.get('verified');
   const resetStatus = searchParams.get('reset');
+  const callbackUrl = safeCallbackUrl(searchParams.get('callbackUrl'));
 
   useEffect(() => {
     if (verified === 'expired') {
@@ -79,7 +81,7 @@ function LoginForm() {
         return;
       }
 
-      router.push('/');
+      router.push(callbackUrl);
       router.refresh();
     } catch {
       setError(t('login.failed'));
@@ -94,7 +96,7 @@ function LoginForm() {
     }
 
     setError('');
-    await signIn('google', { callbackUrl: '/' });
+    await signIn('google', { callbackUrl });
   }
 
   async function handleResend() {

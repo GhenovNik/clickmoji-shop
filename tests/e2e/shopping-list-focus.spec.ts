@@ -19,8 +19,25 @@ test.describe('Purchase focus across held network requests', () => {
           const heldPut = new Promise<Route>((resolve) => {
             capturePut = resolve;
           });
+          let firstPutHeld = false;
           await page.route(`**/api/lists/${E2E_LIST_ID}/items/${item.id}`, (route) => {
-            capturePut(route);
+            if (!firstPutHeld) {
+              firstPutHeld = true;
+              capturePut(route);
+              return;
+            }
+            // The N1 retry budget re-issues the same PUT at 1s/2s/4s; answer retries
+            // like the held attempt so the terminal settle and refetch can fire.
+            if (outcome === '503') {
+              void route.fulfill({ status: 503, json: { error: 'Synthetic unavailable' } });
+            } else if (outcome === 'abort') {
+              void route.abort('aborted');
+            } else {
+              void route.fulfill({
+                status: 200,
+                json: { ...item, isPurchased: !initiallyPurchased },
+              });
+            }
           });
           await page.goto(`/lists/${E2E_LIST_ID}`);
           const toggle = page.getByRole('button', { name: 'Куплено: Молоко', exact: true });
@@ -32,14 +49,14 @@ test.describe('Purchase focus across held network requests', () => {
           const put = await heldPut;
           expect(put.request().postDataJSON()).toEqual({ isPurchased: !initiallyPurchased });
           await expect(toggle).toHaveAttribute('aria-pressed', String(!initiallyPurchased));
-          // No response yet: focus must follow the optimistic DOM commit, not HTTP success.
-          await expect(toggle).toBeFocused();
+          // No response yet: the busy toggle is disabled (AGE-1649). A disabled control cannot
+          // hold focus, so focus is not expected on it here; it returns to the toggle once the
+          // row unlocks, which the final assertion below checks.
+          await expect(toggle).toBeDisabled();
           expect(state.items[0].isPurchased).toBe(initiallyPurchased);
           const neighbour = page.getByRole('button', { name: /Импорт из текста/ });
           if (moveFocus) {
-            await page.keyboard.press('Shift+Tab');
-            await expect(page.getByRole('button', { name: 'Удалить товар: Молоко' })).toBeFocused();
-            // Move beyond the item to a stable control that survives its rollback.
+            // The user moves focus to a stable control; the list must not take it back.
             await neighbour.focus();
           }
           const readsBeforeResponse = state.listRequests;
@@ -51,7 +68,9 @@ test.describe('Purchase focus across held network requests', () => {
           } else {
             await put.abort('aborted');
           }
-          await expect.poll(() => state.listRequests).toBeGreaterThan(readsBeforeResponse);
+          await expect
+            .poll(() => state.listRequests, { timeout: 12_000 })
+            .toBeGreaterThan(readsBeforeResponse);
           const expected = outcome === 'success' ? !initiallyPurchased : initiallyPurchased;
           await expect(toggle).toHaveAttribute('aria-pressed', String(expected));
           await expect(moveFocus ? neighbour : toggle).toBeFocused();
