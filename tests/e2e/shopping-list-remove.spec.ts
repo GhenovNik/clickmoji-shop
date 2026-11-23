@@ -18,6 +18,47 @@ test.describe('mobile item removal', () => {
   test.use({ viewport: { width: 375, height: 812 }, hasTouch: true, isMobile: true });
 
   for (const view of ['list', 'grid'] as const) {
+    test(`${view}: confirmation excludes covered controls from keyboard and accessibility tree @smoke`, async ({
+      page,
+    }) => {
+      const milk = createShoppingItem('removal-item');
+      milk.note = 'Проверить срок';
+      const bread = createShoppingItem('neighbour');
+      bread.product.name = 'Хлеб';
+      const state = await mockAuthenticatedShopping(page, [milk, bread]);
+      await page.goto(`/lists/${E2E_LIST_ID}`);
+      if (view === 'grid') await page.getByRole('button', { name: 'Плитка' }).click();
+      const row = page.locator('[data-item-id="removal-item"]');
+      const remove = row.getByRole('button', { name: 'Удалить товар: Молоко' });
+      await remove.focus();
+      await page.keyboard.press('Enter');
+      const cancel = row.getByRole('button', { name: 'Отмена' });
+      await expect(cancel).toBeFocused();
+      await expect(row.getByRole('button', { name: 'Куплено: Молоко' })).toHaveCount(0);
+      await expect(
+        row.getByRole('button', { name: 'Редактировать комментарий: Молоко' })
+      ).toHaveCount(0);
+      await expect(row.getByRole('button', { name: /Развернуть комментарий/ })).toHaveCount(0);
+      await page.keyboard.press('Shift+Tab');
+      expect(await row.evaluate((element) => element.contains(document.activeElement))).toBe(false);
+      expect(state.updateItemRequests).toEqual([]);
+      await cancel.focus();
+      await page.keyboard.press('Tab');
+      await expect(row.getByRole('button', { name: 'Удалить', exact: true })).toBeFocused();
+      await page.keyboard.press('Tab');
+      const neighbour = page.getByRole('button', { name: 'Куплено: Хлеб' });
+      await neighbour.focus();
+      await page.keyboard.press('Enter');
+      await expect.poll(() => state.updateItemRequests.length).toBe(1);
+      expect(state.updateItemRequests[0].itemId).toBe('neighbour');
+      expect(state.items.find((item) => item.id === 'removal-item')?.isPurchased).toBe(false);
+      await cancel.focus();
+      await page.keyboard.press('Enter');
+      await expect(remove).toBeFocused();
+      expect(state.updateItemRequests).toHaveLength(1);
+      expect(state.items.find((item) => item.id === 'removal-item')).toBeTruthy();
+    });
+
     test(`${view}: swipe asks before removing; scrolling and cancellation do not remove @smoke`, async ({
       page,
     }) => {
