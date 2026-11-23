@@ -247,22 +247,22 @@ export function useShoppingListItems(listId: string) {
     );
   };
 
-  const waitForInFlightListReads = async () => {
+  // Settle any live list read (fetching or paused) without cancelling it, then patch any
+  // server-ACKed changes onto the current cache before the follow-up GET runs — even if an older
+  // read already finished and went idle before entry.
+  const prepareFollowUpRead = async (applyConfirmed?: () => void) => {
     const inFlight = getInFlightListPromises(queryClient, queryKey, true);
-    if (inFlight.length === 0) return false;
-    await Promise.allSettled(inFlight);
-    return true;
+    if (inFlight.length > 0) {
+      await Promise.allSettled(inFlight);
+    }
+    applyConfirmed?.();
   };
 
-  // Required server read after a failed cycle. Any live read (fetching or paused) settles first
-  // without cancellation, then one fresh read starts. Confirmed ACK patches are re-applied if an
-  // older in-flight read settled before the fresh read failed.
+  // Required server read after a failed cycle.
   const readListRequired = async (
     applyConfirmed?: () => void
   ): Promise<{ ok: true } | { ok: false; error: unknown }> => {
-    if (await waitForInFlightListReads()) {
-      applyConfirmed?.();
-    }
+    await prepareFollowUpRead(applyConfirmed);
     try {
       await queryClient.fetchQuery({
         queryKey,
@@ -275,12 +275,9 @@ export function useShoppingListItems(listId: string) {
     }
   };
 
-  // Ordinary refresh after a committed write. Never cancels a running read; any read already live
-  // (fetching or paused) settles first, confirmed ACK changes are preserved, and a fresh read runs.
+  // Ordinary refresh after a committed write. Never cancels a running read.
   const refreshAfterWrite = async (applyConfirmed?: () => void) => {
-    if (await waitForInFlightListReads()) {
-      applyConfirmed?.();
-    }
+    await prepareFollowUpRead(applyConfirmed);
     await queryClient.invalidateQueries({ queryKey }, { cancelRefetch: false });
   };
 
