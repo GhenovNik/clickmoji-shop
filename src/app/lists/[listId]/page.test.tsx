@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import '@testing-library/jest-dom/vitest';
 import { act, fireEvent, screen, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { queryKeys } from '@/lib/query-keys';
 import { renderWithIntl } from '@/test/intl';
 
 // The page decides what an empty list offers. Import must be reachable there too, and a finished
@@ -361,5 +362,69 @@ describe('row lock while a request is in flight (AGE-1649)', () => {
 
     control.releaseReload();
     await waitFor(() => expect(screen.queryByPlaceholderText('Заметка к товару...')).toBeNull());
+  });
+
+  it('F1 closure: a row arriving while completeList is in flight renders aria-busy with disabled controls until Complete settles', async () => {
+    serverItems = [{ ...milk, isPurchased: true }];
+    let releasePost!: (response: Response) => void;
+    const heldPost = new Promise<Response>((resolve) => {
+      releasePost = resolve;
+    });
+    const puts: string[] = [];
+    let posts = 0;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string, init?: RequestInit) => {
+        const method = init?.method ?? 'GET';
+        if (method === 'GET' && url === '/api/lists/list-1') {
+          listRequests += 1;
+          return Response.json({ id: 'list-1', name: 'Покупки', items: serverItems });
+        }
+        if (method === 'POST' && url === '/api/history') {
+          posts += 1;
+          return heldPost;
+        }
+        if (method === 'PUT' && url === '/api/lists/list-1/items/item-2') {
+          puts.push(url);
+          return Response.json({ ...bread, isPurchased: true });
+        }
+        throw new Error(`unexpected fetch ${method} ${url}`);
+      })
+    );
+    vi.spyOn(window, 'alert').mockImplementation(() => undefined);
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    const { queryClient } = renderPage();
+    fireEvent.click(await screen.findByRole('button', { name: /Завершить покупку/ }));
+    await waitFor(() => expect(posts).toBe(1));
+
+    expect(screen.getByRole('button', { name: /Завершить покупку/ })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Очистить всё' })).toBeDisabled();
+
+    act(() => {
+      queryClient.setQueryData(queryKeys.list('list-1'), {
+        id: 'list-1',
+        name: 'Покупки',
+        items: [...serverItems, bread],
+      });
+    });
+
+    const breadToggle = await screen.findByRole('button', { name: 'Куплено: Хлеб' });
+    const breadRow = breadToggle.closest('.group');
+    expect(breadRow?.getAttribute('aria-busy')).toBe('true');
+    expect(breadToggle).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Удалить товар: Хлеб' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Редактировать комментарий: Хлеб' })).toBeDisabled();
+
+    await act(async () => {
+      releasePost(Response.json({ error: 'boom' }, { status: 500 }));
+      await heldPost;
+    });
+
+    await waitFor(() => expect(breadToggle).toBeEnabled());
+    expect(breadRow?.getAttribute('aria-busy')).toBeNull();
+
+    fireEvent.click(breadToggle);
+    await waitFor(() => expect(puts).toEqual(['/api/lists/list-1/items/item-2']));
   });
 });

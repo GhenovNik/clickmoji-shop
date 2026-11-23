@@ -906,6 +906,114 @@ describe('row lock and terminal reload (AGE-1649)', () => {
     });
   });
 
+  it('F1 closure: a row delivered while completeList POST is in flight is busy and blocked until Complete fails and unlocks', async () => {
+    const dialogs = spyDialogs();
+    const releasePost = holdNext('POST', HISTORY_URL);
+    const { result } = await renderList();
+
+    const complete = settle(result.current.completeList());
+    await step(0);
+    expect(methodJournal('POST')).toHaveLength(1);
+
+    const lateItem: Item = {
+      id: 'item-3',
+      isPurchased: false,
+      note: null,
+      product: {
+        id: 'prod-3',
+        name: 'Сыр',
+        emoji: '🧀',
+        isCustom: false,
+        imageUrl: null,
+        category: { name: 'Молочные продукты', emoji: '🧀', order: 1 },
+      },
+      variant: null,
+    };
+    act(() => {
+      queryClient.setQueryData<ListData>(queryKeys.list('list-1'), (old) =>
+        old ? { ...old, items: [...old.items, lateItem] } : old
+      );
+    });
+
+    expect(result.current.isItemBusy('item-3')).toBe(true);
+    expect(result.current.isListBusy).toBe(true);
+
+    await settle(result.current.togglePurchased('item-3'));
+    await settle(result.current.updateNote('item-3', 'срочно'));
+    await settle(result.current.removeItem('item-3'));
+    await settle(result.current.clearAll());
+    await settle(result.current.completeList());
+
+    expect(putJournal()).toHaveLength(0);
+    expect(methodJournal('DELETE')).toHaveLength(0);
+    expect(methodJournal('POST')).toHaveLength(1);
+
+    await act(async () => {
+      releasePost(putRespond(500, 'boom'));
+      await complete;
+    });
+    await step(0);
+
+    expect(dialogs.alert).toHaveBeenCalledTimes(1);
+    expect(result.current.isItemBusy('item-3')).toBe(false);
+    expect(result.current.isItemBusy('item-1')).toBe(false);
+    expect(result.current.isListBusy).toBe(false);
+
+    enqueue('PUT', '/api/lists/list-1/items/item-3', [putRespond(200, '{"isPurchased":true}')]);
+    await settle(result.current.togglePurchased('item-3'));
+    expect(putJournal()).toHaveLength(1);
+  });
+
+  it('F1 closure: a row delivered while completeList POST is in flight unlocks when Complete succeeds', async () => {
+    const releasePost = holdNext('POST', HISTORY_URL);
+    const { result } = await renderList();
+
+    const complete = settle(result.current.completeList());
+    await step(0);
+
+    const lateItem: Item = {
+      id: 'item-3',
+      isPurchased: false,
+      note: null,
+      product: {
+        id: 'prod-3',
+        name: 'Сыр',
+        emoji: '🧀',
+        isCustom: false,
+        imageUrl: null,
+        category: { name: 'Молочные продукты', emoji: '🧀', order: 1 },
+      },
+      variant: null,
+    };
+    act(() => {
+      queryClient.setQueryData<ListData>(queryKeys.list('list-1'), (old) =>
+        old ? { ...old, items: [...old.items, lateItem] } : old
+      );
+    });
+
+    expect(result.current.isItemBusy('item-3')).toBe(true);
+
+    await act(async () => {
+      releasePost(putRespond(200, '{}'));
+      await complete;
+    });
+    await step(0);
+
+    expect(result.current.isItemBusy('item-3')).toBe(false);
+    expect(result.current.isListBusy).toBe(false);
+    expect(router.push).toHaveBeenCalledWith('/history');
+  });
+
+  it('completeList keeps the empty-list guard and sends no POST when items is empty', async () => {
+    serverState = { ...serverState, items: [] };
+    const { result } = await renderList();
+
+    await settle(result.current.completeList());
+
+    expect(methodJournal('POST')).toHaveLength(0);
+    expect(result.current.isListBusy).toBe(false);
+  });
+
   it('ACK refresh: a read that started before the write is not joined; the row reads again after it settles', async () => {
     enqueue('PUT', PUT_URL, [putRespond(200, '{"isPurchased":true}')]);
     const { result } = await renderList();

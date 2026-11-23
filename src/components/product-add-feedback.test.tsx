@@ -745,17 +745,38 @@ describe.each(paths)('%s post-success housekeeping', (path) => {
 });
 
 describe('list-key refresh (AGE-1649)', () => {
-  it('keeps the mounted list read running when the mounted search adds a product', async () => {
-    addResponse = async () => json({ createdItems: [{ id: 'item-1' }] });
+  const addedItem = {
+    id: 'item-1',
+    isPurchased: false,
+    note: null,
+    product: {
+      id: product.id,
+      name: product.name,
+      nameEn: product.nameEn,
+      emoji: product.emoji,
+      isCustom: false,
+      imageUrl: null,
+      imageUrlEn: null,
+      category: { name: 'Молочное', nameEn: 'Dairy', emoji: '🥛', order: 1 },
+    },
+    variant: null,
+  };
+
+  it('keeps a held list read running when the mounted search adds a product, then fetches the added item', async () => {
+    let serverList = { id: 'list-1', name: 'Список', items: [] as Array<typeof addedItem> };
+    addResponse = async () => {
+      serverList = { ...serverList, items: [addedItem] };
+      return json({ createdItems: [{ id: 'item-1' }] });
+    };
     const listReads: Array<() => void> = [];
-    const listPayload = { id: 'list-1', name: 'Список', items: [] };
     const baseFetch = fetchMock as unknown as (
       url: string,
       init?: RequestInit
     ) => Promise<Response>;
     fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
       if (url === '/api/lists/list-1' && !init?.method) {
-        return new Promise((resolve) => listReads.push(() => resolve(json(listPayload))));
+        const snapshot = structuredClone(serverList);
+        return new Promise((resolve) => listReads.push(() => resolve(json(snapshot))));
       }
       return baseFetch(url, init);
     });
@@ -770,7 +791,7 @@ describe('list-key refresh (AGE-1649)', () => {
     const invalidateSpy = vi.spyOn(view.client, 'invalidateQueries');
     await vi.waitFor(() => expect(listReads).toHaveLength(1));
     act(() => {
-      listReads.forEach((release) => release());
+      listReads[0]();
     });
     await vi.waitFor(() =>
       expect(view.client.getQueryData(queryKeys.list('list-1'))).toBeDefined()
@@ -779,10 +800,7 @@ describe('list-key refresh (AGE-1649)', () => {
     // The required reload of a failed row cycle holds a read of the same list key.
     const requiredRead = view.client.fetchQuery({
       queryKey: queryKeys.list('list-1'),
-      queryFn: () =>
-        new Promise((resolve) => {
-          listReads.push(() => resolve(json(listPayload)));
-        }),
+      queryFn: () => fetch('/api/lists/list-1').then((res) => res.json()),
       staleTime: 0,
     });
     const readOutcome = requiredRead.then(
@@ -810,10 +828,88 @@ describe('list-key refresh (AGE-1649)', () => {
     );
 
     act(() => {
-      listReads.forEach((release) => release());
+      listReads[1]();
     });
     expect(await readOutcome).toBe('settled');
-    expect(await screen.findByTestId('list-items')).toHaveTextContent('0');
+
+    // A fresh read starts after the held read settles and delivers the added item to cache and UI.
+    await vi.waitFor(() => expect(listReads).toHaveLength(3));
+    act(() => {
+      listReads[2]();
+    });
+    await vi.waitFor(() => {
+      expect(screen.getByTestId('list-items')).toHaveTextContent('1');
+      expect(
+        (view.client.getQueryData(queryKeys.list('list-1')) as typeof serverList | undefined)?.items
+      ).toHaveLength(1);
+    });
+    view.unmount();
+  });
+
+  it('keeps a held list read running when mounted favorites adds a product, then fetches the added item', async () => {
+    let serverList = { id: 'list-1', name: 'Список', items: [] as Array<typeof addedItem> };
+    addResponse = async () => {
+      serverList = { ...serverList, items: [addedItem] };
+      return json({ createdItems: [{ id: 'item-1' }] });
+    };
+    const listReads: Array<() => void> = [];
+    const baseFetch = fetchMock as unknown as (
+      url: string,
+      init?: RequestInit
+    ) => Promise<Response>;
+    fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === '/api/lists/list-1' && !init?.method) {
+        const snapshot = structuredClone(serverList);
+        return new Promise((resolve) => listReads.push(() => resolve(json(snapshot))));
+      }
+      return baseFetch(url, init);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const view = renderUI(
+      <>
+        <FavoritesSection />
+        <ListReadHarness />
+      </>
+    );
+    await vi.waitFor(() => expect(listReads).toHaveLength(1));
+    act(() => {
+      listReads[0]();
+    });
+    await vi.waitFor(() =>
+      expect(view.client.getQueryData(queryKeys.list('list-1'))).toBeDefined()
+    );
+
+    const requiredRead = view.client.fetchQuery({
+      queryKey: queryKeys.list('list-1'),
+      queryFn: () => fetch('/api/lists/list-1').then((res) => res.json()),
+      staleTime: 0,
+    });
+    const readOutcome = requiredRead.then(
+      () => 'settled',
+      () => 'cancelled'
+    );
+    await vi.waitFor(() => expect(listReads).toHaveLength(2));
+
+    fireEvent.click(await screen.findByTitle('Skimmed'));
+    expect(await screen.findByRole('status')).toHaveTextContent('Item added to the list');
+    expect(listReads).toHaveLength(2);
+
+    act(() => {
+      listReads[1]();
+    });
+    expect(await readOutcome).toBe('settled');
+
+    await vi.waitFor(() => expect(listReads).toHaveLength(3));
+    act(() => {
+      listReads[2]();
+    });
+    await vi.waitFor(() => {
+      expect(screen.getByTestId('list-items')).toHaveTextContent('1');
+      expect(
+        (view.client.getQueryData(queryKeys.list('list-1')) as typeof serverList | undefined)?.items
+      ).toHaveLength(1);
+    });
     view.unmount();
   });
 });
