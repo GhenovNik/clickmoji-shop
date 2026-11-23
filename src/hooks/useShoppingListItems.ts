@@ -145,20 +145,29 @@ export function useShoppingListItems(listId: string) {
   const items = list?.items || [];
   const completeMutation = useCompleteList();
 
-  // Row locks. The ref is what the guards read, synchronously and before any await; the state
-  // only re-renders the busy controls. A locked row accepts no second request until its cycle
-  // (writes, retries and the server read that follows) has settled.
+  // Row locks and a list-wide Complete guard. The refs are what the guards read, synchronously and
+  // before any await; state only re-renders the busy controls. A locked row accepts no second
+  // request until its cycle settles, and an active Complete cycle blocks every row including new ones.
   const lockedRef = useRef(new Set<string>());
+  const completingRef = useRef(false);
   const [busyIds, setBusyIds] = useState<ReadonlySet<string>>(() => new Set());
+  const [isCompleting, setIsCompleting] = useState(false);
 
   // Busy state is published through the query client's scheduler, the same path its own cache
   // notifications take, so a lock taken outside a render commit does not update React directly.
   const publishBusy = () => {
-    notifyManager.schedule(() => setBusyIds(new Set(lockedRef.current)));
+    notifyManager.schedule(() => {
+      setBusyIds(new Set(lockedRef.current));
+      setIsCompleting(completingRef.current);
+    });
   };
 
   const lockRows = (itemIds: readonly string[]): boolean => {
-    if (itemIds.length === 0 || itemIds.some((itemId) => lockedRef.current.has(itemId))) {
+    if (
+      completingRef.current ||
+      itemIds.length === 0 ||
+      itemIds.some((itemId) => lockedRef.current.has(itemId))
+    ) {
       return false;
     }
     for (const itemId of itemIds) lockedRef.current.add(itemId);
@@ -294,9 +303,11 @@ export function useShoppingListItems(listId: string) {
   };
 
   const completeList = async () => {
-    // Every row is locked while the request runs: no row write can overlap the completion.
-    const itemIds = items.map((item) => item.id);
-    if (!lockRows(itemIds)) return;
+    // Whole-cycle guard: keeps the empty-list guard, blocks row/batch/repeat Complete (including
+    // rows arriving mid-flight) and refuses to start while any row or batch lock is held.
+    if (items.length === 0 || completingRef.current || lockedRef.current.size > 0) return;
+    completingRef.current = true;
+    publishBusy();
 
     try {
       await completeMutation.mutateAsync(listId);
@@ -305,7 +316,8 @@ export function useShoppingListItems(listId: string) {
       console.error('Error completing list:', error);
       alert(t('listItems.completeFailed'));
     } finally {
-      unlockRows(itemIds);
+      completingRef.current = false;
+      publishBusy();
     }
   };
 
@@ -318,7 +330,7 @@ export function useShoppingListItems(listId: string) {
     updateNote,
     clearAll,
     completeList,
-    isItemBusy: (itemId: string) => busyIds.has(itemId),
-    isListBusy: busyIds.size > 0,
+    isItemBusy: (itemId: string) => isCompleting || busyIds.has(itemId),
+    isListBusy: isCompleting || busyIds.size > 0,
   };
 }
