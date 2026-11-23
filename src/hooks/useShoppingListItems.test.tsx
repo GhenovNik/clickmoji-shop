@@ -1946,3 +1946,100 @@ describe('F7 malformed list GET shape and empty items regressions (AGE-1649)', (
     expect(dialogs.alert).toHaveBeenLastCalledWith('Не удалось выполнить действие');
   });
 });
+
+describe('F8 required GET retry lifecycle across unmount and remount (AGE-1649)', () => {
+  const productionRetryClient = () =>
+    new QueryClient({
+      defaultOptions: {
+        queries: {
+          staleTime: 5 * 60 * 1000,
+          gcTime: 10 * 60 * 1000,
+          refetchOnWindowFocus: false,
+          retry: 1,
+        },
+      },
+    });
+
+  it('F8 hook: unmounting during held first required GET preserves retry:1 across remount and offline pause without extra GETs', async () => {
+    const dialogs = spyDialogs();
+    queryClient = productionRetryClient();
+    const firstMount = await renderList();
+
+    enqueue('PUT', PUT_URL, [putRespond(401, 'unauthorized')]);
+    const releaseRequired1 = holdNext('GET', LIST_URL);
+    const releaseRequired2 = holdNext('GET', LIST_URL);
+    const done = startToggle(firstMount.result);
+    await step(0);
+    expect(getCount()).toBe(2);
+
+    firstMount.unmount();
+
+    // First 500 arrives while no component is mounted; offline pauses retry until back online.
+    onlineManager.setOnline(false);
+    releaseRequired1(putRespond(500, 'boom'));
+    await step(0);
+    await step(2000);
+    expect(getCount()).toBe(2);
+
+    onlineManager.setOnline(true);
+    await step(0);
+    await step(1000);
+    expect(getCount()).toBe(3);
+
+    const remounted = renderHook(() => useShoppingListItems('list-1'), { wrapper });
+    await step(0);
+    expect(getCount()).toBe(3);
+    expect(remounted.result.current.isItemBusy('item-1')).toBe(true);
+
+    setServerItem('item-1', { isPurchased: false, note: SERVER_NOTE });
+    releaseRequired2();
+    await step(0);
+    await done;
+    await step(1);
+
+    expect(putJournal()).toHaveLength(1);
+    expect(getCount()).toBe(3);
+    expect(currentItem('item-1').isPurchased).toBe(false);
+    expect(currentItem('item-1').note).toBe(SERVER_NOTE);
+    expect(remounted.result.current.isItemBusy('item-1')).toBe(false);
+    expect(dialogs.error).toHaveBeenCalledTimes(1);
+    expect(dialogs.alert).toHaveBeenCalledTimes(1);
+    expect(dialogs.alert).toHaveBeenCalledWith('Не удалось выполнить действие');
+    expect(
+      queryClient
+        .getQueryCache()
+        .find({ queryKey: queryKeys.list('list-1') })
+        ?.getObserversCount()
+    ).toBe(1);
+  });
+
+  it('F8 hook: after 500 -> 500 without observers, scoped observer is cleaned up without leaking onto the query', async () => {
+    const dialogs = spyDialogs();
+    queryClient = productionRetryClient();
+    const firstMount = await renderList();
+
+    enqueue('PUT', PUT_URL, [putRespond(401, 'unauthorized')]);
+    const releaseRequired1 = holdNext('GET', LIST_URL);
+    enqueue('GET', LIST_URL, [putRespond(500, 'boom'), putRespond(500, 'boom')]);
+    const done = startToggle(firstMount.result);
+    await step(0);
+    expect(getCount()).toBe(2);
+
+    firstMount.unmount();
+    releaseRequired1(putRespond(500, 'boom'));
+    await step(0);
+    await step(1000);
+    await done;
+
+    expect(getCount()).toBe(3);
+    expect(currentItem('item-1').isPurchased).toBe(true);
+    expect(dialogs.error).toHaveBeenCalledTimes(1);
+    expect(dialogs.alert).toHaveBeenCalledWith('Не удалось обновить список');
+    expect(
+      queryClient
+        .getQueryCache()
+        .find({ queryKey: queryKeys.list('list-1') })
+        ?.getObserversCount()
+    ).toBe(0);
+  });
+});

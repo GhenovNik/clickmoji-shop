@@ -884,64 +884,78 @@ describe('F5/F6 page regressions (AGE-1649)', () => {
   });
 });
 
+type JournalHit = { method: string; url: string; status?: number; body?: unknown };
+
+function stubControlledFetch() {
+  const queues = new Map<
+    string,
+    Array<
+      { kind: 'response'; response: () => Response } | { kind: 'gate'; gate: Promise<Response> }
+    >
+  >();
+  const hits: JournalHit[] = [];
+  const settled: JournalHit[] = [];
+  const routeKey = (method: string, url: string) => `${method} ${url}`;
+
+  const hold = (method: string, url: string) => {
+    let release!: (response: Response) => void;
+    const gate = new Promise<Response>((resolve) => {
+      release = resolve;
+    });
+    queues.set(routeKey(method, url), [
+      ...(queues.get(routeKey(method, url)) ?? []),
+      { kind: 'gate', gate },
+    ]);
+    return release;
+  };
+
+  const queueResponse = (method: string, url: string, response: () => Response) => {
+    queues.set(routeKey(method, url), [
+      ...(queues.get(routeKey(method, url)) ?? []),
+      { kind: 'response', response },
+    ]);
+  };
+
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (url: string, init?: RequestInit) => {
+      const method = init?.method ?? 'GET';
+      const hit: JournalHit = { method, url };
+      if (init?.body) hit.body = JSON.parse(String(init.body));
+      hits.push(hit);
+
+      const next = queues.get(routeKey(method, url))?.shift();
+      let response: Response;
+      if (next?.kind === 'gate') {
+        response = await next.gate;
+      } else if (next?.kind === 'response') {
+        response = next.response();
+      } else {
+        throw new Error(`unexpected fetch ${method} ${url}`);
+      }
+      hit.status = response.status;
+      settled.push({ ...hit });
+      return response;
+    })
+  );
+
+  return { hits, settled, hold, queueResponse };
+}
+
+const makeProductionRetryClient = () =>
+  new QueryClient({
+    defaultOptions: {
+      queries: {
+        staleTime: 5 * 60 * 1000,
+        gcTime: 10 * 60 * 1000,
+        refetchOnWindowFocus: false,
+        retry: 1,
+      },
+    },
+  });
+
 describe('F7 malformed list GET page regressions (AGE-1649)', () => {
-  type JournalHit = { method: string; url: string; status?: number; body?: unknown };
-
-  function stubF7Fetch() {
-    const queues = new Map<
-      string,
-      Array<
-        { kind: 'response'; response: () => Response } | { kind: 'gate'; gate: Promise<Response> }
-      >
-    >();
-    const hits: JournalHit[] = [];
-    const settled: JournalHit[] = [];
-    const routeKey = (method: string, url: string) => `${method} ${url}`;
-
-    const hold = (method: string, url: string) => {
-      let release!: (response: Response) => void;
-      const gate = new Promise<Response>((resolve) => {
-        release = resolve;
-      });
-      queues.set(routeKey(method, url), [
-        ...(queues.get(routeKey(method, url)) ?? []),
-        { kind: 'gate', gate },
-      ]);
-      return release;
-    };
-
-    const queueResponse = (method: string, url: string, response: () => Response) => {
-      queues.set(routeKey(method, url), [
-        ...(queues.get(routeKey(method, url)) ?? []),
-        { kind: 'response', response },
-      ]);
-    };
-
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async (url: string, init?: RequestInit) => {
-        const method = init?.method ?? 'GET';
-        const hit: JournalHit = { method, url };
-        if (init?.body) hit.body = JSON.parse(String(init.body));
-        hits.push(hit);
-
-        const next = queues.get(routeKey(method, url))?.shift();
-        let response: Response;
-        if (next?.kind === 'gate') {
-          response = await next.gate;
-        } else if (next?.kind === 'response') {
-          response = next.response();
-        } else {
-          throw new Error(`unexpected fetch ${method} ${url}`);
-        }
-        hit.status = response.status;
-        settled.push({ ...hit });
-        return response;
-      })
-    );
-
-    return { hits, settled, hold, queueResponse };
-  }
+  const stubF7Fetch = stubControlledFetch;
 
   const makeRetryOneClient = () =>
     new QueryClient({
@@ -1216,5 +1230,218 @@ describe('F7 malformed list GET page regressions (AGE-1649)', () => {
     expect(retryClient.getQueryData<{ items: Item[] }>(queryKeys.list('list-1'))?.items).toEqual(
       []
     );
+  });
+});
+
+describe('F8 required GET retry survives unmount and remount (AGE-1649)', () => {
+  const listUrl = '/api/lists/list-1';
+  const putUrl = '/api/lists/list-1/items/item-1';
+  const serverNote = 'серверная заметка';
+
+  const getHits = (hits: JournalHit[]) => hits.filter((hit) => hit.method === 'GET');
+  const putHits = (hits: JournalHit[]) => hits.filter((hit) => hit.method === 'PUT');
+  const queryOf = (client: QueryClient) =>
+    client.getQueryCache().find({ queryKey: queryKeys.list('list-1'), exact: true });
+  const toggleBtn = () => screen.queryByRole('button', { name: 'Куплено: Молоко' });
+
+  it('F8 mounted page 500 -> 200: remounting during held first required GET keeps retry alive, locks until retry 200, applies server false and note, logs once with rowFailed and sends no extra GET', async () => {
+    const control = stubControlledFetch();
+    const alertSpy = vi.spyOn(window, 'alert').mockImplementation(() => undefined);
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    control.queueResponse('GET', listUrl, () =>
+      Response.json({ id: 'list-1', name: 'Покупки', items: [milk] })
+    );
+    control.queueResponse('PUT', putUrl, () =>
+      Response.json({ error: 'unauthorized' }, { status: 401 })
+    );
+    const releaseRequired1 = control.hold('GET', listUrl);
+    const releaseRequired2 = control.hold('GET', listUrl);
+
+    const sharedClient = makeProductionRetryClient();
+    const firstView = renderPage(sharedClient);
+    expect(await screen.findByText('Молоко')).toBeTruthy();
+
+    fireEvent.click(toggleBtn()!);
+    await waitFor(() => expect(getHits(control.hits)).toHaveLength(2));
+
+    firstView.unmount();
+    renderPage(sharedClient);
+    expect(await screen.findByText('Молоко')).toBeTruthy();
+    expect(getHits(control.hits)).toHaveLength(2);
+    expect(toggleBtn()?.closest('.group')).toHaveAttribute('aria-busy', 'true');
+    expect(toggleBtn()).toBeDisabled();
+
+    await act(async () => {
+      releaseRequired1(Response.json({ error: 'boom' }, { status: 500 }));
+    });
+    await waitFor(() => expect(getHits(control.hits)).toHaveLength(3), { timeout: 2500 });
+    expect(toggleBtn()?.closest('.group')).toHaveAttribute('aria-busy', 'true');
+    expect(toggleBtn()).toBeDisabled();
+
+    await act(async () => {
+      releaseRequired2(
+        Response.json({
+          id: 'list-1',
+          name: 'Покупки',
+          items: [{ ...milk, isPurchased: false, note: serverNote }],
+        })
+      );
+    });
+
+    await waitFor(() => expect(queryOf(sharedClient)?.state.fetchStatus).toBe('idle'));
+    await waitFor(() => expect(toggleBtn()).toBeEnabled());
+
+    expect(putHits(control.hits)).toHaveLength(1);
+    expect(getHits(control.hits)).toHaveLength(3);
+    expect(toggleBtn()).toHaveAttribute('aria-pressed', 'false');
+    expect(toggleBtn()?.closest('.group')).not.toHaveAttribute('aria-busy');
+    expect(screen.getByText(serverNote)).toBeTruthy();
+    expect(
+      sharedClient.getQueryData<{ items: Item[] }>(queryKeys.list('list-1'))?.items[0]
+    ).toMatchObject({ isPurchased: false, note: serverNote });
+    expect(
+      errorSpy.mock.calls.filter(([message]) => message === 'List item action failed:')
+    ).toHaveLength(1);
+    expect(alertSpy).toHaveBeenCalledTimes(1);
+    expect(alertSpy).toHaveBeenCalledWith('Не удалось выполнить действие');
+    expect(control.settled.map(({ method, url, status }) => [method, url, status])).toEqual([
+      ['GET', listUrl, 200],
+      ['PUT', putUrl, 401],
+      ['GET', listUrl, 500],
+      ['GET', listUrl, 200],
+    ]);
+
+    sharedClient.clear();
+  });
+
+  it('F8 mounted page 500 -> 500: remounting during held first required GET still runs second GET, preserves current display, unlocks, logs once with reloadFailed and sends no third GET', async () => {
+    const control = stubControlledFetch();
+    const alertSpy = vi.spyOn(window, 'alert').mockImplementation(() => undefined);
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    control.queueResponse('GET', listUrl, () =>
+      Response.json({ id: 'list-1', name: 'Покупки', items: [milk] })
+    );
+    control.queueResponse('PUT', putUrl, () =>
+      Response.json({ error: 'unauthorized' }, { status: 401 })
+    );
+    const releaseRequired1 = control.hold('GET', listUrl);
+    const releaseRequired2 = control.hold('GET', listUrl);
+
+    const sharedClient = makeProductionRetryClient();
+    const firstView = renderPage(sharedClient);
+    expect(await screen.findByText('Молоко')).toBeTruthy();
+
+    fireEvent.click(toggleBtn()!);
+    await waitFor(() => expect(getHits(control.hits)).toHaveLength(2));
+
+    firstView.unmount();
+    renderPage(sharedClient);
+    expect(await screen.findByText('Молоко')).toBeTruthy();
+
+    await act(async () => {
+      releaseRequired1(Response.json({ error: 'boom' }, { status: 500 }));
+    });
+    await waitFor(() => expect(getHits(control.hits)).toHaveLength(3), { timeout: 2500 });
+    expect(toggleBtn()?.closest('.group')).toHaveAttribute('aria-busy', 'true');
+    expect(toggleBtn()).toBeDisabled();
+
+    await act(async () => {
+      releaseRequired2(Response.json({ error: 'boom' }, { status: 500 }));
+    });
+
+    await waitFor(() => expect(queryOf(sharedClient)?.state.fetchStatus).toBe('idle'));
+    await waitFor(() => expect(toggleBtn()).toBeEnabled());
+
+    expect(putHits(control.hits)).toHaveLength(1);
+    expect(getHits(control.hits)).toHaveLength(3);
+    expect(toggleBtn()).toHaveAttribute('aria-pressed', 'true');
+    expect(toggleBtn()?.closest('.group')).not.toHaveAttribute('aria-busy');
+    expect(
+      sharedClient.getQueryData<{ items: Item[] }>(queryKeys.list('list-1'))?.items[0]
+    ).toMatchObject({ isPurchased: true });
+    expect(
+      errorSpy.mock.calls.filter(([message]) => message === 'List item action failed:')
+    ).toHaveLength(1);
+    expect(alertSpy).toHaveBeenCalledTimes(1);
+    expect(alertSpy).toHaveBeenCalledWith('Не удалось обновить список');
+    expect(control.settled.map(({ method, url, status }) => [method, url, status])).toEqual([
+      ['GET', listUrl, 200],
+      ['PUT', putUrl, 401],
+      ['GET', listUrl, 500],
+      ['GET', listUrl, 500],
+    ]);
+
+    sharedClient.clear();
+  });
+
+  it('F8 unmounted gap order: first 500 delivered while no page is mounted still triggers retry GET, and remounting does not add an extra GET', async () => {
+    const control = stubControlledFetch();
+    const alertSpy = vi.spyOn(window, 'alert').mockImplementation(() => undefined);
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    control.queueResponse('GET', listUrl, () =>
+      Response.json({ id: 'list-1', name: 'Покупки', items: [milk] })
+    );
+    control.queueResponse('PUT', putUrl, () =>
+      Response.json({ error: 'unauthorized' }, { status: 401 })
+    );
+    const releaseRequired1 = control.hold('GET', listUrl);
+    const releaseRequired2 = control.hold('GET', listUrl);
+
+    const sharedClient = makeProductionRetryClient();
+    const firstView = renderPage(sharedClient);
+    expect(await screen.findByText('Молоко')).toBeTruthy();
+
+    fireEvent.click(toggleBtn()!);
+    await waitFor(() => expect(getHits(control.hits)).toHaveLength(2));
+
+    firstView.unmount();
+
+    // Deliver the first 500 while no page observer is mounted at all.
+    await act(async () => {
+      releaseRequired1(Response.json({ error: 'boom' }, { status: 500 }));
+    });
+    await waitFor(() => expect(getHits(control.hits)).toHaveLength(3), { timeout: 2500 });
+    expect(alertSpy).not.toHaveBeenCalled();
+
+    // Return to the page while the retry GET is in flight: must attach to busy state without extra GET.
+    renderPage(sharedClient);
+    expect(await screen.findByText('Молоко')).toBeTruthy();
+    expect(getHits(control.hits)).toHaveLength(3);
+    expect(toggleBtn()?.closest('.group')).toHaveAttribute('aria-busy', 'true');
+    expect(toggleBtn()).toBeDisabled();
+
+    await act(async () => {
+      releaseRequired2(
+        Response.json({
+          id: 'list-1',
+          name: 'Покупки',
+          items: [{ ...milk, isPurchased: false, note: serverNote }],
+        })
+      );
+    });
+
+    await waitFor(() => expect(queryOf(sharedClient)?.state.fetchStatus).toBe('idle'));
+    await waitFor(() => expect(toggleBtn()).toBeEnabled());
+
+    expect(putHits(control.hits)).toHaveLength(1);
+    expect(getHits(control.hits)).toHaveLength(3);
+    expect(toggleBtn()).toHaveAttribute('aria-pressed', 'false');
+    expect(screen.getByText(serverNote)).toBeTruthy();
+    expect(
+      errorSpy.mock.calls.filter(([message]) => message === 'List item action failed:')
+    ).toHaveLength(1);
+    expect(alertSpy).toHaveBeenCalledTimes(1);
+    expect(alertSpy).toHaveBeenCalledWith('Не удалось выполнить действие');
+    expect(control.settled.map(({ method, url, status }) => [method, url, status])).toEqual([
+      ['GET', listUrl, 200],
+      ['PUT', putUrl, 401],
+      ['GET', listUrl, 500],
+      ['GET', listUrl, 200],
+    ]);
+
+    sharedClient.clear();
   });
 });
