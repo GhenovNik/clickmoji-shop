@@ -60,10 +60,11 @@ const params = Object.assign(Promise.resolve({ listId: 'list-1' }), {
 let serverItems: Item[];
 let listRequests: number;
 
-function renderPage() {
-  const queryClient = new QueryClient({
+function renderPage(
+  queryClient = new QueryClient({
     defaultOptions: { queries: { staleTime: 5 * 60 * 1000, retry: false } },
-  });
+  })
+) {
   const view = renderWithIntl(
     <QueryClientProvider client={queryClient}>
       <Suspense fallback={<p>loading</p>}>
@@ -426,5 +427,178 @@ describe('row lock while a request is in flight (AGE-1649)', () => {
 
     fireEvent.click(breadToggle);
     await waitFor(() => expect(puts).toEqual(['/api/lists/list-1/items/item-2']));
+  });
+});
+
+describe('F3/F5 page regressions (AGE-1649)', () => {
+  const cheese: Item = {
+    id: 'item-3',
+    isPurchased: false,
+    product: {
+      id: 'cheese',
+      name: 'Сыр',
+      emoji: '🧀',
+      isCustom: false,
+      imageUrl: null,
+      category: { name: 'Молочное', emoji: '🥛', order: 1 },
+    },
+  };
+
+  it('F3 page: remounting during held toggle PUT preserves aria-busy and disabled controls, keeps neighbour enabled, then unlocks', async () => {
+    serverItems = [milk, bread];
+    const control = stubRowFetch();
+    const firstView = renderPage();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Куплено: Молоко' }));
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Куплено: Молоко' })).toBeDisabled()
+    );
+
+    firstView.unmount();
+    renderPage(firstView.queryClient);
+
+    const milkToggle = await screen.findByRole('button', { name: 'Куплено: Молоко' });
+    const milkRow = milkToggle.closest('.group');
+    expect(milkRow?.getAttribute('aria-busy')).toBe('true');
+    expect(milkToggle).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Удалить товар: Молоко' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Очистить всё' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Куплено: Хлеб' })).toBeEnabled();
+
+    serverItems = [{ ...milk, isPurchased: true }, bread];
+    await act(async () =>
+      control.releasePut(new Response('{"isPurchased":true}', { status: 200 }))
+    );
+
+    await waitFor(() => expect(milkToggle).toBeEnabled());
+    expect(milkRow?.getAttribute('aria-busy')).toBeNull();
+  });
+
+  it('F3 page: remounting during held Complete POST keeps Complete, Clear all and rows disabled until Complete settles', async () => {
+    serverItems = [{ ...milk, isPurchased: true }];
+    let releasePost!: (response: Response) => void;
+    const heldPost = new Promise<Response>((resolve) => {
+      releasePost = resolve;
+    });
+    let posts = 0;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string, init?: RequestInit) => {
+        const method = init?.method ?? 'GET';
+        if (method === 'GET' && url === '/api/lists/list-1') {
+          listRequests += 1;
+          return Response.json({ id: 'list-1', name: 'Покупки', items: serverItems });
+        }
+        if (method === 'POST' && url === '/api/history') {
+          posts += 1;
+          return heldPost;
+        }
+        throw new Error(`unexpected fetch ${method} ${url}`);
+      })
+    );
+    vi.spyOn(window, 'alert').mockImplementation(() => undefined);
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    const firstView = renderPage();
+    fireEvent.click(await screen.findByRole('button', { name: /Завершить покупку/ }));
+    await waitFor(() => expect(posts).toBe(1));
+
+    firstView.unmount();
+    renderPage(firstView.queryClient);
+
+    const milkToggle = await screen.findByRole('button', { name: 'Куплено: Молоко' });
+    expect(milkToggle.closest('.group')?.getAttribute('aria-busy')).toBe('true');
+    expect(milkToggle).toBeDisabled();
+    expect(screen.getByRole('button', { name: /Завершить покупку/ })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Очистить всё' })).toBeDisabled();
+
+    fireEvent.click(screen.getByRole('button', { name: /Завершить покупку/ }));
+    expect(posts).toBe(1);
+
+    await act(async () => {
+      releasePost(Response.json({ error: 'boom' }, { status: 500 }));
+      await heldPost;
+    });
+
+    await waitFor(() => expect(milkToggle).toBeEnabled());
+    expect(screen.getByRole('button', { name: /Завершить покупку/ })).toBeEnabled();
+  });
+
+  it('F5 page: keeps confirmed single DELETE, note PUT and partial clear-all visible in UI when follow-up reload GET fails with retry 1', async () => {
+    const butter: Item = {
+      id: 'item-4',
+      isPurchased: false,
+      product: {
+        id: 'butter',
+        name: 'Масло',
+        emoji: '🧈',
+        isCustom: false,
+        imageUrl: null,
+        category: { name: 'Молочное', emoji: '🥛', order: 1 },
+      },
+    };
+    serverItems = [milk, bread, cheese, butter];
+    let getPhase: 'ok' | 'fail' = 'ok';
+    const deletes: string[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string, init?: RequestInit) => {
+        const method = init?.method ?? 'GET';
+        if (method === 'GET' && url === '/api/lists/list-1') {
+          listRequests += 1;
+          if (getPhase === 'fail') return Response.json({ error: 'boom' }, { status: 500 });
+          return Response.json({ id: 'list-1', name: 'Покупки', items: serverItems });
+        }
+        if (
+          method === 'DELETE' &&
+          (url === '/api/lists/list-1/items/item-4' || url === '/api/lists/list-1/items/item-1')
+        ) {
+          deletes.push(url);
+          return Response.json({});
+        }
+        if (method === 'DELETE' && url === '/api/lists/list-1/items/item-2') {
+          deletes.push(url);
+          return Response.json({ error: 'boom' }, { status: 500 });
+        }
+        if (method === 'PUT' && url === '/api/lists/list-1/items/item-2') {
+          return Response.json({ ...bread, note: 'на тосты' });
+        }
+        throw new Error(`unexpected fetch ${method} ${url}`);
+      })
+    );
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    vi.spyOn(window, 'alert').mockImplementation(() => undefined);
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    const retryClient = new QueryClient({
+      defaultOptions: { queries: { staleTime: 5 * 60 * 1000, retry: 1, retryDelay: 0 } },
+    });
+    renderPage(retryClient);
+    expect(await screen.findByText('Молоко')).toBeTruthy();
+
+    getPhase = 'fail';
+    fireEvent.click(screen.getByRole('button', { name: 'Удалить товар: Масло' }));
+    await waitFor(() => expect(screen.queryByText('Масло')).toBeNull());
+    expect(screen.getByText('Молоко')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Редактировать комментарий: Хлеб' }));
+    const input = await screen.findByPlaceholderText('Заметка к товару...');
+    fireEvent.change(input, { target: { value: 'на тосты' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+
+    await waitFor(() => expect(screen.queryByPlaceholderText('Заметка к товару...')).toBeNull());
+    expect(await screen.findByText('на тосты')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Очистить всё' }));
+    await waitFor(() =>
+      expect(deletes).toEqual([
+        '/api/lists/list-1/items/item-4',
+        '/api/lists/list-1/items/item-1',
+        '/api/lists/list-1/items/item-2',
+      ])
+    );
+    await waitFor(() => expect(screen.queryByText('Молоко')).toBeNull());
+    expect(screen.getByText('Хлеб')).toBeTruthy();
+    expect(screen.getByText('Сыр')).toBeTruthy();
   });
 });

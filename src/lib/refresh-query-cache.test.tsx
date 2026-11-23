@@ -1,7 +1,7 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { renderHook, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
-import { QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-query';
+import { QueryClient, QueryClientProvider, onlineManager, useQuery } from '@tanstack/react-query';
 import { queryKeys } from '@/lib/query-keys';
 import { refreshQueryCache } from './refresh-query-cache';
 
@@ -9,6 +9,10 @@ import { refreshQueryCache } from './refresh-query-cache';
 // of cancelling it; every other key keeps the cancelling default.
 
 const tick = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+afterEach(() => {
+  onlineManager.setOnline(true);
+});
 
 function wrapper(client: QueryClient) {
   return ({ children }: { children: ReactNode }) => (
@@ -166,5 +170,45 @@ describe('refreshQueryCache list-key policy', () => {
     expect(releases).toHaveLength(3);
     releases[2]('refetched');
     await expect(heldRead).resolves.toBe('refetched');
+  });
+
+  it('follows up a paused retryer cycle without cancelling it when retry is 1 and cache is populated', async () => {
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: 1, retryDelay: 0, staleTime: 5 * 60 * 1000 } },
+    });
+    const { releases, rejections, queryFn } = heldReads();
+    const useList = () => useQuery({ queryKey: queryKeys.list('list-1'), queryFn });
+    const view = renderHook(useList, { wrapper: wrapper(client) });
+    releases[0]('initial [A]');
+    await waitFor(() => expect(view.result.current.data).toBe('initial [A]'));
+
+    void client.invalidateQueries({ queryKey: queryKeys.list('list-1') });
+    await waitFor(() => expect(releases).toHaveLength(2));
+
+    onlineManager.setOnline(false);
+    rejections[1](new Error('temp read failure'));
+    await waitFor(() => {
+      const query = client.getQueryCache().find({ queryKey: queryKeys.list('list-1') });
+      expect(query?.state.fetchStatus).toBe('paused');
+    });
+
+    refreshQueryCache(client, [queryKeys.list('list-1')]);
+
+    await tick();
+    expect(releases).toHaveLength(2);
+    expect(
+      client.getQueryCache().find({ queryKey: queryKeys.list('list-1') })?.state.fetchStatus
+    ).toBe('paused');
+
+    onlineManager.setOnline(true);
+    await waitFor(() => expect(releases).toHaveLength(3));
+    rejections[2](new Error('retry also failed'));
+
+    await waitFor(() => expect(releases).toHaveLength(4));
+    releases[3]('fresh [A, B]');
+    await waitFor(() => {
+      expect(client.getQueryData(queryKeys.list('list-1'))).toBe('fresh [A, B]');
+      expect(view.result.current.data).toBe('fresh [A, B]');
+    });
   });
 });

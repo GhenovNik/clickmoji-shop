@@ -1037,3 +1037,440 @@ describe('row lock and terminal reload (AGE-1649)', () => {
     expect(getCount()).toBe(3);
   });
 });
+
+describe('F3/F4/F5 regressions (AGE-1649)', () => {
+  const makeExtraItem = (id: string, name: string): Item => ({
+    id,
+    isPurchased: false,
+    note: null,
+    product: {
+      id: `prod-${id}`,
+      name,
+      emoji: '🧀',
+      isCustom: false,
+      imageUrl: null,
+      category: { name: 'Молочные продукты', emoji: '🧀', order: 1 },
+    },
+    variant: null,
+  });
+
+  const retryOneClient = () =>
+    new QueryClient({
+      defaultOptions: { queries: { retry: 1, retryDelay: 0, staleTime: 5 * 60 * 1000 } },
+    });
+
+  it('F3: remount during held PUT keeps item-1 busy, blocks conflicting writes, keeps item-2 usable and unlocks on 200', async () => {
+    const releasePut = holdNext('PUT', PUT_URL);
+    enqueue('PUT', ITEM2_URL, [putRespond(200, '{"isPurchased":false}')]);
+    const firstMount = await renderList();
+
+    const pending = startToggle(firstMount.result);
+    await step(0);
+    expect(putJournal()).toHaveLength(1);
+
+    firstMount.unmount();
+    const remounted = renderHook(() => useShoppingListItems('list-1'), { wrapper });
+
+    expect(remounted.result.current.isItemBusy('item-1')).toBe(true);
+    expect(remounted.result.current.isListBusy).toBe(true);
+    expect(remounted.result.current.isItemBusy('item-2')).toBe(false);
+
+    await settle(remounted.result.current.togglePurchased('item-1'));
+    await settle(remounted.result.current.removeItem('item-1'));
+    await settle(remounted.result.current.updateNote('item-1', 'x'));
+    await settle(remounted.result.current.clearAll());
+    await settle(remounted.result.current.completeList());
+    expect(putJournal()).toHaveLength(1);
+    expect(methodJournal('DELETE')).toHaveLength(0);
+    expect(methodJournal('POST')).toHaveLength(0);
+
+    await settle(remounted.result.current.togglePurchased('item-2'));
+    expect(
+      journal.filter((entry) => entry.url === ITEM2_URL && entry.method === 'PUT')
+    ).toHaveLength(1);
+
+    await act(async () => {
+      releasePut(putRespond(200, '{"isPurchased":true}'));
+      await pending;
+    });
+    await step(0);
+
+    expect(remounted.result.current.isItemBusy('item-1')).toBe(false);
+    expect(remounted.result.current.isListBusy).toBe(false);
+
+    enqueue('PUT', PUT_URL, [putRespond(200, '{"isPurchased":false}')]);
+    await settle(remounted.result.current.togglePurchased('item-1'));
+    expect(putJournal()).toHaveLength(3);
+  });
+
+  it('F3: remount during held required GET keeps item-1 busy, blocks conflicting writes and unlocks on reload error', async () => {
+    const dialogs = spyDialogs();
+    enqueue('PUT', PUT_URL, [putRespond(401, 'unauthorized')]);
+    const firstMount = await renderList();
+    const releaseReload = holdNext('GET', LIST_URL);
+
+    const pending = startToggle(firstMount.result);
+    await step(0);
+    expect(getCount()).toBe(2);
+
+    firstMount.unmount();
+    const remounted = renderHook(() => useShoppingListItems('list-1'), { wrapper });
+
+    expect(remounted.result.current.isItemBusy('item-1')).toBe(true);
+    expect(remounted.result.current.isListBusy).toBe(true);
+    expect(remounted.result.current.isItemBusy('item-2')).toBe(false);
+
+    await settle(remounted.result.current.togglePurchased('item-1'));
+    await settle(remounted.result.current.removeItem('item-1'));
+    await settle(remounted.result.current.clearAll());
+    await settle(remounted.result.current.completeList());
+    expect(putJournal()).toHaveLength(1);
+    expect(methodJournal('DELETE')).toHaveLength(0);
+    expect(methodJournal('POST')).toHaveLength(0);
+
+    await act(async () => {
+      releaseReload(putRespond(500, 'boom'));
+      await pending;
+    });
+    await step(0);
+
+    expect(dialogs.alert).toHaveBeenCalledWith('Не удалось обновить список');
+    expect(remounted.result.current.isItemBusy('item-1')).toBe(false);
+    expect(remounted.result.current.isListBusy).toBe(false);
+
+    enqueue('PUT', PUT_URL, [putRespond(200, '{"isPurchased":true}')]);
+    await settle(remounted.result.current.togglePurchased('item-1'));
+    expect(putJournal()).toHaveLength(2);
+  });
+
+  it('F3: remount during held Complete keeps rows and list busy until Complete fails and succeeds', async () => {
+    const dialogs = spyDialogs();
+    const releaseFirstPost = holdNext('POST', HISTORY_URL);
+    const firstMount = await renderList();
+
+    const firstComplete = settle(firstMount.result.current.completeList());
+    await step(0);
+    expect(methodJournal('POST')).toHaveLength(1);
+
+    firstMount.unmount();
+    const remounted = renderHook(() => useShoppingListItems('list-1'), { wrapper });
+
+    expect(remounted.result.current.isListBusy).toBe(true);
+    expect(remounted.result.current.isItemBusy('item-1')).toBe(true);
+    expect(remounted.result.current.isItemBusy('item-2')).toBe(true);
+
+    await settle(remounted.result.current.completeList());
+    await settle(remounted.result.current.togglePurchased('item-1'));
+    await settle(remounted.result.current.removeItem('item-2'));
+    await settle(remounted.result.current.updateNote('item-1', 'x'));
+    await settle(remounted.result.current.clearAll());
+    expect(methodJournal('POST')).toHaveLength(1);
+    expect(putJournal()).toHaveLength(0);
+    expect(methodJournal('DELETE')).toHaveLength(0);
+
+    await act(async () => {
+      releaseFirstPost(putRespond(500, 'boom'));
+      await firstComplete;
+    });
+    await step(0);
+
+    expect(dialogs.alert).toHaveBeenCalledWith('Не удалось завершить список');
+    expect(remounted.result.current.isListBusy).toBe(false);
+    expect(remounted.result.current.isItemBusy('item-1')).toBe(false);
+
+    const releaseSecondPost = holdNext('POST', HISTORY_URL);
+    const secondComplete = settle(remounted.result.current.completeList());
+    await step(0);
+    expect(methodJournal('POST')).toHaveLength(2);
+
+    remounted.unmount();
+    const thirdMount = renderHook(() => useShoppingListItems('list-1'), { wrapper });
+    expect(thirdMount.result.current.isListBusy).toBe(true);
+    expect(thirdMount.result.current.isItemBusy('item-1')).toBe(true);
+
+    await act(async () => {
+      releaseSecondPost(putRespond(200, '{}'));
+      await secondComplete;
+    });
+    await step(0);
+
+    expect(thirdMount.result.current.isListBusy).toBe(false);
+    expect(thirdMount.result.current.isItemBusy('item-1')).toBe(false);
+  });
+
+  it('F3 isolation: lock on list-1 does not block list-2 in same QueryClient or list-1 in another QueryClient', async () => {
+    const releaseList1Put = holdNext('PUT', PUT_URL);
+    enqueue('GET', '/api/lists/list-2', [
+      putRespond(200, JSON.stringify({ ...makeListData(), id: 'list-2' })),
+    ]);
+    enqueue('PUT', '/api/lists/list-2/items/item-1', [putRespond(200, '{"isPurchased":true}')]);
+
+    const list1 = await renderList();
+    const pendingList1 = startToggle(list1.result);
+    await step(0);
+
+    const list2 = renderHook(() => useShoppingListItems('list-2'), { wrapper });
+    await step(0);
+    expect(list2.result.current.isListBusy).toBe(false);
+    expect(list2.result.current.isItemBusy('item-1')).toBe(false);
+
+    await settle(list2.result.current.togglePurchased('item-1'));
+    expect(
+      journal.filter(
+        (entry) => entry.url === '/api/lists/list-2/items/item-1' && entry.method === 'PUT'
+      )
+    ).toHaveLength(1);
+
+    const otherClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: 5 * 60 * 1000 } },
+    });
+    const otherWrapper = ({ children }: { children: ReactNode }) => (
+      <NextIntlClientProvider locale="ru" messages={messages.ru} timeZone="UTC">
+        <QueryClientProvider client={otherClient}>{children}</QueryClientProvider>
+      </NextIntlClientProvider>
+    );
+    enqueue('PUT', PUT_URL, [putRespond(200, '{"isPurchased":true}')]);
+    const otherList1 = renderHook(() => useShoppingListItems('list-1'), { wrapper: otherWrapper });
+    await step(0);
+    expect(otherList1.result.current.isListBusy).toBe(false);
+    expect(otherList1.result.current.isItemBusy('item-1')).toBe(false);
+
+    await settle(otherList1.result.current.togglePurchased('item-1'));
+    expect(journal.filter((entry) => entry.url === PUT_URL && entry.method === 'PUT')).toHaveLength(
+      2
+    );
+    otherClient.clear();
+
+    await act(async () => {
+      releaseList1Put(putRespond(200, '{"isPurchased":true}'));
+      await pendingList1;
+    });
+  });
+
+  it('F4: refreshAfterWrite waits for a paused list retryer without cancelling it, then runs a fresh read', async () => {
+    queryClient = retryOneClient();
+    const { result } = await renderList();
+    const releasePut = holdNext('PUT', PUT_URL);
+    const toggleDone = startToggle(result);
+    await step(0);
+    expect(putJournal()).toHaveLength(1);
+
+    const releaseOldGet = holdNext('GET', LIST_URL);
+    void queryClient.invalidateQueries({ queryKey: queryKeys.list('list-1') });
+    await step(0);
+    expect(getCount()).toBe(2);
+
+    act(() => onlineManager.setOnline(false));
+    await act(async () => {
+      releaseOldGet(putRespond(500, 'temp error'));
+      await Promise.resolve();
+    });
+    await step(0);
+
+    const query = queryClient.getQueryCache().find({ queryKey: queryKeys.list('list-1') });
+    expect(query?.state.fetchStatus).toBe('paused');
+
+    const staleSnapshot = JSON.stringify(serverState);
+    const releaseResumedRetry = holdNext('GET', LIST_URL);
+    await act(async () => {
+      releasePut(putRespond(200, '{"isPurchased":true}'));
+      await Promise.resolve();
+    });
+    await step(1);
+
+    // Paused old cycle was not cancelled; refreshAfterWrite waits for it before unlocking.
+    expect(getCount()).toBe(2);
+    expect(result.current.isItemBusy('item-1')).toBe(true);
+
+    await act(async () => {
+      onlineManager.setOnline(true);
+      await Promise.resolve();
+    });
+    await step(0);
+    expect(getCount()).toBe(3);
+
+    setServerItem('item-1', { note: SERVER_NOTE });
+    releaseResumedRetry(putRespond(200, staleSnapshot));
+    await step(1);
+    await toggleDone;
+    await step(1);
+
+    // 1 mount + 1 failed initial + 1 stale resumed retry + 1 fresh follow-up read.
+    expect(getCount()).toBe(4);
+    expect(currentItem('item-1').note).toBe(SERVER_NOTE);
+    expect(result.current.isItemBusy('item-1')).toBe(false);
+  });
+
+  it.each([200, 404] as const)(
+    'F5: single removeItem (%s) keeps item removed when follow-up reload fails with retry 1',
+    async (status) => {
+      const dialogs = spyDialogs();
+      queryClient = retryOneClient();
+      const { result } = await renderList();
+      enqueue('DELETE', PUT_URL, [putRespond(status, status === 404 ? 'gone' : '{}')]);
+      enqueue('GET', LIST_URL, [putRespond(500, 'boom'), putRespond(500, 'boom')]);
+
+      const done = settle(result.current.removeItem('item-1'));
+      await step(0);
+      await step(0);
+      await done;
+
+      expect(hasItem('item-1')).toBe(false);
+      expect(hasItem('item-2')).toBe(true);
+      expect(getCount()).toBe(3);
+      expect(rollbackCount()).toBe(0);
+      expect(dialogs.alert).not.toHaveBeenCalled();
+      expect(result.current.isItemBusy('item-1')).toBe(false);
+    }
+  );
+
+  it('F5: single updateNote (200) keeps saved note when follow-up reload fails with retry 1', async () => {
+    const dialogs = spyDialogs();
+    queryClient = retryOneClient();
+    const { result } = await renderList();
+    enqueue('PUT', PUT_URL, [putRespond(200, '{"note":"срочно"}')]);
+    enqueue('GET', LIST_URL, [putRespond(500, 'boom'), putRespond(500, 'boom')]);
+
+    const done = settle(result.current.updateNote('item-1', 'срочно'));
+    await step(0);
+    await step(0);
+    await done;
+
+    expect(currentItem('item-1').note).toBe('срочно');
+    expect(getCount()).toBe(3);
+    expect(rollbackCount()).toBe(0);
+    expect(dialogs.alert).not.toHaveBeenCalled();
+    expect(result.current.isItemBusy('item-1')).toBe(false);
+  });
+
+  it('F5: partial clearAll [A,B,C] (A 200, B 500) keeps A removed and B,C visible when reload fails with retry 1', async () => {
+    const dialogs = spyDialogs();
+    queryClient = retryOneClient();
+    serverState = {
+      ...serverState,
+      items: [...serverState.items, makeExtraItem('item-3', 'Сыр')],
+    };
+    const { result } = await renderList();
+    enqueue('DELETE', PUT_URL, [putRespond(200, '{}')]);
+    enqueue('DELETE', ITEM2_URL, [putRespond(500, 'boom')]);
+    enqueue('GET', LIST_URL, [putRespond(500, 'boom'), putRespond(500, 'boom')]);
+
+    const done = settle(result.current.clearAll());
+    await step(0);
+    await step(0);
+    await done;
+
+    expect(deleteUrls()).toEqual([PUT_URL, ITEM2_URL]);
+    expect(getCount()).toBe(3);
+    expect(hasItem('item-1')).toBe(false);
+    expect(hasItem('item-2')).toBe(true);
+    expect(hasItem('item-3')).toBe(true);
+    expect(rollbackCount()).toBe(0);
+    expect(dialogs.error).toHaveBeenCalledTimes(1);
+    expect(dialogs.alert).toHaveBeenCalledTimes(1);
+    expect(dialogs.alert).toHaveBeenCalledWith('Не удалось обновить список');
+    expect(result.current.isListBusy).toBe(false);
+  });
+
+  it('F5: failed single DELETE keeps row visible when terminal reload also fails with retry 1', async () => {
+    const dialogs = spyDialogs();
+    queryClient = retryOneClient();
+    const { result } = await renderList();
+    enqueue('DELETE', PUT_URL, [putRespond(500, 'boom')]);
+    enqueue('GET', LIST_URL, [putRespond(500, 'boom'), putRespond(500, 'boom')]);
+
+    const done = settle(result.current.removeItem('item-1'));
+    await step(0);
+    await step(0);
+    await done;
+    await step(1);
+
+    expect(hasItem('item-1')).toBe(true);
+    expect(getCount()).toBe(3);
+    expect(dialogs.error).toHaveBeenCalledTimes(1);
+    expect(dialogs.alert).toHaveBeenCalledWith('Не удалось обновить список');
+    expect(result.current.isItemBusy('item-1')).toBe(false);
+  });
+
+  it('F5: a held pre-ACK GET settling with stale data does not erase ACK when the fresh reload fails (remove, note, partial batch)', async () => {
+    const dialogs = spyDialogs();
+    queryClient = retryOneClient();
+    const { result } = await renderList();
+
+    // 1) removeItem with held pre-ACK GET
+    const releaseOldGet1 = holdNext('GET', LIST_URL);
+    void queryClient.invalidateQueries({ queryKey: queryKeys.list('list-1') });
+    await step(0);
+    expect(getCount()).toBe(2);
+
+    enqueue('DELETE', PUT_URL, [putRespond(200, '{}')]);
+    enqueue('GET', LIST_URL, [putRespond(500, 'boom'), putRespond(500, 'boom')]);
+    const removeDone = settle(result.current.removeItem('item-1'));
+    await step(0);
+
+    // Pre-ACK GET still returns item-1; fresh GET fails twice.
+    releaseOldGet1(putRespond(200, JSON.stringify(makeListData())));
+    await step(0);
+    await removeDone;
+
+    expect(hasItem('item-1')).toBe(false);
+    expect(hasItem('item-2')).toBe(true);
+    expect(getCount()).toBe(4);
+
+    // 2) updateNote on item-2 with held pre-ACK GET
+    const releaseOldGet2 = holdNext('GET', LIST_URL);
+    void queryClient.invalidateQueries({ queryKey: queryKeys.list('list-1') });
+    await step(0);
+    expect(getCount()).toBe(5);
+
+    enqueue('PUT', ITEM2_URL, [putRespond(200, '{"note":"без корочки"}')]);
+    enqueue('GET', LIST_URL, [putRespond(500, 'boom'), putRespond(500, 'boom')]);
+    const noteDone = settle(result.current.updateNote('item-2', 'без корочки'));
+    await step(0);
+
+    releaseOldGet2(
+      putRespond(
+        200,
+        JSON.stringify({ id: 'list-1', name: 'Список', items: [makeListData().items[1]] })
+      )
+    );
+    await step(0);
+    await noteDone;
+
+    expect(currentItem('item-2').note).toBe('без корочки');
+    expect(getCount()).toBe(7);
+
+    // 3) partial clearAll [item-2, item-3] with held pre-ACK GET
+    const item3 = makeExtraItem('item-3', 'Сыр');
+    act(() => {
+      queryClient.setQueryData<ListData>(queryKeys.list('list-1'), (old) =>
+        old ? { ...old, items: [...old.items, item3] } : old
+      );
+    });
+    const staleBeforeBatch = {
+      id: 'list-1',
+      name: 'Список',
+      items: [makeListData().items[1], item3],
+    };
+    const releaseOldGet3 = holdNext('GET', LIST_URL);
+    void queryClient.invalidateQueries({ queryKey: queryKeys.list('list-1') });
+    await step(0);
+    expect(getCount()).toBe(8);
+
+    enqueue('DELETE', ITEM2_URL, [putRespond(200, '{}')]);
+    enqueue('DELETE', '/api/lists/list-1/items/item-3', [putRespond(500, 'boom')]);
+    enqueue('GET', LIST_URL, [putRespond(500, 'boom'), putRespond(500, 'boom')]);
+    const clearDone = settle(result.current.clearAll());
+    await step(0);
+
+    releaseOldGet3(putRespond(200, JSON.stringify(staleBeforeBatch)));
+    await step(0);
+    await clearDone;
+
+    expect(hasItem('item-2')).toBe(false);
+    expect(hasItem('item-3')).toBe(true);
+    expect(getCount()).toBe(10);
+    expect(dialogs.alert).toHaveBeenCalledTimes(1);
+    expect(dialogs.alert).toHaveBeenCalledWith('Не удалось обновить список');
+  });
+});
