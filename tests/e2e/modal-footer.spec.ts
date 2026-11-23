@@ -78,9 +78,9 @@ for (const height of [667, 812]) {
       const opener = page.getByRole('button', { name: /Импорт из текста/ });
       await expect(opener).toBeVisible();
       // A real scrolled background catches autofocus/body-unlock jumps to the top.
-      await page.evaluate(() => window.scrollTo(0, 100));
+      await page.evaluate(() => window.scrollTo(0, 30));
       const scrollY = await openModal(page, opener, importTitle);
-      expect(scrollY).toBe(100);
+      expect(scrollY).toBe(30);
       const panel = modalPanel(page, importTitle);
       const input = panel.getByRole('textbox');
       await input.fill('Молоко 2 л\nХлеб');

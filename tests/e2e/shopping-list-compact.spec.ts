@@ -485,13 +485,17 @@ test.describe('Compact touch and keyboard behavior', () => {
       const heldPut = new Promise<Route>((resolve) => {
         capturePut = resolve;
       });
-      await page.route(
-        `**/api/lists/${E2E_LIST_ID}/items/compact-beef`,
-        (route) => {
+      let putCount = 0;
+      await page.route(`**/api/lists/${E2E_LIST_ID}/items/compact-beef`, (route) => {
+        putCount += 1;
+        if (putCount === 1) {
           capturePut(route);
-        },
-        { times: 1 }
-      );
+        } else if (outcome === '503' && putCount <= 4) {
+          void route.fulfill({ status: 503, json: { error: 'Synthetic unavailable' } });
+        } else {
+          void route.fallback();
+        }
+      });
       const toggle = page.getByRole('button', { name: 'Куплено: Говядина', exact: true });
       await page.getByRole('button', { name: 'Удалить товар: Говядина', exact: true }).focus();
       await page.keyboard.press('Tab');
@@ -501,7 +505,7 @@ test.describe('Compact touch and keyboard behavior', () => {
       expect(put.request().method()).toBe('PUT');
       expect(put.request().postDataJSON()).toEqual({ isPurchased: true });
       await expect(toggle).toHaveAttribute('aria-pressed', 'true');
-      await expect(toggle).toBeFocused();
+      await expect(toggle).toBeDisabled();
       const beef = state.items.find((entry) => entry.id === 'compact-beef')!;
       expect(beef.isPurchased).toBe(false);
       const readsBeforeResponse = state.listRequests;
@@ -511,8 +515,11 @@ test.describe('Compact touch and keyboard behavior', () => {
       } else {
         await put.fulfill({ status: 503, json: { error: 'Synthetic unavailable' } });
       }
-      await expect.poll(() => state.listRequests).toBeGreaterThan(readsBeforeResponse);
+      await expect
+        .poll(() => state.listRequests, { timeout: 12000 })
+        .toBeGreaterThan(readsBeforeResponse);
       await expect(toggle).toHaveAttribute('aria-pressed', String(outcome === 'success'));
+      await expect(toggle).toBeEnabled();
       await expect(toggle).toBeFocused();
       // No focus repair: Space must work on the same item after its DOM move.
       await page.keyboard.press('Space');
