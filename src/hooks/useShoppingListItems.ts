@@ -72,7 +72,17 @@ const isTogglePurchasedError = (error: unknown): error is TogglePurchasedError =
 const fetchListAPI = async (listId: string): Promise<ListData> => {
   const response = await fetch(`/api/lists/${listId}`);
   if (!response.ok) throw new Error('Failed to fetch list');
-  return response.json();
+  const data: unknown = await response.json();
+  // Reject malformed 2xx payloads before TanStack Query writes them into the list cache.
+  if (
+    typeof data !== 'object' ||
+    data === null ||
+    Array.isArray(data) ||
+    !Array.isArray((data as { items?: unknown }).items)
+  ) {
+    throw new Error('Invalid list response');
+  }
+  return data as ListData;
 };
 
 const togglePurchasedAPI = async ({
