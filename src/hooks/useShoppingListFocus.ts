@@ -15,6 +15,10 @@ export function useShoppingListFocus() {
     if (intent.current?.itemId === itemId) intent.current.target = target;
   }, []);
 
+  const isFocusTarget = useCallback((itemId: string) => {
+    return intent.current?.itemId === itemId && document.activeElement === intent.current.target;
+  }, []);
+
   useEffect(() => {
     const onFocus = (event: FocusEvent) => {
       // Unmounting the focused control leaves focus on body without a focusin
@@ -30,5 +34,5 @@ export function useShoppingListFocus() {
     if (target?.isConnected && document.activeElement === document.body) target.focus();
   });
 
-  return { rememberFocus, registerTarget };
+  return { rememberFocus, registerTarget, isFocusTarget };
 }

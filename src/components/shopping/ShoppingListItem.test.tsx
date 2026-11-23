@@ -124,6 +124,8 @@ describe.each([false, true])('shopping item interactions (purchased: %s)', (isPu
     const { onToggle, onRemove } = renderInteractiveItem();
 
     fireEvent.click(screen.getByRole('button', { name: 'Удалить товар: Молоко' }));
+    expect(onRemove).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Удалить' }));
 
     expect(onRemove).toHaveBeenCalledExactlyOnceWith(item.id);
     expect(onToggle).not.toHaveBeenCalled();
