@@ -1,10 +1,17 @@
 'use client';
 
-import { useRef, useState } from 'react';
-import { notifyManager, useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useCallback, useSyncExternalStore } from 'react';
+import {
+  notifyManager,
+  useQuery,
+  useMutation,
+  useQueryClient,
+  type QueryClient,
+} from '@tanstack/react-query';
 import { useRouter } from 'next/navigation';
 import { useTranslations } from 'next-intl';
 import { queryKeys } from '@/lib/query-keys';
+import { getInFlightListPromises } from '@/lib/refresh-query-cache';
 import { useCompleteList } from '@/hooks/useListMutations';
 
 export type Item = {
@@ -125,6 +132,78 @@ const removeItemAPI = async ({ listId, itemId }: { listId: string; itemId: strin
   return { success: true };
 };
 
+type ListLockSnapshot = {
+  busyIds: ReadonlySet<string>;
+  isCompleting: boolean;
+};
+
+type ListLockState = {
+  lockedIds: Set<string>;
+  completing: boolean;
+  snapshot: ListLockSnapshot;
+  listeners: Set<() => void>;
+};
+
+const EMPTY_LOCK_SNAPSHOT: ListLockSnapshot = {
+  busyIds: new Set(),
+  isCompleting: false,
+};
+
+// In-app navigation shares the root QueryClient, so row and Complete locks live per
+// (QueryClient, listId) rather than per hook mount.
+const listLocksByClient = new WeakMap<QueryClient, Map<string, ListLockState>>();
+
+function getListLockState(queryClient: QueryClient, listId: string): ListLockState {
+  let byList = listLocksByClient.get(queryClient);
+  if (!byList) {
+    byList = new Map();
+    listLocksByClient.set(queryClient, byList);
+  }
+  let state = byList.get(listId);
+  if (!state) {
+    state = {
+      lockedIds: new Set(),
+      completing: false,
+      snapshot: EMPTY_LOCK_SNAPSHOT,
+      listeners: new Set(),
+    };
+    byList.set(listId, state);
+  }
+  return state;
+}
+
+// Busy state is published through the query client's scheduler, the same path its own cache
+// notifications take, so a lock taken outside a render commit does not update React directly.
+function publishListLock(state: ListLockState) {
+  state.snapshot = {
+    busyIds: new Set(state.lockedIds),
+    isCompleting: state.completing,
+  };
+  notifyManager.schedule(() => {
+    for (const listener of state.listeners) {
+      listener();
+    }
+  });
+}
+
+function lockRows(state: ListLockState, itemIds: readonly string[]): boolean {
+  if (
+    state.completing ||
+    itemIds.length === 0 ||
+    itemIds.some((itemId) => state.lockedIds.has(itemId))
+  ) {
+    return false;
+  }
+  for (const itemId of itemIds) state.lockedIds.add(itemId);
+  publishListLock(state);
+  return true;
+}
+
+function unlockRows(state: ListLockState, itemIds: readonly string[]) {
+  for (const itemId of itemIds) state.lockedIds.delete(itemId);
+  publishListLock(state);
+}
+
 export function useShoppingListItems(listId: string) {
   const router = useRouter();
   const queryClient = useQueryClient();
@@ -145,75 +224,69 @@ export function useShoppingListItems(listId: string) {
   const items = list?.items || [];
   const completeMutation = useCompleteList();
 
-  // Row locks and a list-wide Complete guard. The refs are what the guards read, synchronously and
-  // before any await; state only re-renders the busy controls. A locked row accepts no second
-  // request until its cycle settles, and an active Complete cycle blocks every row including new ones.
-  const lockedRef = useRef(new Set<string>());
-  const completingRef = useRef(false);
-  const [busyIds, setBusyIds] = useState<ReadonlySet<string>>(() => new Set());
-  const [isCompleting, setIsCompleting] = useState(false);
+  const lockState = getListLockState(queryClient, listId);
+  const subscribeLock = useCallback(
+    (listener: () => void) => {
+      lockState.listeners.add(listener);
+      return () => {
+        lockState.listeners.delete(listener);
+      };
+    },
+    [lockState]
+  );
+  const getLockSnapshot = useCallback(() => lockState.snapshot, [lockState]);
+  const { busyIds, isCompleting } = useSyncExternalStore(
+    subscribeLock,
+    getLockSnapshot,
+    () => EMPTY_LOCK_SNAPSHOT
+  );
 
-  // Busy state is published through the query client's scheduler, the same path its own cache
-  // notifications take, so a lock taken outside a render commit does not update React directly.
-  const publishBusy = () => {
-    notifyManager.schedule(() => {
-      setBusyIds(new Set(lockedRef.current));
-      setIsCompleting(completingRef.current);
-    });
+  const updateCachedItems = (updater: (prev: Item[]) => Item[]) => {
+    queryClient.setQueryData<ListData>(queryKey, (old) =>
+      old ? { ...old, items: updater(old.items) } : old
+    );
   };
 
-  const lockRows = (itemIds: readonly string[]): boolean => {
-    if (
-      completingRef.current ||
-      itemIds.length === 0 ||
-      itemIds.some((itemId) => lockedRef.current.has(itemId))
-    ) {
-      return false;
-    }
-    for (const itemId of itemIds) lockedRef.current.add(itemId);
-    publishBusy();
+  const waitForInFlightListReads = async () => {
+    const inFlight = getInFlightListPromises(queryClient, queryKey, true);
+    if (inFlight.length === 0) return false;
+    await Promise.allSettled(inFlight);
     return true;
   };
 
-  const unlockRows = (itemIds: readonly string[]) => {
-    for (const itemId of itemIds) lockedRef.current.delete(itemId);
-    publishBusy();
-  };
-
-  // Required server read after a failed cycle. A read already running is joined and waited for
-  // (never cancelled), then one fresh read starts. The cache keeps its current value on failure.
-  const readListRequired = async (): Promise<{ ok: true } | { ok: false; error: unknown }> => {
-    const read = () =>
-      queryClient.fetchQuery({
+  // Required server read after a failed cycle. Any live read (fetching or paused) settles first
+  // without cancellation, then one fresh read starts. Confirmed ACK patches are re-applied if an
+  // older in-flight read settled before the fresh read failed.
+  const readListRequired = async (
+    applyConfirmed?: () => void
+  ): Promise<{ ok: true } | { ok: false; error: unknown }> => {
+    if (await waitForInFlightListReads()) {
+      applyConfirmed?.();
+    }
+    try {
+      await queryClient.fetchQuery({
         queryKey,
         queryFn: () => fetchListAPI(listId),
         staleTime: 0,
       });
-    if (queryClient.isFetching({ queryKey, exact: true }) > 0) {
-      await read().catch(() => undefined);
-    }
-    try {
-      await read();
       return { ok: true };
     } catch (error) {
       return { ok: false, error };
     }
   };
 
-  // Ordinary refresh after a committed write. It never cancels a running read, but a read that
-  // is already running may predate this write, so it settles first and the refresh reads again.
-  const refreshAfterWrite = async () => {
-    if (queryClient.isFetching({ queryKey, exact: true }) > 0) {
-      await queryClient
-        .fetchQuery({ queryKey, queryFn: () => fetchListAPI(listId), staleTime: 0 })
-        .catch(() => undefined);
+  // Ordinary refresh after a committed write. Never cancels a running read; any read already live
+  // (fetching or paused) settles first, confirmed ACK changes are preserved, and a fresh read runs.
+  const refreshAfterWrite = async (applyConfirmed?: () => void) => {
+    if (await waitForInFlightListReads()) {
+      applyConfirmed?.();
     }
     await queryClient.invalidateQueries({ queryKey }, { cancelRefetch: false });
   };
 
   // One message and one log per failed cycle; the message names what the user now sees.
-  const reportFailedCycle = async (cause: unknown) => {
-    const reload = await readListRequired();
+  const reportFailedCycle = async (cause: unknown, applyConfirmed?: () => void) => {
+    const reload = await readListRequired(applyConfirmed);
     console.error('List item action failed:', {
       cause,
       reloadError: reload.ok ? null : reload.error,
@@ -222,13 +295,14 @@ export function useShoppingListItems(listId: string) {
   };
 
   const runRowAction = async (itemIds: string[], action: () => Promise<void>) => {
-    if (!lockRows(itemIds)) return;
+    const lock = lockState;
+    if (!lockRows(lock, itemIds)) return;
     try {
       await action();
     } catch (error) {
       await reportFailedCycle(error);
     } finally {
-      unlockRows(itemIds);
+      unlockRows(lock, itemIds);
     }
   };
 
@@ -242,13 +316,7 @@ export function useShoppingListItems(listId: string) {
       (error.status === null || isRetryablePutStatus(error.status)),
     retryDelay: (failureCount) => [1000, 2000, 4000][Math.min(failureCount, 2)],
     onMutate: ({ itemId, isPurchased }) => {
-      queryClient.setQueryData<ListData>(queryKey, (old) => {
-        if (!old) return old;
-        return {
-          ...old,
-          items: old.items.map((i) => (i.id === itemId ? { ...i, isPurchased } : i)),
-        };
-      });
+      updateCachedItems((prev) => prev.map((i) => (i.id === itemId ? { ...i, isPurchased } : i)));
     },
   });
 
@@ -257,57 +325,76 @@ export function useShoppingListItems(listId: string) {
   const togglePurchased = async (itemId: string) => {
     const item = items.find((i) => i.id === itemId);
     if (!item) return;
+    const nextPurchased = !item.isPurchased;
 
     await runRowAction([itemId], async () => {
       await toggleMutation.mutateAsync({
         listId,
         itemId,
-        isPurchased: !item.isPurchased,
+        isPurchased: nextPurchased,
       });
-      await refreshAfterWrite();
+      await refreshAfterWrite(() =>
+        updateCachedItems((prev) =>
+          prev.map((i) => (i.id === itemId ? { ...i, isPurchased: nextPurchased } : i))
+        )
+      );
     });
   };
 
   const removeItem = async (itemId: string) => {
+    const applyRemoval = () => updateCachedItems((prev) => prev.filter((i) => i.id !== itemId));
     await runRowAction([itemId], async () => {
       await removeItemAPI({ listId, itemId });
-      await refreshAfterWrite();
+      applyRemoval();
+      await refreshAfterWrite(applyRemoval);
     });
   };
 
   const updateNote = async (itemId: string, note: string) => {
+    const applyNote = () =>
+      updateCachedItems((prev) => prev.map((i) => (i.id === itemId ? { ...i, note } : i)));
     await runRowAction([itemId], async () => {
       await updateNoteAPI({ listId, itemId, note });
-      await refreshAfterWrite();
+      applyNote();
+      await refreshAfterWrite(applyNote);
     });
   };
 
   const clearAll = async () => {
     const itemIds = items.map((item) => item.id);
-    if (!lockRows(itemIds)) return;
+    const lock = lockState;
+    if (!lockRows(lock, itemIds)) return;
+    const confirmedRemoved = new Set<string>();
+    const applyConfirmedRemovals = () => {
+      if (confirmedRemoved.size === 0) return;
+      updateCachedItems((prev) => prev.filter((i) => !confirmedRemoved.has(i.id)));
+    };
     try {
       if (!confirm(t('listItems.clearConfirm'))) return;
       try {
         // Sequential on purpose: the first failure stops the batch, so later rows are not sent.
         for (const itemId of itemIds) {
           await removeItemAPI({ listId, itemId });
+          confirmedRemoved.add(itemId);
+          applyConfirmedRemovals();
         }
       } catch (error) {
-        await reportFailedCycle(error);
+        await reportFailedCycle(error, applyConfirmedRemovals);
         return;
       }
-      await refreshAfterWrite();
+      await refreshAfterWrite(applyConfirmedRemovals);
     } finally {
-      unlockRows(itemIds);
+      unlockRows(lock, itemIds);
     }
   };
 
   const completeList = async () => {
     // Whole-cycle guard: keeps the empty-list guard, blocks row/batch/repeat Complete (including
     // rows arriving mid-flight) and refuses to start while any row or batch lock is held.
-    if (items.length === 0 || completingRef.current || lockedRef.current.size > 0) return;
-    completingRef.current = true;
-    publishBusy();
+    const lock = lockState;
+    if (items.length === 0 || lock.completing || lock.lockedIds.size > 0) return;
+    lock.completing = true;
+    publishListLock(lock);
 
     try {
       await completeMutation.mutateAsync(listId);
@@ -316,8 +403,8 @@ export function useShoppingListItems(listId: string) {
       console.error('Error completing list:', error);
       alert(t('listItems.completeFailed'));
     } finally {
-      completingRef.current = false;
-      publishBusy();
+      lock.completing = false;
+      publishListLock(lock);
     }
   };
 
