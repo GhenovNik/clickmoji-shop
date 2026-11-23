@@ -1314,6 +1314,7 @@ describe('F3/F4/F5 regressions (AGE-1649)', () => {
       await step(0);
       await step(0);
       await done;
+      await step(1);
 
       expect(hasItem('item-1')).toBe(false);
       expect(hasItem('item-2')).toBe(true);
@@ -1335,6 +1336,7 @@ describe('F3/F4/F5 regressions (AGE-1649)', () => {
     await step(0);
     await step(0);
     await done;
+    await step(1);
 
     expect(currentItem('item-1').note).toBe('срочно');
     expect(getCount()).toBe(3);
@@ -1359,6 +1361,7 @@ describe('F3/F4/F5 regressions (AGE-1649)', () => {
     await step(0);
     await step(0);
     await done;
+    await step(1);
 
     expect(deleteUrls()).toEqual([PUT_URL, ITEM2_URL]);
     expect(getCount()).toBe(3);

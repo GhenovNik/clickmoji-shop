@@ -172,6 +172,38 @@ describe('refreshQueryCache list-key policy', () => {
     await expect(heldRead).resolves.toBe('refetched');
   });
 
+  it('triggers only one GET in the normal case right after a real successful GET settles to idle', async () => {
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: 5 * 60 * 1000 } },
+    });
+    const { releases, queryFn } = heldReads();
+    const useList = () => useQuery({ queryKey: queryKeys.list('list-1'), queryFn });
+    const view = renderHook(useList, { wrapper: wrapper(client) });
+    releases[0]('mount read');
+    await waitFor(() => expect(view.result.current.data).toBe('mount read'));
+
+    // Also verify in the immediate microtask after a fetchQuery GET resolves to idle.
+    const directRead = client.fetchQuery({
+      queryKey: queryKeys.list('list-1'),
+      queryFn,
+      staleTime: 0,
+    });
+    await waitFor(() => expect(releases).toHaveLength(2));
+    releases[1]('settled read');
+    await directRead;
+    expect(
+      client.getQueryCache().find({ queryKey: queryKeys.list('list-1') })?.state.fetchStatus
+    ).toBe('idle');
+
+    refreshQueryCache(client, [queryKeys.list('list-1')]);
+
+    await waitFor(() => expect(releases).toHaveLength(3));
+    releases[2]('fresh read');
+    await waitFor(() => expect(client.getQueryData(queryKeys.list('list-1'))).toBe('fresh read'));
+    await tick();
+    expect(releases).toHaveLength(3);
+  });
+
   it('follows up a paused retryer cycle without cancelling it when retry is 1 and cache is populated', async () => {
     const client = new QueryClient({
       defaultOptions: { queries: { retry: 1, retryDelay: 0, staleTime: 5 * 60 * 1000 } },
