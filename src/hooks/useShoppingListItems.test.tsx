@@ -1731,9 +1731,12 @@ describe('F7 malformed list GET shape and empty items regressions (AGE-1649)', (
         putRespond(200, malformedBody),
         putRespond(500, JSON.stringify({ error: 'boom' })),
       ]);
-      await act(async () => {
-        await queryClient.invalidateQueries({ queryKey: queryKeys.list('list-1') });
-      });
+      const refreshFailed = settle(
+        queryClient.invalidateQueries({ queryKey: queryKeys.list('list-1') })
+      );
+      await step(0);
+      await step(0);
+      await refreshFailed;
       await step(1);
 
       expect(getCount()).toBe(3);
@@ -1744,9 +1747,12 @@ describe('F7 malformed list GET shape and empty items regressions (AGE-1649)', (
       // 2) Malformed attempt 1 followed by valid retry applies the fresh server response.
       setServerItem('item-1', { note: SERVER_NOTE });
       enqueue('GET', LIST_URL, [putRespond(200, malformedBody)]);
-      await act(async () => {
-        await queryClient.invalidateQueries({ queryKey: queryKeys.list('list-1') });
-      });
+      const refreshRecovered = settle(
+        queryClient.invalidateQueries({ queryKey: queryKeys.list('list-1') })
+      );
+      await step(0);
+      await step(0);
+      await refreshRecovered;
       await step(1);
 
       expect(getCount()).toBe(5);
@@ -1761,9 +1767,11 @@ describe('F7 malformed list GET shape and empty items regressions (AGE-1649)', (
     enqueue('GET', LIST_URL, [
       putRespond(200, JSON.stringify({ id: 'list-1', name: 'Список', items: [] })),
     ]);
-    await act(async () => {
-      await queryClient.invalidateQueries({ queryKey: queryKeys.list('list-1') });
-    });
+    const refreshEmpty = settle(
+      queryClient.invalidateQueries({ queryKey: queryKeys.list('list-1') })
+    );
+    await step(0);
+    await refreshEmpty;
     await step(1);
 
     expect(getCount()).toBe(2);
@@ -1774,9 +1782,12 @@ describe('F7 malformed list GET shape and empty items regressions (AGE-1649)', (
       putRespond(200, JSON.stringify({ id: 'list-1', name: 'Список', items: null })),
       putRespond(500, JSON.stringify({ error: 'boom' })),
     ]);
-    await act(async () => {
-      await queryClient.invalidateQueries({ queryKey: queryKeys.list('list-1') });
-    });
+    const refreshMalformed = settle(
+      queryClient.invalidateQueries({ queryKey: queryKeys.list('list-1') })
+    );
+    await step(0);
+    await step(0);
+    await refreshMalformed;
     await step(1);
 
     expect(getCount()).toBe(4);

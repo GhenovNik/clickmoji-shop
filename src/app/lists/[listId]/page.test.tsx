@@ -895,6 +895,7 @@ describe('F7 malformed list GET page regressions (AGE-1649)', () => {
       >
     >();
     const hits: JournalHit[] = [];
+    const settled: JournalHit[] = [];
     const routeKey = (method: string, url: string) => `${method} ${url}`;
 
     const hold = (method: string, url: string) => {
@@ -934,11 +935,12 @@ describe('F7 malformed list GET page regressions (AGE-1649)', () => {
           throw new Error(`unexpected fetch ${method} ${url}`);
         }
         hit.status = response.status;
+        settled.push({ ...hit });
         return response;
       })
     );
 
-    return { hits, hold, queueResponse };
+    return { hits, settled, hold, queueResponse };
   }
 
   const makeRetryOneClient = () =>
@@ -1061,6 +1063,15 @@ describe('F7 malformed list GET page regressions (AGE-1649)', () => {
       ['GET', listUrl, 200],
       ['POST', importUrl, 200],
       ['GET', listUrl, 200],
+      ['PUT', putUrl, 204],
+      ['GET', listUrl, 500],
+      ['GET', listUrl, 500],
+      ['GET', listUrl, 500],
+    ]);
+    expect(control.settled.map(({ method, url, status }) => [method, url, status])).toEqual([
+      ['GET', listUrl, 200],
+      ['POST', importUrl, 200],
+      ['GET', listUrl, 200],
       ['GET', listUrl, 500],
       ['PUT', putUrl, 204],
       ['GET', listUrl, 500],
@@ -1068,6 +1079,103 @@ describe('F7 malformed list GET page regressions (AGE-1649)', () => {
     ]);
     expect(control.hits.filter((hit) => hit.method === 'PUT').map((hit) => hit.body)).toEqual([
       { isPurchased: true },
+    ]);
+  });
+
+  it('F7 mounted page: when malformed old GET retry returns valid stale false before PUT 204, ACK patch still preserves A=true and aria-pressed="true" after two 500 final GETs', async () => {
+    const listUrl = '/api/lists/list-1';
+    const putUrl = '/api/lists/list-1/items/item-1';
+    const importUrl = '/api/lists/import-text';
+    const control = stubF7Fetch();
+    const alertSpy = vi.spyOn(window, 'alert').mockImplementation(() => undefined);
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    control.queueResponse('GET', listUrl, () =>
+      Response.json({ id: 'list-1', name: 'Покупки', items: [milk] })
+    );
+    control.queueResponse('POST', importUrl, () =>
+      Response.json({
+        results: {
+          added: [{ name: 'Сыр', category: 'Молочное' }],
+          created: [],
+          skipped: [],
+          failed: [],
+        },
+      })
+    );
+    const releaseOldGet1 = control.hold('GET', listUrl);
+    const releaseOldGetRetry = control.hold('GET', listUrl);
+    const releasePut = control.hold('PUT', putUrl);
+    const releaseFinal1 = control.hold('GET', listUrl);
+    const releaseFinal2 = control.hold('GET', listUrl);
+
+    const retryClient = makeRetryOneClient();
+    renderPage(retryClient);
+
+    const toggle = () => screen.queryByRole('button', { name: 'Куплено: Молоко' });
+    const query = () =>
+      retryClient.getQueryCache().find({ queryKey: queryKeys.list('list-1'), exact: true });
+    const cached = () =>
+      retryClient
+        .getQueryData<{ items?: Array<{ id: string; isPurchased: boolean }> }>(
+          queryKeys.list('list-1')
+        )
+        ?.items?.map(({ id, isPurchased }) => [id, isPurchased]) ?? null;
+
+    expect(await screen.findByText('Молоко')).toBeTruthy();
+    await runImportModal('Сыр');
+    await waitFor(() => expect(control.hits.filter((hit) => hit.method === 'GET')).toHaveLength(2));
+
+    fireEvent.click(toggle()!);
+    await waitFor(() =>
+      expect(control.hits.at(-1)).toMatchObject({
+        method: 'PUT',
+        url: putUrl,
+        body: { isPurchased: true },
+      })
+    );
+
+    await act(async () => {
+      releaseOldGet1(Response.json({ id: 'list-1', name: 'Покупки', items: null }));
+    });
+    await waitFor(() => expect(control.hits.filter((hit) => hit.method === 'GET')).toHaveLength(3));
+    expect(cached()).toEqual([['item-1', true]]);
+
+    // Old GET retry resolves with valid stale false before PUT 204 arrives.
+    await act(async () => {
+      releaseOldGetRetry(Response.json({ id: 'list-1', name: 'Покупки', items: [milk] }));
+    });
+    await waitFor(() => expect(query()?.state.fetchStatus).toBe('idle'));
+    expect(toggle()).toBeDisabled();
+
+    await act(async () => {
+      releasePut(new Response(null, { status: 204 }));
+    });
+    await waitFor(() => expect(control.hits.filter((hit) => hit.method === 'GET')).toHaveLength(4));
+    await act(async () => {
+      releaseFinal1(Response.json({ error: 'boom' }, { status: 500 }));
+    });
+    await waitFor(() => expect(control.hits.filter((hit) => hit.method === 'GET')).toHaveLength(5));
+    await act(async () => {
+      releaseFinal2(Response.json({ error: 'boom' }, { status: 500 }));
+    });
+
+    await waitFor(() => expect(toggle()).toBeEnabled());
+    expect(cached()).toEqual([['item-1', true]]);
+    expect(toggle()).toHaveAttribute('aria-pressed', 'true');
+    expect(toggle()?.closest('.group')).not.toHaveAttribute('aria-busy');
+    expect(alertSpy).not.toHaveBeenCalled();
+    expect(
+      errorSpy.mock.calls.filter(([message]) => message === 'List item action failed:')
+    ).toEqual([]);
+    expect(control.settled.map(({ method, url, status }) => [method, url, status])).toEqual([
+      ['GET', listUrl, 200],
+      ['POST', importUrl, 200],
+      ['GET', listUrl, 200],
+      ['GET', listUrl, 200],
+      ['PUT', putUrl, 204],
+      ['GET', listUrl, 500],
+      ['GET', listUrl, 500],
     ]);
   });
 
