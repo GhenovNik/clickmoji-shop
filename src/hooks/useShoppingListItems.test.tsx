@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ReactNode } from 'react';
-import { act, renderHook } from '@testing-library/react';
+import { act, render, renderHook } from '@testing-library/react';
 import { QueryClient, QueryClientProvider, onlineManager } from '@tanstack/react-query';
 import { NextIntlClientProvider } from 'next-intl';
 import { messages } from '@/i18n/messages';
@@ -1963,16 +1963,33 @@ describe('F8 required GET retry lifecycle across unmount and remount (AGE-1649)'
   it('F8 hook: unmounting during held first required GET preserves retry:1 across remount and offline pause without extra GETs', async () => {
     const dialogs = spyDialogs();
     queryClient = productionRetryClient();
-    const firstMount = await renderList();
+    let latestHook!: ReturnType<typeof useShoppingListItems>;
+    function Harness() {
+      latestHook = useShoppingListItems('list-1');
+      return null;
+    }
+    const view = render(
+      <NextIntlClientProvider locale="ru" messages={messages.ru} timeZone="UTC">
+        <QueryClientProvider client={queryClient}>
+          <Harness />
+        </QueryClientProvider>
+      </NextIntlClientProvider>
+    );
+    await step(0);
 
     enqueue('PUT', PUT_URL, [putRespond(401, 'unauthorized')]);
     const releaseRequired1 = holdNext('GET', LIST_URL);
     const releaseRequired2 = holdNext('GET', LIST_URL);
-    const done = startToggle(firstMount.result);
+    const done = latestHook.togglePurchased('item-1').catch((error: unknown) => error);
     await step(0);
     expect(getCount()).toBe(2);
 
-    firstMount.unmount();
+    // Unmount only the list view while the root QueryClientProvider survives navigation.
+    view.rerender(
+      <NextIntlClientProvider locale="ru" messages={messages.ru} timeZone="UTC">
+        <QueryClientProvider client={queryClient}>{null}</QueryClientProvider>
+      </NextIntlClientProvider>
+    );
 
     // First 500 arrives while no component is mounted; offline pauses retry until back online.
     onlineManager.setOnline(false);
@@ -1983,13 +2000,18 @@ describe('F8 required GET retry lifecycle across unmount and remount (AGE-1649)'
 
     onlineManager.setOnline(true);
     await step(0);
-    await step(1000);
     expect(getCount()).toBe(3);
 
-    const remounted = renderHook(() => useShoppingListItems('list-1'), { wrapper });
+    view.rerender(
+      <NextIntlClientProvider locale="ru" messages={messages.ru} timeZone="UTC">
+        <QueryClientProvider client={queryClient}>
+          <Harness />
+        </QueryClientProvider>
+      </NextIntlClientProvider>
+    );
     await step(0);
     expect(getCount()).toBe(3);
-    expect(remounted.result.current.isItemBusy('item-1')).toBe(true);
+    expect(latestHook.isItemBusy('item-1')).toBe(true);
 
     setServerItem('item-1', { isPurchased: false, note: SERVER_NOTE });
     releaseRequired2();
@@ -2001,7 +2023,7 @@ describe('F8 required GET retry lifecycle across unmount and remount (AGE-1649)'
     expect(getCount()).toBe(3);
     expect(currentItem('item-1').isPurchased).toBe(false);
     expect(currentItem('item-1').note).toBe(SERVER_NOTE);
-    expect(remounted.result.current.isItemBusy('item-1')).toBe(false);
+    expect(latestHook.isItemBusy('item-1')).toBe(false);
     expect(dialogs.error).toHaveBeenCalledTimes(1);
     expect(dialogs.alert).toHaveBeenCalledTimes(1);
     expect(dialogs.alert).toHaveBeenCalledWith('Не удалось выполнить действие');
