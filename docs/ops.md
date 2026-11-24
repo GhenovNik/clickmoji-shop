@@ -368,26 +368,23 @@ an isolated preview. Do not seed restored data.
    For the point-in-time branch, use `"$RECOVERY_BRANCH"` and its database instead. For another
    provider, use that provider's pooled URL with TLS.
 
-4. Replace the Vercel production variable from the release checkout. Between `rm` and `add` the
-   production site has no `DATABASE_URL`, so run both commands in one go and do not change the order:
+4. Update the existing Vercel production variable from the linked release checkout. Check the project
+   and keep writes stopped if the update or deployment fails.
 
    ```sh
-   vercel env rm DATABASE_URL --environment production --yes
-   printf '%s' "$CUTOVER_URL" | vercel env add DATABASE_URL --environment production
-   vercel deploy --prod
+   printf '%s' "$CUTOVER_URL" | vercel env update DATABASE_URL production --yes &&
+     vercel deploy --prod
    ```
 
-   The Vercel dashboard (Project → Settings → Environment Variables) can do the same edit; use it if
-   the CLI is unavailable. Vercel's `env add` reads the value from stdin, so it is never placed on the
-   command line.
+   In the Vercel dashboard, edit the existing Production variable under Project Settings →
+   Environment Variables, then redeploy. The CLI reads the value from stdin.
 
 5. Verify the deployed site: sign-in, reading a test list, and the runtime error view in Vercel. Only
    then resume writes.
 6. Record the selected backup or time, the target name (not its URL), the checks that passed, and the
    switch time, without credentials.
 
-If any step fails, keep the old setting: re-add the value saved in step 2 with the same two Vercel
-commands and redeploy, then investigate. Finally unset the variables and remove temporary targets and
+If any step fails, keep the old setting: update the variable with the value saved in step 2 and redeploy, then investigate. Finally unset the variables and remove temporary targets and
 files when they are no longer needed:
 
 ```sh
