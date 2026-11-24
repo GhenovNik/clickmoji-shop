@@ -53,13 +53,24 @@ export function makeSandbox() {
   };
 }
 
+export function fixtureUrl(address, username, password) {
+  const url = new URL(address);
+  url.username = username;
+  url.password = password;
+  return url.href;
+}
+
 // A database address that exists only in memory: the host is reserved (.invalid) and the
 // password is random on every call.
 export function syntheticDatabase() {
   const password = crypto.randomBytes(12).toString('hex');
   const host = 'synthetic-db.test.invalid';
   return {
-    url: `postgresql://app_user:${password}@${host}:5432/clickmoji?sslmode=require&schema=public`,
+    url: fixtureUrl(
+      `postgresql://${host}:5432/clickmoji?sslmode=require&schema=public`,
+      'app_user',
+      password
+    ),
     password,
     host,
   };

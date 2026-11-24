@@ -1,5 +1,6 @@
 // Unit tests: configuration, retention, report comparison, status line, pins and argv.
 import assert from 'node:assert/strict';
+import { fixtureUrl } from './helpers.mjs';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, it } from 'node:test';
@@ -55,7 +56,7 @@ describe('config', () => {
   });
 
   it('rejects a non-postgres scheme without echoing the address', () => {
-    const env = { ...base(), DATABASE_URL: 'mysql://u:secret@h/db' };
+    const env = { ...base(), DATABASE_URL: fixtureUrl('mysql://h/db', 'u', 'secret') };
     assert.throws(
       () => loadConfig(env),
       (error) => !error.message.includes('secret') && !error.message.includes('mysql://')
@@ -107,7 +108,9 @@ describe('config', () => {
 
   it('maps the address to libpq variables: host, port, database, user, password, ssl', () => {
     assert.deepEqual(
-      libpqEnv('postgresql://u:p%40x@db.example.invalid/db?sslmode=require&schema=x'),
+      libpqEnv(
+        fixtureUrl('postgresql://db.example.invalid/db?sslmode=require&schema=x', 'u', 'p%40x')
+      ),
       {
         PGSSLMODE: 'require',
         PGHOST: 'db.example.invalid',
@@ -121,7 +124,11 @@ describe('config', () => {
 
   it('maps localhost to the host gateway for containers and keeps channel binding', () => {
     const env = libpqEnv(
-      'postgresql://u:p@localhost:6543/db?schema=public&sslmode=disable&channel_binding=require'
+      fixtureUrl(
+        'postgresql://localhost:6543/db?schema=public&sslmode=disable&channel_binding=require',
+        'u',
+        'p'
+      )
     );
     assert.equal(env.PGHOST, 'host.docker.internal');
     assert.equal(env.PGPORT, '6543');
@@ -132,7 +139,7 @@ describe('config', () => {
 
   it('refuses a connection parameter it cannot pass to libpq, without echoing its value', () => {
     assert.throws(
-      () => libpqEnv('postgresql://u:p@h/db?pgbouncer=true&sslmode=require'),
+      () => libpqEnv(fixtureUrl('postgresql://h/db?pgbouncer=true&sslmode=require', 'u', 'p')),
       (error) =>
         error instanceof ConfigError &&
         error.message === 'DATABASE_URL: параметр pgbouncer не поддерживается' &&
@@ -142,7 +149,11 @@ describe('config', () => {
 
   it('only ever yields names libpq reads, and every one is forwarded by name', () => {
     const env = libpqEnv(
-      'postgresql://u:p@h/db?sslmode=require&sslrootcert=/x/ca.pem&connect_timeout=5&application_name=b'
+      fixtureUrl(
+        'postgresql://h/db?sslmode=require&sslrootcert=/x/ca.pem&connect_timeout=5&application_name=b',
+        'u',
+        'p'
+      )
     );
     for (const name of Object.keys(env)) assert.ok(LIBPQ_ENV_NAMES.includes(name), name);
     assert.equal(env.PGSSLROOTCERT, '/x/ca.pem');
@@ -264,7 +275,11 @@ describe('status line', () => {
     });
     assert.equal(line, '2026-11-24T12:00:00.000Z\tok\tsize=10 verify=ok\n');
     assert.throws(() =>
-      formatStatusLine({ now: new Date(), outcome: 'failed', detail: 'postgresql://u:p@h/d' })
+      formatStatusLine({
+        now: new Date(),
+        outcome: 'failed',
+        detail: fixtureUrl('postgresql://h/d', 'u', 'p'),
+      })
     );
   });
 });
