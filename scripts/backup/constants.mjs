@@ -23,6 +23,8 @@ export const LOCK_NAME = '.backup.lock';
 // Containers started by a run that the daemon has not yet been seen to remove (the recovery marker).
 export const LEDGER_NAME = '.backup.ledger';
 export const TEMP_PREFIX = 'clickmoji-backup-';
+// Written into every temporary directory first; removed last, and never by a container's cleanup.
+export const TEMP_MARKER = 'owner.json';
 
 // Process exit codes.
 export const EXIT = Object.freeze({

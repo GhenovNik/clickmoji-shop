@@ -6,7 +6,7 @@
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { TOOLS_IMAGE } from './constants.mjs';
+import { TEMP_MARKER, TOOLS_IMAGE } from './constants.mjs';
 import { LIBPQ_ENV_NAMES } from './config.mjs';
 
 export const CONTAINER_DIR = path.resolve(
@@ -128,7 +128,8 @@ export function cleanupArgs({ name, workDir }) {
     '/bin/sh',
     TOOLS_IMAGE,
     '-c',
-    'rm -rf /work/* /work/.[!.]* 2>/dev/null; exit 0',
+    // Empties the work directory except the ownership marker, which the host removes last.
+    `for f in /work/* /work/.[!.]*; do [ -e "$f" ] || continue; [ "$f" = "/work/${TEMP_MARKER}" ] || rm -rf "$f"; done 2>/dev/null; exit 0`,
   ];
 }
 

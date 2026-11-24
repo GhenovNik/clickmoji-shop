@@ -10,6 +10,7 @@
 // cleanup-hang is cleanup-fail with the in-image cleanup container kept running until something
 // removes it (`docker rm -f`), as a daemon keeps it when its client was killed.
 // FAKE_DOCKER_PS=fail makes `docker ps` fail: the daemon cannot be asked, so no absence is proven.
+// FAKE_DOCKER_PS=fail-cleanup makes it fail only for cleanup containers: the fallback is unproven.
 // FAKE_SWAP_STATUS=<path> replaces the status file by a directory when the run starts, so the
 // status line cannot be written any more (the path was replaced after configuration).
 // Each `docker run` with --name is logged with ledgerHas: whether FAKE_WATCH_LEDGER (the ledger
@@ -159,6 +160,8 @@ if (argv[0] === 'ps') {
   if (process.env.FAKE_DOCKER_PS === 'fail') process.exit(1);
   const filter = optionValue('--filter') ?? '';
   const match = /^name=\^(.*)\$$/.exec(filter);
+  if (process.env.FAKE_DOCKER_PS === 'fail-cleanup' && match?.[1].includes('-cleanup-'))
+    process.exit(1);
   if (!match || !REGISTRY || !existsSync(REGISTRY)) process.exit(0);
   for (const entry of readdirSync(REGISTRY)) {
     if (entry === match[1]) process.stdout.write(`${entry}\n`);
@@ -223,8 +226,10 @@ function runContainer(quiet) {
   if (argv.some((arg) => arg.includes('rm -rf'))) {
     if (mode === 'cleanup-hang') return undefined;
     if (mode === 'cleanup-fail') return 0;
+    // The real script keeps the ownership marker (owner.json) for the host to remove last.
     for (const entry of readdirSync(workDir))
-      rmSync(path.join(workDir, entry), { recursive: true, force: true });
+      if (entry !== 'owner.json')
+        rmSync(path.join(workDir, entry), { recursive: true, force: true });
     return 0;
   }
   return 2;

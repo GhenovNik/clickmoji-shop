@@ -6,6 +6,7 @@ import {
   chmodSync,
   existsSync,
   mkdirSync,
+  mkdtempSync,
   readdirSync,
   readFileSync,
   rmSync,
@@ -13,7 +14,8 @@ import {
   writeFileSync,
 } from 'node:fs';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
+import { cleanupArgs } from '../docker.mjs';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import { loadConfig } from '../config.mjs';
 import { LEDGER_NAME } from '../constants.mjs';
@@ -558,6 +560,7 @@ describe('the cleanup fallback is a tracked container too (B1b)', () => {
       assert.equal(await run.done, null, 'the writer died without a result');
       const leftover = fallbackName();
       assert.deepEqual(ledgerNames(), [leftover], 'the fallback container is recorded');
+      unlockTemp(); // the host can delete the directory again; a stuck cleanup would be fail-closed
 
       const from = readDockerLog(sandbox).length;
       const next = await runWithFake(sandbox, db, {}, LATER);
@@ -648,5 +651,125 @@ describe('the status line can fail after the copy is saved', () => {
       1,
       'the copy is there (the CLI uses the real clock)'
     );
+  });
+});
+
+// A directory a killed run left behind: its marker names this backup directory and a process that
+// has exited, and its plaintext is partly in a read-only subdirectory the host cannot delete.
+function plantStale({ locked = true } = {}) {
+  const config = loadConfig(envFor(sandbox, db));
+  const dir = mkdtempSync(path.join(sandbox.tmp, 'clickmoji-backup-'));
+  const dead = spawnSync(process.execPath, ['-e', '']).pid;
+  writeFileSync(
+    path.join(dir, 'owner.json'),
+    JSON.stringify({
+      pid: dead,
+      backupKey: crypto.createHash('sha256').update(config.backupDir).digest('hex'),
+    })
+  );
+  writeFileSync(path.join(dir, 'dump.custom'), 'PLAINTEXT-OLD');
+  const restored = path.join(dir, 'out', 'restored');
+  mkdirSync(restored, { recursive: true });
+  writeFileSync(path.join(restored, 'counts.tsv'), 'a\t1\n');
+  if (locked) chmodSync(restored, 0o555);
+  return dir;
+}
+
+const runCallsFrom = (from) =>
+  readDockerLog(sandbox)
+    .slice(from)
+    .filter((call) => call.argv[0] === 'run');
+
+describe('stale scratch from a killed run is recovered, or the run fails closed (B1b)', () => {
+  const failing = { FAKE_DOCKER_MODE: 'cleanup-fail' };
+
+  it('host deletion fails and the fallback is unconfirmed: no dump, publish or prune; the marker stays', async () => {
+    try {
+      const old = seedBackups(sandbox.backupDir, 100);
+      const before = old.map((name) => readFileSync(path.join(sandbox.backupDir, name), 'utf8'));
+      const stale = plantStale();
+      const env = { ...failing, FAKE_DOCKER_PS: 'fail-cleanup' };
+
+      const first = await runWithFake(sandbox, db, env);
+      assert.equal(first.ok, false);
+      assert.equal(first.exit, EXIT.failed);
+      assert.ok(
+        runCalls().length > 0 && runCalls().every(isFallback),
+        'only the cleanup fallback ran'
+      );
+      assert.ok(existsSync(path.join(stale, 'owner.json')), 'the marker survives');
+      assert.ok(existsSync(path.join(stale, 'out', 'restored', 'counts.tsv')), 'plaintext kept');
+      assert.equal(ledgerNames().length, 1, 'the unconfirmed fallback stays in the ledger');
+      assert.ok(!listCopies(sandbox.backupDir).includes(NEW_NAME), 'nothing published');
+      assert.deepEqual(listCopies(sandbox.backupDir).sort(), [...old].sort(), 'nothing pruned');
+      old.forEach((name, i) =>
+        assert.equal(readFileSync(path.join(sandbox.backupDir, name), 'utf8'), before[i])
+      );
+
+      const from = readDockerLog(sandbox).length;
+      const again = await runWithFake(sandbox, db, env);
+      assert.equal(again.ok, false, 'a repeated run fails the same way');
+      assert.deepEqual(runCallsFrom(from), [], 'no container starts on the repeated run');
+      assert.ok(existsSync(path.join(stale, 'owner.json')), 'the marker survives repeated failure');
+      assert.ok(!listCopies(sandbox.backupDir).includes(NEW_NAME), 'still nothing published');
+      old.forEach((name, i) =>
+        assert.equal(readFileSync(path.join(sandbox.backupDir, name), 'utf8'), before[i])
+      );
+    } finally {
+      unlockTemp();
+    }
+  });
+
+  it('host deletion fails after a proven fallback: fails closed, keeps the marker, and recovers once the directory can be removed', async () => {
+    try {
+      const old = seedBackups(sandbox.backupDir, 100);
+      const before = old.map((name) => readFileSync(path.join(sandbox.backupDir, name), 'utf8'));
+      const stale = plantStale();
+
+      const first = await runWithFake(sandbox, db, failing);
+      assert.equal(first.ok, false);
+      assert.equal(first.key, 'cleanup');
+      assert.equal(first.exit, EXIT.failed);
+      assert.ok(runCalls().every(isFallback), 'only the cleanup fallback ran');
+      assert.deepEqual(containersLeft(sandbox), [], 'the fallback is proven gone');
+      assert.deepEqual(ledgerNames(), []);
+      assert.ok(
+        existsSync(path.join(stale, 'owner.json')),
+        'partial host deletion keeps the marker'
+      );
+      assert.ok(existsSync(path.join(stale, 'out', 'restored', 'counts.tsv')));
+      assert.ok(!listCopies(sandbox.backupDir).includes(NEW_NAME), 'nothing published');
+      assert.deepEqual(listCopies(sandbox.backupDir).sort(), [...old].sort(), 'nothing pruned');
+
+      const from = readDockerLog(sandbox).length;
+      const again = await runWithFake(sandbox, db, failing);
+      assert.equal(again.key, 'cleanup', 'the repeated failure is the same');
+      assert.ok(runCallsFrom(from).every(isFallback), 'no dump, verify or encrypt on repeat');
+      assert.ok(existsSync(path.join(stale, 'owner.json')), 'the marker survives repeated failure');
+      assert.ok(!listCopies(sandbox.backupDir).includes(NEW_NAME));
+      old.forEach((name, i) =>
+        assert.equal(readFileSync(path.join(sandbox.backupDir, name), 'utf8'), before[i])
+      );
+
+      unlockTemp();
+      const healed = await runWithFake(sandbox, db);
+      assert.equal(healed.ok, true, 'the next run completes once the directory is removable');
+      assert.equal(existsSync(stale), false, 'the stale directory is gone');
+      assert.ok(listCopies(sandbox.backupDir).includes(NEW_NAME));
+    } finally {
+      unlockTemp();
+    }
+  });
+
+  it('the in-image cleanup never removes the ownership marker, whatever it finds', () => {
+    const dir = mkdtempSync(path.join(sandbox.tmp, 'clickmoji-backup-'));
+    writeFileSync(path.join(dir, 'owner.json'), '{}');
+    writeFileSync(path.join(dir, 'dump.custom'), 'PLAINTEXT');
+    mkdirSync(path.join(dir, '.hidden'));
+    writeFileSync(path.join(dir, '.hidden', 'file'), 'PLAINTEXT');
+    const script = cleanupArgs({ name: 'n', workDir: dir }).at(-1).replaceAll('/work', dir);
+    const run = spawnSync('/bin/sh', ['-c', script], { stdio: 'ignore' });
+    assert.equal(run.status, 0);
+    assert.deepEqual(readdirSync(dir), ['owner.json']);
   });
 });

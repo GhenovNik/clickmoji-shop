@@ -28,6 +28,7 @@ import {
   EXIT,
   META_DIR,
   MESSAGES,
+  TEMP_MARKER,
   TEMP_PREFIX,
 } from './constants.mjs';
 import {
@@ -53,11 +54,6 @@ import {
   verifyArgs,
   versionArgs,
 } from './docker.mjs';
-
-// Written into every temporary directory before anything else goes in: which backup
-// directory the run serves and which process owns it. Directories without it are never
-// removed by a sweep.
-const TEMP_MARKER = 'owner.json';
 
 export class StepError extends Error {
   constructor(key, exit) {
@@ -108,19 +104,22 @@ function removeQuietly(target) {
   }
 }
 
-// Removes temporary directories that an earlier run of THIS backup directory left behind
-// (for example after SIGKILL). A directory is removed only when its marker names this backup
+// Recovers temporary directories that an earlier run of THIS backup directory left behind
+// (for example after SIGKILL). A directory is recovered only when its marker names this backup
 // directory and a process that no longer exists. The caller holds this directory's lock, so
 // no live run of it can exist. Other backup directories, unmarked entries and entries of
 // live processes are never touched, whatever their age.
-function sweepStaleTemp(tempRoot, backupDir) {
+// Each recovered directory goes through removeTemp, the same path a run uses. One that stays
+// is a failure: the run stops before any dump, publish or prune.
+async function sweepStaleTemp(tempRoot, backupDir, docker) {
   let entries;
   try {
     entries = readdirSync(tempRoot);
   } catch {
-    return;
+    throw new StepError('cleanup', EXIT.failed);
   }
   const key = backupKey(backupDir);
+  const stale = [];
   for (const entry of entries) {
     if (!entry.startsWith(TEMP_PREFIX)) continue;
     const full = path.join(tempRoot, entry);
@@ -132,8 +131,19 @@ function sweepStaleTemp(tempRoot, backupDir) {
     }
     if (marker?.backupKey !== key || !Number.isInteger(marker.pid)) continue;
     if (pidAlive(marker.pid)) continue;
-    removeQuietly(full);
+    stale.push(full);
   }
+  let stuck = false;
+  for (const dir of stale) {
+    let gone = false;
+    try {
+      gone = await removeTemp(dir, docker);
+    } catch {
+      gone = false;
+    }
+    if (!gone) stuck = true;
+  }
+  if (stuck) throw new StepError('cleanup', EXIT.failed);
 }
 
 // Completed copies in the backup directory, by the time in their file name.
@@ -311,14 +321,46 @@ async function recoverContainers(docker, ledger) {
   }
 }
 
-// Returns true when the directory is gone. Container-written files may belong to another
-// uid, so a failed plain removal is retried from inside the tools image. That fallback is a
-// container like any other: tracked in the ledger before it starts and proven absent after it
-// exits (the caller's settle() repeats the proof). Exported for the real-Docker test.
+// Every entry of the directory except the ownership marker.
+function removeContents(tempDir) {
+  let entries;
+  try {
+    entries = readdirSync(tempDir);
+  } catch {
+    return;
+  }
+  for (const entry of entries) {
+    if (entry !== TEMP_MARKER) removeQuietly(path.join(tempDir, entry));
+  }
+}
+
+// True when anything but the marker is left, or when that cannot be told.
+function contentsLeft(tempDir) {
+  if (!existsSync(tempDir)) return false;
+  try {
+    return readdirSync(tempDir).some((entry) => entry !== TEMP_MARKER);
+  } catch {
+    return true;
+  }
+}
+
+// Returns true only when the directory is gone. Contents go first, on the host. Container-written
+// files may belong to another uid, so anything left is emptied from inside the tools image. That
+// fallback is a container like any other: tracked in the ledger before it starts. Its absence must
+// be proven (absent) before the host looks again; an unproven fallback stops everything here, so
+// nothing is removed under a container that may still exist. The marker goes last, so a directory
+// that is not fully removed keeps the marker a later sweep needs. Exported for the real-Docker test.
 export async function removeTemp(tempDir, docker) {
-  removeQuietly(tempDir);
-  if (!existsSync(tempDir)) return true;
-  await docker.runAfterShutdown(cleanupArgs({ name: containerName('cleanup'), workDir: tempDir }));
+  removeContents(tempDir);
+  if (contentsLeft(tempDir)) {
+    const cleanup = await docker.runAfterShutdown(
+      cleanupArgs({ name: containerName('cleanup'), workDir: tempDir })
+    );
+    if (!cleanup.absent) return false;
+    removeContents(tempDir);
+    if (contentsLeft(tempDir)) return false;
+  }
+  removeQuietly(path.join(tempDir, TEMP_MARKER));
   removeQuietly(tempDir);
   return !existsSync(tempDir);
 }
@@ -387,7 +429,7 @@ export async function runBackup({
   let tempDir = null;
   try {
     await recoverContainers(docker, ledger);
-    sweepStaleTemp(tempRoot, config.backupDir);
+    await sweepStaleTemp(tempRoot, config.backupDir, docker);
     tempDir = mkdtempSync(path.join(tempRoot, TEMP_PREFIX));
     writeFileSync(
       path.join(tempDir, TEMP_MARKER),
