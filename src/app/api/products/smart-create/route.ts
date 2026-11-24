@@ -11,6 +11,7 @@ import {
 import { MonthlyBudgetAccountingError } from '@/lib/ai-budget';
 import {
   AI_INPUT_LIMITS,
+  AiInputTooLargeError,
   CATEGORY_ID_PATTERN,
   readBoundedJsonBody,
 } from '@/lib/ai-input-validation';
@@ -240,6 +241,9 @@ export async function POST(request: Request) {
       message: t('api.products.created'),
     });
   } catch (error) {
+    if (error instanceof AiInputTooLargeError) {
+      return NextResponse.json({ error: t('api.products.payloadTooLarge') }, { status: 413 });
+    }
     console.error('Error in smart product creation:', textAiErrorCode(error));
     return NextResponse.json({ error: t('api.products.createFailed') }, { status: 500 });
   }

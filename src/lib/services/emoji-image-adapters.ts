@@ -123,6 +123,7 @@ function assertPromptAndContextBounds({
   imageSize,
   aspectRatio,
   outputCount,
+  maxOutputTokens,
 }: {
   prompt: string;
   provider: EmojiProvider;
@@ -132,6 +133,7 @@ function assertPromptAndContextBounds({
   imageSize?: string;
   aspectRatio?: string;
   outputCount: number;
+  maxOutputTokens?: number;
 }): number {
   const promptBytes = Buffer.byteLength(prompt, 'utf8');
   if (
@@ -154,7 +156,8 @@ function assertPromptAndContextBounds({
       quotaCtx.imageBounds.quality !== quality ||
       quotaCtx.imageBounds.imageSize !== imageSize ||
       quotaCtx.imageBounds.aspectRatio !== aspectRatio ||
-      quotaCtx.imageBounds.outputCount !== outputCount
+      quotaCtx.imageBounds.outputCount !== outputCount ||
+      quotaCtx.imageBounds.maxOutputTokens !== maxOutputTokens
     ) {
       throw new EmojiImageGenerationError(
         'configuration',
@@ -187,6 +190,8 @@ async function callProviderSdk<T>(
   extractUsage?: (result: T) => {
     googleUsageMetadata?: GenerateContentResponse['usageMetadata'];
     openaiUsage?: OpenAI.Images.ImagesResponse['usage'];
+    outputCount?: number;
+    finalImagePartsCount?: number;
   }
 ): Promise<T> {
   try {
@@ -274,7 +279,12 @@ async function generateWithGoogleImages({
           numberOfImages: IMAGE_OUTPUT_COUNT,
           aspectRatio: GOOGLE_IMAGE_ASPECT_RATIO,
         },
-      })
+      }),
+    (res) => ({
+      outputCount: Array.isArray(res?.generatedImages)
+        ? Math.max(pricing.outputCount, res.generatedImages.length)
+        : pricing.outputCount,
+    })
   );
 
   if (!response?.generatedImages?.length) {
@@ -400,6 +410,7 @@ async function generateWithGoogleGenerateContent({
     imageSize: pricing.imageSize,
     aspectRatio: pricing.aspectRatio,
     outputCount: pricing.outputCount,
+    maxOutputTokens: pricing.maxOutputTokens,
   });
   const ai = clients.createGoogleClient({ apiKey });
 
@@ -419,10 +430,20 @@ async function generateWithGoogleGenerateContent({
         contents: prompt,
         config: {
           responseModalities: ['IMAGE'],
+          maxOutputTokens: pricing.maxOutputTokens,
           imageConfig: { aspectRatio: GOOGLE_IMAGE_ASPECT_RATIO },
         },
       }),
-    (res) => ({ googleUsageMetadata: res?.usageMetadata })
+    (res) => {
+      const parts = res?.candidates?.[0]?.content?.parts ?? [];
+      const finalImagePartsCount = parts.filter(
+        (part) => part?.inlineData && part.thought !== true
+      ).length;
+      return {
+        googleUsageMetadata: res?.usageMetadata,
+        finalImagePartsCount,
+      };
+    }
   );
 
   return {

@@ -1,6 +1,10 @@
 import { NextResponse } from 'next/server';
 import { apiText } from '@/lib/api-messages';
-import { AI_INPUT_LIMITS, readBoundedJsonBody } from '@/lib/ai-input-validation';
+import {
+  AI_INPUT_LIMITS,
+  AiInputTooLargeError,
+  readBoundedJsonBody,
+} from '@/lib/ai-input-validation';
 import { estimateBulkProductsPromptTokens } from '@/lib/ai-pricing';
 import { localizedName } from '@/lib/catalog-name';
 import { prisma } from '@/lib/prisma';
@@ -205,6 +209,12 @@ export async function POST(request: Request) {
       results,
     });
   } catch (error) {
+    if (error instanceof AiInputTooLargeError) {
+      return NextResponse.json(
+        { error: await apiText(request, 'payloadTooLarge') },
+        { status: 413 }
+      );
+    }
     console.error('Error in bulk import:', textAiErrorCode(error));
     return NextResponse.json(
       { error: await apiText(request, 'importProductsFailed') },

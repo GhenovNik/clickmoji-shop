@@ -62,6 +62,8 @@
     "textTooLong": "The text is too long: at most {max} characters",
     "listIdRequired": "No list given",
     "listNotFound": "List not found",
+    "invalidRequest": "Invalid request",
+    "payloadTooLarge": "Request payload is too large",
     "aiNotConfigured": "AI is not configured. Please contact the administrator.",
     "noCategories": "There are no categories. Please contact the administrator.",
     "noProductsFound": "No products found in the text",

@@ -110,7 +110,11 @@ const UNSET_MODEL_ENV: Array<{ label: string; value: string | undefined }> = [
 const EXPECTED_GEMINI_CONTENT_CALL = {
   model: 'gemini-3.1-flash-lite-image',
   contents: GEMINI_PROMPT,
-  config: { responseModalities: ['IMAGE'], imageConfig: { aspectRatio: '1:1' } },
+  config: {
+    responseModalities: ['IMAGE'],
+    maxOutputTokens: 4_096,
+    imageConfig: { aspectRatio: '1:1' },
+  },
 };
 
 beforeEach(() => {

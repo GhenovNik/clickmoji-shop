@@ -13,7 +13,10 @@ const DECIMAL_USD_PATTERN = /^(?:0|[1-9]\d*)(?:\.(\d{1,6}))?$/;
 export type MonthlyBudgetDbClient = Pick<typeof prisma, '$queryRaw'>;
 
 export type MonthlyBudgetAccountingReason =
-  'invalid_settlement_amount' | 'settlement_mismatch' | 'reconciliation_db_error';
+  | 'invalid_settlement_amount'
+  | 'settlement_mismatch'
+  | 'reconciliation_db_error'
+  | 'overspend_above_ceiling';
 
 /**
  * Sanitized error thrown when monthly budget reconciliation cannot prove a matching settlement.
@@ -207,6 +210,12 @@ export async function reconcileMonthlyAiBudget({
   if (rows.length !== 1) {
     console.error('Monthly AI budget reconciliation failed:', 'settlement_mismatch');
     throw new MonthlyBudgetAccountingError('settlement_mismatch');
+  }
+
+  // Record full actual spend in PostgreSQL first, then fail closed if actual exceeded the reserve.
+  if (actualMicroUsd > ceilingMicroUsd) {
+    console.error('Monthly AI budget reconciliation failed:', 'overspend_above_ceiling');
+    throw new MonthlyBudgetAccountingError('overspend_above_ceiling');
   }
 
   return {

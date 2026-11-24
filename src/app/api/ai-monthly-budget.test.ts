@@ -19,6 +19,13 @@ const doubles = vi.hoisted(() => ({
   openaiImageBehavior: vi.fn(),
   uploadCalls: 0,
   createdProducts: [] as Array<Record<string, unknown>>,
+  categories: [{ id: 'cat-1', name: 'Молочное', nameEn: 'Dairy', order: 1 }],
+  catalogProducts: [] as Array<{
+    id: string;
+    name: string;
+    nameEn: string;
+    categoryId: string;
+  }>,
 }));
 
 vi.mock('@/lib/auth-guards', () => ({
@@ -165,7 +172,7 @@ vi.mock('@/lib/prisma', () => ({
       findUnique: async () => ({ id: 'list-1', userId: 'user-1' }),
     },
     category: {
-      findMany: async () => [{ id: 'cat-1', name: 'Молочное', nameEn: 'Dairy', order: 1 }],
+      findMany: async () => doubles.categories,
     },
     user: {
       findUnique: async () => ({ id: 'user-1', role: 'USER', createdProductsCount: 0 }),
@@ -173,7 +180,7 @@ vi.mock('@/lib/prisma', () => ({
     },
     product: {
       findFirst: async () => null,
-      findMany: async () => [],
+      findMany: async () => doubles.catalogProducts,
       create: async ({ data }: { data: Record<string, unknown> }) => {
         const created = { id: `prod-${doubles.createdProducts.length + 1}`, ...data };
         doubles.createdProducts.push(created);
@@ -196,6 +203,7 @@ const { AI_MONTHLY_BUDGET_USD_ENV } = await import('@/lib/ai-budget');
 const {
   estimateEmojiPromptTokens,
   estimateImageCallCeilingMicroUsd,
+  estimateShoppingListPromptTokens,
   estimateTextCallCeilingMicroUsd,
 } = await import('@/lib/ai-pricing');
 const { AI_INPUT_LIMITS } = await import('@/lib/ai-input-validation');
@@ -242,9 +250,13 @@ beforeEach(() => {
   doubles.openaiImageCalls.length = 0;
   doubles.uploadCalls = 0;
   doubles.createdProducts.length = 0;
+  doubles.categories = [{ id: 'cat-1', name: 'Молочное', nameEn: 'Dairy', order: 1 }];
+  doubles.catalogProducts = [];
 
   delete process.env[AI_MONTHLY_BUDGET_USD_ENV];
   delete process.env.AI_PROVIDER;
+  delete process.env.AI_DAILY_CALLS_PER_USER;
+  delete process.env.AI_DAILY_CALLS_PER_ADMIN;
   delete process.env.GOOGLE_TEXT_MODEL;
   delete process.env.GOOGLE_TEXT_MODEL_FALLBACK;
   delete process.env.GOOGLE_IMAGE_MODEL;
@@ -314,7 +326,13 @@ afterEach(() => {
 
 describe('monthly AI budget across all HTTP AI entry points', () => {
   it('enforces exact boundary at ceiling vs ceiling - 1 across text and image routes', async () => {
-    const textCeiling = estimateTextCallCeilingMicroUsd();
+    const textCeiling = estimateTextCallCeilingMicroUsd({
+      maxPromptTokens: estimateShoppingListPromptTokens({
+        text: 'Молоко',
+        categories: doubles.categories,
+        catalog: [],
+      }),
+    });
     process.env[AI_MONTHLY_BUDGET_USD_ENV] = formatUsd(textCeiling - BigInt(1));
 
     const deniedImport = await importTextRoute.POST(
@@ -352,7 +370,13 @@ describe('monthly AI budget across all HTTP AI entry points', () => {
   });
 
   it('enforces atomic concurrent reservations across routes without over-allocating', async () => {
-    const textCeiling = estimateTextCallCeilingMicroUsd();
+    const textCeiling = estimateTextCallCeilingMicroUsd({
+      maxPromptTokens: estimateShoppingListPromptTokens({
+        text: 'Молоко',
+        categories: doubles.categories,
+        catalog: [],
+      }),
+    });
     process.env[AI_MONTHLY_BUDGET_USD_ENV] = formatUsd(textCeiling * BigInt(2));
 
     let release!: () => void;
@@ -503,7 +527,7 @@ describe('monthly AI budget across all HTTP AI entry points', () => {
 });
 
 describe('server-side input bounds before providers (400/413)', () => {
-  it('blocks oversized import-text input (2001 chars -> 400) before provider or budget reservation', async () => {
+  it('blocks oversized import-text input (2001 chars -> 400), invalid listId (400), and oversized payload (413) before reading full body or calling provider', async () => {
     const okRes = await importTextRoute.POST(
       jsonReq('/api/lists/import-text', {
         text: 'a'.repeat(AI_INPUT_LIMITS.MAX_IMPORT_TEXT_CHARS),
@@ -513,6 +537,7 @@ describe('server-side input bounds before providers (400/413)', () => {
     expect(okRes.status).toBe(200);
     doubles.textCalls.length = 0;
     doubles.monthlyRows.clear();
+    doubles.dailyCounts.clear();
 
     const tooLong = await importTextRoute.POST(
       jsonReq('/api/lists/import-text', {
@@ -521,8 +546,51 @@ describe('server-side input bounds before providers (400/413)', () => {
       })
     );
     expect(tooLong.status).toBe(400);
+
+    const badListId = await importTextRoute.POST(
+      jsonReq('/api/lists/import-text', {
+        text: 'Молоко',
+        listId: 'bad list id\n'.repeat(10),
+      })
+    );
+    expect(badListId.status).toBe(400);
+
+    // Streaming body exceeding IMPORT_TEXT_BODY_MAX_BYTES is aborted before reading the trailing chunks.
+    let pulledChunks = 0;
+    const stream = new ReadableStream<Uint8Array>(
+      {
+        pull(controller) {
+          pulledChunks += 1;
+          if (pulledChunks === 1) {
+            controller.enqueue(
+              new TextEncoder().encode('{"text":"Молоко","listId":"list-1","extra":"')
+            );
+          } else if (pulledChunks <= 5) {
+            controller.enqueue(
+              new TextEncoder().encode('z'.repeat(AI_INPUT_LIMITS.IMPORT_TEXT_BODY_MAX_BYTES))
+            );
+          } else {
+            controller.enqueue(new TextEncoder().encode('"}'));
+            controller.close();
+          }
+        },
+      },
+      new CountQueuingStrategy({ highWaterMark: 0 })
+    );
+    const oversizedBody = await importTextRoute.POST(
+      new Request('http://localhost/api/lists/import-text', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', cookie: 'NEXT_LOCALE=ru' },
+        body: stream,
+        duplex: 'half',
+      } as RequestInit)
+    );
+    expect(oversizedBody.status).toBe(413);
+    expect(await oversizedBody.json()).toEqual({ error: 'Запрос слишком большой' });
+    expect(pulledChunks).toBe(2);
     expect(doubles.textCalls).toHaveLength(0);
     expect(doubles.monthlyRows.size).toBe(0);
+    expect(doubles.dailyCounts.size).toBe(0);
   });
 
   it('blocks oversized smart-create productName (400), invalid categoryId (400), and oversized payload (413) before provider', async () => {
@@ -656,5 +724,196 @@ describe('server-side input bounds before providers (400/413)', () => {
       jsonReq('/api/emoji/generate', { productName: 'Milk' }, 'en')
     );
     expect(imgRes.status).toBe(500);
+  });
+
+  it('returns localized 400 on invalid JSON across all four AI routes without leaking body content in diagnostics', async () => {
+    const secretMarker = 'secret_invalid_json_marker_xyz';
+    const rawInvalidBody = `{"productName": "${secretMarker}", invalid`;
+    const routes = [
+      {
+        fn: importTextRoute.POST,
+        path: '/api/lists/import-text',
+        ru: 'Некорректный запрос',
+        en: 'Invalid request',
+      },
+      {
+        fn: smartCreateRoute.POST,
+        path: '/api/products/smart-create',
+        ru: 'Некорректный запрос',
+        en: 'Invalid request',
+      },
+      {
+        fn: bulkImportRoute.POST,
+        path: '/api/products/bulk-import',
+        ru: 'Некорректный запрос',
+        en: 'Invalid request',
+      },
+      {
+        fn: emojiGenerateRoute.POST,
+        path: '/api/emoji/generate',
+        ru: 'Некорректный запрос',
+        en: 'Invalid request',
+      },
+    ];
+
+    for (const route of routes) {
+      for (const [locale, expectedError] of [
+        ['ru', route.ru],
+        ['en', route.en],
+      ] as const) {
+        const res = await route.fn(
+          new Request(new URL(route.path, 'http://localhost'), {
+            method: 'POST',
+            headers: { 'content-type': 'application/json', cookie: `NEXT_LOCALE=${locale}` },
+            body: rawInvalidBody,
+          })
+        );
+        expect(res.status).toBe(400);
+        const json = await res.json();
+        expect(json).toEqual({ error: expectedError });
+        expect(JSON.stringify(json)).not.toContain(secretMarker);
+      }
+    }
+
+    expect(doubles.textCalls).toHaveLength(0);
+    expect(doubles.googleImageCalls).toHaveLength(0);
+    expect(doubles.monthlyRows.size).toBe(0);
+    expect(doubles.dailyCounts.size).toBe(0);
+    expect(JSON.stringify(vi.mocked(console.error).mock.calls)).not.toContain(secretMarker);
+  });
+
+  it('preserves localized 413 when server-assembled prompt exceeds MAX_TEXT_PROMPT_BYTES across all text AI routes with zero provider calls and preserved daily limit', async () => {
+    // Make categories huge so smart-create and bulk-import assembled prompts exceed 120,000 bytes.
+    doubles.categories = Array.from({ length: 150 }, (_, i) => ({
+      id: `cat-${i}`,
+      name: `Категория-${i}-${'к'.repeat(500)}`,
+      nameEn: `Category-${i}-${'c'.repeat(500)}`,
+      order: i,
+    }));
+
+    // 1. smart-create (ru + en)
+    for (const [locale, expected] of [
+      ['ru', 'Запрос слишком большой'],
+      ['en', 'Request payload is too large'],
+    ] as const) {
+      const res = await smartCreateRoute.POST(
+        jsonReq('/api/products/smart-create', { productName: 'Молоко' }, locale)
+      );
+      expect(res.status).toBe(413);
+      expect(await res.json()).toEqual({ error: expected });
+    }
+
+    // 2. bulk-import (ru + en)
+    for (const [locale, expected] of [
+      ['ru', 'Запрос слишком большой'],
+      ['en', 'Request payload is too large'],
+    ] as const) {
+      const res = await bulkImportRoute.POST(
+        jsonReq('/api/products/bulk-import', { productNames: ['Молоко'] }, locale)
+      );
+      expect(res.status).toBe(413);
+      expect(await res.json()).toEqual({ error: expected });
+    }
+
+    // 3. import-text (ru + en) with huge catalog
+    doubles.categories = [{ id: 'cat-1', name: 'Молочное', nameEn: 'Dairy', order: 1 }];
+    doubles.catalogProducts = Array.from({ length: 200 }, (_, i) => ({
+      id: `prod-${i}`,
+      name: `Молоко-${i}-${'м'.repeat(400)}`,
+      nameEn: `Milk-${i}-${'m'.repeat(400)}`,
+      categoryId: 'cat-1',
+    }));
+    for (const [locale, expected] of [
+      ['ru', 'Запрос слишком большой'],
+      ['en', 'Request payload is too large'],
+    ] as const) {
+      const res = await importTextRoute.POST(
+        jsonReq('/api/lists/import-text', { text: 'Молоко', listId: 'list-1' }, locale)
+      );
+      expect(res.status).toBe(413);
+      expect(await res.json()).toEqual({ error: expected });
+    }
+
+    expect(doubles.textCalls).toHaveLength(0);
+    // Daily quota must remain unconsumed after prompt-limit rejection.
+    expect([...doubles.dailyCounts.values()].every((v) => v === 0)).toBe(true);
+
+    // Daily limit still blocks before assembling/running when exhausted.
+    process.env.AI_DAILY_CALLS_PER_ADMIN = '0';
+    const disabledRes = await importTextRoute.POST(
+      jsonReq('/api/lists/import-text', { text: 'Молоко', listId: 'list-1' }, 'en')
+    );
+    delete process.env.AI_DAILY_CALLS_PER_ADMIN;
+    expect(disabledRes.status).toBe(403);
+    expect(doubles.textCalls).toHaveLength(0);
+  });
+
+  it('records full actual overspend and fails closed with HTTP 500 across image and text routes when provider usage exceeds reserved ceiling', async () => {
+    doubles.googleImageBehavior.mockResolvedValueOnce({
+      candidates: [
+        {
+          finishReason: 'STOP',
+          content: { parts: [{ inlineData: { mimeType: 'image/png', data: VALID_PNG } }] },
+        },
+      ],
+      usageMetadata: {
+        promptTokenCount: 100,
+        candidatesTokenCount: 5_000, // exceeds 4,096 maxOutputTokens on gemini-3.1-flash-lite-image
+        totalTokenCount: 5_100,
+      },
+    });
+    const imgRes = await emojiGenerateRoute.POST(
+      jsonReq('/api/emoji/generate', { productName: 'Milk' }, 'en')
+    );
+    expect(imgRes.status).toBe(500);
+    expect(doubles.uploadCalls).toBe(0);
+    const [monthRow] = [...doubles.monthlyRows.values()];
+    expect(monthRow.reservedMicroUsd).toBe(BigInt(0));
+    expect(monthRow.spentMicroUsd).toBe(BigInt(Math.ceil(100 * 0.25) + Math.ceil(5_000 * 30)));
+
+    // smart-create Stage 2 overspend must NOT silently fall back to 200 OK; it fails closed (500).
+    doubles.monthlyRows.clear();
+    doubles.googleImageBehavior.mockResolvedValueOnce({
+      candidates: [
+        {
+          finishReason: 'STOP',
+          content: { parts: [{ inlineData: { mimeType: 'image/png', data: VALID_PNG } }] },
+        },
+      ],
+      usageMetadata: {
+        promptTokenCount: 100,
+        candidatesTokenCount: 5_000,
+        totalTokenCount: 5_100,
+      },
+    });
+    const smartRes = await smartCreateRoute.POST(
+      jsonReq('/api/products/smart-create', { productName: 'Тархун' }, 'en')
+    );
+    expect(smartRes.status).toBe(500);
+    expect(doubles.createdProducts).toHaveLength(0);
+
+    // Text route overspend (e.g. provider returns token counts above reserved text ceiling):
+    // records full actual spend, keeps daily limit intact, and fails closed with HTTP 500.
+    doubles.monthlyRows.clear();
+    doubles.dailyCounts.clear();
+    doubles.textBehavior.mockResolvedValueOnce({
+      text: JSON.stringify([
+        { nameRu: 'Молоко', nameEn: 'Milk', categoryName: 'Dairy', emoji: '🥛' },
+      ]),
+      usageMetadata: {
+        promptTokenCount: 50_000,
+        candidatesTokenCount: 10_000,
+        totalTokenCount: 60_000,
+      },
+    });
+    const importOverspendRes = await importTextRoute.POST(
+      jsonReq('/api/lists/import-text', { text: 'Молоко', listId: 'list-1' }, 'en')
+    );
+    expect(importOverspendRes.status).toBe(500);
+    const [textMonthRow] = [...doubles.monthlyRows.values()];
+    expect(textMonthRow.reservedMicroUsd).toBe(BigInt(0));
+    expect(textMonthRow.spentMicroUsd).toBe(
+      BigInt(Math.ceil(50_000 * 1.5) + Math.ceil(10_000 * 7.5))
+    );
   });
 });

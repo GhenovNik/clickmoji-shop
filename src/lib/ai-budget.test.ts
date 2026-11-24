@@ -89,7 +89,15 @@ vi.mock('@/lib/prisma', () => ({
 vi.mock('@google/genai', () => ({
   GoogleGenAI: class {
     models = {
-      generateContent: async (params: { model: string; contents: string }) => {
+      generateContent: async (params: {
+        model: string;
+        contents: string;
+        config?: { responseModalities?: string[] };
+      }) => {
+        if (params.config?.responseModalities?.includes('IMAGE')) {
+          dbState.sdkImageCalls.push({ provider: 'gemini', model: params.model });
+          return dbState.sdkImageBehavior(params);
+        }
         dbState.sdkTextCalls.push({ model: params.model, prompt: params.contents });
         return dbState.sdkTextBehavior(params);
       },
@@ -131,6 +139,7 @@ const {
   calculateTextOperationCostMicroUsd,
   estimateBulkProductsPromptTokens,
   estimateImageCallCeilingMicroUsd,
+  estimateShoppingListPromptTokens,
   estimateSmartProductPromptTokens,
   estimateTextAttemptCeilingMicroUsd,
   estimateTextCallCeilingMicroUsd,
@@ -142,7 +151,7 @@ const { runMonthlyBudgetedTextAiCall, runTextAiCall, MonthlyBudgetBlockedError }
 const { runImageAiCall } = await import('@/lib/image-ai-call');
 const { generateGoogleText } = await import('@/lib/services/google-text-generation');
 const { generateEmojiImage } = await import('@/lib/services/emoji-assets');
-const { buildBulkProductsPrompt, buildSmartProductPrompt } =
+const { buildBulkProductsPrompt, buildShoppingListPrompt, buildSmartProductPrompt } =
   await import('@/lib/services/ai-products');
 
 beforeEach(() => {
@@ -491,8 +500,9 @@ describe('cost calculation & provider reconciliation', () => {
     // input = 75; baseOutput = 4096; accounted = 4171; residual = 829 -> output = 4925
     expect(partialWithResidual).toBe(BigInt(Math.ceil(75 * 1.5) + Math.ceil(4925 * 7.5)));
 
-    // Gemini image generateContent reserves image output + maxThoughtTokens independently, so missing
-    // candidatesTokenCount with known thoughtsTokenCount stays within the reserved ceiling.
+    // Gemini image generateContent reserves all maxOutputTokens at imageOutputUsdPerMillion, so
+    // missing candidatesTokenCount with known thoughtsTokenCount bills remaining tokens (4096 - 500 = 3596)
+    // as potential image outputs and stays within the reserved ceiling.
     const imageMissingCandidatesWithThoughts = calculateImageAttemptCostMicroUsd({
       provider: 'gemini',
       model: 'gemini-3.1-flash-lite-image',
@@ -508,7 +518,7 @@ describe('cost calculation & provider reconciliation', () => {
       },
     });
     expect(imageMissingCandidatesWithThoughts).toBe(
-      BigInt(Math.ceil(60 * 0.25) + Math.ceil(1120 * 30) + Math.ceil(500 * 1.5))
+      BigInt(Math.ceil(60 * 0.25) + Math.ceil((4_096 - 500) * 30) + Math.ceil(500 * 1.5))
     );
     expect(imageMissingCandidatesWithThoughts).toBeLessThanOrEqual(
       estimateImageCallCeilingMicroUsd({
@@ -517,6 +527,53 @@ describe('cost calculation & provider reconciliation', () => {
         imageSize: '1K',
         aspectRatio: '1:1',
         outputCount: 1,
+        maxPromptTokens: promptBytes + IMAGE_PROMPT_FRAMING_TOKEN_OVERHEAD,
+      })
+    );
+
+    // Partial usage with candidatesTokenCount present but thoughtsTokenCount and totalTokenCount
+    // omitted conservatively bills remaining (maxOutputTokens - candidatesTokenCount) at textOutputUsdPerMillion.
+    const imageMissingThoughtsWithoutTotal = calculateImageAttemptCostMicroUsd({
+      provider: 'gemini',
+      model: 'gemini-3.1-flash-lite-image',
+      promptChars: prompt.length,
+      promptBytes,
+      imageSize: '1K',
+      aspectRatio: '1:1',
+      outputCount: 1,
+      outcome: 'ok',
+      googleUsageMetadata: {
+        promptTokenCount: 60,
+        candidatesTokenCount: 1_120,
+      },
+    });
+    expect(imageMissingThoughtsWithoutTotal).toBe(
+      BigInt(Math.ceil(60 * 0.25) + Math.ceil(1_120 * 30) + Math.ceil((4_096 - 1_120) * 1.5))
+    );
+    expect(imageMissingThoughtsWithoutTotal).toBeLessThanOrEqual(
+      estimateImageCallCeilingMicroUsd({
+        provider: 'gemini',
+        model: 'gemini-3.1-flash-lite-image',
+        maxPromptTokens: promptBytes + IMAGE_PROMPT_FRAMING_TOKEN_OVERHEAD,
+      })
+    );
+
+    // Completely missing usageMetadata on Gemini generateContent image accounts full maxOutputTokens
+    // at imageOutputUsdPerMillion plus UTF-8 byte input bound.
+    const imageMissingAllUsage = calculateImageAttemptCostMicroUsd({
+      provider: 'gemini',
+      model: 'gemini-3.1-flash-lite-image',
+      promptChars: prompt.length,
+      promptBytes,
+      imageSize: '1K',
+      aspectRatio: '1:1',
+      outputCount: 1,
+      outcome: 'ok',
+    });
+    expect(imageMissingAllUsage).toBe(
+      estimateImageCallCeilingMicroUsd({
+        provider: 'gemini',
+        model: 'gemini-3.1-flash-lite-image',
         maxPromptTokens: promptBytes + IMAGE_PROMPT_FRAMING_TOKEN_OVERHEAD,
       })
     );
@@ -694,6 +751,136 @@ describe('cost calculation & provider reconciliation', () => {
     expect(estimateBulkProductsPromptTokens({ productNames, categories })).toBeGreaterThanOrEqual(
       promptTokenUpperBound(bulkPrompt, TEXT_PROMPT_FRAMING_TOKEN_OVERHEAD)
     );
+
+    const catalog = Array.from({ length: 40 }, (_, i) => ({
+      id: `prod-${i}`,
+      name: `Товар ${i} Молочный`,
+      nameEn: `Product ${i} Dairy`,
+      categoryName: `Категория ${i % 20}`,
+    }));
+    const listText = 'Молоко 2л\nХлеб белый\nЯйца 10 шт';
+    const listPrompt = buildShoppingListPrompt({ text: listText, categories, catalog });
+    expect(
+      estimateShoppingListPromptTokens({ text: listText, categories, catalog })
+    ).toBeGreaterThanOrEqual(promptTokenUpperBound(listPrompt, TEXT_PROMPT_FRAMING_TOKEN_OVERHEAD));
+  });
+
+  it('reconciles full actual spend and fails closed with MonthlyBudgetAccountingError when mocked Gemini image provider emits missing, partial, multi-image, or overspend usage', async () => {
+    const validPng = Buffer.concat([
+      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+      Buffer.from('fake-png-bytes'),
+    ]).toString('base64');
+    const monthKey = startOfUtcMonth(new Date()).toISOString();
+    vi.stubEnv(AI_MONTHLY_BUDGET_USD_ENV, '1.00');
+
+    // 1. Multi-image response (3 images = 3360 tokens + 200 thoughts) stays within 4096 * $30/1M ceiling.
+    dbState.sdkImageBehavior.mockResolvedValueOnce({
+      candidates: [
+        {
+          finishReason: 'STOP',
+          content: {
+            parts: [
+              { inlineData: { mimeType: 'image/png', data: validPng } },
+              { inlineData: { mimeType: 'image/png', data: validPng } },
+              { inlineData: { mimeType: 'image/png', data: validPng } },
+            ],
+          },
+        },
+      ],
+      usageMetadata: {
+        promptTokenCount: 80,
+        candidatesTokenCount: 3_360,
+        thoughtsTokenCount: 200,
+        totalTokenCount: 3_640,
+      },
+    });
+    await runImageAiCall({ id: 'admin-1', role: 'ADMIN' }, 'en', () =>
+      generateEmojiImage({ productName: 'Milk' })
+    );
+    const expectedMultiImageCost = BigInt(
+      Math.ceil(80 * 0.25) + Math.ceil(3_360 * 30) + Math.ceil(200 * 1.5)
+    );
+    expect(dbState.rows.get(monthKey)).toEqual({
+      reservedMicroUsd: ZERO,
+      spentMicroUsd: expectedMultiImageCost,
+    });
+
+    // 2. Completely missing usageMetadata on ok response records full maxOutputTokens ceiling (not 1 image).
+    dbState.rows.clear();
+    dbState.sdkImageBehavior.mockResolvedValueOnce({
+      candidates: [
+        {
+          finishReason: 'STOP',
+          content: { parts: [{ inlineData: { mimeType: 'image/png', data: validPng } }] },
+        },
+      ],
+    });
+    const outMissing = await runImageAiCall({ id: 'admin-1', role: 'ADMIN' }, 'en', () =>
+      generateEmojiImage({ productName: 'Milk' })
+    );
+    expect(outMissing).toMatchObject({ model: 'gemini-3.1-flash-lite-image' });
+    const rowAfterMissing = dbState.rows.get(monthKey)!;
+    expect(rowAfterMissing.reservedMicroUsd).toBe(ZERO);
+    expect(rowAfterMissing.spentMicroUsd).toBeGreaterThan(BigInt(122_880));
+
+    // 3. Overspend reported by mocked usageMetadata: records full actual spend, releases reserve, then fails closed.
+    dbState.rows.clear();
+    dbState.sdkImageBehavior.mockResolvedValueOnce({
+      candidates: [
+        {
+          finishReason: 'STOP',
+          content: { parts: [{ inlineData: { mimeType: 'image/png', data: validPng } }] },
+        },
+      ],
+      usageMetadata: {
+        promptTokenCount: 100,
+        candidatesTokenCount: 5_000, // exceeds 4096 maxOutputTokens ceiling
+        thoughtsTokenCount: 200,
+        totalTokenCount: 5_300,
+      },
+    });
+    await expect(
+      runImageAiCall({ id: 'admin-1', role: 'ADMIN' }, 'en', () =>
+        generateEmojiImage({ productName: 'Milk' })
+      )
+    ).rejects.toMatchObject({
+      name: 'MonthlyBudgetAccountingError',
+      reason: 'overspend_above_ceiling',
+    });
+    const expectedOverspend = BigInt(
+      Math.ceil(100 * 0.25) + Math.ceil(5_000 * 30) + Math.ceil(200 * 1.5)
+    );
+    expect(dbState.rows.get(monthKey)).toEqual({
+      reservedMicroUsd: ZERO,
+      spentMicroUsd: expectedOverspend,
+    });
+
+    // 4. Overspend without usageMetadata (e.g. 5 final image parts emitted -> 5 * 1120 = 5600 > 4096)
+    // accounts full 5600 * $30/1M and fails closed.
+    dbState.rows.clear();
+    dbState.sdkImageBehavior.mockResolvedValueOnce({
+      candidates: [
+        {
+          finishReason: 'STOP',
+          content: {
+            parts: Array.from({ length: 5 }, () => ({
+              inlineData: { mimeType: 'image/png', data: validPng },
+            })),
+          },
+        },
+      ],
+    });
+    await expect(
+      runImageAiCall({ id: 'admin-1', role: 'ADMIN' }, 'en', () =>
+        generateEmojiImage({ productName: 'Milk' })
+      )
+    ).rejects.toMatchObject({
+      name: 'MonthlyBudgetAccountingError',
+      reason: 'overspend_above_ceiling',
+    });
+    const rowAfterMultiPartOverspend = dbState.rows.get(monthKey)!;
+    expect(rowAfterMultiPartOverspend.reservedMicroUsd).toBe(ZERO);
+    expect(rowAfterMultiPartOverspend.spentMicroUsd).toBeGreaterThan(BigInt(5_600 * 30));
   });
 
   it('rejects unknown image bounds (model, size, quality, imageSize, outputCount) before DB reservation or SDK call', async () => {
@@ -742,7 +929,7 @@ describe('cost calculation & provider reconciliation', () => {
       })
     ).toThrow(/Invalid image output count/);
 
-    // Verify Imagen & Gemini scaling with dimensions / outputCount
+    // Verify Imagen & Gemini scaling with model output limits and outputCount
     expect(
       estimateImageCallCeilingMicroUsd({
         provider: 'gemini',
@@ -753,15 +940,13 @@ describe('cost calculation & provider reconciliation', () => {
     expect(
       estimateImageCallCeilingMicroUsd({
         provider: 'gemini',
-        model: 'gemini-3.1-flash-image',
-        imageSize: '4K',
+        model: 'gemini-3-pro-image',
         maxPromptTokens: 100,
       })
     ).toBeGreaterThan(
       estimateImageCallCeilingMicroUsd({
         provider: 'gemini',
         model: 'gemini-3.1-flash-image',
-        imageSize: '0.5K',
         maxPromptTokens: 100,
       })
     );
@@ -769,14 +954,12 @@ describe('cost calculation & provider reconciliation', () => {
       estimateImageCallCeilingMicroUsd({
         provider: 'gemini',
         model: 'gemini-3.1-flash-image',
-        imageSize: '1K',
         maxPromptTokens: 100,
       })
     ).toBeGreaterThan(
       estimateImageCallCeilingMicroUsd({
         provider: 'gemini',
         model: 'gemini-3.1-flash-lite-image',
-        imageSize: '1K',
         maxPromptTokens: 100,
       })
     );

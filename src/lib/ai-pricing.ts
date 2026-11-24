@@ -58,7 +58,9 @@ type GoogleGenerateContentImageSpec = {
   imageSizeTokens: Record<string, number>;
   defaultImageSize: string;
   supportedAspectRatios: readonly string[];
-  maxThoughtTokens: number;
+  // Documented hard output-token ceiling passed as `maxOutputTokens` on `generateContent`
+  // (covers combined candidate outputs, including multiple images, and thinking tokens).
+  maxOutputTokens: number;
   maxOutputCount: number;
 };
 
@@ -94,7 +96,7 @@ const SUPPORTED_IMAGE_MODEL_SPECS: Record<string, SupportedImageModelSpec> = {
     defaultImageSize: '1K',
     supportedAspectRatios: ['1:1'],
     // Official model output token limit (https://ai.google.dev/gemini-api/docs/models/gemini-3.1-flash-lite-image).
-    maxThoughtTokens: 4_096,
+    maxOutputTokens: 4_096,
     maxOutputCount: 1,
   },
   'gemini-3.1-flash-image': {
@@ -106,7 +108,7 @@ const SUPPORTED_IMAGE_MODEL_SPECS: Record<string, SupportedImageModelSpec> = {
     imageSizeTokens: { '0.5K': 747, '1K': 1_120, '2K': 1_680, '4K': 2_520 },
     defaultImageSize: '1K',
     supportedAspectRatios: ['1:1'],
-    maxThoughtTokens: 32_768,
+    maxOutputTokens: 32_768,
     maxOutputCount: 1,
   },
   'gemini-2.5-flash-image': {
@@ -119,7 +121,7 @@ const SUPPORTED_IMAGE_MODEL_SPECS: Record<string, SupportedImageModelSpec> = {
     defaultImageSize: '1K',
     supportedAspectRatios: ['1:1'],
     // Thinking is not supported on gemini-2.5-flash-image; 32,768 is the documented output limit.
-    maxThoughtTokens: 32_768,
+    maxOutputTokens: 32_768,
     maxOutputCount: 1,
   },
   'gemini-2.5-flash-image-preview': {
@@ -131,7 +133,7 @@ const SUPPORTED_IMAGE_MODEL_SPECS: Record<string, SupportedImageModelSpec> = {
     imageSizeTokens: { '1K': 1_290 },
     defaultImageSize: '1K',
     supportedAspectRatios: ['1:1'],
-    maxThoughtTokens: 32_768,
+    maxOutputTokens: 32_768,
     maxOutputCount: 1,
   },
   'gemini-3-pro-image': {
@@ -143,7 +145,7 @@ const SUPPORTED_IMAGE_MODEL_SPECS: Record<string, SupportedImageModelSpec> = {
     imageSizeTokens: { '1K': 1_120, '2K': 1_120, '4K': 2_000 },
     defaultImageSize: '1K',
     supportedAspectRatios: ['1:1'],
-    maxThoughtTokens: 32_768,
+    maxOutputTokens: 32_768,
     maxOutputCount: 1,
   },
   'imagen-4.0-generate-001': {
@@ -226,6 +228,7 @@ export type RecordedImageAttempt = {
   imageSize?: string;
   aspectRatio?: string;
   outputCount?: number;
+  finalImagePartsCount?: number;
   outcome: AttemptOutcome;
   googleUsageMetadata?: GoogleUsageMetadataLike;
   openaiUsage?: OpenAIImageUsageLike;
@@ -357,6 +360,37 @@ export function estimateBulkProductsPromptTokens({
     0
   );
   const inputBytes = namesBytes + categoryBytes + 2_000;
+  return promptTokenUpperBoundFromBytes(inputBytes, TEXT_PROMPT_FRAMING_TOKEN_OVERHEAD);
+}
+
+export function estimateShoppingListPromptTokens({
+  text,
+  categories,
+  catalog,
+}: {
+  text: string;
+  categories: Array<{ name: string; nameEn: string }>;
+  catalog: Array<{ id: string; name: string; nameEn: string; categoryName: string }>;
+}): number {
+  const categoryBytes = categories.reduce(
+    (sum, category) =>
+      sum +
+      Buffer.byteLength(category.name, 'utf8') +
+      Buffer.byteLength(category.nameEn, 'utf8') +
+      120,
+    0
+  );
+  const catalogBytes = catalog.reduce(
+    (sum, product) =>
+      sum +
+      Buffer.byteLength(product.id, 'utf8') +
+      Buffer.byteLength(product.name, 'utf8') +
+      Buffer.byteLength(product.nameEn, 'utf8') +
+      Buffer.byteLength(product.categoryName, 'utf8') +
+      32,
+    0
+  );
+  const inputBytes = Buffer.byteLength(text, 'utf8') + categoryBytes + catalogBytes + 2_500;
   return promptTokenUpperBoundFromBytes(inputBytes, TEXT_PROMPT_FRAMING_TOKEN_OVERHEAD);
 }
 
@@ -561,6 +595,7 @@ export type ResolvedImagePricingConfig = {
   imageSize?: string;
   aspectRatio?: string;
   outputCount: number;
+  maxOutputTokens?: number;
   maxPromptTokens: number;
   ceilingMicroUsd: bigint;
 };
@@ -668,10 +703,12 @@ export function resolveImagePricingConfig(options?: {
     );
   }
 
+  // Google generateContent image model: `generateContent` does not guarantee a single output image,
+  // while `maxOutputTokens` strictly bounds combined candidate + thinking tokens and
+  // `imageOutputUsdPerMillion >= textOutputUsdPerMillion` for every model.
   const ceilingMicroUsd =
     usdPerMillionToMicroUsd(maxPromptTokens, spec.inputUsdPerMillion) +
-    usdPerMillionToMicroUsd(tokensPerImage * outputCount, spec.imageOutputUsdPerMillion) +
-    usdPerMillionToMicroUsd(spec.maxThoughtTokens, spec.textOutputUsdPerMillion);
+    usdPerMillionToMicroUsd(spec.maxOutputTokens, spec.imageOutputUsdPerMillion);
 
   return {
     ...active,
@@ -679,6 +716,7 @@ export function resolveImagePricingConfig(options?: {
     imageSize,
     aspectRatio,
     outputCount,
+    maxOutputTokens: spec.maxOutputTokens,
     maxPromptTokens,
     ceilingMicroUsd,
   };
@@ -699,6 +737,8 @@ export function estimateImageCallCeilingMicroUsd(options?: {
 }
 
 export function calculateImageAttemptCostMicroUsd(attempt: RecordedImageAttempt): bigint {
+  const effectiveOutputCount = attempt.outputCount ?? DEFAULT_OUTPUT_COUNT;
+  const specLookup = SUPPORTED_IMAGE_MODEL_SPECS[attempt.model];
   const config = resolveImagePricingConfig({
     provider: attempt.provider,
     model: attempt.model,
@@ -706,7 +746,10 @@ export function calculateImageAttemptCostMicroUsd(attempt: RecordedImageAttempt)
     quality: attempt.quality,
     imageSize: attempt.imageSize,
     aspectRatio: attempt.aspectRatio,
-    outputCount: attempt.outputCount,
+    outputCount:
+      specLookup?.adapter === 'generateImages'
+        ? Math.min(effectiveOutputCount, specLookup.maxOutputCount)
+        : attempt.outputCount,
     maxPromptTokens: attemptInputTokenUpperBound(attempt, IMAGE_PROMPT_FRAMING_TOKEN_OVERHEAD),
   });
 
@@ -714,7 +757,8 @@ export function calculateImageAttemptCostMicroUsd(attempt: RecordedImageAttempt)
     if (attempt.outcome === 'rejected') {
       return ZERO_MICRO_USD;
     }
-    return config.spec.perImageMicroUsd * BigInt(config.outputCount);
+    const billedCount = Math.max(config.outputCount, effectiveOutputCount);
+    return config.spec.perImageMicroUsd * BigInt(billedCount);
   }
 
   // Google generateContent image model
@@ -744,19 +788,29 @@ export function calculateImageAttemptCostMicroUsd(attempt: RecordedImageAttempt)
   const tokensPerImage =
     spec.imageSizeTokens[config.imageSize ?? spec.defaultImageSize] ??
     spec.imageSizeTokens[spec.defaultImageSize];
-  const fallbackImageTokens = tokensPerImage * config.outputCount;
 
   const effectivePromptTokens =
     promptTokens ?? attemptInputTokenUpperBound(attempt, IMAGE_PROMPT_FRAMING_TOKEN_OVERHEAD);
   const effectiveInputTokens = effectivePromptTokens + (toolTokens ?? 0);
 
-  const effectiveCandidatesTokens = candidatesTokens ?? fallbackImageTokens;
-  const effectiveThoughtsTokens =
-    thoughtsTokens !== undefined
-      ? thoughtsTokens
-      : attempt.outcome === 'ok' && candidatesTokens !== undefined
-        ? 0
-        : spec.maxThoughtTokens;
+  let effectiveCandidatesTokens: number;
+  let effectiveThoughtsTokens: number;
+  if (candidatesTokens === undefined) {
+    effectiveThoughtsTokens = thoughtsTokens ?? 0;
+    const partsLowerBound = (attempt.finalImagePartsCount ?? 0) * tokensPerImage;
+    effectiveCandidatesTokens = Math.max(
+      Math.max(0, spec.maxOutputTokens - effectiveThoughtsTokens),
+      partsLowerBound
+    );
+  } else {
+    effectiveCandidatesTokens = candidatesTokens;
+    effectiveThoughtsTokens =
+      thoughtsTokens !== undefined
+        ? thoughtsTokens
+        : totalTokens !== undefined
+          ? 0
+          : Math.max(0, spec.maxOutputTokens - effectiveCandidatesTokens);
+  }
 
   const accounted = effectiveInputTokens + effectiveCandidatesTokens + effectiveThoughtsTokens;
   const residual =

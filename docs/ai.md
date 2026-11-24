@@ -70,7 +70,7 @@ validates it against the verified priced allowlist in `src/lib/ai-pricing.ts`
 - `gemini-3.1-flash-lite-image`, `gemini-3.1-flash-image`, `gemini-2.5-flash-image`,
   `gemini-2.5-flash-image-preview`, `gemini-3-pro-image` →
   `models.generateContent({ model, contents: prompt, config: { responseModalities: ['IMAGE'],
-imageConfig: { aspectRatio: '1:1' } } })`
+maxOutputTokens: <model output limit>, imageConfig: { aspectRatio: '1:1' } } })`
 - anything else (including unpriced/unknown-bound model IDs, uppercase, spaces, newlines, or
   unsupported dimensions/quality/output count) → configuration error naming `GOOGLE_IMAGE_MODEL` or
   `IMAGEN_MODEL` before budget reservation or SDK construction
@@ -377,28 +377,33 @@ In addition to the per-user daily call counters, all paid HTTP AI routes and the
   (`src/lib/image-ai-call.ts`) validate that the active configuration has an enforceable cost
   ceiling (`src/lib/ai-pricing.ts`, tied to verified Google models, UTF-8 byte input bounds of the
   sent request, `maxOutputTokens = 4096` combined cap on `candidates + thoughts` for up to 3 text
-  attempts including `GOOGLE_TEXT_MODEL_FALLBACK`, and documented output limits on Google image
-  models). Unbounded configurations (`AI_PROVIDER=gpt-image` / `OPENAI_IMAGE_MODEL`) fail closed
+  attempts including `GOOGLE_TEXT_MODEL_FALLBACK`, and the applied `maxOutputTokens` cap priced at
+  `imageOutputUsdPerMillion` for Gemini `generateContent` image models / `numberOfImages: 1` for
+  Imagen `generateImages`). Unbounded configurations (`AI_PROVIDER=gpt-image` / `OPENAI_IMAGE_MODEL`) fail closed
   before DB reservation or SDK construction with HTTP `503` (`api.aiQuota.unavailable`) on image
   generation, while preserving bounded Google text functionality (including Stage 1 of
   `smart-create`). Execution adapters verify sent prompt bounds and model configuration match the
   active reservation before calling any SDK.
   After the provider settles, the reservation is reconciled against actual reported usage
   (`usageMetadata` for Gemini `generateContent`) or conservative per-component/per-attempt bounds
-  when usage is missing or partial (including remaining combined output bound
-  `max(0, MAX_TEXT_OUTPUT_TOKENS - thoughtsTokenCount)` when `candidatesTokenCount` is omitted with
-  known `thoughtsTokenCount`, UTF-8 byte bounds for missing input, and residual `totalTokenCount`
-  billing); pre-SDK failures and explicit rejections
-  (`400`/`401`/`403`/`404`/`422`/`429`/`RESOURCE_EXHAUSTED`) record `$0`, while ambiguous upstream
-  failures (`408`/`500`/`502`/`503`/`504`/`UNAVAILABLE`/`TIMEOUT`) are treated as potentially billed.
+  when usage is missing or partial (including remaining `maxOutputTokens` priced at
+  `imageOutputUsdPerMillion` when `candidatesTokenCount` is omitted on Gemini image calls,
+  remaining combined output bound `max(0, MAX_TEXT_OUTPUT_TOKENS - thoughtsTokenCount)` when
+  `candidatesTokenCount` is omitted with known `thoughtsTokenCount` on text calls, UTF-8 byte
+  bounds for missing input, and residual `totalTokenCount` billing); pre-SDK failures and explicit
+  rejections (`400`/`401`/`403`/`404`/`422`/`429`/`RESOURCE_EXHAUSTED`) record `$0`, while
+  ambiguous upstream failures (`408`/`500`/`502`/`503`/`504`/`UNAVAILABLE`/`TIMEOUT`) are treated as
+  potentially billed.
 - **Fail-closed accounting**: if `ai_monthly_budgets` cannot be read or updated at reservation time,
   the request fails closed with HTTP `503` and a localized AI-only unavailability message; non-AI
   routes remain unaffected. Reconciliation requires a matching row with `"reservedMicroUsd" >=
-ceilingMicroUsd` (no `GREATEST` clamping) and propagates `MonthlyBudgetAccountingError` on zero
-  matched rows or DB failure.
+ceilingMicroUsd` (no `GREATEST` clamping), records full `actualMicroUsd` on overspend, and
+  propagates `MonthlyBudgetAccountingError` on zero matched rows, DB failure, or actual spend
+  exceeding the reserved ceiling (`overspend_above_ceiling`).
 - **Server-side input bounds before providers**:
-  - `POST /api/lists/import-text`: `text` <= 2000 chars (`400`); defense-in-depth prompt cap in
-    `src/lib/services/ai-products.ts`.
+  - `POST /api/lists/import-text`: body <= 16 KiB (`413`, invalid JSON `400`), `text` <= 2000 chars
+    (`400`), `listId` validated against `^[a-zA-Z0-9_-]{1,64}$` (`400`), and assembled prompt cap
+    (`413`) in `src/lib/services/ai-products.ts`.
   - `POST /api/products/smart-create`: body <= 8 KiB (`413`), `productName` <= 120 chars (`400`),
     optional `categoryId` validated against `^[a-zA-Z0-9_-]{1,64}$` (`400`).
   - `POST /api/products/bulk-import`: body <= 32 KiB (`413`), `productNames` <= 50 items, each

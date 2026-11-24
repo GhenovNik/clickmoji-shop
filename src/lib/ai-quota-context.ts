@@ -18,6 +18,7 @@ export type ImageReservationBounds = {
   provider: EmojiProvider;
   model: string;
   maxPromptTokens: number;
+  maxOutputTokens?: number;
   size?: string;
   quality?: string;
   imageSize?: string;

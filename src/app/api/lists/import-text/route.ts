@@ -1,4 +1,11 @@
 import { NextResponse } from 'next/server';
+import {
+  AI_INPUT_LIMITS,
+  AiInputTooLargeError,
+  CATEGORY_ID_PATTERN,
+  readBoundedJsonBody,
+} from '@/lib/ai-input-validation';
+import { estimateShoppingListPromptTokens } from '@/lib/ai-pricing';
 import { prisma } from '@/lib/prisma';
 import { localizedName } from '@/lib/catalog-name';
 import { requireUser } from '@/lib/auth-guards';
@@ -37,22 +44,34 @@ export async function POST(request: Request) {
     if (guard instanceof Response) return guard;
     const { session } = guard;
 
-    const body = await request.json();
-    const { text, listId } = body;
+    const parsedBody = await readBoundedJsonBody({
+      request,
+      maxBytes: AI_INPUT_LIMITS.IMPORT_TEXT_BODY_MAX_BYTES,
+      locale,
+      namespace: 'import',
+    });
+    if (!parsedBody.ok) return parsedBody.response;
 
-    if (!text || typeof text !== 'string') {
+    const { text: rawText, listId: rawListId } = parsedBody.body;
+
+    if (typeof rawText !== 'string' || rawText.trim().length === 0) {
       return NextResponse.json({ error: t('api.import.textRequired') }, { status: 400 });
     }
+    const text = rawText;
 
-    if (text.length > 2000) {
+    if (text.length > AI_INPUT_LIMITS.MAX_IMPORT_TEXT_CHARS) {
       return NextResponse.json(
-        { error: t('api.import.textTooLong', { max: 2000 }) },
+        { error: t('api.import.textTooLong', { max: AI_INPUT_LIMITS.MAX_IMPORT_TEXT_CHARS }) },
         { status: 400 }
       );
     }
 
-    if (!listId) {
+    if (typeof rawListId !== 'string' || rawListId.trim().length === 0) {
       return NextResponse.json({ error: t('api.import.listIdRequired') }, { status: 400 });
+    }
+    const listId = rawListId.trim();
+    if (!CATEGORY_ID_PATTERN.test(listId)) {
+      return NextResponse.json({ error: t('api.import.invalidRequest') }, { status: 400 });
     }
 
     const userLimit = await checkRateLimit({
@@ -117,8 +136,17 @@ export async function POST(request: Request) {
 
     const promptCatalog = selectCatalogForPrompt(catalog, text);
 
-    const analysis = await runTextAiCall(session.user, locale, () =>
-      parseShoppingListText({ apiKey, text, categories, catalog: promptCatalog })
+    const analysis = await runTextAiCall(
+      session.user,
+      locale,
+      () => parseShoppingListText({ apiKey, text, categories, catalog: promptCatalog }),
+      {
+        maxPromptTokens: estimateShoppingListPromptTokens({
+          text,
+          categories,
+          catalog: promptCatalog,
+        }),
+      }
     );
     if (analysis instanceof Response) return analysis;
     const { products: parsedProducts, invalid: invalidEntries, promptVersion, model } = analysis;
@@ -258,6 +286,9 @@ export async function POST(request: Request) {
       results,
     });
   } catch (error) {
+    if (error instanceof AiInputTooLargeError) {
+      return NextResponse.json({ error: t('api.import.payloadTooLarge') }, { status: 413 });
+    }
     console.error('Error importing list:', textAiErrorCode(error));
     return NextResponse.json({ error: t('api.import.importFailed') }, { status: 500 });
   }

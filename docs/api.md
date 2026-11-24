@@ -197,7 +197,7 @@ All endpoints are implemented as Next.js Route Handlers under `src/app/api`.
 ### `POST /api/lists/import-text`
 
 - Auth: signed in
-- Body: `text`, `listId`
+- Body: `text` (<= 2000 chars), `listId` (`^[a-zA-Z0-9_-]{1,64}$`); payload <= 16 KiB (`400`/`413`)
 - Notes: Gemini parses, creates missing products, adds items. The prompt carries the visible catalog
   (id, name, nameEn, category; above 400 products only those sharing a word with the text) and the
   model may return `existingProductId` instead of a new proposal; an id outside the visible catalog

@@ -171,7 +171,11 @@ describe('AC-4 generateContent request shape and image part selection', () => {
     expect(sdk.generateContentCalls[0]).toEqual({
       model: 'gemini-3.1-flash-image',
       contents: getEmojiGenerationPrompt(PRODUCT, DESCRIPTION),
-      config: { responseModalities: ['IMAGE'], imageConfig: { aspectRatio: '1:1' } },
+      config: {
+        responseModalities: ['IMAGE'],
+        maxOutputTokens: 32_768,
+        imageConfig: { aspectRatio: '1:1' },
+      },
     });
   });
 

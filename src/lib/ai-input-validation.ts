@@ -5,6 +5,7 @@ import { getServerTranslator } from '@/lib/auth-security';
 export const AI_INPUT_LIMITS = {
   SMART_CREATE_BODY_MAX_BYTES: 8_192,
   EMOJI_GENERATE_BODY_MAX_BYTES: 16_384,
+  IMPORT_TEXT_BODY_MAX_BYTES: 16_384,
   BULK_IMPORT_BODY_MAX_BYTES: 32_768,
   MAX_PRODUCT_NAME_LENGTH: 120,
   MAX_CATEGORY_ID_LENGTH: 64,
@@ -29,7 +30,7 @@ export class AiInputTooLargeError extends Error {
   }
 }
 
-type BoundedBodyNamespace = 'products' | 'errors';
+type BoundedBodyNamespace = 'products' | 'errors' | 'import';
 
 async function readUtf8BodyWithinLimit(request: Request, maxBytes: number): Promise<string | null> {
   const contentLengthHeader = request.headers.get('content-length');
@@ -93,7 +94,15 @@ export async function readBoundedJsonBody({
     };
   }
 
-  const parsed: unknown = JSON.parse(rawText);
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(rawText);
+  } catch {
+    return {
+      ok: false,
+      response: NextResponse.json({ error: t(`api.${namespace}.invalidRequest`) }, { status: 400 }),
+    };
+  }
 
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
     return {

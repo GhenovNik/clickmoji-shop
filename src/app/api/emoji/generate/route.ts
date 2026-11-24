@@ -1,6 +1,10 @@
 import { NextResponse } from 'next/server';
 import { apiText } from '@/lib/api-messages';
-import { AI_INPUT_LIMITS, readBoundedJsonBody } from '@/lib/ai-input-validation';
+import {
+  AI_INPUT_LIMITS,
+  AiInputTooLargeError,
+  readBoundedJsonBody,
+} from '@/lib/ai-input-validation';
 import { estimateEmojiPromptTokens } from '@/lib/ai-pricing';
 import { requireAdmin } from '@/lib/auth-guards';
 import { checkRateLimit, getRequestLocale, rateLimitResponse } from '@/lib/auth-security';
@@ -115,6 +119,12 @@ export async function POST(request: Request) {
       if (generation instanceof Response) return generation;
       generated = generation;
     } catch (error) {
+      if (error instanceof AiInputTooLargeError) {
+        return NextResponse.json(
+          { error: await apiText(request, 'payloadTooLarge') },
+          { status: 413 }
+        );
+      }
       // FR-10: the log carries allowlisted fields only, never the SDK message, body or cause.
       console.error('Error generating AI emoji:', summarizeEmojiGenerationFailure(error));
       if (error instanceof EmojiProviderUnavailableError) {
