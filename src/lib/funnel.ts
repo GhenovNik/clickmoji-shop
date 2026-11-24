@@ -164,13 +164,14 @@ export async function recordFunnelEvent(input: RecordFunnelEventInput): Promise<
     return false;
   }
 
-  const funnelEvent = (prisma as unknown as { funnelEvent?: FunnelEventDelegateLike }).funnelEvent;
-  if (!funnelEvent || typeof funnelEvent.create !== 'function') {
-    return false;
-  }
-
+  let funnelEvent: FunnelEventDelegateLike | undefined;
   let recorded = false;
   try {
+    funnelEvent = (prisma as unknown as { funnelEvent?: FunnelEventDelegateLike }).funnelEvent;
+    if (!funnelEvent || typeof funnelEvent.create !== 'function') {
+      logFunnelWriteFailure('record', input.type, new Error('Funnel event storage unavailable'));
+      return false;
+    }
     await funnelEvent.create({
       data: {
         type: input.type,
@@ -183,7 +184,7 @@ export async function recordFunnelEvent(input: RecordFunnelEventInput): Promise<
     logFunnelWriteFailure('record', input.type, error);
   }
 
-  if (input.correlateGuest && userId && guestId && typeof funnelEvent.updateMany === 'function') {
+  if (input.correlateGuest && userId && guestId && funnelEvent?.updateMany) {
     try {
       await funnelEvent.updateMany({
         where: {

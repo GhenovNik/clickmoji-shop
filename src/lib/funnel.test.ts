@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { NextRequest } from 'next/server';
+import { prisma } from '@/lib/prisma';
 import { aggregateFunnelWindow, type FunnelEventRecord } from './funnel-analytics';
 
 const doubles = vi.hoisted(() => ({
@@ -14,9 +15,11 @@ const doubles = vi.hoisted(() => ({
 
 vi.mock('@/lib/prisma', () => ({
   prisma: {
-    funnelEvent: {
-      create: doubles.funnelCreate,
-      updateMany: doubles.funnelUpdateMany,
+    get funnelEvent() {
+      return {
+        create: doubles.funnelCreate,
+        updateMany: doubles.funnelUpdateMany,
+      };
     },
   },
 }));
@@ -316,6 +319,27 @@ describe('direct entry visit tracking (proxy)', () => {
     const response = await proxy(new NextRequest('http://localhost/register'));
 
     expect(response.cookies.get(FUNNEL_GUEST_COOKIE)?.value).toBeTruthy();
+  });
+
+  it('keeps the response and cookie when analytics storage initialization fails', async () => {
+    const delegate = vi.spyOn(prisma, 'funnelEvent', 'get').mockImplementationOnce(() => {
+      throw new Error('private connection details');
+    });
+
+    try {
+      const response = await proxy(new NextRequest('http://localhost/register'));
+
+      expect(response.headers.get('x-middleware-next')).toBe('1');
+      expect(verifyGuestToken(response.cookies.get(FUNNEL_GUEST_COOKIE)?.value)).toBeTruthy();
+      expect(doubles.funnelCreate).not.toHaveBeenCalled();
+      expect(console.error).toHaveBeenCalledWith('Funnel write failed:', {
+        action: 'record',
+        type: 'VISIT',
+        errorName: 'Error',
+      });
+    } finally {
+      delegate.mockRestore();
+    }
   });
 
   it('does not record VISIT for non-entry routes', async () => {
