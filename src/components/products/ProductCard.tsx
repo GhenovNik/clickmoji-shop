@@ -4,7 +4,8 @@ import { useState } from 'react';
 import Image from 'next/image';
 import { useLocale, useTranslations } from 'next-intl';
 import type { Product } from '@/hooks/useProductSelection';
-import { localizedName } from '@/lib/catalog-name';
+import { localizedName, namesOf } from '@/lib/catalog-name';
+import { LocalizedName } from '@/components/ui/LocalizedName';
 import { productImageUrl } from '@/lib/product-image';
 import { productNameClassName } from './product-name';
 import VariantMenu from './VariantMenu';
@@ -81,8 +82,6 @@ export default function ProductCard({
   const locale = useLocale();
   const [variantsOpen, setVariantsOpen] = useState(false);
   const name = localizedName(product, locale);
-  // Hyphenation follows the language the name is actually shown in (English falls back to Russian).
-  const nameLang = locale === 'en' && product.nameEn?.trim() ? 'en' : 'ru';
   const imageUrl = productImageUrl(product, locale);
   const variants = product.variants ?? [];
   const pickedVariant = isSelected
@@ -118,9 +117,13 @@ export default function ProductCard({
             )}
           </div>
           <div className="h-[42px] flex items-center justify-center">
-            <p lang={nameLang} className={productNameClassName(name)}>
-              {name}
-            </p>
+            <LocalizedName
+              names={namesOf(product)}
+              locale={locale}
+              className="text-center"
+              primaryClassName={productNameClassName(name)}
+              secondaryClassName="truncate"
+            />
           </div>
         </div>
       </button>
@@ -142,9 +145,11 @@ export default function ProductCard({
             }
           `}
         >
-          {pickedVariant
-            ? localizedName(pickedVariant, locale)
-            : t('variantsButton', { count: variants.length })}
+          {pickedVariant ? (
+            <LocalizedName names={namesOf(pickedVariant)} locale={locale} />
+          ) : (
+            t('variantsButton', { count: variants.length })
+          )}
         </button>
       )}
 

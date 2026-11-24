@@ -5,7 +5,8 @@ import { ChevronDown, ChevronUp } from 'lucide-react';
 import { useLocale, useTranslations } from 'next-intl';
 import type { Item } from '@/hooks/useShoppingListItems';
 import type { ShoppingView } from '@/hooks/useShoppingListPresentation';
-import { localizedName } from '@/lib/catalog-name';
+import { namesOf } from '@/lib/catalog-name';
+import { LocalizedName } from '@/components/ui/LocalizedName';
 import { cn } from '@/lib/utils';
 
 type Props = {
@@ -44,9 +45,12 @@ export default function ShoppingCategoryGroup({
           className="flex w-full items-center gap-2 min-h-6 px-1 text-left text-sm font-medium text-gray-700 rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
         >
           <span className="text-lg leading-6">{category.emoji}</span>{' '}
-          <span className="min-w-0 flex-1 truncate">
-            {localizedName(category, locale)} ({count})
-          </span>
+          <LocalizedName
+            names={namesOf(category)}
+            locale={locale}
+            className="min-w-0 flex-1 truncate"
+            suffix={` (${count})`}
+          />
           <Chevron size={18} aria-hidden="true" />
         </button>
       </h3>

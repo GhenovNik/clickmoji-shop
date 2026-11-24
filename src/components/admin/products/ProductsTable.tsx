@@ -3,8 +3,9 @@
 import Image from 'next/image';
 import { useState } from 'react';
 import { useLocale, useTranslations } from 'next-intl';
-import { localizedName } from '@/lib/catalog-name';
+import { localizedName, namesOf } from '@/lib/catalog-name';
 import { productImageUrl } from '@/lib/product-image';
+import { LocalizedName } from '@/components/ui/LocalizedName';
 
 interface Product {
   id: string;
@@ -123,10 +124,12 @@ export default function ProductsTable({ products, onEdit, onDelete }: ProductsTa
                     )}
                   </td>
                   <td className="px-4 py-4 align-top min-w-45">
-                    <div className="text-sm font-medium text-gray-900 wrap-break-word">
-                      {product.name}
-                    </div>
-                    <div className="text-sm text-gray-500 wrap-break-word">{product.nameEn}</div>
+                    <LocalizedName
+                      names={namesOf(product)}
+                      locale={locale}
+                      primaryClassName="text-sm font-medium text-gray-900 wrap-break-word"
+                      secondaryClassName="text-sm"
+                    />
                   </td>
                   <td className="px-4 py-4 align-top text-sm text-gray-500 min-w-45">
                     <div className="flex items-center gap-2">
@@ -142,9 +145,11 @@ export default function ProductsTable({ products, onEdit, onDelete }: ProductsTa
                       ) : (
                         <span>{product.category.emoji}</span>
                       )}
-                      <span className="wrap-break-word">
-                        {localizedName(product.category, locale)}
-                      </span>
+                      <LocalizedName
+                        names={namesOf(product.category)}
+                        locale={locale}
+                        className="wrap-break-word"
+                      />
                     </div>
                   </td>
                   <td className="px-4 py-4 text-right text-sm font-medium align-top whitespace-nowrap">
@@ -195,8 +200,14 @@ export default function ProductsTable({ products, onEdit, onDelete }: ProductsTa
               </div>
               <div className="flex-1 min-w-0">
                 <div className="mb-1">
-                  <h3 className="font-semibold text-gray-900 wrap-break-word">{product.name}</h3>
-                  <p className="text-sm text-gray-500 wrap-break-word">{product.nameEn}</p>
+                  <h3 className="font-semibold text-gray-900 wrap-break-word">
+                    <LocalizedName
+                      names={namesOf(product)}
+                      locale={locale}
+                      primaryClassName="font-semibold text-gray-900 wrap-break-word"
+                      secondaryClassName="text-sm"
+                    />
+                  </h3>
                 </div>
                 <div className="flex items-center gap-2 mt-1 text-sm text-gray-600">
                   {product.category.isCustom && product.category.imageUrl ? (
@@ -211,7 +222,7 @@ export default function ProductsTable({ products, onEdit, onDelete }: ProductsTa
                   ) : (
                     <span>{product.category.emoji}</span>
                   )}
-                  <span>{localizedName(product.category, locale)}</span>
+                  <LocalizedName names={namesOf(product.category)} locale={locale} />
                 </div>
               </div>
             </div>

@@ -12,7 +12,8 @@ import Image from 'next/image';
 import { useLocale, useTranslations } from 'next-intl';
 import type { Item } from '@/hooks/useShoppingListItems';
 import type { ShoppingView } from '@/hooks/useShoppingListPresentation';
-import { localizedName } from '@/lib/catalog-name';
+import { localizedName, namesOf } from '@/lib/catalog-name';
+import { LocalizedName } from '@/components/ui/LocalizedName';
 import { productImageUrl } from '@/lib/product-image';
 import { cn } from '@/lib/utils';
 import { X, MoreHorizontal, MessageSquarePlus, Check } from 'lucide-react';
@@ -149,18 +150,20 @@ export default function ShoppingListItem({
         )}
       >
         <div className="flex items-center gap-1 min-w-0">
-          <p
-            className={cn(
+          <LocalizedName
+            names={namesOf(item.product)}
+            locale={locale}
+            className="min-w-0"
+            primaryClassName={cn(
               'font-bold text-base leading-5 truncate transition-all duration-300',
               view === 'grid' && 'text-xs leading-4',
               item.isPurchased ? 'line-through text-muted-foreground' : 'text-foreground'
             )}
-          >
-            {productName}
-          </p>
+            secondaryClassName={cn('truncate', item.isPurchased && 'line-through')}
+          />
           {item.variant?.name && (
             <span className="max-w-1/2 truncate text-[10px] bg-secondary/10 text-secondary-foreground px-1.5 py-0.5 rounded-full font-bold">
-              {localizedName(item.variant, locale)}
+              <LocalizedName names={namesOf(item.variant)} locale={locale} />
             </span>
           )}
         </div>

@@ -9,7 +9,8 @@ import { useFormatter, useLocale, useTranslations } from 'next-intl';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { queryKeys } from '@/lib/query-keys';
 import { useRestoreHistory } from '@/hooks/useListMutations';
-import { localizedName } from '@/lib/catalog-name';
+import { localizedName, namesOf } from '@/lib/catalog-name';
+import { LocalizedName } from '@/components/ui/LocalizedName';
 import { productImageUrl } from '@/lib/product-image';
 
 type HistoryItem = {
@@ -218,6 +219,10 @@ export default function HistoryPage() {
                             { name: item.productName, nameEn: item.productNameEn },
                             locale
                           );
+                          const productNames = namesOf({
+                            name: item.productName,
+                            nameEn: item.productNameEn,
+                          });
                           const imageUrl = productImageUrl(
                             { imageUrl: item.productImageUrl, imageUrlEn: item.productImageUrlEn },
                             locale
@@ -239,25 +244,29 @@ export default function HistoryPage() {
                                 <span className="text-2xl">{item.productEmoji}</span>
                               )}
                               <div className="flex-1">
-                                <p className="font-medium text-gray-900">
-                                  {productName}
-                                  {item.variantName && (
-                                    <span className="text-sm text-gray-600">
-                                      {' '}
-                                      -{' '}
-                                      {localizedName(
-                                        { name: item.variantName, nameEn: item.variantNameEn },
-                                        locale
-                                      )}
-                                    </span>
-                                  )}
-                                </p>
-                                <p className="text-sm text-gray-600">
-                                  {localizedName(
-                                    { name: item.categoryName, nameEn: item.categoryNameEn },
-                                    locale
-                                  )}
-                                </p>
+                                <LocalizedName
+                                  names={productNames}
+                                  locale={locale}
+                                  primaryClassName="font-medium text-gray-900"
+                                />
+                                {item.variantName && (
+                                  <LocalizedName
+                                    names={namesOf({
+                                      name: item.variantName,
+                                      nameEn: item.variantNameEn,
+                                    })}
+                                    locale={locale}
+                                    className="text-sm text-gray-600"
+                                  />
+                                )}
+                                <LocalizedName
+                                  names={namesOf({
+                                    name: item.categoryName,
+                                    nameEn: item.categoryNameEn,
+                                  })}
+                                  locale={locale}
+                                  className="text-sm text-gray-600"
+                                />
                                 {item.note && <p className="text-xs text-gray-500">{item.note}</p>}
                               </div>
                               {item.isPurchased && (

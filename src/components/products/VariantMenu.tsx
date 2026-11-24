@@ -3,10 +3,11 @@
 import Image from 'next/image';
 import { useLocale, useTranslations } from 'next-intl';
 import type { Product } from '@/hooks/useProductSelection';
-import { localizedName } from '@/lib/catalog-name';
+import { localizedName, namesOf } from '@/lib/catalog-name';
 import { productImageUrl } from '@/lib/product-image';
 import { productNameClassName } from './product-name';
 import Modal, { ModalBody, ModalFooter } from '@/components/ui/Modal';
+import { LocalizedName } from '@/components/ui/LocalizedName';
 
 interface VariantMenuProps {
   product: Product;
@@ -61,7 +62,6 @@ export default function VariantMenu({
         <div className="grid grid-cols-3 gap-3">
           {(product.variants ?? []).map((variant) => {
             const name = localizedName(variant, locale);
-            const nameLang = locale === 'en' && variant.nameEn?.trim() ? 'en' : 'ru';
             // A variant without a picture or emoji of its own shows the product's.
             const variantImage = productImageUrl(
               { imageUrl: variant.imageUrl ?? null, imageUrlEn: variant.imageUrlEn },
@@ -98,9 +98,13 @@ export default function VariantMenu({
                     )}
                   </div>
                   <div className="flex h-[42px] items-center justify-center">
-                    <p lang={nameLang} className={productNameClassName(name)}>
-                      {name}
-                    </p>
+                    <LocalizedName
+                      names={namesOf(variant)}
+                      locale={locale}
+                      className="text-center"
+                      primaryClassName={productNameClassName(name)}
+                      secondaryClassName="truncate"
+                    />
                   </div>
                 </button>
 

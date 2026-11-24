@@ -1,8 +1,10 @@
 'use client';
 
 import Image from 'next/image';
-import { useTranslations } from 'next-intl';
+import { useLocale, useTranslations } from 'next-intl';
 import { openModalFromTrigger } from '@/components/ui/Modal';
+import { LocalizedName } from '@/components/ui/LocalizedName';
+import { namesOf } from '@/lib/catalog-name';
 
 interface Category {
   id: string;
@@ -31,6 +33,7 @@ export default function CategoriesTable({
   onManageProducts,
 }: CategoriesTableProps) {
   const t = useTranslations('admin');
+  const locale = useLocale();
   return (
     <>
       {/* Desktop Table View */}
@@ -81,8 +84,12 @@ export default function CategoriesTable({
                     )}
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap">
-                    <div className="text-sm font-medium text-gray-900">{category.name}</div>
-                    <div className="text-sm text-gray-500">{category.nameEn}</div>
+                    <LocalizedName
+                      names={namesOf(category)}
+                      locale={locale}
+                      primaryClassName="text-sm font-medium text-gray-900"
+                      secondaryClassName="text-sm"
+                    />
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                     {category._count?.products || 0}
@@ -138,8 +145,14 @@ export default function CategoriesTable({
                 )}
               </div>
               <div className="flex-1">
-                <h3 className="font-semibold text-gray-900">{category.name}</h3>
-                <p className="text-sm text-gray-500">{category.nameEn}</p>
+                <h3 className="font-semibold text-gray-900">
+                  <LocalizedName
+                    names={namesOf(category)}
+                    locale={locale}
+                    primaryClassName="font-semibold text-gray-900"
+                    secondaryClassName="text-sm"
+                  />
+                </h3>
                 <div className="mt-2 flex items-center gap-4 text-xs text-gray-600">
                   <span>{t('categoriesTable.order', { order: category.order })}</span>
                   <span>

@@ -1,0 +1,146 @@
+import { mkdirSync } from 'node:fs';
+import path from 'node:path';
+import { expect, test, type BrowserContext, type Page, type Route } from '@playwright/test';
+import {
+  E2E_LIST_ID,
+  createShoppingItem,
+  e2eCategory,
+  e2eMilkProduct,
+  mockAuthenticatedShopping,
+  type E2EShoppingItem,
+} from './fixtures/auth';
+
+// AGE-1667: four phone-width screens (catalog and shopping list, Russian and English) with local
+// fixture data only. Opt-in so the ordinary suite never writes them:
+//   LOCALIZED_NAME_SCREENS=1 npx playwright test tests/e2e/localized-name-screens.local.spec.ts \
+//     --project=chromium --reporter=line
+// Output: $LOCALIZED_NAME_SCREENS_DIR, default test-results/localized-name-screens (git-ignored).
+
+const outDir =
+  process.env.LOCALIZED_NAME_SCREENS_DIR ?? path.join('test-results', 'localized-name-screens');
+
+// Names exercise each branch of the rule: a different English name, a missing English name and
+// an English name equal to the Russian one.
+const products = [
+  { ...e2eMilkProduct, id: 'e2e-milk', name: 'Молоко', nameEn: 'Milk', variants: [] },
+  {
+    ...e2eMilkProduct,
+    id: 'e2e-bread',
+    name: 'Хлеб бородинский',
+    nameEn: '',
+    emoji: '🍞',
+    variants: [],
+  },
+  {
+    ...e2eMilkProduct,
+    id: 'e2e-ketchup',
+    name: 'Кетчуп',
+    nameEn: 'Кетчуп',
+    emoji: '🥫',
+    variants: [],
+  },
+  { ...e2eMilkProduct, id: 'e2e-cheese', name: 'Сыр', nameEn: 'Cheese', emoji: '🧀', variants: [] },
+];
+
+// The shopping list shows the same products; the fixture's list item has no English name, so the
+// English name is added here.
+function listItems(): E2EShoppingItem[] {
+  return products.map((product, index) => {
+    const base = createShoppingItem(`e2e-item-${index}`, product);
+    return {
+      ...base,
+      product: { ...base.product, nameEn: product.nameEn },
+    } as E2EShoppingItem;
+  });
+}
+
+async function setLocale(context: BrowserContext, locale: 'ru' | 'en') {
+  await context.addCookies([
+    { name: 'NEXT_LOCALE', value: locale, domain: 'localhost', path: '/', sameSite: 'Lax' },
+  ]);
+}
+
+async function mockCatalog(page: Page) {
+  await page.route('**/api/**', async (route: Route) => {
+    const url = new URL(route.request().url());
+    const json = (body: unknown) =>
+      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) });
+
+    if (url.pathname === '/api/auth/session') return json({});
+    if (url.pathname === '/api/categories') return json([e2eCategory]);
+    if (url.pathname === '/api/products') {
+      const categoryId = url.searchParams.get('categoryId');
+      return json(products.filter((product) => !categoryId || product.category.id === categoryId));
+    }
+    return json([]);
+  });
+}
+
+async function screenshot(page: Page, file: string) {
+  mkdirSync(outDir, { recursive: true });
+  await page.screenshot({ path: path.join(outDir, file), fullPage: true });
+}
+
+test.describe('catalogue names by interface language', () => {
+  test.skip(process.env.LOCALIZED_NAME_SCREENS !== '1', 'Screenshot capture is opt-in');
+  test.setTimeout(120_000);
+  // A phone viewport, same as the Pixel 5 project but at a fixed 390 px width.
+  test.use({
+    viewport: { width: 390, height: 844 },
+    deviceScaleFactor: 2,
+    isMobile: true,
+    hasTouch: true,
+  });
+  test('catalog in Russian: Russian name big, English small under it', async ({
+    page,
+    context,
+  }) => {
+    await setLocale(context, 'ru');
+    await mockCatalog(page);
+    await page.goto(`/categories/${e2eCategory.id}/products`);
+
+    await expect(page.getByText('Milk', { exact: true })).toBeVisible();
+    await expect(page.getByText('Молоко', { exact: true })).toBeVisible();
+    await screenshot(page, 'catalog-ru.png');
+  });
+
+  test('catalog in English: no Russian name where English is filled', async ({ page, context }) => {
+    await setLocale(context, 'en');
+    await mockCatalog(page);
+    await page.goto(`/categories/${e2eCategory.id}/products`);
+
+    await expect(page.getByText('Milk', { exact: true })).toBeVisible();
+    await expect(page.getByText('Молоко', { exact: true })).toHaveCount(0);
+    // No English name for bread: the Russian one is the only name, which is allowed.
+    await expect(page.getByText('Хлеб бородинский', { exact: true })).toBeVisible();
+    await screenshot(page, 'catalog-en.png');
+  });
+
+  test('shopping list in Russian: Russian name big, English small under it', async ({
+    page,
+    context,
+  }) => {
+    await setLocale(context, 'ru');
+    await mockAuthenticatedShopping(page, listItems());
+    await page.goto(`/lists/${E2E_LIST_ID}`);
+
+    await expect(page.getByTestId('shopping-item')).toHaveCount(products.length);
+    await expect(page.getByText('Milk', { exact: true })).toBeVisible();
+    await screenshot(page, 'list-ru.png');
+  });
+
+  test('shopping list in English: no Russian name where English is filled', async ({
+    page,
+    context,
+  }) => {
+    await setLocale(context, 'en');
+    await mockAuthenticatedShopping(page, listItems());
+    await page.goto(`/lists/${E2E_LIST_ID}`);
+
+    await expect(page.getByTestId('shopping-item')).toHaveCount(products.length);
+    await expect(page.getByText('Milk', { exact: true })).toBeVisible();
+    await expect(page.getByText('Молоко', { exact: true })).toHaveCount(0);
+    await expect(page.getByText('Сыр', { exact: true })).toHaveCount(0);
+    await screenshot(page, 'list-en.png');
+  });
+});

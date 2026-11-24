@@ -8,7 +8,8 @@ import Link from 'next/link';
 import Image from 'next/image';
 import { useSession } from 'next-auth/react';
 import { useLocale, useTranslations } from 'next-intl';
-import { localizedName } from '@/lib/catalog-name';
+import { localizedName, namesOf } from '@/lib/catalog-name';
+import { LocalizedName } from '@/components/ui/LocalizedName';
 import { useLists } from '@/store/lists';
 import { useProductSelection } from '@/hooks/useProductSelection';
 import ProductCard from '@/components/products/ProductCard';
@@ -74,7 +75,16 @@ function ProductsPageContent() {
             <div className="text-6xl mb-2">{category?.emoji || '📦'}</div>
           )}
           <h1 className="text-4xl font-bold mb-2 text-gray-900">
-            {categoryName || tCommon('loading')}
+            {category ? (
+              <LocalizedName
+                names={namesOf(category)}
+                locale={locale}
+                className="text-center"
+                primaryClassName="text-4xl font-bold text-gray-900"
+              />
+            ) : (
+              tCommon('loading')
+            )}
           </h1>
           <p className="text-gray-700">{t('products.subtitle')}</p>
 

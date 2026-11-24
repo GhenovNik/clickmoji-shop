@@ -9,7 +9,8 @@ import { useLocale, useTranslations } from 'next-intl';
 import { listsQueryKey, useActiveList } from '@/hooks/useListsQuery';
 import { queryKeys } from '@/lib/query-keys';
 import { refreshQueryCache } from '@/lib/refresh-query-cache';
-import { localizedName } from '@/lib/catalog-name';
+import { localizedName, namesOf } from '@/lib/catalog-name';
+import { LocalizedName } from '@/components/ui/LocalizedName';
 import { productImageUrl } from '@/lib/product-image';
 import { cn } from '@/lib/utils';
 import { settleCatalogAddAttempt, type CatalogAddAttempt } from '@/lib/catalog-add-attempt';
@@ -371,7 +372,11 @@ export default function ProductSearch({ compact = false }: { compact?: boolean }
                       <span className="text-3xl">{product.emoji}</span>
                     )}
                     <div className="flex-1 text-left">
-                      <p className="font-medium text-gray-900">{name}</p>
+                      <LocalizedName
+                        names={namesOf(product)}
+                        locale={locale}
+                        primaryClassName="font-medium text-gray-900"
+                      />
                       <p className="text-sm text-gray-500 flex items-center gap-1">
                         {product.category.isCustom && product.category.imageUrl ? (
                           <Image
@@ -384,7 +389,7 @@ export default function ProductSearch({ compact = false }: { compact?: boolean }
                         ) : (
                           <span>{product.category.emoji}</span>
                         )}
-                        <span>{localizedName(product.category, locale)}</span>
+                        <LocalizedName names={namesOf(product.category)} locale={locale} />
                       </p>
                       {product.variants && product.variants.length > 0 && (
                         <div className="mt-2">
