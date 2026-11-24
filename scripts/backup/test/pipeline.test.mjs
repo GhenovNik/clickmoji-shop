@@ -16,9 +16,6 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import { loadConfig } from '../config.mjs';
-import { DockerRunner } from '../docker.mjs';
-import { runBackup } from '../pipeline.mjs';
-import { acquireLock } from '../lock.mjs';
 import { LEDGER_NAME } from '../constants.mjs';
 import {
   containersLeft,
@@ -27,6 +24,7 @@ import {
   lockIsFree,
   removalEvents,
   spawnLockHolder,
+  startLockedRun,
   NEW_NAME,
   NOW,
   listCopies,
@@ -204,7 +202,9 @@ describe('drops against the previous good copy', () => {
 describe('concurrency', () => {
   it('a live lock makes the second run stop without touching anything', async () => {
     const old = seedBackups(sandbox.backupDir, 5);
-    const held = await acquireLock(sandbox.backupDir);
+    mkdirSync(sandbox.backupDir, { recursive: true });
+    const holder = spawnLockHolder(sandbox.backupDir, path.join(sandbox.root, 'gate'));
+    assert.equal(await holder.acquired, true);
     try {
       const result = await runWithFake(sandbox, db);
       assert.equal(result.exit, EXIT.busy);
@@ -213,7 +213,8 @@ describe('concurrency', () => {
       assert.equal(readStatus(sandbox).trim().split('\t')[2], MESSAGES.busy);
       assert.equal(readDockerLog(sandbox).length, 0, 'docker was never called');
     } finally {
-      await held.release();
+      holder.child.kill('SIGKILL');
+      await holder.exited;
     }
   });
 
@@ -247,20 +248,14 @@ describe('interruption stops containers before anything is removed', () => {
   it('a stop with a dump in progress removes its container, then plaintext and lock; copies intact', async () => {
     const old = seedBackups(sandbox.backupDir, 20);
     const env = envFor(sandbox, db, { FAKE_DOCKER_MODE: 'interrupt' });
-    const config = loadConfig(env);
-    const docker = new DockerRunner({
-      bin: config.dockerBin,
-      containerEnv: config.containerEnv,
-      env,
-    });
-    const run = runBackup({ config, docker, now: () => NOW, tempRoot: sandbox.tmp });
+    const run = startLockedRun({ backupDir: sandbox.backupDir, env, tempRoot: sandbox.tmp });
     const started = Date.now();
     while (containersLeft(sandbox).length === 0 && Date.now() - started < 15_000) {
       await new Promise((resolve) => setTimeout(resolve, 20));
     }
     assert.equal(containersLeft(sandbox).length, 1, 'the dump container is running');
-    docker.shutdown();
-    const result = await run;
+    run.child.kill('SIGTERM');
+    const result = await run.done;
 
     assert.equal(result.key, 'interrupted');
     assert.equal(result.exit, EXIT.interrupted);
@@ -275,19 +270,13 @@ describe('interruption stops containers before anything is removed', () => {
 
   it('a container that cannot be proven gone stays in the ledger: later runs do nothing until it is proven gone', async () => {
     const env = envFor(sandbox, db, { FAKE_DOCKER_MODE: 'interrupt', FAKE_DOCKER_RM: 'fail' });
-    const config = loadConfig(env);
-    const docker = new DockerRunner({
-      bin: config.dockerBin,
-      containerEnv: config.containerEnv,
-      env,
-    });
-    const run = runBackup({ config, docker, now: () => NOW, tempRoot: sandbox.tmp });
+    const run = startLockedRun({ backupDir: sandbox.backupDir, env, tempRoot: sandbox.tmp });
     const started = Date.now();
     while (containersLeft(sandbox).length === 0 && Date.now() - started < 15_000) {
       await new Promise((resolve) => setTimeout(resolve, 20));
     }
-    docker.shutdown();
-    const result = await run;
+    run.child.kill('SIGTERM');
+    const result = await run.done;
 
     assert.equal(result.ok, false);
     assert.equal(result.key, 'cleanup');
@@ -435,13 +424,7 @@ describe('temporary directories', () => {
       const backupDir = path.join(sandbox.root, `backups-${label}`);
       const statusFile = path.join(sandbox.root, `status-${label}.log`);
       const env = envFor({ ...sandbox, backupDir, statusFile }, db);
-      const config = loadConfig(env);
-      const docker = new DockerRunner({
-        bin: config.dockerBin,
-        containerEnv: config.containerEnv,
-        env,
-      });
-      return runBackup({ config, docker, now: () => NOW, tempRoot: tmpRoot });
+      return startLockedRun({ backupDir, env, tempRoot: tmpRoot }).done;
     };
     const [first, second] = await Promise.all([makeConfigRun('a'), makeConfigRun('b')]);
     assert.equal(first.ok, true);

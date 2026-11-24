@@ -20,13 +20,15 @@ import {
   envFor,
   listCopies,
   makeSandbox,
+  readDockerLog,
   readStatus,
   removalEvents,
   runCli,
   seedBackups,
+  spawnLockHolder,
   syntheticDatabase,
 } from './helpers.mjs';
-import { EXIT } from '../constants.mjs';
+import { EXIT, MESSAGES } from '../constants.mjs';
 
 let sandbox;
 let db;
@@ -48,6 +50,26 @@ function assertNoSecrets(text) {
   assert.ok(!text.includes(db.host), 'host not printed');
   assert.ok(!text.includes('postgresql://'), 'URL not printed');
 }
+
+describe('cli concurrency', () => {
+  it('a run started while another process holds the lock exits busy (3), touches nothing, and says so', async () => {
+    const old = seedBackups(sandbox.backupDir, 5);
+    const holder = spawnLockHolder(sandbox.backupDir, path.join(sandbox.root, 'gate'));
+    assert.equal(await holder.acquired, true);
+    try {
+      const result = await runCli(envFor(sandbox, db));
+      assert.equal(result.code, EXIT.busy);
+      assert.equal(result.stdout, `backup: ${MESSAGES.busy}\n`);
+      assert.deepEqual(listCopies(sandbox.backupDir).sort(), [...old].sort());
+      assert.equal(readDockerLog(sandbox).length, 0, 'docker was never called');
+      assert.ok(readStatus(sandbox).trimEnd().endsWith(`\t${MESSAGES.busy}`), 'status says busy');
+      assertNoSecrets(result.stdout + result.stderr + readStatus(sandbox));
+    } finally {
+      holder.child.kill('SIGKILL');
+      await holder.exited;
+    }
+  });
+});
 
 describe('cli failure outcomes', () => {
   it('docker unavailable: literal sanitized status, non-zero exit, old copies intact', async () => {
@@ -93,7 +115,7 @@ describe('cli failure outcomes', () => {
 });
 
 describe('interruption after plaintext exists', () => {
-  it('the lock helper dying mid-run stops the run: containers removed, nothing published', async () => {
+  it('the writer SIGKILLed mid-run frees the lock at once, publishes nothing, and the next run recovers and completes', async () => {
     const old = seedBackups(sandbox.backupDir, 20);
     const env = envFor(sandbox, db, { FAKE_DOCKER_MODE: 'interrupt' });
     const child = spawn(process.execPath, [CLI], { env, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -104,19 +126,20 @@ describe('interruption after plaintext exists', () => {
     );
 
     assert.ok(await waitFor(() => findPlaintext(sandbox.tmp), 15_000), 'plaintext written');
-    // The lock helper is the run's only direct perl child.
-    const helper = spawnSync('pgrep', ['-P', String(child.pid), '-x', 'perl'], {
-      encoding: 'utf8',
-    }).stdout.trim();
-    assert.match(helper, /^\d+$/, 'the lock helper is running');
-    process.kill(Number(helper), 'SIGKILL');
+    // The starter's only child is the writer: the launcher replaced itself with it.
+    const writer = spawnSync('pgrep', ['-P', String(child.pid)], { encoding: 'utf8' }).stdout.trim();
+    assert.match(writer, /^\d+$/, 'the writer is running');
+    process.kill(Number(writer), 'SIGKILL');
 
-    assert.equal(await exited, EXIT.interrupted);
-    assert.deepEqual(containersLeft(sandbox), [], 'the dump container is gone');
-    assert.equal(findPlaintext(sandbox.tmp), null, 'plaintext removed');
-    assert.deepEqual(tempLeft(), [], 'temporary directory removed');
+    assert.equal(await exited, 128 + 9, 'the starter reports the writer was killed');
+    assert.equal(await lockIsFree(sandbox.backupDir), true, 'the kernel freed the lock at once');
     assert.deepEqual(listCopies(sandbox.backupDir).sort(), [...old].sort(), 'nothing published');
-    assert.match(readStatus(sandbox), /\tfailed\tсбой: прервано\n$/);
+
+    // The killed run left its container for the ledger; the next run proves it gone and completes.
+    const next = await runCli(envFor(sandbox, db));
+    assert.equal(next.code, EXIT.ok, next.stderr);
+    assert.deepEqual(containersLeft(sandbox), [], 'the stale container was proven gone');
+    assert.deepEqual(tempLeft(), [], 'the stale temporary directory was removed');
   });
 
   it('SIGTERM kills the dump container, removes plaintext and the cluster, releases the lock', async () => {

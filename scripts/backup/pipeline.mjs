@@ -38,7 +38,7 @@ import {
   parseMigration,
 } from './compare.mjs';
 import { checkStatusTarget } from './config.mjs';
-import { acquireLock, pidAlive } from './lock.mjs';
+import { pidAlive } from './lock.mjs';
 import { Ledger, LedgerError } from './ledger.mjs';
 import { selectRetention } from './retention.mjs';
 import { appendStatus, formatStatusLine } from './status.mjs';
@@ -270,12 +270,12 @@ async function executeBackup({ config, docker, now, tempDir, lock }) {
     counts: Object.fromEntries(counts),
     flagged: drops.map((drop) => drop.table),
   };
-  if (!(await lock.confirm())) throw new StepError('busy', EXIT.busy);
+  if (!lock.held()) throw new StepError('busy', EXIT.busy);
   publish({ backupDir: config.backupDir, encryptedFile, name, meta });
 
   // Pruning runs only after the new copy is in place, and only for the lock holder.
   let pruned = 'ok';
-  if (!(await lock.confirm())) {
+  if (!lock.held()) {
     pruned = 'skipped';
   } else {
     try {
@@ -348,30 +348,23 @@ function report(config, now, result) {
   };
 }
 
+// The caller is the writer: it runs under the lock it was started with (see lock.mjs), passed in
+// as `lock`. Without a held lock nothing is done and the run is reported busy.
 // Never throws for an expected failure: the outcome is written to the status file and returned.
-// The lock is held from acquisition until the very end: containers, plaintext and the temporary
-// directory are all dealt with before release() lets the next process in.
+// The lock is held until the very end: containers, plaintext and the temporary directory are all
+// dealt with before release() lets the next process in.
 export async function runBackup({
   config,
   docker,
+  lock,
   now = () => new Date(),
   tempRoot = os.tmpdir(),
 }) {
   mkdirSync(config.backupDir, { recursive: true, mode: 0o700 });
-  let lock;
-  try {
-    lock = await acquireLock(config.backupDir);
-  } catch {
-    return report(config, now, { ok: false, key: 'busy', exit: EXIT.busy });
-  }
-  if (!lock) return report(config, now, { ok: false, key: 'busy', exit: EXIT.busy });
+  if (!lock?.held()) return reportBusy(config, now);
 
   const ledger = new Ledger(config.backupDir);
   docker.bindLedger(ledger);
-  // The helper died while this run owned the lock: stop every container before anything else.
-  lock.onLost(() => {
-    docker.shutdown().catch(() => {}); // the outcome is reported by runBackup's own shutdown
-  });
 
   let result;
   let tempDir = null;
@@ -416,11 +409,17 @@ export async function runBackup({
 }
 
 // Release is the last thing a run does. A failure here cannot leave a live owner behind: the
-// helper exits with this process, and the kernel frees the lock.
+// descriptor belongs to this process, and the kernel frees the lock when it exits.
 async function releaseQuietly(lock) {
   try {
     await lock.release();
   } catch {
-    // Nothing more to do: the lock belongs to a helper that is gone or exiting.
+    // Nothing more to do: the process is about to exit, and so is its hold on the lock.
   }
+}
+
+// The outcome of a run that could not take the lock. Used by the entry point, which holds no lock
+// when another process does.
+export function reportBusy(config, now = () => new Date()) {
+  return report(config, now, { ok: false, key: 'busy', exit: EXIT.busy });
 }

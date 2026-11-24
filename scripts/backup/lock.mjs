@@ -1,74 +1,52 @@
 // One backup at a time per backup directory, enforced by the operating system.
 //
 // The lock is an exclusive flock(2) on a stable file, `.backup.lock`. That file is created once
-// and never renamed, replaced or removed, so there is no name that two processes can judge
-// differently. Nothing is read from the file to decide ownership: a stale pid, an old record or
-// an inode comparison cannot take a live owner's lock, because the kernel does not care about
-// any of them. The lock is released by the kernel when its holder exits, including on SIGKILL.
+// and never renamed, replaced or removed. The kernel releases the lock when every open file
+// description of it is closed: the holder's exit, including SIGKILL, closes them all.
 //
-// Node has no flock binding, so the lock is held by a tiny helper process: the macOS system
-// perl (/usr/bin/perl, present on every supported host, nothing is installed). The helper takes
-// the flock, reports `locked`, and then serves a control pipe:
-//   ping     -> alive     (the helper is running and still holds the lock)
-//   release  -> released  (unlock, then exit)
-// End of the pipe (the parent exited, or crashed) makes the helper exit, and the exit releases
-// the lock. The owner therefore never releases the lock by itself: release() ends the pipe only
-// after the caller's critical work is finished, and resolves only once the helper has exited.
+// The lock is taken by a launcher, the macOS system perl (/usr/bin/perl, present on every
+// supported host). It opens the lock file without following links, takes the flock without
+// blocking, clears FD_CLOEXEC on that descriptor, checks the flags, and then exec()s the writer
+// in the same process. The writer therefore inherits the locked descriptor and owns it for its
+// whole critical section; no helper process and no control protocol sit beside it. There is
+// nothing to ping: while the writer lives, the descriptor is open and the lock is held; when the
+// writer dies, the kernel closes the descriptor and frees the lock.
 //
-// Fail closed: if the helper dies while its owner runs, the owner loses the lock. held() and
-// confirm() then say so, and the owner's onLost callbacks run, so it stops before it writes.
+// The launcher passes the descriptor number in BACKUP_LOCK_FD. The writer checks with heldLock()
+// that this descriptor refers to the lock file. BACKUP_LOCK_FD is set only by the launcher.
+//
+// Child processes do not receive the descriptor: libuv starts them with only their stdio, so a
+// docker client cannot keep the lock alive after the writer has gone (checked by a test).
 import { spawn } from 'node:child_process';
+import { closeSync, fstatSync, lstatSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { LOCK_NAME } from './constants.mjs';
 
 const PERL = '/usr/bin/perl';
 
-// The helper. Opens the lock file without following links and without truncating it.
-const HOLDER = `
+export const LOCK_FD_ENV = 'BACKUP_LOCK_FD';
+// Launcher exit statuses. A writer never exits with either of them.
+export const LAUNCH_BUSY = 75; // another process holds the lock
+export const LAUNCH_FAILED = 70; // the lock could not be taken or the writer could not start
+
+// The launcher. Exits LAUNCH_BUSY when the lock is held elsewhere, LAUNCH_FAILED when anything
+// it relies on cannot be verified; otherwise the exec replaces it with the writer.
+const LAUNCHER = `
 use strict;
 use warnings;
-use Fcntl qw(:flock O_RDWR O_CREAT O_NOFOLLOW);
-$| = 1;
-my ($path) = @ARGV;
-sysopen(my $fh, $path, O_RDWR | O_CREAT | O_NOFOLLOW, 0600) or do { print "error\\n"; exit 0 };
-if (!flock($fh, LOCK_EX | LOCK_NB)) { print "busy\\n"; exit 0 }
-print "locked\\n";
-while (defined(my $line = <STDIN>)) {
-  if ($line eq "ping\\n") { print "alive\\n"; next }
-  if ($line eq "release\\n") { flock($fh, LOCK_UN); print "released\\n"; exit 0 }
-}
-exit 0;
+use Fcntl qw(:flock O_RDWR O_CREAT O_NOFOLLOW F_GETFD F_SETFD FD_CLOEXEC);
+my ($path, @command) = @ARGV;
+sysopen(my $fh, $path, O_RDWR | O_CREAT | O_NOFOLLOW, 0600) or exit ${LAUNCH_FAILED};
+my @named = lstat($path) or exit ${LAUNCH_FAILED};
+my @opened = stat($fh) or exit ${LAUNCH_FAILED};
+exit ${LAUNCH_FAILED} unless $named[0] == $opened[0] && $named[1] == $opened[1];
+flock($fh, LOCK_EX | LOCK_NB) or exit ${LAUNCH_BUSY};
+fcntl($fh, F_SETFD, 0) or exit ${LAUNCH_FAILED};
+my $flags = fcntl($fh, F_GETFD, 0);
+exit ${LAUNCH_FAILED} if !defined $flags || ($flags & FD_CLOEXEC);
+$ENV{'${LOCK_FD_ENV}'} = fileno($fh);
+exec { $command[0] } @command or exit ${LAUNCH_FAILED};
 `;
-
-// Lines of a stream, delivered one at a time; null once the stream has closed.
-function lineQueue(stream) {
-  const lines = [];
-  const waiters = [];
-  let buffer = '';
-  let closed = false;
-  stream.setEncoding('utf8');
-  stream.on('data', (chunk) => {
-    buffer += chunk;
-    let at = buffer.indexOf('\n');
-    while (at !== -1) {
-      const line = buffer.slice(0, at);
-      buffer = buffer.slice(at + 1);
-      if (waiters.length > 0) waiters.shift()(line);
-      else lines.push(line);
-      at = buffer.indexOf('\n');
-    }
-  });
-  stream.on('close', () => {
-    closed = true;
-    while (waiters.length > 0) waiters.shift()(null);
-  });
-  stream.on('error', () => {});
-  return () => {
-    if (lines.length > 0) return Promise.resolve(lines.shift());
-    if (closed) return Promise.resolve(null);
-    return new Promise((resolve) => waiters.push(resolve));
-  };
-}
 
 // True when a process with this pid exists (EPERM means it exists under another user).
 export function pidAlive(pid) {
@@ -80,75 +58,58 @@ export function pidAlive(pid) {
   }
 }
 
-export class Lock {
-  #child;
-  #nextLine;
-  #exited;
-  #released = false;
-  #lost = false;
-  #lostCallbacks = [];
-
-  constructor(child, nextLine) {
-    this.#child = child;
-    this.#nextLine = nextLine;
-    this.#exited = new Promise((resolve) => {
-      child.once('exit', () => {
-        resolve();
-        if (this.#released || this.#lost) return;
-        this.#lost = true;
-        for (const callback of this.#lostCallbacks.splice(0)) callback();
-      });
-    });
-    child.stdin.on('error', () => {}); // a helper that already died is handled by its exit
-  }
-
-  get helperPid() {
-    return this.#child.pid;
-  }
-
-  // Synchronous: false once released, or once the helper is known to have exited.
-  held() {
-    return !this.#released && !this.#lost;
-  }
-
-  // Asks the helper, which holds the lock, to confirm it is still alive. Use right before a
-  // critical step. False means the lock can no longer be relied on.
-  async confirm() {
-    if (!this.held()) return false;
-    this.#child.stdin.write('ping\n');
-    return (await this.#nextLine()) === 'alive' && this.held();
-  }
-
-  // Registers a callback for the moment the lock is lost without release().
-  onLost(callback) {
-    if (this.#lost) callback();
-    else if (!this.#released) this.#lostCallbacks.push(callback);
-  }
-
-  // Unlocks and resolves once the helper has exited, so the lock is free for the next process.
-  async release() {
-    if (this.#released) return this.#exited;
-    this.#released = true;
-    if (!this.#lost) {
-      this.#child.stdin.write('release\n');
-      this.#child.stdin.end();
-    }
-    await this.#exited;
-  }
+// Starts `command` as the writer of backupDir's lock. The returned child is the writer itself
+// (the launcher execs it, so the PID is the same) and holds the lock while it lives. Resolves
+// its exit through `child.on('exit')`: LAUNCH_BUSY or LAUNCH_FAILED mean it never ran.
+export function launchLocked(backupDir, command, { env = process.env, stdio = 'inherit' } = {}) {
+  // The lock file lives in the backup directory, which is created private, as the run would.
+  mkdirSync(backupDir, { recursive: true, mode: 0o700 });
+  const childEnv = { ...env };
+  delete childEnv[LOCK_FD_ENV];
+  return spawn(PERL, ['-e', LAUNCHER, path.join(backupDir, LOCK_NAME), ...command], {
+    env: childEnv,
+    stdio,
+  });
 }
 
-// Takes the lock for backupDir, or returns null when another live process holds it. Throws
-// when the helper cannot run at all; the caller reports that as busy.
-export async function acquireLock(backupDir) {
-  const file = path.join(backupDir, LOCK_NAME);
-  const child = spawn(PERL, ['-e', HOLDER, file], { stdio: ['pipe', 'pipe', 'ignore'] });
-  const nextLine = lineQueue(child.stdout);
-  const first = await Promise.race([
-    nextLine(),
-    new Promise((resolve) => child.once('exit', () => resolve(null))),
-  ]);
-  if (first === 'locked') return new Lock(child, nextLine);
-  if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
-  if (first === 'busy') return null;
-  throw new Error('lock helper failed');
+// The lock held by this process, or null. Null means the descriptor is missing or does not
+// refer to the lock file: the caller must not write anything.
+export function heldLock(backupDir, env = process.env) {
+  const raw = env[LOCK_FD_ENV];
+  if (!/^[0-9]+$/.test(raw ?? '')) return null;
+  const fd = Number(raw);
+  if (fd < 3) return null;
+  try {
+    const opened = fstatSync(fd);
+    const named = lstatSync(path.join(backupDir, LOCK_NAME));
+    if (opened.dev !== named.dev || opened.ino !== named.ino) return null;
+  } catch {
+    return null;
+  }
+  return new Lock(fd);
+}
+
+// The writer's hold on the lock. The descriptor is open for as long as the lock is held, so
+// held() needs no round trip. release() closes the descriptor, which frees the kernel lock.
+export class Lock {
+  #fd;
+  #released = false;
+
+  constructor(fd) {
+    this.#fd = fd;
+  }
+
+  held() {
+    return !this.#released;
+  }
+
+  release() {
+    if (this.#released) return;
+    this.#released = true;
+    try {
+      closeSync(this.#fd);
+    } catch {
+      // Already closed: the kernel lock is gone either way.
+    }
+  }
 }

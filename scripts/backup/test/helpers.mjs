@@ -16,14 +16,14 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadConfig } from '../config.mjs';
-import { acquireLock } from '../lock.mjs';
-import { DockerRunner } from '../docker.mjs';
-import { runBackup } from '../pipeline.mjs';
+import { LAUNCH_BUSY, LAUNCH_FAILED, launchLocked } from '../lock.mjs';
+import { reportBusy } from '../pipeline.mjs';
 
 export const HERE = path.dirname(fileURLToPath(import.meta.url));
 export const CLI = path.join(HERE, '..', 'cli.mjs');
 export const FAKE_DOCKER = path.join(HERE, 'fake-docker.mjs');
 export const LOCK_WORKER = path.join(HERE, 'lock-worker.mjs');
+export const RUN_LOCKED = path.join(HERE, 'run-locked.mjs');
 chmodSync(FAKE_DOCKER, 0o755);
 
 // Fixed clock for the tests: the new copy is named clickmoji-20261124T120000Z.dump.age.
@@ -117,16 +117,39 @@ export function daemonLog(sandbox) {
   return existsSync(sandbox.daemonLog) ? readFileSync(sandbox.daemonLog, 'utf8') : '';
 }
 
-// In-process run of the pipeline with the fake docker.
-export async function runWithFake(sandbox, db, extra = {}, now = NOW) {
-  const env = envFor(sandbox, db, extra);
-  const config = loadConfig(env);
-  const docker = new DockerRunner({
-    bin: config.dockerBin,
-    containerEnv: config.containerEnv,
+// One backup run with the fake docker, as the lock holder in a child process (the way cli.mjs runs
+// it). `child` is the writer; `done` resolves to the run's result. A run that finds the lock held
+// reports busy, exactly as cli.mjs does.
+export function startLockedRun({ backupDir, env, now = NOW, tempRoot }) {
+  const child = launchLocked(backupDir, [process.execPath, RUN_LOCKED], {
     env,
+    stdio: ['pipe', 'pipe', 'pipe'],
   });
-  return runBackup({ config, docker, now: () => now, tempRoot: sandbox.tmp });
+  child.stdin.on('error', () => {}); // a launcher that never ran has no stdin reader
+  let stdout = '';
+  child.stdout.on('data', (chunk) => {
+    stdout += chunk;
+  });
+  child.stderr.on('data', () => {});
+  child.stdin.end(JSON.stringify({ env, now: now.toISOString(), tempRoot }));
+  const done = new Promise((resolve, reject) => {
+    child.on('error', reject);
+    child.on('close', (code) => {
+      if (code === LAUNCH_BUSY || code === LAUNCH_FAILED) {
+        resolve(reportBusy(loadConfig(env), () => now));
+        return;
+      }
+      const line = stdout.trim().split('\n').pop();
+      resolve(JSON.parse(line));
+    });
+  });
+  return { child, done };
+}
+
+// Runs one fake-docker backup as the lock holder and returns its result.
+export function runWithFake(sandbox, db, extra = {}, now = NOW) {
+  const env = envFor(sandbox, db, extra);
+  return startLockedRun({ backupDir: sandbox.backupDir, env, now, tempRoot: sandbox.tmp }).done;
 }
 
 // Spawns the real CLI and captures what it prints.
@@ -190,33 +213,35 @@ export function readDockerLog(sandbox) {
 
 export const LOCK = (backupDir) => path.join(backupDir, '.backup.lock');
 
-// A child process that takes the real backup lock and holds it until `gate` exists (or until it
-// is killed). Resolves `acquired` with whether it got the lock on its first attempt.
-export function spawnLockHolder(backupDir, gate) {
-  const child = spawn(process.execPath, [LOCK_WORKER, backupDir, gate], {
+// A writer process that holds the real backup lock until `gate` exists (or until it is killed).
+// `report` resolves to its first JSON line (null when it never ran); `acquired` is true when it
+// holds the lock; `exited` resolves when it has gone. `mode` is a lock-worker.mjs mode.
+export function spawnLockHolder(backupDir, gate, mode = 'hold') {
+  const child = launchLocked(backupDir, [process.execPath, LOCK_WORKER, backupDir, gate, mode], {
     stdio: ['ignore', 'pipe', 'inherit'],
   });
   let buffer = '';
-  const acquired = new Promise((resolve) => {
+  const report = new Promise((resolve) => {
     child.stdout.on('data', (chunk) => {
       buffer += chunk;
       const at = buffer.indexOf('\n');
-      if (at === -1) return;
-      const line = JSON.parse(buffer.slice(0, at));
-      resolve(line.acquired === true);
+      if (at !== -1) resolve(JSON.parse(buffer.slice(0, at)));
     });
-    child.on('close', () => resolve(false));
+    child.on('close', () => resolve(null));
   });
+  const acquired = report.then((line) => line?.acquired === true);
   const exited = new Promise((resolve) => child.on('close', resolve));
-  return { child, acquired, exited };
+  return { child, report, acquired, exited };
 }
 
-// True when no live process holds the backup lock. Probes by taking it and giving it back.
-export async function lockIsFree(backupDir) {
-  const probe = await acquireLock(backupDir);
-  if (!probe) return false;
-  await probe.release();
-  return true;
+// True when no live process holds the backup lock. Probes by starting a writer that does nothing
+// and exits, which needs the lock: a launcher refused as busy means it is held.
+export function lockIsFree(backupDir) {
+  return new Promise((resolve) => {
+    const probe = launchLocked(backupDir, [process.execPath, '-e', ''], { stdio: 'ignore' });
+    probe.on('error', () => resolve(false));
+    probe.on('close', (code) => resolve(code === 0));
+  });
 }
 
 // True while some other open file description holds an exclusive flock on the lock file. Used
