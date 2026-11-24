@@ -28,16 +28,6 @@ jobs:
     if: ${{ inputs.confirm == 'migrate production' && github.ref == 'refs/heads/master' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    services:
-      scratch:
-        image: postgres:17-alpine
-        env:
-          POSTGRES_PASSWORD: scratch
-          POSTGRES_DB: restore_check
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 20
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -75,14 +65,29 @@ jobs:
             sh -lc "pg_dump \"\$DATABASE_URL\" -Fc -f \"/backups/${{ steps.meta.outputs.file_name }}\""
 
       - name: Prove the backup restores
+        # Output is suppressed: a failing COPY can print production values and the repository is public.
         shell: bash
         run: |
           test -s "backups/${{ steps.meta.outputs.file_name }}"
-          docker run --rm --network host \
-            -v "${GITHUB_WORKSPACE}/backups:/backups" \
-            -e PGPASSWORD=scratch \
-            postgres:17-alpine \
-            sh -lc "pg_restore --exit-on-error --no-owner --no-privileges -h 127.0.0.1 -U postgres -d restore_check \"/backups/${{ steps.meta.outputs.file_name }}\""
+          docker network create restore-check > /dev/null
+          docker run -d --rm --name scratch --network restore-check --log-driver none \
+            -e POSTGRES_PASSWORD=scratch -e POSTGRES_DB=restore_check postgres:17-alpine > /dev/null
+          for _ in $(seq 1 60); do
+            docker exec scratch pg_isready -U postgres > /dev/null 2>&1 && break
+            sleep 2
+          done
+          if docker run --rm --network restore-check --log-driver none \
+              -v "${GITHUB_WORKSPACE}/backups:/backups" -e PGPASSWORD=scratch postgres:17-alpine \
+              sh -lc "pg_restore --exit-on-error --no-owner --no-privileges -h scratch -U postgres -d restore_check \"/backups/${{ steps.meta.outputs.file_name }}\"" \
+              > /dev/null 2>&1; then
+            echo "backup restored into a scratch PostgreSQL 17"
+          else
+            echo "backup restore check failed; migration not applied"
+            docker stop scratch > /dev/null 2>&1 || true
+            exit 1
+          fi
+          docker stop scratch > /dev/null 2>&1 || true
+          rm -f "backups/${{ steps.meta.outputs.file_name }}"
 
       - name: Migration status before
         env:
