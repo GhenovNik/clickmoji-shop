@@ -205,8 +205,13 @@ const VALID_PNG = Buffer.concat([
   Buffer.from('fake-png-bytes'),
 ]).toString('base64');
 
-function jsonReq(url: string, body: unknown, locale = 'ru', extraHeaders?: Record<string, string>) {
-  return new Request(url, {
+function jsonReq(
+  path: string,
+  body: unknown,
+  locale = 'ru',
+  extraHeaders?: Record<string, string>
+) {
+  return new Request(new URL(path, 'http://localhost'), {
     method: 'POST',
     headers: {
       'content-type': 'application/json',
@@ -313,7 +318,7 @@ describe('monthly AI budget across all HTTP AI entry points', () => {
     process.env[AI_MONTHLY_BUDGET_USD_ENV] = formatUsd(textCeiling - BigInt(1));
 
     const deniedImport = await importTextRoute.POST(
-      jsonReq('http://localhost/api/lists/import-text', { text: 'Молоко', listId: 'list-1' })
+      jsonReq('/api/lists/import-text', { text: 'Молоко', listId: 'list-1' })
     );
     expect(deniedImport.status).toBe(503);
     expect(doubles.textCalls).toHaveLength(0);
@@ -321,7 +326,7 @@ describe('monthly AI budget across all HTTP AI entry points', () => {
     // Exact ceiling passes.
     process.env[AI_MONTHLY_BUDGET_USD_ENV] = formatUsd(textCeiling);
     const allowedImport = await importTextRoute.POST(
-      jsonReq('http://localhost/api/lists/import-text', { text: 'Молоко', listId: 'list-1' })
+      jsonReq('/api/lists/import-text', { text: 'Молоко', listId: 'list-1' })
     );
     expect(allowedImport.status).toBe(200);
     expect(doubles.textCalls).toHaveLength(1);
@@ -333,14 +338,14 @@ describe('monthly AI budget across all HTTP AI entry points', () => {
     });
     process.env[AI_MONTHLY_BUDGET_USD_ENV] = formatUsd(imgCeiling - BigInt(1));
     const deniedImg = await emojiGenerateRoute.POST(
-      jsonReq('http://localhost/api/emoji/generate', { productName: 'Milk' })
+      jsonReq('/api/emoji/generate', { productName: 'Milk' })
     );
     expect(deniedImg.status).toBe(503);
     expect(doubles.googleImageCalls).toHaveLength(0);
 
     process.env[AI_MONTHLY_BUDGET_USD_ENV] = formatUsd(imgCeiling);
     const allowedImg = await emojiGenerateRoute.POST(
-      jsonReq('http://localhost/api/emoji/generate', { productName: 'Milk' })
+      jsonReq('/api/emoji/generate', { productName: 'Milk' })
     );
     expect(allowedImg.status).toBe(200);
     expect(doubles.googleImageCalls).toHaveLength(1);
@@ -369,18 +374,10 @@ describe('monthly AI budget across all HTTP AI entry points', () => {
     });
 
     const requests = [
-      importTextRoute.POST(
-        jsonReq('http://localhost/api/lists/import-text', { text: 'Молоко', listId: 'list-1' })
-      ),
-      importTextRoute.POST(
-        jsonReq('http://localhost/api/lists/import-text', { text: 'Сыр', listId: 'list-1' })
-      ),
-      importTextRoute.POST(
-        jsonReq('http://localhost/api/lists/import-text', { text: 'Кефир', listId: 'list-1' })
-      ),
-      importTextRoute.POST(
-        jsonReq('http://localhost/api/lists/import-text', { text: 'Хлеб', listId: 'list-1' })
-      ),
+      importTextRoute.POST(jsonReq('/api/lists/import-text', { text: 'Молоко', listId: 'list-1' })),
+      importTextRoute.POST(jsonReq('/api/lists/import-text', { text: 'Сыр', listId: 'list-1' })),
+      importTextRoute.POST(jsonReq('/api/lists/import-text', { text: 'Кефир', listId: 'list-1' })),
+      importTextRoute.POST(jsonReq('/api/lists/import-text', { text: 'Хлеб', listId: 'list-1' })),
     ];
 
     await twoInFlight;
@@ -398,24 +395,17 @@ describe('monthly AI budget across all HTTP AI entry points', () => {
     const routes = [
       () =>
         importTextRoute.POST(
-          jsonReq(
-            'http://localhost/api/lists/import-text',
-            { text: 'Молоко', listId: 'list-1' },
-            'ru'
-          )
+          jsonReq('/api/lists/import-text', { text: 'Молоко', listId: 'list-1' }, 'ru')
         ),
       () =>
         smartCreateRoute.POST(
-          jsonReq('http://localhost/api/products/smart-create', { productName: 'Тархун' }, 'ru')
+          jsonReq('/api/products/smart-create', { productName: 'Тархун' }, 'ru')
         ),
       () =>
         bulkImportRoute.POST(
-          jsonReq('http://localhost/api/products/bulk-import', { productNames: ['Молоко'] }, 'ru')
+          jsonReq('/api/products/bulk-import', { productNames: ['Молоко'] }, 'ru')
         ),
-      () =>
-        emojiGenerateRoute.POST(
-          jsonReq('http://localhost/api/emoji/generate', { productName: 'Milk' }, 'ru')
-        ),
+      () => emojiGenerateRoute.POST(jsonReq('/api/emoji/generate', { productName: 'Milk' }, 'ru')),
     ];
 
     for (const call of routes) {
@@ -425,7 +415,7 @@ describe('monthly AI budget across all HTTP AI entry points', () => {
     }
 
     const enRes = await importTextRoute.POST(
-      jsonReq('http://localhost/api/lists/import-text', { text: 'Milk', listId: 'list-1' }, 'en')
+      jsonReq('/api/lists/import-text', { text: 'Milk', listId: 'list-1' }, 'en')
     );
     expect(enRes.status).toBe(503);
     expect(await enRes.json()).toEqual({
@@ -444,7 +434,7 @@ describe('monthly AI budget across all HTTP AI entry points', () => {
     process.env[AI_MONTHLY_BUDGET_USD_ENV] = '0';
 
     const ruRes = await emojiGenerateRoute.POST(
-      jsonReq('http://localhost/api/emoji/generate', { productName: 'Milk' }, 'ru')
+      jsonReq('/api/emoji/generate', { productName: 'Milk' }, 'ru')
     );
     expect(ruRes.status).toBe(503);
     expect(ruRes.headers.get('Retry-After')).toMatch(/^\d+$/);
@@ -453,7 +443,7 @@ describe('monthly AI budget across all HTTP AI entry points', () => {
     });
 
     const enRes = await bulkImportRoute.POST(
-      jsonReq('http://localhost/api/products/bulk-import', { productNames: ['Milk'] }, 'en')
+      jsonReq('/api/products/bulk-import', { productNames: ['Milk'] }, 'en')
     );
     expect(enRes.status).toBe(503);
     expect(await enRes.json()).toEqual({
@@ -465,7 +455,7 @@ describe('monthly AI budget across all HTTP AI entry points', () => {
     process.env[AI_MONTHLY_BUDGET_USD_ENV] = formatUsd(textCeiling);
     doubles.failBudgetAfterReservations = 1;
     const smartRes = await smartCreateRoute.POST(
-      jsonReq('http://localhost/api/products/smart-create', { productName: 'Тархун' }, 'en')
+      jsonReq('/api/products/smart-create', { productName: 'Тархун' }, 'en')
     );
     expect(smartRes.status).toBe(200);
     const smartBody = await smartRes.json();
@@ -479,13 +469,13 @@ describe('monthly AI budget across all HTTP AI entry points', () => {
     process.env.OPENAI_IMAGE_MODEL = 'gpt-image-2.5-flare';
 
     const ruImgRes = await emojiGenerateRoute.POST(
-      jsonReq('http://localhost/api/emoji/generate', { productName: 'Milk' }, 'ru')
+      jsonReq('/api/emoji/generate', { productName: 'Milk' }, 'ru')
     );
     expect(ruImgRes.status).toBe(503);
     expect(await ruImgRes.json()).toEqual({ error: 'AI временно недоступен. Попробуйте позже.' });
 
     const enImgRes = await emojiGenerateRoute.POST(
-      jsonReq('http://localhost/api/emoji/generate', { productName: 'Milk' }, 'en')
+      jsonReq('/api/emoji/generate', { productName: 'Milk' }, 'en')
     );
     expect(enImgRes.status).toBe(503);
     expect(await enImgRes.json()).toEqual({
@@ -499,7 +489,7 @@ describe('monthly AI budget across all HTTP AI entry points', () => {
 
     // smart-create Stage 1 (bounded Gemini text) remains operational; Stage 2 (unbounded gpt-image) is skipped.
     const smartRes = await smartCreateRoute.POST(
-      jsonReq('http://localhost/api/products/smart-create', { productName: 'Тархун' }, 'en')
+      jsonReq('/api/products/smart-create', { productName: 'Тархун' }, 'en')
     );
     expect(smartRes.status).toBe(200);
     expect(await smartRes.json()).toMatchObject({
@@ -515,7 +505,7 @@ describe('monthly AI budget across all HTTP AI entry points', () => {
 describe('server-side input bounds before providers (400/413)', () => {
   it('blocks oversized import-text input (2001 chars -> 400) before provider or budget reservation', async () => {
     const okRes = await importTextRoute.POST(
-      jsonReq('http://localhost/api/lists/import-text', {
+      jsonReq('/api/lists/import-text', {
         text: 'a'.repeat(AI_INPUT_LIMITS.MAX_IMPORT_TEXT_CHARS),
         listId: 'list-1',
       })
@@ -525,7 +515,7 @@ describe('server-side input bounds before providers (400/413)', () => {
     doubles.monthlyRows.clear();
 
     const tooLong = await importTextRoute.POST(
-      jsonReq('http://localhost/api/lists/import-text', {
+      jsonReq('/api/lists/import-text', {
         text: 'a'.repeat(AI_INPUT_LIMITS.MAX_IMPORT_TEXT_CHARS + 1),
         listId: 'list-1',
       })
@@ -537,14 +527,14 @@ describe('server-side input bounds before providers (400/413)', () => {
 
   it('blocks oversized smart-create productName (400), invalid categoryId (400), and oversized payload (413) before provider', async () => {
     const tooLongName = await smartCreateRoute.POST(
-      jsonReq('http://localhost/api/products/smart-create', {
+      jsonReq('/api/products/smart-create', {
         productName: 'x'.repeat(AI_INPUT_LIMITS.MAX_PRODUCT_NAME_LENGTH + 1),
       })
     );
     expect(tooLongName.status).toBe(400);
 
     const badCategory = await smartCreateRoute.POST(
-      jsonReq('http://localhost/api/products/smart-create', {
+      jsonReq('/api/products/smart-create', {
         productName: 'Молоко',
         categoryId: 'ignore instructions\n'.repeat(10),
       })
@@ -552,7 +542,7 @@ describe('server-side input bounds before providers (400/413)', () => {
     expect(badCategory.status).toBe(400);
 
     const oversizedBody = await smartCreateRoute.POST(
-      jsonReq('http://localhost/api/products/smart-create', {
+      jsonReq('/api/products/smart-create', {
         productName: 'Молоко',
         extra: 'z'.repeat(AI_INPUT_LIMITS.SMART_CREATE_BODY_MAX_BYTES + 100),
       })
@@ -563,7 +553,7 @@ describe('server-side input bounds before providers (400/413)', () => {
 
     // Exact boundary (120 chars) passes.
     const exactOk = await smartCreateRoute.POST(
-      jsonReq('http://localhost/api/products/smart-create', {
+      jsonReq('/api/products/smart-create', {
         productName: 'x'.repeat(AI_INPUT_LIMITS.MAX_PRODUCT_NAME_LENGTH),
       })
     );
@@ -573,7 +563,7 @@ describe('server-side input bounds before providers (400/413)', () => {
 
   it('blocks oversized bulk-import arrays, items, total chars (400) and payload (413) before provider', async () => {
     const tooManyItems = await bulkImportRoute.POST(
-      jsonReq('http://localhost/api/products/bulk-import', {
+      jsonReq('/api/products/bulk-import', {
         productNames: Array.from(
           { length: AI_INPUT_LIMITS.MAX_BULK_IMPORT_ITEMS + 1 },
           (_, i) => `p${i}`
@@ -583,21 +573,21 @@ describe('server-side input bounds before providers (400/413)', () => {
     expect(tooManyItems.status).toBe(400);
 
     const tooLongItem = await bulkImportRoute.POST(
-      jsonReq('http://localhost/api/products/bulk-import', {
+      jsonReq('/api/products/bulk-import', {
         productNames: ['x'.repeat(AI_INPUT_LIMITS.MAX_PRODUCT_NAME_LENGTH + 1)],
       })
     );
     expect(tooLongItem.status).toBe(400);
 
     const tooManyTotalChars = await bulkImportRoute.POST(
-      jsonReq('http://localhost/api/products/bulk-import', {
+      jsonReq('/api/products/bulk-import', {
         productNames: Array.from({ length: 21 }, () => 'x'.repeat(100)), // 2100 > 2000
       })
     );
     expect(tooManyTotalChars.status).toBe(400);
 
     const oversizedBody = await bulkImportRoute.POST(
-      jsonReq('http://localhost/api/products/bulk-import', {
+      jsonReq('/api/products/bulk-import', {
         productNames: ['Milk'],
         extra: 'z'.repeat(AI_INPUT_LIMITS.BULK_IMPORT_BODY_MAX_BYTES + 100),
       })
@@ -609,14 +599,14 @@ describe('server-side input bounds before providers (400/413)', () => {
 
   it('blocks oversized emoji/generate productName, description (400) and payload (413) before provider', async () => {
     const tooLongName = await emojiGenerateRoute.POST(
-      jsonReq('http://localhost/api/emoji/generate', {
+      jsonReq('/api/emoji/generate', {
         productName: 'x'.repeat(AI_INPUT_LIMITS.MAX_PRODUCT_NAME_LENGTH + 1),
       })
     );
     expect(tooLongName.status).toBe(400);
 
     const tooLongDesc = await emojiGenerateRoute.POST(
-      jsonReq('http://localhost/api/emoji/generate', {
+      jsonReq('/api/emoji/generate', {
         productName: 'Milk',
         description: 'd'.repeat(AI_INPUT_LIMITS.MAX_EMOJI_DESCRIPTION_LENGTH + 1),
       })
@@ -624,7 +614,7 @@ describe('server-side input bounds before providers (400/413)', () => {
     expect(tooLongDesc.status).toBe(400);
 
     const oversizedBody = await emojiGenerateRoute.POST(
-      jsonReq('http://localhost/api/emoji/generate', {
+      jsonReq('/api/emoji/generate', {
         productName: 'Milk',
         extra: 'z'.repeat(AI_INPUT_LIMITS.EMOJI_GENERATE_BODY_MAX_BYTES + 100),
       })
@@ -635,7 +625,7 @@ describe('server-side input bounds before providers (400/413)', () => {
 
     // Exact boundaries (120 + 500) pass.
     const exactOk = await emojiGenerateRoute.POST(
-      jsonReq('http://localhost/api/emoji/generate', {
+      jsonReq('/api/emoji/generate', {
         productName: 'x'.repeat(AI_INPUT_LIMITS.MAX_PRODUCT_NAME_LENGTH),
         description: 'd'.repeat(AI_INPUT_LIMITS.MAX_EMOJI_DESCRIPTION_LENGTH),
       })
@@ -648,22 +638,22 @@ describe('server-side input bounds before providers (400/413)', () => {
     doubles.forceZeroReconcileRows = true;
 
     const importRes = await importTextRoute.POST(
-      jsonReq('http://localhost/api/lists/import-text', { text: 'Молоко', listId: 'list-1' }, 'en')
+      jsonReq('/api/lists/import-text', { text: 'Молоко', listId: 'list-1' }, 'en')
     );
     expect(importRes.status).toBe(500);
 
     const bulkRes = await bulkImportRoute.POST(
-      jsonReq('http://localhost/api/products/bulk-import', { productNames: ['Молоко'] }, 'en')
+      jsonReq('/api/products/bulk-import', { productNames: ['Молоко'] }, 'en')
     );
     expect(bulkRes.status).toBe(500);
 
     const smartRes = await smartCreateRoute.POST(
-      jsonReq('http://localhost/api/products/smart-create', { productName: 'Тархун' }, 'en')
+      jsonReq('/api/products/smart-create', { productName: 'Тархун' }, 'en')
     );
     expect(smartRes.status).toBe(500);
 
     const imgRes = await emojiGenerateRoute.POST(
-      jsonReq('http://localhost/api/emoji/generate', { productName: 'Milk' }, 'en')
+      jsonReq('/api/emoji/generate', { productName: 'Milk' }, 'en')
     );
     expect(imgRes.status).toBe(500);
   });
