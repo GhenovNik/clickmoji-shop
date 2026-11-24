@@ -40,7 +40,37 @@
     "productsTitle": "Products",
     "productsDescription": "Add new products, edit them and upload custom images",
     "usersTitle": "Users",
-    "usersDescription": "Manage users, assign roles and edit profiles"
+    "usersDescription": "Manage users, assign roles and edit profiles",
+    "funnelTitle": "Action funnel",
+    "funnelDescription": "Unique people conversion from landing visit to purchased items across 1, 7 and 30 days"
+  },
+  "funnelPage": {
+    "title": "Action funnel",
+    "subtitle": "Ordered unique people across rolling 1, 7 and 30-day windows",
+    "deferredImportNote": "Non-AI item additions and restorations are tracked; AI text import tracking is deferred.",
+    "refresh": "Refresh",
+    "updatedAt": "Updated {time}",
+    "overallConversion": "Visit → Purchase",
+    "entry": "Entry",
+    "emptyRate": "—",
+    "noData": "No funnel events recorded in this period yet.",
+    "columns": {
+      "stage": "Stage",
+      "users": "Unique people",
+      "stepConversion": "From previous step"
+    },
+    "windows": {
+      "1": "Last 24 hours",
+      "7": "Last 7 days",
+      "30": "Last 30 days"
+    },
+    "stages": {
+      "visit": "Landing visit",
+      "auth": "Sign up or login",
+      "listCreate": "Created list",
+      "itemAdd": "Added item",
+      "itemPurchase": "Marked purchased"
+    }
   },
   "productsPage": {
     "title": "Products",

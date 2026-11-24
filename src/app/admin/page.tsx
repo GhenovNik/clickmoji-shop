@@ -54,6 +54,15 @@ export default async function AdminPage() {
             <h2 className="text-2xl font-bold text-gray-900 mb-2">{t('dashboard.usersTitle')}</h2>
             <p className="text-gray-600">{t('dashboard.usersDescription')}</p>
           </Link>
+
+          <Link
+            href="/admin/funnel"
+            className="block p-8 bg-white rounded-xl shadow-md hover:shadow-lg transition-shadow border border-gray-200"
+          >
+            <div className="text-5xl mb-4">📊</div>
+            <h2 className="text-2xl font-bold text-gray-900 mb-2">{t('dashboard.funnelTitle')}</h2>
+            <p className="text-gray-600">{t('dashboard.funnelDescription')}</p>
+          </Link>
         </div>
       </div>
     </div>

@@ -14,6 +14,13 @@ const state = vi.hoisted(() => ({
   items: [] as Row[],
   failCatalog: false,
   failCreate: false,
+  failItem: false,
+  record: vi.fn(),
+}));
+
+vi.mock('@/lib/funnel', () => ({
+  getGuestIdFromRequest: () => null,
+  recordFunnelEvent: state.record,
 }));
 
 vi.mock('@google/genai', () => ({
@@ -78,6 +85,7 @@ vi.mock('@/lib/prisma', () => {
       },
       item: {
         create: async ({ data }: { data: Row }) => {
+          if (state.failItem && data.productId === 'eggs') throw new Error('insert refused');
           state.items.push(data);
           return data;
         },
@@ -135,6 +143,8 @@ beforeEach(() => {
   state.items = [];
   state.failCatalog = false;
   state.failCreate = false;
+  state.failItem = false;
+  state.record.mockReset().mockResolvedValue(true);
   state.products = [
     catalogProduct('milk', 'Молоко', 'Milk', 'cat-dairy'),
     catalogProduct('eggs', 'Яйца', 'Eggs', 'cat-dairy'),
@@ -427,5 +437,34 @@ describe('import messages follow the request language', () => {
     expect(oversizedRes.status).toBe(413);
     expect(await oversizedRes.json()).toEqual({ error: 'Request payload is too large' });
     expect(state.prompts).toEqual([]);
+  });
+});
+
+describe('import funnel recording', () => {
+  it('records once when a partial import persists an item', async () => {
+    state.failItem = true;
+    const result = await runImport([milk, eggs]);
+    expect(result.addedProductIds).toEqual(['milk']);
+    expect(result.body.results.failed).toHaveLength(1);
+    expect(state.record).toHaveBeenCalledOnce();
+    expect(state.record).toHaveBeenCalledWith({
+      type: 'ITEM_ADD',
+      userId: 'user-b',
+      guestId: null,
+    });
+  });
+
+  it('does not record when no item persists', async () => {
+    state.failItem = true;
+    const result = await runImport([eggs]);
+    expect(result.addedProductIds).toEqual([]);
+    expect(state.record).not.toHaveBeenCalled();
+  });
+
+  it('preserves success if recording fails', async () => {
+    state.record.mockRejectedValueOnce(new Error('record failed'));
+    const result = await runImport([milk]);
+    expect(result.status).toBe(200);
+    expect(result.body.results.added).toHaveLength(1);
   });
 });

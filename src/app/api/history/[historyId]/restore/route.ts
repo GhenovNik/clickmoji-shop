@@ -3,6 +3,7 @@ import { apiText } from '@/lib/api-messages';
 import { prisma } from '@/lib/prisma';
 import { requireUser } from '@/lib/auth-guards';
 import { visibleProductsWhere } from '@/lib/product-visibility';
+import { getGuestIdFromRequest, recordFunnelEvent } from '@/lib/funnel';
 
 export async function POST(
   request: Request,
@@ -84,6 +85,20 @@ export async function POST(
 
       return created;
     });
+
+    const guestId = getGuestIdFromRequest(request);
+    await recordFunnelEvent({
+      type: 'LIST_CREATE',
+      userId: session.user.id,
+      guestId,
+    });
+    if (itemsToCreate.length > 0) {
+      await recordFunnelEvent({
+        type: 'ITEM_ADD',
+        userId: session.user.id,
+        guestId,
+      });
+    }
 
     return NextResponse.json({
       listId: list.id,

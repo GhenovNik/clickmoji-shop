@@ -4,6 +4,7 @@ import { prisma } from '@/lib/prisma';
 import { requireUser } from '@/lib/auth-guards';
 import { getRequestLocale, getServerTranslator } from '@/lib/auth-security';
 import { starterListData } from '@/lib/starter-lists';
+import { getGuestIdFromRequest, recordFunnelEvent } from '@/lib/funnel';
 
 // POST /api/lists/init - create starter lists when the account has none, named in the
 // language of the request.
@@ -40,6 +41,12 @@ export async function POST(request: Request) {
     if (!created) {
       return NextResponse.json({ message: await apiText(request, 'listsAlreadyExist') });
     }
+
+    await recordFunnelEvent({
+      type: 'LIST_CREATE',
+      userId: session.user.id,
+      guestId: getGuestIdFromRequest(request),
+    });
 
     const lists = await prisma.list.findMany({
       where: {
