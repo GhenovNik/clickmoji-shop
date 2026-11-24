@@ -161,6 +161,7 @@
     "fetchCategoriesFailed": "Не удалось загрузить категории",
     "categoryFieldsRequired": "Заполните название, английское название и порядок",
     "categoryImageRequired": "Нужен emoji или своя картинка",
-    "createCategoryFailed": "Не удалось создать категорию"
+    "createCategoryFailed": "Не удалось создать категорию",
+    "fetchFunnelFailed": "Не удалось загрузить воронку действий"
   }
 }

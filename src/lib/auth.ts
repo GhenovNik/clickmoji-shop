@@ -6,6 +6,7 @@ import { prisma } from './prisma';
 import { authConfig } from './auth.config';
 import { isEmailVerificationRequired } from './email';
 import { normalizeEmail } from './auth-security';
+import { readGuestIdFromRequestScope, recordFunnelEvent } from './funnel';
 
 const providers: NextAuthOptions['providers'] = [
   Credentials({
@@ -65,6 +66,15 @@ export const authOptions: NextAuthOptions = {
   callbacks: {
     async signIn({ user, account, profile }) {
       if (account?.provider !== 'google') {
+        if (user?.id) {
+          const guestId = await readGuestIdFromRequestScope();
+          await recordFunnelEvent({
+            type: 'LOGIN',
+            userId: user.id,
+            guestId,
+            correlateGuest: true,
+          });
+        }
         return true;
       }
 
@@ -74,9 +84,11 @@ export const authOptions: NextAuthOptions = {
       }
 
       const existingUser = await prisma.user.findUnique({ where: { email } });
+      let authenticatedUserId: string;
+      let isNewUser = false;
 
       if (!existingUser) {
-        await prisma.user.create({
+        const createdUser = await prisma.user.create({
           data: {
             email,
             name: user.name || null,
@@ -85,6 +97,8 @@ export const authOptions: NextAuthOptions = {
             emailVerified: new Date(),
           },
         });
+        authenticatedUserId = createdUser.id;
+        isNewUser = true;
       } else {
         await prisma.user.update({
           where: { email },
@@ -95,7 +109,16 @@ export const authOptions: NextAuthOptions = {
             password: existingUser.emailVerified ? undefined : null,
           },
         });
+        authenticatedUserId = existingUser.id;
       }
+
+      const guestId = await readGuestIdFromRequestScope();
+      await recordFunnelEvent({
+        type: isNewUser ? 'REGISTER' : 'LOGIN',
+        userId: authenticatedUserId,
+        guestId,
+        correlateGuest: true,
+      });
 
       return true;
     },

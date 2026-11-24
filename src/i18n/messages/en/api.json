@@ -161,6 +161,7 @@
     "fetchCategoriesFailed": "Failed to fetch categories",
     "categoryFieldsRequired": "Missing required fields: name, nameEn, order",
     "categoryImageRequired": "Either emoji or custom image (imageUrl) is required",
-    "createCategoryFailed": "Failed to create category"
+    "createCategoryFailed": "Failed to create category",
+    "fetchFunnelFailed": "Failed to load funnel analytics"
   }
 }

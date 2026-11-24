@@ -7,6 +7,13 @@ import {
   getRequestLocale,
   rateLimitResponse,
 } from '@/lib/auth-security';
+import {
+  FUNNEL_GUEST_COOKIE,
+  FUNNEL_GUEST_HEADER,
+  FUNNEL_GUEST_MAX_AGE_SECONDS,
+  generateGuestId,
+  sanitizeGuestId,
+} from '@/lib/funnel';
 
 const publicRoutes = [
   '/',
@@ -32,6 +39,11 @@ const isPublicCatalogRoute = (pathname: string) => {
 
   return /^\/categories\/[^/]+\/products$/.test(pathname);
 };
+
+const isPrefetchRequest = (request: NextRequest) =>
+  request.headers.get('next-router-prefetch') === '1' ||
+  request.headers.get('purpose') === 'prefetch' ||
+  Boolean(request.headers.get('sec-purpose')?.toLowerCase().includes('prefetch'));
 
 const hasPlaywrightAuthBypass = (request: NextRequest) => {
   const bypassToken = process.env.PLAYWRIGHT_AUTH_BYPASS_TOKEN;
@@ -91,6 +103,31 @@ export default async function proxy(request: NextRequest) {
 
   if (isLoggedIn && (pathname === '/login' || pathname === '/register')) {
     return NextResponse.redirect(new URL('/', request.url));
+  }
+
+  if (pathname === '/' && request.method === 'GET' && !isPrefetchRequest(request)) {
+    const existingGuestId = sanitizeGuestId(request.cookies.get(FUNNEL_GUEST_COOKIE)?.value);
+    const guestId = existingGuestId ?? generateGuestId();
+    const requestHeaders = new Headers(request.headers);
+    requestHeaders.set(FUNNEL_GUEST_HEADER, guestId);
+
+    const response = NextResponse.next({
+      request: {
+        headers: requestHeaders,
+      },
+    });
+
+    if (!existingGuestId) {
+      response.cookies.set(FUNNEL_GUEST_COOKIE, guestId, {
+        httpOnly: true,
+        sameSite: 'lax',
+        secure: process.env.NODE_ENV === 'production',
+        path: '/',
+        maxAge: FUNNEL_GUEST_MAX_AGE_SECONDS,
+      });
+    }
+
+    return response;
   }
 
   return NextResponse.next();

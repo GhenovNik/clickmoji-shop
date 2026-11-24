@@ -1,0 +1,190 @@
+import { prisma } from '@/lib/prisma';
+import type { FunnelEventType } from '@/lib/funnel';
+
+export const FUNNEL_WINDOWS = [1, 7, 30] as const;
+export type FunnelWindowDays = (typeof FUNNEL_WINDOWS)[number];
+
+export const FUNNEL_STAGES = ['visit', 'auth', 'listCreate', 'itemAdd', 'itemPurchase'] as const;
+export type FunnelStageKey = (typeof FUNNEL_STAGES)[number];
+
+export type FunnelEventRecord = {
+  type: FunnelEventType;
+  guestId: string | null;
+  userId: string | null;
+  createdAt: Date;
+};
+
+export type FunnelStageSummary = {
+  stage: FunnelStageKey;
+  count: number;
+  /** Conversion rate from the immediately preceding stage (0..1), or null for entry/empty denominator. */
+  transitionRate: number | null;
+};
+
+export type FunnelWindowSummary = {
+  days: FunnelWindowDays;
+  windowStart: string;
+  windowEnd: string;
+  stages: FunnelStageSummary[];
+  /** Overall conversion from visit to purchased (0..1), or null when visit count is zero. */
+  overallRate: number | null;
+};
+
+export type FunnelReport = {
+  generatedAt: string;
+  windows: FunnelWindowSummary[];
+};
+
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
+
+const STAGE_INDEX: Record<FunnelEventType, number> = {
+  VISIT: 0,
+  REGISTER: 1,
+  LOGIN: 1,
+  LIST_CREATE: 2,
+  ITEM_ADD: 3,
+  ITEM_PURCHASE: 4,
+};
+
+function compareEvents(left: FunnelEventRecord, right: FunnelEventRecord): number {
+  const timeDiff = left.createdAt.getTime() - right.createdAt.getTime();
+  if (timeDiff !== 0) return timeDiff;
+  return STAGE_INDEX[left.type] - STAGE_INDEX[right.type];
+}
+
+type GuestUserLink = {
+  userId: string;
+  createdAtMs: number;
+};
+
+function buildGuestLinks(sortedEvents: FunnelEventRecord[]): Map<string, GuestUserLink[]> {
+  const links = new Map<string, GuestUserLink[]>();
+  for (const event of sortedEvents) {
+    if (!event.guestId || !event.userId) continue;
+    const list = links.get(event.guestId);
+    const entry = { userId: event.userId, createdAtMs: event.createdAt.getTime() };
+    if (list) {
+      list.push(entry);
+    } else {
+      links.set(event.guestId, [entry]);
+    }
+  }
+  return links;
+}
+
+function resolvePersonKey(
+  event: FunnelEventRecord,
+  guestLinks: Map<string, GuestUserLink[]>
+): string | null {
+  if (event.userId) {
+    return `user:${event.userId}`;
+  }
+  if (!event.guestId) {
+    return null;
+  }
+
+  const candidates = guestLinks.get(event.guestId);
+  if (candidates) {
+    const eventTimeMs = event.createdAt.getTime();
+    const match = candidates.find((candidate) => candidate.createdAtMs >= eventTimeMs);
+    if (match) {
+      return `user:${match.userId}`;
+    }
+  }
+
+  return `guest:${event.guestId}`;
+}
+
+export function aggregateFunnelWindow(
+  events: FunnelEventRecord[],
+  days: FunnelWindowDays,
+  now: Date = new Date()
+): FunnelWindowSummary {
+  const windowEndMs = now.getTime();
+  const windowStartMs = windowEndMs - days * MS_PER_DAY;
+  const windowStart = new Date(windowStartMs);
+  const windowEnd = new Date(windowEndMs);
+
+  const sortedAll = [...events]
+    .filter((event) => event.createdAt.getTime() <= windowEndMs)
+    .sort(compareEvents);
+  const guestLinks = buildGuestLinks(sortedAll);
+
+  const inWindow = sortedAll.filter((event) => event.createdAt.getTime() >= windowStartMs);
+
+  const personMaxStage = new Map<string, number>();
+  for (const event of inWindow) {
+    const personKey = resolvePersonKey(event, guestLinks);
+    if (!personKey) continue;
+
+    const stageIndex = STAGE_INDEX[event.type];
+    const currentStage = personMaxStage.get(personKey) ?? -1;
+    if (stageIndex === currentStage + 1) {
+      personMaxStage.set(personKey, stageIndex);
+    }
+  }
+
+  const counts = FUNNEL_STAGES.map(() => 0);
+  for (const maxStage of personMaxStage.values()) {
+    for (let stage = 0; stage <= maxStage; stage += 1) {
+      counts[stage] += 1;
+    }
+  }
+
+  const stages: FunnelStageSummary[] = FUNNEL_STAGES.map((stage, index) => {
+    const count = counts[index];
+    if (index === 0) {
+      return { stage, count, transitionRate: null };
+    }
+    const previousCount = counts[index - 1];
+    return {
+      stage,
+      count,
+      transitionRate: previousCount > 0 ? count / previousCount : null,
+    };
+  });
+
+  const visitCount = counts[0];
+  const purchaseCount = counts[FUNNEL_STAGES.length - 1];
+
+  return {
+    days,
+    windowStart: windowStart.toISOString(),
+    windowEnd: windowEnd.toISOString(),
+    stages,
+    overallRate: visitCount > 0 ? purchaseCount / visitCount : null,
+  };
+}
+
+export function buildFunnelReport(
+  events: FunnelEventRecord[],
+  now: Date = new Date()
+): FunnelReport {
+  return {
+    generatedAt: now.toISOString(),
+    windows: FUNNEL_WINDOWS.map((days) => aggregateFunnelWindow(events, days, now)),
+  };
+}
+
+export async function getFunnelReport(now: Date = new Date()): Promise<FunnelReport> {
+  const maxDays = FUNNEL_WINDOWS[FUNNEL_WINDOWS.length - 1];
+  const earliestWindowStart = new Date(now.getTime() - maxDays * MS_PER_DAY);
+
+  const events = await prisma.funnelEvent.findMany({
+    where: {
+      createdAt: {
+        gte: earliestWindowStart,
+        lte: now,
+      },
+    },
+    select: {
+      type: true,
+      guestId: true,
+      userId: true,
+      createdAt: true,
+    },
+    orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+  });
+
+  return buildFunnelReport(events, now);
+}

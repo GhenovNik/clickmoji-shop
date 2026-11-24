@@ -4,6 +4,7 @@ import { prisma } from '@/lib/prisma';
 import { requireUser } from '@/lib/auth-guards';
 import { visibleItemsWhere } from '@/lib/product-visibility';
 import { lockOwnedList } from '@/lib/list-lock';
+import { getGuestIdFromRequest, recordFunnelEvent } from '@/lib/funnel';
 
 // PUT /api/lists/[listId]/items/[itemId] - update a list item.
 // Runs under the list lock shared by every change to the list's items (see lockOwnedList), so an
@@ -27,12 +28,12 @@ export async function PUT(
       // A legacy item of another user's private product is neither updated nor returned.
       const existingItem = await tx.item.findFirst({
         where: { id: itemId, listId, ...visibleItemsWhere(session.user.id) },
-        select: { id: true },
+        select: { id: true, isPurchased: true },
       });
 
       if (!existingItem) return 'item-not-found' as const;
 
-      return tx.item.update({
+      const updatedItem = await tx.item.update({
         where: {
           id: itemId,
           listId: listId,
@@ -53,6 +54,12 @@ export async function PUT(
           },
         },
       });
+
+      return {
+        status: 'updated' as const,
+        item: updatedItem,
+        transitionedToPurchased: !existingItem.isPurchased && Boolean(updatedItem.isPurchased),
+      };
     });
 
     if (result === 'list-not-found') {
@@ -63,7 +70,15 @@ export async function PUT(
       return NextResponse.json({ error: await apiText(request, 'itemNotFound') }, { status: 404 });
     }
 
-    return NextResponse.json(result);
+    if (result.transitionedToPurchased) {
+      await recordFunnelEvent({
+        type: 'ITEM_PURCHASE',
+        userId: session.user.id,
+        guestId: getGuestIdFromRequest(request),
+      });
+    }
+
+    return NextResponse.json(result.item);
   } catch (error) {
     console.error('Error updating item:', error);
     return NextResponse.json(

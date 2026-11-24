@@ -1,10 +1,39 @@
 import Link from 'next/link';
+import { headers } from 'next/headers';
 import { ShoppingCart, Star, History, ArrowRight } from 'lucide-react';
 import { getTranslations } from 'next-intl/server';
 import InteractiveCart from '@/components/ui/InteractiveCart';
+import { auth } from '@/lib/auth';
+import { readGuestIdFromRequestScope, recordFunnelEvent } from '@/lib/funnel';
+
+async function recordLandingVisit() {
+  let isPrefetch = false;
+  try {
+    const headerList = await headers();
+    isPrefetch =
+      headerList.get('next-router-prefetch') === '1' ||
+      headerList.get('purpose') === 'prefetch' ||
+      Boolean(headerList.get('sec-purpose')?.toLowerCase().includes('prefetch'));
+  } catch {
+    // Outside Next.js request scope; proceed with best-effort check.
+  }
+
+  if (isPrefetch) return;
+
+  const [guestId, session] = await Promise.all([
+    readGuestIdFromRequestScope(),
+    auth().catch(() => null),
+  ]);
+
+  await recordFunnelEvent({
+    type: 'VISIT',
+    guestId,
+    userId: session?.user?.id ?? null,
+  });
+}
 
 export default async function Home() {
-  const t = await getTranslations('home');
+  const [t] = await Promise.all([getTranslations('home'), recordLandingVisit()]);
 
   return (
     <div className="min-h-[78vh] md:min-h-[85vh] flex flex-col items-center justify-start md:justify-center py-8 sm:py-10 px-4 sm:px-6 bg-gradient-to-b from-blue-50/50 to-white">

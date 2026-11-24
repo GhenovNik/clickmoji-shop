@@ -5,6 +5,7 @@ import { requireUser } from '@/lib/auth-guards';
 import { visibleProductsWhere } from '@/lib/product-visibility';
 import { lockOwnedList } from '@/lib/list-lock';
 import { getRequestLocale, getServerTranslator } from '@/lib/auth-security';
+import { getGuestIdFromRequest, recordFunnelEvent } from '@/lib/funnel';
 
 // Upper bound for one request; the largest category has far fewer products than this.
 const MAX_ITEMS_PER_BATCH = 100;
@@ -126,6 +127,14 @@ export async function POST(request: Request, { params }: { params: Promise<{ lis
 
     if (!createdItems) {
       return NextResponse.json({ error: await apiText(request, 'listNotFound') }, { status: 404 });
+    }
+
+    if (createdItems.length > 0) {
+      await recordFunnelEvent({
+        type: 'ITEM_ADD',
+        userId: session.user.id,
+        guestId: getGuestIdFromRequest(request),
+      });
     }
 
     return NextResponse.json({

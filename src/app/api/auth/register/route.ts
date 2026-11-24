@@ -5,6 +5,7 @@ import { createEmailVerificationToken } from '@/lib/auth-tokens';
 import { isEmailVerificationRequired, sendVerificationEmail } from '@/lib/email';
 import { getPasswordValidationError } from '@/lib/validation/password';
 import { starterListData } from '@/lib/starter-lists';
+import { getGuestIdFromRequest, recordFunnelEvent } from '@/lib/funnel';
 import {
   checkRateLimit,
   getClientIp,
@@ -102,6 +103,19 @@ export async function POST(request: Request) {
     // Create starter shopping lists for the new account.
     await prisma.list.createMany({
       data: starterListData(t, user.id),
+    });
+
+    const guestId = getGuestIdFromRequest(request);
+    await recordFunnelEvent({
+      type: 'REGISTER',
+      userId: user.id,
+      guestId,
+      correlateGuest: true,
+    });
+    await recordFunnelEvent({
+      type: 'LIST_CREATE',
+      userId: user.id,
+      guestId,
     });
 
     return NextResponse.json(

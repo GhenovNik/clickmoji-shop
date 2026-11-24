@@ -3,6 +3,7 @@ import { apiText } from '@/lib/api-messages';
 import { prisma } from '@/lib/prisma';
 import { requireUser } from '@/lib/auth-guards';
 import { visibleItemsWhere } from '@/lib/product-visibility';
+import { getGuestIdFromRequest, recordFunnelEvent } from '@/lib/funnel';
 
 // GET /api/lists - list the current user's shopping lists.
 export async function GET(request?: Request) {
@@ -80,6 +81,12 @@ export async function POST(request: Request) {
           },
         },
       });
+    });
+
+    await recordFunnelEvent({
+      type: 'LIST_CREATE',
+      userId: session.user.id,
+      guestId: getGuestIdFromRequest(request),
     });
 
     return NextResponse.json(list);
