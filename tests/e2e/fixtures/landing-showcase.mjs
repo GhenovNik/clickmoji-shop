@@ -17,7 +17,8 @@ export const LANDING_VIEWS = [
     view: 'product-cards',
     route: '/categories/cat-veg/products',
     scrollY: 0,
-    description: 'Category product cards with Tomato and Milk selected and add-to-list bar visible',
+    description:
+      'Vegetables category product cards (Tomato and Onion selected) and add-to-list bar visible',
   },
   {
     view: 'shopping-list',
@@ -42,8 +43,8 @@ export const COMMITTED_LANDING_ASSETS = [
     assetPath: 'src/assets/landing/ru/product-cards.webp',
     width: 780,
     height: 1040,
-    bytes: 39116,
-    sha256: 'cde505479d5bac5ec2cde81d93e685fae745223a112d17486da2436443960d56',
+    bytes: 38108,
+    sha256: '576f18a64673043cda3dc500985d067334c32abef7d9b539e644416cfd1a9ce2',
   },
   {
     locale: 'ru',
@@ -51,8 +52,8 @@ export const COMMITTED_LANDING_ASSETS = [
     assetPath: 'src/assets/landing/ru/shopping-list.webp',
     width: 780,
     height: 1040,
-    bytes: 43316,
-    sha256: '16017e26a5926581884208b0a61e5af46f0f0810ac98c6edd4970a7269b55c49',
+    bytes: 43494,
+    sha256: '0ec8e647f8a7b99fcbd61c3a4d013b12d227cc10b75ac42bf74bb9d9d33a3d95',
   },
   {
     locale: 'ru',
@@ -60,8 +61,8 @@ export const COMMITTED_LANDING_ASSETS = [
     assetPath: 'src/assets/landing/ru/shopping-grid.webp',
     width: 780,
     height: 1040,
-    bytes: 39526,
-    sha256: 'f4cffda1fe94f095139eeeb318bf616ef399f6ff4381d3b6b09b7976341a5ff3',
+    bytes: 39678,
+    sha256: '92bd2a67ae10bcb74c21b67c95e12b0d95500c30ca996f4b7e5ee648b178da33',
   },
   {
     locale: 'en',
@@ -69,8 +70,8 @@ export const COMMITTED_LANDING_ASSETS = [
     assetPath: 'src/assets/landing/en/product-cards.webp',
     width: 780,
     height: 1040,
-    bytes: 38530,
-    sha256: '5ebf5b7411d5cec4cac7c68bb3025b3b93a7d95dd0cd49dfc0614e1f8ec543fb',
+    bytes: 37670,
+    sha256: '4904935979ec20ab56dad4cdc9fd2014d8a416c2de79e2808eb01698a8dd452b',
   },
   {
     locale: 'en',
@@ -78,8 +79,8 @@ export const COMMITTED_LANDING_ASSETS = [
     assetPath: 'src/assets/landing/en/shopping-list.webp',
     width: 780,
     height: 1040,
-    bytes: 41366,
-    sha256: '3afbeb75fa87e20833c82642a037d9adedc464432134121981ade5c1e4441c54',
+    bytes: 41504,
+    sha256: 'eaf03761c596d3f9a6d8cd0696d599a4b2ba38277c58c72ca09cabba25351a84',
   },
   {
     locale: 'en',
@@ -87,8 +88,8 @@ export const COMMITTED_LANDING_ASSETS = [
     assetPath: 'src/assets/landing/en/shopping-grid.webp',
     width: 780,
     height: 1040,
-    bytes: 37408,
-    sha256: '9c9c3bf6f07dcb5b1965fa4319c5eb0d3387c4df69fc9fe23ae4a22554e1956b',
+    bytes: 37562,
+    sha256: 'abae14ec733d9d2b04a36298023e6c647483ce51cf87083198e70525860c5249',
   },
 ];
 
@@ -164,7 +165,7 @@ const catalogProducts = [
     isCustom: false,
     imageUrl: null,
     variants: [],
-    category: categories[0],
+    category: categories[1],
   },
   {
     id: 'demo-milk',
@@ -231,6 +232,87 @@ const catalogProducts = [
     imageUrl: null,
     variants: [],
     category: categories[2],
+  },
+  // Vegetables from prisma/seed.ts (category "Овощи"); appended so list-view indexes above stay stable.
+  {
+    id: 'demo-cucumber',
+    name: 'Огурец',
+    nameEn: 'Cucumber',
+    emoji: '🥒',
+    isCustom: false,
+    imageUrl: null,
+    variants: [],
+    category: categories[0],
+  },
+  {
+    id: 'demo-carrot',
+    name: 'Морковь',
+    nameEn: 'Carrot',
+    emoji: '🥕',
+    isCustom: false,
+    imageUrl: null,
+    variants: [],
+    category: categories[0],
+  },
+  {
+    id: 'demo-onion',
+    name: 'Лук',
+    nameEn: 'Onion',
+    emoji: '🧅',
+    isCustom: false,
+    imageUrl: null,
+    variants: [],
+    category: categories[0],
+  },
+  {
+    id: 'demo-garlic',
+    name: 'Чеснок',
+    nameEn: 'Garlic',
+    emoji: '🧄',
+    isCustom: false,
+    imageUrl: null,
+    variants: [],
+    category: categories[0],
+  },
+  {
+    id: 'demo-potato',
+    name: 'Картофель',
+    nameEn: 'Potato',
+    emoji: '🥔',
+    isCustom: false,
+    imageUrl: null,
+    variants: [],
+    category: categories[0],
+  },
+  {
+    id: 'demo-broccoli',
+    name: 'Брокколи',
+    nameEn: 'Broccoli',
+    emoji: '🥦',
+    isCustom: false,
+    imageUrl: null,
+    variants: [],
+    category: categories[0],
+  },
+  {
+    id: 'demo-cabbage',
+    name: 'Капуста',
+    nameEn: 'Cabbage',
+    emoji: '🥬',
+    isCustom: false,
+    imageUrl: null,
+    variants: [],
+    category: categories[0],
+  },
+  {
+    id: 'demo-eggplant',
+    name: 'Баклажан',
+    nameEn: 'Eggplant',
+    emoji: '🍆',
+    isCustom: false,
+    imageUrl: null,
+    variants: [],
+    category: categories[0],
   },
 ];
 
@@ -379,10 +461,15 @@ export async function setupLandingShowcaseMocks(page, locale, { authenticated = 
       });
     }
     if (pathname === '/api/products') {
+      // The app requests /api/products?categoryId=<id>; honour it so each category page shows only its own products.
+      const categoryId = url.searchParams.get('categoryId');
+      const products = categoryId
+        ? catalogProducts.filter((product) => product.category.id === categoryId)
+        : catalogProducts;
       return route.fulfill({
         status: 200,
         contentType: 'application/json',
-        body: JSON.stringify(catalogProducts),
+        body: JSON.stringify(products),
       });
     }
     if (pathname === '/api/lists') {
