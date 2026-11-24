@@ -7,10 +7,11 @@ const aiProductsServicePath = path.join(serviceRoot, 'ai-products.ts');
 const emojiAssetsServicePath = path.join(serviceRoot, 'emoji-assets.ts');
 
 describe('AI service hardening contract', () => {
-  it('routes every runtime text call, including the database CLI, through the retry policy', () => {
+  it('routes every runtime text call, including the database CLI, through the retry policy and monthly budget', () => {
     // Do not import/run the database-writing CLI merely to inspect its AI boundary.
     const cli = readFileSync(path.join(process.cwd(), 'scripts/db-products.ts'), 'utf8');
     expect(cli).toContain('await generateGoogleText({ apiKey, prompt })');
+    expect(cli).toContain('runMonthlyBudgetedTextAiCall');
     const directCallers = ['src', 'scripts']
       .flatMap((root) =>
         readdirSync(path.join(process.cwd(), root), { recursive: true })

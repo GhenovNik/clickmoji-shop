@@ -7,6 +7,8 @@ const doubles = vi.hoisted(() => ({
   monthlyRows: new Map<string, { reservedMicroUsd: bigint; spentMicroUsd: bigint }>(),
   dailyCounts: new Map<string, number>(),
   failBudgetDb: false,
+  failReconcileDb: false,
+  forceZeroReconcileRows: false,
   failBudgetAfterReservations: Infinity,
   monthlyReservationsCount: 0,
   textCalls: [] as Array<{ model: string; prompt: string }>,
@@ -90,13 +92,16 @@ vi.mock('@/lib/prisma', () => ({
     $queryRaw: vi.fn(async (strings: TemplateStringsArray, ...values: unknown[]) => {
       const sql = strings.join('?');
       if (sql.includes('ai_monthly_budgets')) {
-        if (
-          doubles.failBudgetDb ||
-          doubles.monthlyReservationsCount >= doubles.failBudgetAfterReservations
-        ) {
+        if (doubles.failBudgetDb) {
           throw new Error('relation "ai_monthly_budgets" does not exist');
         }
         if (sql.includes('INSERT INTO ai_monthly_budgets')) {
+          if (
+            doubles.failBudgetDb ||
+            doubles.monthlyReservationsCount >= doubles.failBudgetAfterReservations
+          ) {
+            throw new Error('relation "ai_monthly_budgets" does not exist');
+          }
           const key = (values[0] as Date).toISOString();
           const ceiling = BigInt(values[1] as bigint | number);
           const limit = BigInt(values[values.length - 1] as bigint | number);
@@ -114,16 +119,21 @@ vi.mock('@/lib/prisma', () => ({
           return [next];
         }
         if (sql.includes('UPDATE ai_monthly_budgets')) {
+          if (doubles.failReconcileDb) {
+            throw new Error('relation "ai_monthly_budgets" reconcile error');
+          }
+          if (doubles.forceZeroReconcileRows) {
+            return [];
+          }
           const ceiling = BigInt(values[0] as bigint | number);
           const actual = BigInt(values[1] as bigint | number);
           const key = (values[2] as Date).toISOString();
-          const cur = doubles.monthlyRows.get(key) ?? {
-            reservedMicroUsd: BigInt(0),
-            spentMicroUsd: BigInt(0),
-          };
+          const cur = doubles.monthlyRows.get(key);
+          if (!cur || cur.reservedMicroUsd < ceiling) {
+            return [];
+          }
           const next = {
-            reservedMicroUsd:
-              cur.reservedMicroUsd > ceiling ? cur.reservedMicroUsd - ceiling : BigInt(0),
+            reservedMicroUsd: cur.reservedMicroUsd - ceiling,
             spentMicroUsd: cur.spentMicroUsd + actual,
           };
           doubles.monthlyRows.set(key, next);
@@ -183,8 +193,11 @@ const emojiGenerateRoute = await import('@/app/api/emoji/generate/route');
 const listsRoute = await import('@/app/api/lists/route');
 
 const { AI_MONTHLY_BUDGET_USD_ENV } = await import('@/lib/ai-budget');
-const { estimateImageCallCeilingMicroUsd, estimateTextCallCeilingMicroUsd } =
-  await import('@/lib/ai-pricing');
+const {
+  estimateEmojiPromptTokens,
+  estimateImageCallCeilingMicroUsd,
+  estimateTextCallCeilingMicroUsd,
+} = await import('@/lib/ai-pricing');
 const { AI_INPUT_LIMITS } = await import('@/lib/ai-input-validation');
 
 const VALID_PNG = Buffer.concat([
@@ -215,6 +228,8 @@ beforeEach(() => {
   doubles.monthlyRows.clear();
   doubles.dailyCounts.clear();
   doubles.failBudgetDb = false;
+  doubles.failReconcileDb = false;
+  doubles.forceZeroReconcileRows = false;
   doubles.failBudgetAfterReservations = Infinity;
   doubles.monthlyReservationsCount = 0;
   doubles.textCalls.length = 0;
@@ -311,9 +326,11 @@ describe('monthly AI budget across all HTTP AI entry points', () => {
     expect(allowedImport.status).toBe(200);
     expect(doubles.textCalls).toHaveLength(1);
 
-    // Image exact boundary.
+    // Image exact boundary (tied to actual prompt tokens for "Milk").
     doubles.monthlyRows.clear();
-    const imgCeiling = estimateImageCallCeilingMicroUsd();
+    const imgCeiling = estimateImageCallCeilingMicroUsd({
+      maxPromptTokens: estimateEmojiPromptTokens('Milk'),
+    });
     process.env[AI_MONTHLY_BUDGET_USD_ENV] = formatUsd(imgCeiling - BigInt(1));
     const deniedImg = await emojiGenerateRoute.POST(
       jsonReq('http://localhost/api/emoji/generate', { productName: 'Milk' })
@@ -355,14 +372,14 @@ describe('monthly AI budget across all HTTP AI entry points', () => {
       importTextRoute.POST(
         jsonReq('http://localhost/api/lists/import-text', { text: 'Молоко', listId: 'list-1' })
       ),
-      bulkImportRoute.POST(
-        jsonReq('http://localhost/api/products/bulk-import', { productNames: ['Молоко'] })
+      importTextRoute.POST(
+        jsonReq('http://localhost/api/lists/import-text', { text: 'Сыр', listId: 'list-1' })
       ),
       importTextRoute.POST(
         jsonReq('http://localhost/api/lists/import-text', { text: 'Кефир', listId: 'list-1' })
       ),
-      bulkImportRoute.POST(
-        jsonReq('http://localhost/api/products/bulk-import', { productNames: ['Кефир'] })
+      importTextRoute.POST(
+        jsonReq('http://localhost/api/lists/import-text', { text: 'Хлеб', listId: 'list-1' })
       ),
     ];
 
@@ -588,5 +605,29 @@ describe('server-side input bounds before providers (400/413)', () => {
     );
     expect(exactOk.status).toBe(200);
     expect(doubles.googleImageCalls).toHaveLength(1);
+  });
+
+  it('propagates accounting failure across text and image routes when reconciliation returns zero rows or fails', async () => {
+    doubles.forceZeroReconcileRows = true;
+
+    const importRes = await importTextRoute.POST(
+      jsonReq('http://localhost/api/lists/import-text', { text: 'Молоко', listId: 'list-1' }, 'en')
+    );
+    expect(importRes.status).toBe(500);
+
+    const bulkRes = await bulkImportRoute.POST(
+      jsonReq('http://localhost/api/products/bulk-import', { productNames: ['Молоко'] }, 'en')
+    );
+    expect(bulkRes.status).toBe(500);
+
+    const smartRes = await smartCreateRoute.POST(
+      jsonReq('http://localhost/api/products/smart-create', { productName: 'Тархун' }, 'en')
+    );
+    expect(smartRes.status).toBe(500);
+
+    const imgRes = await emojiGenerateRoute.POST(
+      jsonReq('http://localhost/api/emoji/generate', { productName: 'Milk' }, 'en')
+    );
+    expect(imgRes.status).toBe(500);
   });
 });

@@ -1,7 +1,15 @@
 import { GoogleGenAI } from '@google/genai';
 import type { GenerateContentResponse } from '@google/genai';
 import OpenAI from 'openai';
-import { recordImageProviderAttempt } from '@/lib/ai-pricing';
+import { AI_INPUT_LIMITS, AiInputTooLargeError } from '@/lib/ai-input-validation';
+import {
+  IMAGE_PROMPT_FRAMING_TOKEN_OVERHEAD,
+  promptTokenUpperBound,
+  recordImageProviderAttempt,
+  resolveImagePricingConfig,
+  type ResolvedImagePricingConfig,
+} from '@/lib/ai-pricing';
+import { getActiveAiQuotaContext } from '@/lib/ai-quota-context';
 import {
   classifyProviderFailure,
   EmojiImageGenerationError,
@@ -25,16 +33,11 @@ export const DEFAULT_OPENAI_IMAGE_MODEL = 'gpt-image-2.5-flare';
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
+const GOOGLE_IMAGE_ASPECT_RATIO = '1:1';
+const IMAGE_OUTPUT_COUNT = 1;
 const OPENAI_IMAGE_SIZE = '1024x1024';
 const OPENAI_IMAGE_QUALITY = 'medium';
 const OPENAI_IMAGE_BACKGROUND = 'transparent';
-
-// Model id grammar, not a catalogue of models: an id that matches is routed, it is not guaranteed
-// that the model itself can generate images.
-const IMAGEN_MODEL_ID_PATTERN = /^imagen-[a-z0-9]+(?:[.-][a-z0-9]+)*$/;
-const GEMINI_IMAGE_MODEL_ID_PATTERN =
-  /^gemini-[a-z0-9]+(?:[.-][a-z0-9]+)*-image(?:-[a-z0-9]+(?:[.-][a-z0-9]+)*)?$/;
-const OPENAI_IMAGE_MODEL_ID_PATTERN = /^gpt-image-[a-z0-9]+(?:[.-][a-z0-9]+)*$/;
 
 // Values verified against the installed @google/genai FinishReason enum.
 const BLOCKED_FINISH_REASONS = new Set([
@@ -54,7 +57,10 @@ type GenerateImageInput = {
   apiKey: string;
 };
 
-type GenerateImageWithModelInput = GenerateImageInput & { model: string };
+type GenerateImageWithModelInput = GenerateImageInput & {
+  model: string;
+  pricing: ResolvedImagePricingConfig;
+};
 
 type GeneratedImage = {
   imageBuffer: Buffer;
@@ -62,8 +68,6 @@ type GeneratedImage = {
   prompt: string;
   promptVersion: EmojiGenerationPromptVersion;
 };
-
-type GoogleImageAdapter = 'generateImages' | 'generateContent';
 
 export type GoogleImageClient = Pick<GoogleGenAI, 'models'>;
 export type OpenAIImageClient = Pick<OpenAI, 'images'>;
@@ -81,7 +85,8 @@ type ResolvedClientFactory = Required<EmojiImageClientFactory>;
 
 const DEFAULT_CLIENT_FACTORY: ResolvedClientFactory = {
   createGoogleClient: ({ apiKey }) => new GoogleGenAI({ apiKey }),
-  createOpenAIClient: ({ apiKey }) => new OpenAI({ apiKey }),
+  // Disable OpenAI SDK implicit retries (default maxRetries=2) so one reservation = at most one HTTP call.
+  createOpenAIClient: ({ apiKey }) => new OpenAI({ apiKey, maxRetries: 0 }),
 };
 
 function resolveClientFactory(factory?: EmojiImageClientFactory): ResolvedClientFactory {
@@ -109,20 +114,74 @@ function requireProviderApiKey({
   }
 }
 
+function assertPromptAndContextBounds({
+  prompt,
+  provider,
+  model,
+  size,
+  quality,
+  imageSize,
+  aspectRatio,
+  outputCount,
+}: {
+  prompt: string;
+  provider: EmojiProvider;
+  model: string;
+  size?: string;
+  quality?: string;
+  imageSize?: string;
+  aspectRatio?: string;
+  outputCount: number;
+}): number {
+  const promptBytes = Buffer.byteLength(prompt, 'utf8');
+  if (
+    prompt.length > AI_INPUT_LIMITS.MAX_IMAGE_PROMPT_CHARS ||
+    promptBytes > AI_INPUT_LIMITS.MAX_IMAGE_PROMPT_BYTES
+  ) {
+    throw new AiInputTooLargeError('Image AI prompt exceeds maximum length');
+  }
+
+  const quotaCtx = getActiveAiQuotaContext();
+  if (quotaCtx?.kind === 'image' && quotaCtx.imageBounds) {
+    const promptTokens = promptTokenUpperBound(prompt, IMAGE_PROMPT_FRAMING_TOKEN_OVERHEAD);
+    if (promptTokens > quotaCtx.imageBounds.maxPromptTokens) {
+      throw new AiInputTooLargeError('Image AI prompt exceeds reserved monthly budget bound');
+    }
+    if (
+      quotaCtx.imageBounds.provider !== provider ||
+      quotaCtx.imageBounds.model !== model ||
+      quotaCtx.imageBounds.size !== size ||
+      quotaCtx.imageBounds.quality !== quality ||
+      quotaCtx.imageBounds.imageSize !== imageSize ||
+      quotaCtx.imageBounds.aspectRatio !== aspectRatio ||
+      quotaCtx.imageBounds.outputCount !== outputCount
+    ) {
+      throw new EmojiImageGenerationError(
+        'configuration',
+        `Image provider configuration (${provider}/${model}) does not match reserved budget bounds`
+      );
+    }
+  }
+
+  return promptBytes;
+}
+
 /**
  * FR-9 + FR-6: one SDK call per generation, no retry of our own. A quota or auth failure becomes a
  * typed `EmojiProviderUnavailableError`; every other SDK failure is rethrown unchanged, and the SDK
  * error itself is not attached to the typed error so it cannot reach a server log.
  */
 async function callProviderSdk<T>(
-  {
-    provider,
-    model,
-    promptChars,
-  }: {
+  attemptMeta: {
     provider: EmojiProvider;
     model: string;
     promptChars: number;
+    promptBytes: number;
+    size?: string;
+    quality?: string;
+    imageSize?: string;
+    aspectRatio?: string;
+    outputCount: number;
   },
   operation: () => Promise<T>,
   extractUsage?: (result: T) => {
@@ -133,9 +192,7 @@ async function callProviderSdk<T>(
   try {
     const result = await operation();
     recordImageProviderAttempt({
-      provider,
-      model,
-      promptChars,
+      ...attemptMeta,
       outcome: 'ok',
       ...extractUsage?.(result),
     });
@@ -143,13 +200,15 @@ async function callProviderSdk<T>(
   } catch (error) {
     const reason = classifyProviderFailure(error);
     recordImageProviderAttempt({
-      provider,
-      model,
-      promptChars,
+      ...attemptMeta,
       outcome: reason ? 'rejected' : 'error',
     });
     if (reason) {
-      throw new EmojiProviderUnavailableError({ reason, provider, model });
+      throw new EmojiProviderUnavailableError({
+        reason,
+        provider: attemptMeta.provider,
+        model: attemptMeta.model,
+      });
     }
     throw error;
   }
@@ -179,50 +238,41 @@ function readGoogleImageModel(): { env: string; model: string } {
   return { env: GOOGLE_IMAGE_MODEL_ENV, model: DEFAULT_GOOGLE_IMAGE_MODEL };
 }
 
-function resolveGoogleImageAdapter(model: string, env: string): GoogleImageAdapter {
-  if (IMAGEN_MODEL_ID_PATTERN.test(model)) {
-    return 'generateImages';
-  }
-  if (GEMINI_IMAGE_MODEL_ID_PATTERN.test(model)) {
-    return 'generateContent';
-  }
-  throw new EmojiImageGenerationError(
-    'configuration',
-    `Invalid ${env} value "${model}": expected an Imagen model id (${IMAGEN_MODEL_ID_PATTERN.source}) for generateImages or a Gemini image model id (${GEMINI_IMAGE_MODEL_ID_PATTERN.source}) for generateContent`
-  );
-}
-
-function resolveOpenAIImageModel(): string {
-  const model = readModelEnv(OPENAI_IMAGE_MODEL_ENV) ?? DEFAULT_OPENAI_IMAGE_MODEL;
-  if (!OPENAI_IMAGE_MODEL_ID_PATTERN.test(model)) {
-    throw new EmojiImageGenerationError(
-      'configuration',
-      `Invalid ${OPENAI_IMAGE_MODEL_ENV} value "${model}": expected a GPT Image model id (${OPENAI_IMAGE_MODEL_ID_PATTERN.source}) that supports images.generate with a base64 PNG response`
-    );
-  }
-  return model;
-}
-
 async function generateWithGoogleImages({
   productName,
   description,
   apiKey,
   model,
+  pricing,
   clients,
 }: GenerateImageWithModelInput & { clients: ResolvedClientFactory }): Promise<GeneratedImage> {
   requireProviderApiKey({ apiKey, provider: 'gemini', model });
   const prompt = getEmojiGenerationPrompt(productName, description);
+  const promptBytes = assertPromptAndContextBounds({
+    prompt,
+    provider: 'gemini',
+    model,
+    aspectRatio: pricing.aspectRatio,
+    outputCount: pricing.outputCount,
+  });
   const ai = clients.createGoogleClient({ apiKey });
 
   const response = await callProviderSdk(
-    { provider: 'gemini', model, promptChars: prompt.length },
+    {
+      provider: 'gemini',
+      model,
+      promptChars: prompt.length,
+      promptBytes,
+      aspectRatio: pricing.aspectRatio,
+      outputCount: pricing.outputCount,
+    },
     () =>
       ai.models.generateImages({
         model,
         prompt,
         config: {
-          numberOfImages: 1,
-          aspectRatio: '1:1',
+          numberOfImages: IMAGE_OUTPUT_COUNT,
+          aspectRatio: GOOGLE_IMAGE_ASPECT_RATIO,
         },
       })
   );
@@ -338,21 +388,38 @@ async function generateWithGoogleGenerateContent({
   description,
   apiKey,
   model,
+  pricing,
   clients,
 }: GenerateImageWithModelInput & { clients: ResolvedClientFactory }): Promise<GeneratedImage> {
   requireProviderApiKey({ apiKey, provider: 'gemini', model });
   const prompt = getEmojiGenerationPrompt(productName, description);
+  const promptBytes = assertPromptAndContextBounds({
+    prompt,
+    provider: 'gemini',
+    model,
+    imageSize: pricing.imageSize,
+    aspectRatio: pricing.aspectRatio,
+    outputCount: pricing.outputCount,
+  });
   const ai = clients.createGoogleClient({ apiKey });
 
   const response = await callProviderSdk(
-    { provider: 'gemini', model, promptChars: prompt.length },
+    {
+      provider: 'gemini',
+      model,
+      promptChars: prompt.length,
+      promptBytes,
+      imageSize: pricing.imageSize,
+      aspectRatio: pricing.aspectRatio,
+      outputCount: pricing.outputCount,
+    },
     () =>
       ai.models.generateContent({
         model,
         contents: prompt,
         config: {
           responseModalities: ['IMAGE'],
-          imageConfig: { aspectRatio: '1:1' },
+          imageConfig: { aspectRatio: GOOGLE_IMAGE_ASPECT_RATIO },
         },
       }),
     (res) => ({ googleUsageMetadata: res?.usageMetadata })
@@ -373,11 +440,17 @@ export async function generateWithGoogleImage(
   const clients = resolveClientFactory(clientFactory);
   const { env, model } = readGoogleImageModel();
 
-  // Configuration is validated before any client is created or any request is sent.
-  const adapter = resolveGoogleImageAdapter(model, env);
-  const modelInput = { ...input, model, clients };
+  // Model and request bounds are validated against verified pricing before any client or request.
+  const pricing = resolveImagePricingConfig({
+    provider: 'gemini',
+    model,
+    env,
+    aspectRatio: GOOGLE_IMAGE_ASPECT_RATIO,
+    outputCount: IMAGE_OUTPUT_COUNT,
+  });
+  const modelInput = { ...input, model, pricing, clients };
 
-  if (adapter === 'generateImages') {
+  if (pricing.spec.adapter === 'generateImages') {
     return generateWithGoogleImages(modelInput);
   }
   return generateWithGoogleGenerateContent(modelInput);
@@ -394,13 +467,37 @@ export async function generateWithOpenAI(
     EMOJI_GENERATION_TRANSPARENT_PROMPT_VERSION
   );
 
-  // Configuration is validated before any client is created or any request is sent.
-  const model = resolveOpenAIImageModel();
+  // Model and request bounds are validated against verified pricing before any client or request.
+  const model = readModelEnv(OPENAI_IMAGE_MODEL_ENV) ?? DEFAULT_OPENAI_IMAGE_MODEL;
+  const pricing = resolveImagePricingConfig({
+    provider: 'gpt-image',
+    model,
+    env: OPENAI_IMAGE_MODEL_ENV,
+    size: OPENAI_IMAGE_SIZE,
+    quality: OPENAI_IMAGE_QUALITY,
+    outputCount: IMAGE_OUTPUT_COUNT,
+  });
   requireProviderApiKey({ apiKey, provider: 'gpt-image', model });
+  const promptBytes = assertPromptAndContextBounds({
+    prompt,
+    provider: 'gpt-image',
+    model,
+    size: pricing.size,
+    quality: pricing.quality,
+    outputCount: pricing.outputCount,
+  });
   const openai = clients.createOpenAIClient({ apiKey });
 
   const result = await callProviderSdk(
-    { provider: 'gpt-image', model, promptChars: prompt.length },
+    {
+      provider: 'gpt-image',
+      model,
+      promptChars: prompt.length,
+      promptBytes,
+      size: pricing.size,
+      quality: pricing.quality,
+      outputCount: pricing.outputCount,
+    },
     () =>
       openai.images.generate({
         model: model as OpenAI.ImageModel,

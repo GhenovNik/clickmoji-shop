@@ -55,10 +55,13 @@ vi.mock('@/lib/prisma', () => ({
     $queryRaw: async (strings: TemplateStringsArray, ...values: unknown[]) => {
       const sql = strings.join('?');
       if (sql.includes('ai_monthly_budgets')) {
-        if (doubles.budget.fail || doubles.budget.used >= doubles.budget.failAfter) {
+        if (doubles.budget.fail) {
           throw new Error('relation "ai_monthly_budgets" does not exist');
         }
         if (sql.includes('INSERT INTO ai_monthly_budgets')) {
+          if (doubles.budget.fail || doubles.budget.used >= doubles.budget.failAfter) {
+            throw new Error('relation "ai_monthly_budgets" does not exist');
+          }
           const ceiling = BigInt(values[1] as bigint | number);
           const limit = BigInt(values[values.length - 1] as bigint | number);
           if (doubles.budget.monthlySpent + doubles.budget.monthlyReserved + ceiling > limit) {

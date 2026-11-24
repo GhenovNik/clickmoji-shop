@@ -338,7 +338,10 @@ New product:
 }
 
 function assertPromptWithinLimit(prompt: string) {
-  if (prompt.length > AI_INPUT_LIMITS.MAX_TEXT_PROMPT_CHARS) {
+  if (
+    prompt.length > AI_INPUT_LIMITS.MAX_TEXT_PROMPT_CHARS ||
+    Buffer.byteLength(prompt, 'utf8') > AI_INPUT_LIMITS.MAX_TEXT_PROMPT_BYTES
+  ) {
     throw new AiInputTooLargeError('Text AI prompt exceeds maximum length');
   }
 }

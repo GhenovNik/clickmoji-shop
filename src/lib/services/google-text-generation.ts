@@ -1,6 +1,15 @@
 import { GoogleGenAI } from '@google/genai';
-import { MAX_TEXT_OUTPUT_TOKENS, recordTextProviderAttempt } from '@/lib/ai-pricing';
+import { AI_INPUT_LIMITS, AiInputTooLargeError } from '@/lib/ai-input-validation';
 import {
+  MAX_TEXT_OUTPUT_TOKENS,
+  promptTokenUpperBound,
+  recordTextProviderAttempt,
+  TEXT_PROMPT_FRAMING_TOKEN_OVERHEAD,
+} from '@/lib/ai-pricing';
+import { getActiveAiQuotaContext } from '@/lib/ai-quota-context';
+import {
+  GOOGLE_TEXT_MODEL_ENV,
+  GOOGLE_TEXT_MODEL_FALLBACK_ENV,
   GoogleTextModelConfigurationError,
   resolveGoogleTextModel,
   resolveGoogleTextModelFallback,
@@ -16,22 +25,23 @@ const MAX_ATTEMPTS = 3;
 const ATTEMPT_TIMEOUT_MS = 8_000;
 const TOTAL_BUDGET_MS = 30_000;
 
+// Only explicit client/validation/auth/rate-limit rejections are guaranteed non-billed.
+// Ambiguous upstream failures (408, 500, 502, 503, 504, UNAVAILABLE, TIMEOUT, network resets)
+// are recorded as potentially billed ('timeout' / 'error').
 const NON_BILLABLE_ERROR_CODES = new Set([
   '400',
   '401',
   '403',
   '404',
-  '408',
   '422',
   '429',
-  '503',
-  'UNAVAILABLE',
   'RESOURCE_EXHAUSTED',
 ]);
 
 async function generateAttempt(
   client: GoogleGenAI,
   prompt: string,
+  promptBytes: number,
   model: string,
   timeoutMs: number
 ): Promise<string> {
@@ -61,6 +71,7 @@ async function generateAttempt(
     recordTextProviderAttempt({
       model,
       promptChars: prompt.length,
+      promptBytes,
       outcome: 'ok',
       usageMetadata: result.usageMetadata,
     });
@@ -70,10 +81,15 @@ async function generateAttempt(
     if (!(error instanceof Error && error.message === 'No response from AI')) {
       const code = textAiErrorCode(error);
       const outcome =
-        code === 'TIMEOUT' ? 'timeout' : NON_BILLABLE_ERROR_CODES.has(code) ? 'rejected' : 'error';
+        code === 'TIMEOUT' || code === '408'
+          ? 'timeout'
+          : NON_BILLABLE_ERROR_CODES.has(code)
+            ? 'rejected'
+            : 'error';
       recordTextProviderAttempt({
         model,
         promptChars: prompt.length,
+        promptBytes,
         outcome,
       });
     }
@@ -103,6 +119,32 @@ export async function generateGoogleText({ apiKey, prompt }: { apiKey: string; p
     }
     throw error;
   }
+
+  const promptBytes = Buffer.byteLength(prompt, 'utf8');
+  if (
+    prompt.length > AI_INPUT_LIMITS.MAX_TEXT_PROMPT_CHARS ||
+    promptBytes > AI_INPUT_LIMITS.MAX_TEXT_PROMPT_BYTES
+  ) {
+    throw new AiInputTooLargeError('Text AI prompt exceeds maximum length');
+  }
+
+  const quotaCtx = getActiveAiQuotaContext();
+  if (quotaCtx?.kind === 'text' && quotaCtx.textBounds) {
+    const promptTokens = promptTokenUpperBound(prompt, TEXT_PROMPT_FRAMING_TOKEN_OVERHEAD);
+    if (promptTokens > quotaCtx.textBounds.maxPromptTokens) {
+      throw new AiInputTooLargeError('Text AI prompt exceeds reserved monthly budget bound');
+    }
+    if (primary !== quotaCtx.textBounds.primaryModel) {
+      throw new GoogleTextModelConfigurationError(primary, GOOGLE_TEXT_MODEL_ENV);
+    }
+    if (fallback !== quotaCtx.textBounds.fallbackModel) {
+      throw new GoogleTextModelConfigurationError(
+        fallback ?? primary,
+        GOOGLE_TEXT_MODEL_FALLBACK_ENV
+      );
+    }
+  }
+
   // In SDK 1.52 the no-client-retryOptions path performs exactly one fetch and preserves ApiError.
   // Enabling client-level retryOptions (even attempts: 1) instead erases HTTP status on failures.
   // Keep it unset; the real-SDK transport regression tests guard this as well as the request hint.
@@ -117,6 +159,7 @@ export async function generateGoogleText({ apiKey, prompt }: { apiKey: string; p
       const text = await generateAttempt(
         client,
         prompt,
+        promptBytes,
         model,
         Math.min(ATTEMPT_TIMEOUT_MS, remaining)
       );

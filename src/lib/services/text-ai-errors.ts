@@ -68,6 +68,9 @@ export function textAiErrorCode(error: unknown): string {
   if (statuses.includes(503)) return '503';
   if (statuses.includes(429)) return '429';
   for (const detail of details) {
+    if (detail.code === 'MONTHLY_BUDGET_RECONCILIATION_FAILED') {
+      return 'MONTHLY_BUDGET_RECONCILIATION_FAILED';
+    }
     if (detail.status === 'UNAVAILABLE' || detail.code === 'UNAVAILABLE') return 'UNAVAILABLE';
     if (detail.status === 'RESOURCE_EXHAUSTED' || detail.code === 'RESOURCE_EXHAUSTED') {
       return 'RESOURCE_EXHAUSTED';

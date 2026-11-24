@@ -10,6 +10,26 @@ export const MAX_AI_MONTHLY_BUDGET_USD = 1_000_000;
 
 const DECIMAL_USD_PATTERN = /^(?:0|[1-9]\d*)(?:\.(\d{1,6}))?$/;
 
+export type MonthlyBudgetDbClient = Pick<typeof prisma, '$queryRaw'>;
+
+export type MonthlyBudgetAccountingReason =
+  'invalid_settlement_amount' | 'settlement_mismatch' | 'reconciliation_db_error';
+
+/**
+ * Sanitized error thrown when monthly budget reconciliation cannot prove a matching settlement.
+ * Never carries raw database error messages, SQL text, keys, or prompts.
+ */
+export class MonthlyBudgetAccountingError extends Error {
+  readonly code = 'MONTHLY_BUDGET_RECONCILIATION_FAILED';
+  readonly reason: MonthlyBudgetAccountingReason;
+
+  constructor(reason: MonthlyBudgetAccountingReason) {
+    super(`Monthly AI budget accounting failed (${reason})`);
+    this.name = 'MonthlyBudgetAccountingError';
+    this.reason = reason;
+  }
+}
+
 export type ParsedMonthlyBudget =
   { ok: true; limitMicroUsd: bigint } | { ok: false; code: 'INVALID_MONTHLY_BUDGET' };
 
@@ -88,9 +108,11 @@ function toBigInt(value: bigint | number | string): bigint {
 export async function reserveMonthlyAiBudget({
   ceilingMicroUsd,
   now = new Date(),
+  db = prisma,
 }: {
   ceilingMicroUsd: bigint;
   now?: Date;
+  db?: MonthlyBudgetDbClient;
 }): Promise<MonthlyBudgetReservation> {
   const monthStart = startOfUtcMonth(now);
   const resetAt = nextUtcMonthStart(now).getTime();
@@ -112,7 +134,7 @@ export async function reserveMonthlyAiBudget({
     return { allowed: false, reason: 'exhausted', limitMicroUsd, resetAt };
   }
 
-  const rows = await prisma.$queryRaw<
+  const rows = await db.$queryRaw<
     Array<{ reservedMicroUsd: bigint | number | string; spentMicroUsd: bigint | number | string }>
   >`
     INSERT INTO ai_monthly_budgets ("monthStart", "reservedMicroUsd", "spentMicroUsd", "updatedAt")
@@ -139,6 +161,8 @@ export async function reserveMonthlyAiBudget({
 
 /**
  * Releases the previously reserved ceiling on `monthStart` and records `actualMicroUsd` spent.
+ * Fails closed: requires exactly one matching row with `"reservedMicroUsd" >= ceilingMicroUsd`
+ * (never masking under-reservation with GREATEST) and propagates accounting errors.
  * Never retries an ambiguous DB error: retaining the conservative ceiling in `reservedMicroUsd`
  * prevents undercounting spend if a write outcome is uncertain.
  */
@@ -146,23 +170,47 @@ export async function reconcileMonthlyAiBudget({
   monthStart,
   ceilingMicroUsd,
   actualMicroUsd,
+  db = prisma,
 }: {
   monthStart: Date;
   ceilingMicroUsd: bigint;
   actualMicroUsd: bigint;
-}): Promise<boolean> {
-  const safeActual = actualMicroUsd > BigInt(0) ? actualMicroUsd : BigInt(0);
+  db?: MonthlyBudgetDbClient;
+}): Promise<{ reservedMicroUsd: bigint; spentMicroUsd: bigint }> {
+  if (ceilingMicroUsd < BigInt(0) || actualMicroUsd < BigInt(0)) {
+    console.error('Monthly AI budget reconciliation rejected invalid amount:', {
+      reason: 'invalid_settlement_amount',
+    });
+    throw new MonthlyBudgetAccountingError('invalid_settlement_amount');
+  }
+
+  let rows: Array<{
+    reservedMicroUsd: bigint | number | string;
+    spentMicroUsd: bigint | number | string;
+  }>;
   try {
-    await prisma.$queryRaw`
+    rows = await db.$queryRaw<
+      Array<{ reservedMicroUsd: bigint | number | string; spentMicroUsd: bigint | number | string }>
+    >`
       UPDATE ai_monthly_budgets
-      SET "reservedMicroUsd" = GREATEST(0, "reservedMicroUsd" - ${ceilingMicroUsd}),
-          "spentMicroUsd" = "spentMicroUsd" + ${safeActual},
+      SET "reservedMicroUsd" = "reservedMicroUsd" - ${ceilingMicroUsd},
+          "spentMicroUsd" = "spentMicroUsd" + ${actualMicroUsd},
           "updatedAt" = NOW()
       WHERE "monthStart" = ${monthStart}
+        AND "reservedMicroUsd" >= ${ceilingMicroUsd}
       RETURNING "reservedMicroUsd", "spentMicroUsd"`;
-    return true;
   } catch (error) {
     console.error('Monthly AI budget reconciliation failed:', textAiErrorCode(error));
-    return false;
+    throw new MonthlyBudgetAccountingError('reconciliation_db_error');
   }
+
+  if (rows.length !== 1) {
+    console.error('Monthly AI budget reconciliation failed:', 'settlement_mismatch');
+    throw new MonthlyBudgetAccountingError('settlement_mismatch');
+  }
+
+  return {
+    reservedMicroUsd: toBigInt(rows[0].reservedMicroUsd),
+    spentMicroUsd: toBigInt(rows[0].spentMicroUsd),
+  };
 }

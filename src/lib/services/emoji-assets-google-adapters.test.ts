@@ -93,7 +93,7 @@ afterEach(() => {
 const ACCEPTED_MODELS: Array<{ model: string; adapter: 'generateImages' | 'generateContent' }> = [
   { model: 'imagen-4.0-generate-001', adapter: 'generateImages' },
   { model: 'imagen-4.0-fast-generate-001', adapter: 'generateImages' },
-  { model: 'imagen-5.0-generate-preview', adapter: 'generateImages' },
+  { model: 'imagen-4.0-ultra-generate-001', adapter: 'generateImages' },
   { model: 'gemini-3.1-flash-image', adapter: 'generateContent' },
   { model: 'gemini-3.1-flash-lite-image', adapter: 'generateContent' },
   { model: 'gemini-2.5-flash-image-preview', adapter: 'generateContent' },
@@ -101,7 +101,7 @@ const ACCEPTED_MODELS: Array<{ model: string; adapter: 'generateImages' | 'gener
   { model: 'gemini-3.1-flash-image\n', adapter: 'generateContent' },
 ];
 
-describe('AC-3 Google adapter selection by model id grammar', () => {
+describe('AC-3 Google adapter selection by supported priced models', () => {
   for (const accepted of ACCEPTED_MODELS) {
     it(`routes ${JSON.stringify(accepted.model)} to ${accepted.adapter}`, async () => {
       const result = await generateWithGoogleModel(accepted.model);
@@ -121,9 +121,10 @@ describe('AC-3 Google adapter selection by model id grammar', () => {
     });
   }
 
-  // An id of another grammar is rejected too, so the Imagen branch is covered by negatives of its
-  // own: a case flag, a missing end anchor or a missing start anchor would accept one of them.
+  // Unpriced / unknown-bound model IDs must be rejected before SDK construction alongside malformed IDs.
   const REJECTED_MODELS = [
+    'imagen-5.0-generate-preview',
+    'gemini-99-unknown-image',
     'gemini-image',
     'gemini-imagen',
     'gemini-3.1-flash-noimage',

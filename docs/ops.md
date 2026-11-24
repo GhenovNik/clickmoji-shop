@@ -66,8 +66,10 @@ Primary and fallback share an exact allowlist (`SUPPORTED_GOOGLE_TEXT_MODELS`); 
 alone proves no capability. Embedding, image, TTS, live/audio and unknown IDs are refused before
 SDK construction. Configuration diagnostics name the env and `UNSUPPORTED_TEXT_MODEL`, not its raw
 value or keys. See `docs/ai.md#text-model-selection` for supported IDs, sources and update policy.
-The operator CLI has no authenticated shopper and therefore no per-user daily reservation; its
-existing product writes are not run by the regression tests.
+The operator CLI has no authenticated shopper and therefore no per-user daily reservation, but
+`scripts/db-products.ts import` reserves and reconciles against the shared `ai_monthly_budgets`
+monthly monetary cap via `runMonthlyBudgetedTextAiCall`; its existing product writes are not run
+by the regression tests.
 
 Daily text accounting is **one unit per successful logical text operation**, including internal
 retries, fallback and AI response parsing, not one unit per provider attempt. The shared PostgreSQL

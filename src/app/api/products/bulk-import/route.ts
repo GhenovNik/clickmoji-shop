@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { apiText } from '@/lib/api-messages';
 import { AI_INPUT_LIMITS, readBoundedJsonBody } from '@/lib/ai-input-validation';
+import { estimateBulkProductsPromptTokens } from '@/lib/ai-pricing';
 import { localizedName } from '@/lib/catalog-name';
 import { prisma } from '@/lib/prisma';
 import { requireAdmin } from '@/lib/auth-guards';
@@ -110,8 +111,11 @@ export async function POST(request: Request) {
       );
     }
 
-    const analysis = await runTextAiCall(session.user, getRequestLocale(request), () =>
-      processProductBatch({ apiKey, productNames, categories })
+    const analysis = await runTextAiCall(
+      session.user,
+      getRequestLocale(request),
+      () => processProductBatch({ apiKey, productNames, categories }),
+      { maxPromptTokens: estimateBulkProductsPromptTokens({ productNames, categories }) }
     );
     if (analysis instanceof Response) return analysis;
     const { products: processedProducts, promptVersion, model } = analysis;

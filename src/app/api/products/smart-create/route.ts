@@ -8,11 +8,13 @@ import {
   getServerTranslator,
   rateLimitResponse,
 } from '@/lib/auth-security';
+import { MonthlyBudgetAccountingError } from '@/lib/ai-budget';
 import {
   AI_INPUT_LIMITS,
   CATEGORY_ID_PATTERN,
   readBoundedJsonBody,
 } from '@/lib/ai-input-validation';
+import { estimateEmojiPromptTokens, estimateSmartProductPromptTokens } from '@/lib/ai-pricing';
 import { runImageAiCall } from '@/lib/image-ai-call';
 import { runTextAiCall } from '@/lib/text-ai-call';
 import { textAiErrorCode } from '@/lib/services/text-ai-errors';
@@ -102,8 +104,11 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: t('api.products.noCategories') }, { status: 400 });
     }
 
-    const analysis = await runTextAiCall(dbUser, locale, () =>
-      analyzeSmartProduct({ apiKey, productName, categoryId, categories })
+    const analysis = await runTextAiCall(
+      dbUser,
+      locale,
+      () => analyzeSmartProduct({ apiKey, productName, categoryId, categories }),
+      { maxPromptTokens: estimateSmartProductPromptTokens({ productName, categoryId, categories }) }
     );
     if (analysis instanceof Response) return analysis;
     const { result: aiResult, promptVersion, model } = analysis;
@@ -166,10 +171,14 @@ export async function POST(request: Request) {
     // or budget the product keeps the Unicode emoji, like after a failed generation.
     if (aiResult.needsCustomEmoji) {
       try {
-        const emojiResult = await runImageAiCall(dbUser, locale, () =>
-          generateAndUploadEmojiAsset({
-            productName: aiResult.nameRu,
-          })
+        const emojiResult = await runImageAiCall(
+          dbUser,
+          locale,
+          () =>
+            generateAndUploadEmojiAsset({
+              productName: aiResult.nameRu,
+            }),
+          { maxPromptTokens: estimateEmojiPromptTokens(aiResult.nameRu) }
         );
         if (!(emojiResult instanceof Response)) {
           customEmojiUrl = emojiResult.imageUrl;
@@ -186,6 +195,9 @@ export async function POST(request: Request) {
           finalEmoji = aiResult.emoji || '🎨';
         }
       } catch (error) {
+        if (error instanceof MonthlyBudgetAccountingError) {
+          throw error;
+        }
         // FR-10: the log carries allowlisted fields only, never the SDK message, body or cause.
         console.error('Error generating custom emoji:', summarizeEmojiGenerationFailure(error));
         // Continue with Unicode emoji if generation fails

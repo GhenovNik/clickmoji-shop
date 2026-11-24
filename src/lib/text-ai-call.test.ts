@@ -22,7 +22,7 @@ beforeEach(() => {
   state.counters.clear();
   state.monthly = { reserved: BigInt(0), spent: BigInt(0) };
   process.env.AI_DAILY_CALLS_PER_USER = '30';
-  delete process.env.AI_MONTHLY_BUDGET_USD;
+  process.env.AI_MONTHLY_BUDGET_USD = '100';
   vi.spyOn(console, 'error').mockImplementation(() => undefined);
   state.reserve.mockImplementation(async (strings: TemplateStringsArray, ...args: unknown[]) => {
     const sql = strings.join('?');
@@ -64,6 +64,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.useRealTimers();
   delete process.env.AI_DAILY_CALLS_PER_USER;
+  delete process.env.AI_MONTHLY_BUDGET_USD;
 });
 
 describe('private text reservation compensation', () => {

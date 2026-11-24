@@ -147,21 +147,32 @@ export async function enforceAiQuota(
   try {
     decision = await reserveAiCall({ userId: user.id, role: user.role, now });
   } catch {
-    await reconcileMonthlyAiBudget({
-      monthStart: monthlyDecision.monthStart,
-      ceilingMicroUsd,
-      actualMicroUsd: BigInt(0),
-    });
+    try {
+      await reconcileMonthlyAiBudget({
+        monthStart: monthlyDecision.monthStart,
+        ceilingMicroUsd,
+        actualMicroUsd: BigInt(0),
+      });
+    } catch {
+      console.error(
+        'AI quota check failed, refusing the paid call:',
+        'monthly_budget_reconciliation_failed'
+      );
+    }
     console.error('AI quota check failed, refusing the paid call:', 'quota_reservation_failed');
     return NextResponse.json({ error: t('api.aiQuota.unavailable') }, { status: 503 });
   }
 
   if (!decision.allowed) {
-    await reconcileMonthlyAiBudget({
-      monthStart: monthlyDecision.monthStart,
-      ceilingMicroUsd,
-      actualMicroUsd: BigInt(0),
-    });
+    try {
+      await reconcileMonthlyAiBudget({
+        monthStart: monthlyDecision.monthStart,
+        ceilingMicroUsd,
+        actualMicroUsd: BigInt(0),
+      });
+    } catch {
+      return NextResponse.json({ error: t('api.aiQuota.unavailable') }, { status: 503 });
+    }
     if (decision.limit === 0) {
       return NextResponse.json({ error: t('api.aiQuota.disabled') }, { status: 403 });
     }

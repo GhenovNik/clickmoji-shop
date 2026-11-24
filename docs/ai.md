@@ -62,22 +62,27 @@ its value, before any SDK call.
 
 `AI_PROVIDER=gemini` (or anything that is not exactly `gpt-image`) resolves the Google id as the
 first non-empty trimmed value of `GOOGLE_IMAGE_MODEL`, then `IMAGEN_MODEL`, then the default, and
-picks the adapter by the id grammar (full match, no flags):
+validates it against the verified priced allowlist in `src/lib/ai-pricing.ts`
+(`SUPPORTED_GOOGLE_IMAGE_MODELS`):
 
-- `^imagen-[a-z0-9]+(?:[.-][a-z0-9]+)*$` → `models.generateImages`
-- `^gemini-[a-z0-9]+(?:[.-][a-z0-9]+)*-image(?:-[a-z0-9]+(?:[.-][a-z0-9]+)*)?$` →
+- `imagen-4.0-generate-001`, `imagen-4.0-fast-generate-001`, `imagen-4.0-ultra-generate-001` →
+  `models.generateImages`
+- `gemini-3.1-flash-lite-image`, `gemini-3.1-flash-image`, `gemini-2.5-flash-image`,
+  `gemini-2.5-flash-image-preview`, `gemini-3-pro-image` →
   `models.generateContent({ model, contents: prompt, config: { responseModalities: ['IMAGE'],
 imageConfig: { aspectRatio: '1:1' } } })`
-- anything else (`gemini-image`, `gemini-2.5-flash`, `dall-e-3`, `foo`, uppercase, spaces, newlines,
-  `models/...`) → configuration error naming `GOOGLE_IMAGE_MODEL` or `IMAGEN_MODEL`
+- anything else (including unpriced/unknown-bound model IDs, uppercase, spaces, newlines, or
+  unsupported dimensions/quality/output count) → configuration error naming `GOOGLE_IMAGE_MODEL` or
+  `IMAGEN_MODEL` before budget reservation or SDK construction
 
-`AI_PROVIDER=gpt-image` validates the id against `^gpt-image-[a-z0-9]+(?:[.-][a-z0-9]+)*$` and then
-calls `images.generate({ model, prompt, size: '1024x1024', quality: 'medium', background:
-'transparent' })`, reading `data[0].b64_json`.
+`AI_PROVIDER=gpt-image` validates the id against `SUPPORTED_OPENAI_IMAGE_MODELS`
+(`gpt-image-2.5-flare`, `gpt-image-2.5-sunburst`, `gpt-image-2`, `gpt-image-1.5`) and then calls
+`images.generate({ model, prompt, size: '1024x1024', quality: 'medium', background:
+'transparent' })` with `maxRetries: 0`, reading `data[0].b64_json`.
 
-The grammar is a shape check, not a model catalogue: a matching id is routed, it does not guarantee
-that the model can generate images. For OpenAI the model must support `images.generate` and return a
-base64 PNG.
+Only models with verified official pricing and request bounds are allowed so reservation ceilings
+and reconciliation rates stay aligned before any provider call. For OpenAI the model must support
+`images.generate` and return a base64 PNG.
 
 ### Adapter error classes
 
@@ -353,24 +358,33 @@ Outcome of a reservation, by stage:
 
 ## Monthly monetary cap and input limits
 
-In addition to the per-user daily call counters, all paid HTTP AI routes share a persistent
-UTC-month monetary cap stored in PostgreSQL (`ai_monthly_budgets`, `src/lib/ai-budget.ts`):
+In addition to the per-user daily call counters, all paid HTTP AI routes and the
+`scripts/db-products.ts import` CLI share a persistent UTC-month monetary cap stored in PostgreSQL
+(`ai_monthly_budgets`, `src/lib/ai-budget.ts`):
 
 - **Configured cap (`AI_MONTHLY_BUDGET_USD`)**: unset, empty, or whitespace defaults to `$10.00`
   (`10_000_000` micro-USD). `"0"` disables paid AI under the monthly cap (`503`). Any malformed
   or negative value fails closed (`503`, logging `INVALID_MONTHLY_BUDGET` and the env name without
   the raw value).
-- **Atomic pre-call reservation & reconciliation**: before contacting a provider, `runTextAiCall`
-  (`src/lib/text-ai-call.ts`) and `runImageAiCall` (`src/lib/image-ai-call.ts`) atomically reserve
-  a conservative micro-USD ceiling (`src/lib/ai-pricing.ts`, covering up to 3 text attempts
-  including `GOOGLE_TEXT_MODEL_FALLBACK` with `maxOutputTokens = 4096`, or 1 image attempt).
+- **Atomic pre-call reservation & reconciliation**: before contacting a provider, `runTextAiCall` /
+  `runMonthlyBudgetedTextAiCall` (`src/lib/text-ai-call.ts`) and `runImageAiCall`
+  (`src/lib/image-ai-call.ts`) atomically reserve a conservative micro-USD ceiling
+  (`src/lib/ai-pricing.ts`, tied to supported models, UTF-8 byte input bounds of the sent request,
+  `maxOutputTokens = 4096` for up to 3 text attempts including `GOOGLE_TEXT_MODEL_FALLBACK`, or 1
+  image attempt with `maxRetries: 0` on OpenAI). Execution adapters verify sent prompt bounds and
+  model configuration match the active reservation before calling any SDK.
   After the provider settles, the reservation is reconciled against actual reported usage
-  (`usageMetadata` for Gemini `generateContent`, `usage` for OpenAI `images.generate`) or a
-  conservative per-attempt estimate when usage is absent; pre-SDK failures and explicit provider
-  rejections (`400`/`401`/`403`/`404`/`429`/`503`) record `$0`.
+  (`usageMetadata` for Gemini `generateContent`, `usage` for OpenAI `images.generate`) or
+  conservative per-component/per-attempt bounds when usage is missing or partial (including
+  `MAX_TEXT_OUTPUT_TOKENS` for missing text output, UTF-8 byte bounds for missing input, and residual
+  `totalTokenCount` billing); pre-SDK failures and explicit rejections
+  (`400`/`401`/`403`/`404`/`422`/`429`/`RESOURCE_EXHAUSTED`) record `$0`, while ambiguous upstream
+  failures (`408`/`500`/`502`/`503`/`504`/`UNAVAILABLE`/`TIMEOUT`) are treated as potentially billed.
 - **Fail-closed accounting**: if `ai_monthly_budgets` cannot be read or updated at reservation time,
   the request fails closed with HTTP `503` and a localized AI-only unavailability message; non-AI
-  routes remain unaffected.
+  routes remain unaffected. Reconciliation requires a matching row with `"reservedMicroUsd" >=
+ceilingMicroUsd` (no `GREATEST` clamping) and propagates `MonthlyBudgetAccountingError` on zero
+  matched rows or DB failure.
 - **Server-side input bounds before providers**:
   - `POST /api/lists/import-text`: `text` <= 2000 chars (`400`); defense-in-depth prompt cap in
     `src/lib/services/ai-products.ts`.

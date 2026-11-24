@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { apiText } from '@/lib/api-messages';
 import { AI_INPUT_LIMITS, readBoundedJsonBody } from '@/lib/ai-input-validation';
+import { estimateEmojiPromptTokens } from '@/lib/ai-pricing';
 import { requireAdmin } from '@/lib/auth-guards';
 import { checkRateLimit, getRequestLocale, rateLimitResponse } from '@/lib/auth-security';
 import { runImageAiCall } from '@/lib/image-ai-call';
@@ -105,8 +106,11 @@ export async function POST(request: Request) {
     // ever sees a failure of the request itself.
     let generated: Awaited<ReturnType<typeof generateEmojiImage>>;
     try {
-      const generation = await runImageAiCall(session.user, locale, () =>
-        generateEmojiImage({ productName, description })
+      const generation = await runImageAiCall(
+        session.user,
+        locale,
+        () => generateEmojiImage({ productName, description }),
+        { maxPromptTokens: estimateEmojiPromptTokens(productName, description) }
       );
       if (generation instanceof Response) return generation;
       generated = generation;

@@ -183,6 +183,13 @@ export function summarizeEmojiGenerationFailure(error: unknown): EmojiGeneration
     return { errorClass: error.kind };
   }
 
+  if (
+    error instanceof Error &&
+    (error as { code?: unknown }).code === 'MONTHLY_BUDGET_RECONCILIATION_FAILED'
+  ) {
+    return { errorClass: error.name };
+  }
+
   const status = readNumberField(error, 'status');
 
   return status === undefined ? { errorClass: 'Error' } : { errorClass: 'Error', status };
