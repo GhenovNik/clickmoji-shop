@@ -368,3 +368,17 @@ describe('applyCell', () => {
     });
   });
 });
+
+describe('batch prompts', () => {
+  it('emits the shared style and category rule', async () => {
+    const { universalPrompt, textPrompt } = await import('../../../scripts/emoji-batches');
+    for (const prompt of [universalPrompt([]), textPrompt([])]) {
+      expect(prompt).toContain(
+        'Style: One object viewed from the front at a slight angle, filling 70–80% of the cell; simplified smooth forms, 3–5 saturated colors, soft upper-left light and one soft highlight. No texture, pores, fibres, grains or photographic reflections; no outlines or background shadows. Labels are flat, single-color, with up to two large words. Recognizable at 32px.'
+      );
+      expect(prompt).toContain(
+        'Category cells: Compose two or three items of the same group with the same lighting and simplification.'
+      );
+    }
+  });
+});

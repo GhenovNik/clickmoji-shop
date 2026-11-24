@@ -2,24 +2,25 @@
 
 Новый чат в Gemini → вставить промпт → сохранить картинку как `batch-010.png`.
 
-| Ячейка | Товар         | English         | Категория              | Действие |
-| ------ | ------------- | --------------- | ---------------------- | -------- |
-| 1      | Зефир         | Zefir           | Сладости               | новый    |
-| 2      | Пряники       | Pryaniki        | Сладости               | новый    |
-| 3      | Леденец       | Lollipop        | Сладости               | новый    |
-| 4      | Мёд           | Honey           | Сладости               | новый    |
-| 5      | Попкорн       | Popcorn         | Сладости               | новый    |
-| 6      | Суши          | Sushi           | Консервы и готовая еда | новый    |
-| 7      | Сэндвич       | Sandwich        | Консервы и готовая еда | новый    |
-| 8      | Наггетсы      | Chicken nuggets | Замороженные продукты  | новый    |
-| 9      | Картофель фри | French fries    | Замороженные продукты  | новый    |
+| Ячейка | Товар | English | Категория | Действие |
+|---|---|---|---|---|
+| 1 | Зефир | Zefir | Сладости | новый |
+| 2 | Пряники | Pryaniki | Сладости | новый |
+| 3 | Леденец | Lollipop | Сладости | новый |
+| 4 | Мёд | Honey | Сладости | новый |
+| 5 | Попкорн | Popcorn | Сладости | новый |
+| 6 | Суши | Sushi | Консервы и готовая еда | новый |
+| 7 | Сэндвич | Sandwich | Консервы и готовая еда | новый |
+| 8 | Наггетсы | Chicken nuggets | Замороженные продукты | новый |
+| 9 | Картофель фри | French fries | Замороженные продукты | новый |
 
 ## Промпт
 
 ```text
 Create ONE square image: a 3×3 grid of separate product emoji on a pure white background (#FFFFFF).
 
-Style: Apple iOS emoji style — exactly like the emoji set on an iPhone (match the attached samples if any). Soft volume, smooth rounded shapes, subtle gradients, gentle highlights. One consistent emoji set.
+Style: One object viewed from the front at a slight angle, filling 70–80% of the cell; simplified smooth forms, 3–5 saturated colors, soft upper-left light and one soft highlight. No texture, pores, fibres, grains or photographic reflections; no outlines or background shadows. Labels are flat, single-color, with up to two large words. Recognizable at 32px.
+Category cells: Compose two or three items of the same group with the same lighting and simplification.
 NOT photorealistic, NOT a cartoon sticker: no thick dark outlines. NO shadows or drop shadows. NO grid lines, cell borders, frames or dividers. NO captions under the icons.
 Every icon is centered in its own cell with generous white space around it; no icon touches or crosses its cell edge.
 NO text at all: no letters, words, numbers or logos anywhere, not even on packaging.

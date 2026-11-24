@@ -4,24 +4,25 @@
 2. **В том же чате** → промпт «Английская версия» → сохранить как `text-005-en.png`.
    Рисунки остаются те же, меняются только надписи.
 
-| Ячейка | Товар                     | English            | Категория              | Действие |
-| ------ | ------------------------- | ------------------ | ---------------------- | -------- |
-| 1      | Шоколадная паста          | Chocolate spread   | Сладости               | новый    |
-| 2      | Жевательная резинка       | Chewing gum        | Сладости               | новый    |
-| 3      | Тушёнка                   | Canned stewed meat | Консервы и готовая еда | новый    |
-| 4      | Консервированная кукуруза | Canned corn        | Консервы и готовая еда | новый    |
-| 5      | Консервированный горошек  | Canned peas        | Консервы и готовая еда | новый    |
-| 6      | Консервированная фасоль   | Canned beans       | Консервы и готовая еда | новый    |
-| 7      | Шпроты                    | Sprats             | Консервы и готовая еда | новый    |
-| 8      | Чипсы                     | Potato chips       | Консервы и готовая еда | новый    |
-| 9      | Крекеры                   | Crackers           | Консервы и готовая еда | новый    |
+| Ячейка | Товар | English | Категория | Действие |
+|---|---|---|---|---|
+| 1 | Шоколадная паста | Chocolate spread | Сладости | новый |
+| 2 | Жевательная резинка | Chewing gum | Сладости | новый |
+| 3 | Тушёнка | Canned stewed meat | Консервы и готовая еда | новый |
+| 4 | Консервированная кукуруза | Canned corn | Консервы и готовая еда | новый |
+| 5 | Консервированный горошек | Canned peas | Консервы и готовая еда | новый |
+| 6 | Консервированная фасоль | Canned beans | Консервы и готовая еда | новый |
+| 7 | Шпроты | Sprats | Консервы и готовая еда | новый |
+| 8 | Чипсы | Potato chips | Консервы и готовая еда | новый |
+| 9 | Крекеры | Crackers | Консервы и готовая еда | новый |
 
 ## Русская версия
 
 ```text
 Create ONE square image: a 3×3 grid of separate product emoji on a pure white background (#FFFFFF).
 
-Style: Apple iOS emoji style — exactly like the emoji set on an iPhone (match the attached samples if any). Soft volume, smooth rounded shapes, subtle gradients, gentle highlights. One consistent emoji set.
+Style: One object viewed from the front at a slight angle, filling 70–80% of the cell; simplified smooth forms, 3–5 saturated colors, soft upper-left light and one soft highlight. No texture, pores, fibres, grains or photographic reflections; no outlines or background shadows. Labels are flat, single-color, with up to two large words. Recognizable at 32px.
+Category cells: Compose two or three items of the same group with the same lighting and simplification.
 NOT photorealistic, NOT a cartoon sticker: no thick dark outlines. NO shadows or drop shadows. NO grid lines, cell borders, frames or dividers. NO captions under the icons.
 Every icon is centered in its own cell with generous white space around it; no icon touches or crosses its cell edge.
 Each product is shown in its typical packaging with ONE short label in Russian, exactly the quoted word(s) below, large, spelled correctly. No other text, no brand names.
