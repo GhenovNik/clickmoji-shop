@@ -27,7 +27,8 @@ interface ProductShowcaseProps {
 }
 
 // Displays real Clickmoji UI captures so visitors recognize the app immediately.
-// Single screenshot per row on mobile prevents crowding and horizontal overflow.
+// Mobile cards cap at 272px (480w at 1.75x DPR) and prioritize only the first
+// above-the-fold screenshot so LCP stays close to the text baseline on Slow 4G.
 export default function ProductShowcase({ locale, heading, screens }: ProductShowcaseProps) {
   const images = SCREEN_IMAGES[locale];
 
@@ -35,15 +36,23 @@ export default function ProductShowcase({ locale, heading, screens }: ProductSho
     <section aria-label={heading} className="w-full max-w-5xl mx-auto">
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6 md:gap-7">
         {screens.map((screen, index) => (
-          <figure key={screen.id} data-testid={`landing-screen-${screen.id}`} className="min-w-0">
+          <figure
+            key={screen.id}
+            data-testid={`landing-screen-${screen.id}`}
+            className="min-w-0 w-full max-w-[272px] mx-auto md:max-w-none"
+          >
             <div className="overflow-hidden rounded-2xl border border-border bg-card shadow-soft aspect-[3/4]">
               <Image
                 src={images[screen.id]}
                 alt={screen.alt}
                 width={780}
                 height={1040}
-                sizes="(max-width: 767px) calc(100vw - 2rem), (max-width: 1023px) 31vw, 316px"
-                priority={index === 0}
+                sizes="(max-width: 767px) min(272px, calc(100vw - 2rem)), (max-width: 1055px) calc((100vw - 5.5rem) / 3), 322px"
+                quality={45}
+                preload={index === 0}
+                loading={index === 0 ? 'eager' : 'lazy'}
+                fetchPriority={index === 0 ? 'high' : 'low'}
+                decoding={index === 0 ? 'sync' : 'async'}
                 className="h-full w-full object-cover object-top"
               />
             </div>

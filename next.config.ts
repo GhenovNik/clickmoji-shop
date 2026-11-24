@@ -21,6 +21,9 @@ const nextConfig: NextConfig = {
     ];
   },
   images: {
+    formats: ['image/avif', 'image/webp'],
+    deviceSizes: [480, 560, 640, 750, 828, 1080, 1200, 1920, 2048, 3840],
+    qualities: [45, 55, 75],
     minimumCacheTTL: 2592000, // 30 days
     remotePatterns: [
       {

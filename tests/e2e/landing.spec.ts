@@ -63,6 +63,10 @@ for (const locale of ['ru', 'en'] as const) {
           await expect(figure).toBeVisible();
           const img = figure.locator('img');
           await expect(img).toHaveAttribute('alt', copy.home.showcase[id].alt);
+          await expect(img).toHaveAttribute('loading', id === 'cards' ? 'eager' : 'lazy');
+          if (id === 'cards') {
+            await expect(img).toHaveAttribute('fetchpriority', 'high');
+          }
           await expect
             .poll(() =>
               img.evaluate(
