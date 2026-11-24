@@ -1,20 +1,28 @@
 {
   "hero": {
     "title": "Shopping with <brand>ClickMoji</brand>",
-    "subtitle": "Visual shopping lists instead of boring text. Fill your cart quickly and easily, with emoji you can see at a glance!"
+    "subtitle": "Visual shopping lists instead of plain text — tap product cards and check items off as you shop."
   },
   "actions": {
-    "openCatalog": "Open catalog",
-    "myLists": "My lists",
-    "history": "Purchase history"
+    "start": "Start"
   },
-  "features": {
-    "smartListsTitle": "Smart lists",
-    "smartListsText": "Build lists in a couple of taps and shop faster",
-    "favoritesTitle": "Favorites",
-    "favoritesText": "Your usual items always at hand in a section of their own",
-    "historyTitle": "History",
-    "historyText": "Keep past shopping trips so you can repeat them easily"
+  "showcase": {
+    "heading": "ClickMoji product screens",
+    "cards": {
+      "title": "Product cards",
+      "caption": "Pick items and variants in the catalog with a single tap",
+      "alt": "ClickMoji catalog screen showing product cards, variants, and the add-to-list bar"
+    },
+    "list": {
+      "title": "Categorized list",
+      "caption": "Aisle groups, item notes, and one-tap checkoff",
+      "alt": "ClickMoji active shopping list screen grouped by category with notes"
+    },
+    "grid": {
+      "title": "Compact tile view",
+      "caption": "Fit more items on one screen while walking the aisles",
+      "alt": "ClickMoji compact shopping list tile view showing checked-off items"
+    }
   },
   "cart": {
     "clear": "Empty the cart",

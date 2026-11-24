@@ -16,7 +16,7 @@ test.describe('Interface language', () => {
     await page.goto('/');
 
     await expect(page.locator('html')).toHaveAttribute('lang', 'en');
-    await expect(page.getByRole('link', { name: /Open catalog/ })).toBeVisible();
+    await expect(page.getByRole('main').getByRole('link', { name: 'Start' })).toBeVisible();
     await context.close();
   });
 
