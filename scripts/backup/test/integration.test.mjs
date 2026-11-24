@@ -7,7 +7,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import crypto from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import { describe, it } from 'node:test';
+import { after, describe, it } from 'node:test';
 import { buildImageArgs, CONTAINER_DIR, DockerRunner } from '../docker.mjs';
 import { Ledger } from '../ledger.mjs';
 import { removeTemp } from '../pipeline.mjs';
@@ -42,11 +42,24 @@ CREATE TABLE "Bulk" (id serial PRIMARY KEY, payload text NOT NULL);
 INSERT INTO "Bulk" (payload) SELECT repeat(md5(g::text), 8) FROM generate_series(1, 150000) g;
 `;
 
-// Containers this tool starts are named clickmoji-backup-<step>-<hex>.
-const toolContainers = (step = '') =>
-  docker(['ps', '-a', '--filter', `name=^clickmoji-backup-${step}`, '--format', '{{.Names}}'])
+// Containers this tool starts are named clickmoji-backup-<step>-<hex>. The source container of
+// this test is clickmoji-backup-itest-<hex> and is deliberately not matched.
+const TOOL_STEPS = '(dump|verify|encrypt|cleanup)';
+const toolContainers = (step = TOOL_STEPS) =>
+  docker(['ps', '-a', '--filter', `name=^clickmoji-backup-${step}-`, '--format', '{{.Names}}'])
     .stdout.split('\n')
     .filter(Boolean);
+
+// Resolves with `fallback` when `promise` has not settled after `ms`; the timer never keeps a settled wait alive.
+function withTimeout(promise, ms, fallback) {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(fallback), ms);
+    promise.then((value) => {
+      clearTimeout(timer);
+      resolve(value);
+    });
+  });
+}
 
 async function waitUntil(check, timeoutMs) {
   const started = Date.now();
@@ -71,6 +84,11 @@ describe(
   { skip: !dockerUp && 'set CLICKMOJI_BACKUP_INTEGRATION=1 and start Docker' },
   () => {
     const sandbox = makeSandbox();
+    // Whatever a test did, the source container and the sandbox are gone when the suite ends.
+    after(() => {
+      docker(['rm', '-f', container]);
+      sandbox.cleanup();
+    });
     const container = `clickmoji-backup-itest-${crypto.randomBytes(4).toString('hex')}`;
     const password = crypto.randomBytes(16).toString('hex');
     const state = { url: null, host: '127.0.0.1', identity: null };
@@ -206,31 +224,39 @@ describe(
     });
 
     it('a truncated dump fails the restore check', () => {
-      const work = path.join(sandbox.tmp, 'corrupt');
-      mkdirSync(work, { recursive: true });
-      writeFileSync(path.join(work, 'dump.custom'), 'PGDMP-truncated');
-      const result = docker(
-        [
-          'run',
-          '--rm',
-          ...['DATABASE_URL', ...LIBPQ_ENV_NAMES].flatMap((name) => ['-e', name]),
-          '--mount',
-          `type=bind,source=${work},target=/work`,
-          '--mount',
-          `type=bind,source=${CONTAINER_DIR},target=/opt/backup,readonly`,
-          '--entrypoint',
-          '/bin/sh',
-          TOOLS_IMAGE,
-          '/opt/backup/verify.sh',
-        ],
-        { env: { ...process.env, DATABASE_URL: state.url, ...libpqEnv(state.url) } }
-      );
-      assert.notEqual(result.status, 0, 'verification of a corrupt dump fails');
-      assert.doesNotMatch(`${result.stdout}${result.stderr}`, new RegExp(password));
+      // Its own fixture directory, outside the run's temporary root, removed on every path: the
+      // scratch check of the stop test looks only inside that root.
+      const work = path.join(sandbox.root, 'corrupt');
+      try {
+        mkdirSync(work, { recursive: true });
+        writeFileSync(path.join(work, 'dump.custom'), 'PGDMP-truncated');
+        const result = docker(
+          [
+            'run',
+            '--rm',
+            ...['DATABASE_URL', ...LIBPQ_ENV_NAMES].flatMap((name) => ['-e', name]),
+            '--mount',
+            `type=bind,source=${work},target=/work`,
+            '--mount',
+            `type=bind,source=${CONTAINER_DIR},target=/opt/backup,readonly`,
+            '--entrypoint',
+            '/bin/sh',
+            TOOLS_IMAGE,
+            '/opt/backup/verify.sh',
+          ],
+          { env: { ...process.env, DATABASE_URL: state.url, ...libpqEnv(state.url) } }
+        );
+        assert.notEqual(result.status, 0, 'verification of a corrupt dump fails');
+        assert.doesNotMatch(`${result.stdout}${result.stderr}`, new RegExp(password));
+      } finally {
+        rmSync(work, { recursive: true, force: true });
+      }
     });
 
     it('a stop during the active dump leaves no container, scratch, plaintext, and no copy changed', async () => {
-      const old = seedBackups(sandbox.backupDir, 3);
+      // Every copy present before the run, including the one the publish test left in this sandbox.
+      seedBackups(sandbox.backupDir, 3);
+      const old = listCopies(sandbox.backupDir);
       const bytesBefore = old.map((name) =>
         readFileSync(path.join(sandbox.backupDir, name), 'utf8')
       );
@@ -252,87 +278,107 @@ describe(
       // on the bulk table is taken in a psql session this test controls. pg_dump needs that table
       // and waits for the lock; the wait is observed on the server before the stop is sent, and the
       // session is rolled back only after the run has ended.
-      const holder = spawn(
-        'docker',
-        [
-          'exec',
-          '-i',
-          container,
-          'psql',
-          '-U',
-          'postgres',
-          '-d',
-          'postgres',
-          '-v',
-          'ON_ERROR_STOP=1',
-        ],
-        { stdio: ['pipe', 'pipe', 'pipe'] }
-      );
-      const holderClosed = new Promise((resolve) => holder.on('close', resolve));
-      holder.stdin.write('BEGIN;\nLOCK TABLE "Bulk" IN ACCESS EXCLUSIVE MODE;\n');
-      const held = await waitUntil(
-        () =>
-          serverSql(
-            `SELECT count(*) FROM pg_locks WHERE relation = '"Bulk"'::regclass AND mode = 'AccessExclusiveLock' AND granted`
-          ) === '1',
-        30_000
-      );
-      assert.ok(held, 'the test holds the bulk table');
+      let holder = null;
+      let child = null;
+      try {
+        holder = spawn(
+          'docker',
+          [
+            'exec',
+            '-i',
+            container,
+            'psql',
+            '-U',
+            'postgres',
+            '-d',
+            'postgres',
+            '-v',
+            'ON_ERROR_STOP=1',
+          ],
+          { stdio: ['pipe', 'pipe', 'pipe'] }
+        );
+        holder.stdin.on('error', () => {}); // the psql session may close first; its stdin then errors
+        holder.stdin.write('BEGIN;\nLOCK TABLE "Bulk" IN ACCESS EXCLUSIVE MODE;\n');
+        const held = await waitUntil(
+          () =>
+            serverSql(
+              `SELECT count(*) FROM pg_locks WHERE relation = '"Bulk"'::regclass AND mode = 'AccessExclusiveLock' AND granted`
+            ) === '1',
+          30_000
+        );
+        assert.ok(held, 'the test holds the bulk table');
 
-      const env = {
-        PATH: process.env.PATH,
-        TMPDIR: sandbox.tmp,
-        DATABASE_URL: state.url,
-        BACKUP_DIR: sandbox.backupDir,
-        BACKUP_STATUS_FILE: sandbox.statusFile,
-        BACKUP_AGE_RECIPIENT_FILE: sandbox.recipientFile,
-      };
-      const child = spawn(process.execPath, [CLI], { env, stdio: ['ignore', 'pipe', 'pipe'] });
-      let output = '';
-      child.stdout.on('data', (chunk) => {
-        output += chunk;
-      });
-      child.stderr.on('data', (chunk) => {
-        output += chunk;
-      });
-      const exited = new Promise((resolve) =>
-        child.on('close', (code, signal) => resolve(code ?? `signal:${signal}`))
-      );
+        const env = {
+          PATH: process.env.PATH,
+          TMPDIR: sandbox.tmp,
+          DATABASE_URL: state.url,
+          BACKUP_DIR: sandbox.backupDir,
+          BACKUP_STATUS_FILE: sandbox.statusFile,
+          BACKUP_AGE_RECIPIENT_FILE: sandbox.recipientFile,
+        };
+        child = spawn(process.execPath, [CLI], { env, stdio: ['ignore', 'pipe', 'pipe'] });
+        let output = '';
+        child.stdout.on('data', (chunk) => {
+          output += chunk;
+        });
+        child.stderr.on('data', (chunk) => {
+          output += chunk;
+        });
+        const exited = new Promise((resolve) =>
+          child.on('close', (code, signal) => resolve(code ?? `signal:${signal}`))
+        );
 
-      const waiting = await waitUntil(
-        () =>
-          toolContainers('dump-')[0] &&
-          serverSql(`SELECT count(*) FROM pg_stat_activity WHERE wait_event_type = 'Lock'`) !== '0',
-        120_000
-      );
-      assert.ok(waiting, 'the dump container is running and waiting on the held table');
-      const active = toolContainers('dump-')[0];
-      assert.equal(
-        docker(['inspect', '--format', '{{.HostConfig.LogConfig.Type}}', active]).stdout.trim(),
-        'none',
-        'the active container keeps no daemon log'
-      );
+        const waiting = await waitUntil(
+          () =>
+            toolContainers('dump')[0] &&
+            serverSql(`SELECT count(*) FROM pg_stat_activity WHERE wait_event_type = 'Lock'`) !==
+              '0',
+          120_000
+        );
+        assert.ok(waiting, 'the dump container is running and waiting on the held table');
+        const active = toolContainers('dump')[0];
+        assert.equal(
+          docker(['inspect', '--format', '{{.HostConfig.LogConfig.Type}}', active]).stdout.trim(),
+          'none',
+          'the active container keeps no daemon log'
+        );
 
-      child.kill('SIGTERM');
-      const code = await exited;
-      holder.stdin.end('ROLLBACK;\n');
-      await holderClosed;
-      assert.equal(code, EXIT.interrupted);
+        // The container's PID 1 ignores SIGTERM while pg_dump waits, so the stop must not depend on
+        // the docker client closing. A bounded wait turns a regression into a failure, not a hang.
+        child.kill('SIGTERM');
+        const code = await withTimeout(exited, 120_000, 'timeout');
+        assert.equal(code, EXIT.interrupted, 'the stopped run ends with the interrupted code');
 
-      assert.deepEqual(toolContainers(), [], 'no tool container survives the stop');
-      const scratch = filesUnder(sandbox.tmp).filter((file) => /dump\.(custom|age)$/.test(file));
-      assert.deepEqual(scratch, [], 'no plaintext or ciphertext scratch file is left');
-      assert.equal(await lockIsFree(sandbox.backupDir), true, 'lock released');
-      assert.deepEqual(listCopies(sandbox.backupDir).sort(), [...old].sort(), 'copies unchanged');
-      old.forEach((name, i) =>
-        assert.equal(readFileSync(path.join(sandbox.backupDir, name), 'utf8'), bytesBefore[i])
-      );
-      assert.doesNotMatch(`${output}${readStatus(sandbox)}`, new RegExp(password));
-      assert.match(readStatus(sandbox), /\tfailed\tсбой: прервано\n$/);
+        assert.deepEqual(toolContainers(), [], 'no tool container survives the stop');
+        const scratch = filesUnder(sandbox.tmp).filter((file) => /dump\.(custom|age)$/.test(file));
+        assert.deepEqual(scratch, [], 'no plaintext or ciphertext scratch file is left');
+        assert.equal(await lockIsFree(sandbox.backupDir), true, 'lock released');
+        assert.deepEqual(listCopies(sandbox.backupDir).sort(), [...old].sort(), 'copies unchanged');
+        old.forEach((name, i) =>
+          assert.equal(readFileSync(path.join(sandbox.backupDir, name), 'utf8'), bytesBefore[i])
+        );
+        assert.doesNotMatch(`${output}${readStatus(sandbox)}`, new RegExp(password));
+        assert.match(readStatus(sandbox), /\tfailed\tсбой: прервано\n$/);
+      } finally {
+        // Runs on success, assertion failure and timeout alike: nothing started here may outlive it.
+        if (child && child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+        if (holder) {
+          const holderClosed = new Promise((resolve) => holder.on('close', resolve));
+          holder.stdin.end('ROLLBACK;\n');
+          if ((await withTimeout(holderClosed, 10_000, 'timeout')) === 'timeout') {
+            holder.kill('SIGKILL');
+          }
+        }
+        for (const name of toolContainers()) docker(['rm', '-f', name]);
+      }
     });
 
     it('the cleanup fallback removes a tree the host cannot delete, with its container proven gone', async () => {
-      // Written by root inside the container: a read-only subdirectory the host user cannot unlink from.
+      // Written by a container: a subdirectory with plaintext, as a dump step leaves it. Docker Desktop
+      // maps container ownership onto the host user, so the host can really delete the tree and the
+      // fallback is not reached by itself. The refusal is therefore injected: the host remover refuses
+      // the one subdirectory, exactly as a permission failure would, and the real cleanup container
+      // must then empty it. Everything else (the container, its proof of absence, the ledger) is real.
       const work = path.join(sandbox.tmp, 'clickmoji-backup-realcleanup');
       mkdirSync(work, { recursive: true, mode: 0o700 });
       const made = docker([
@@ -344,26 +390,34 @@ describe(
         `type=bind,source=${work},target=/work`,
         TOOLS_IMAGE,
         '-c',
-        'mkdir /work/locked && echo PLAINTEXT > /work/locked/dump.custom && chmod 555 /work/locked',
+        'mkdir /work/locked && echo PLAINTEXT > /work/locked/dump.custom',
       ]);
-      assert.equal(made.status, 0, 'root-owned scratch tree written');
-      try {
-        rmSync(work, { recursive: true, force: true });
-      } catch {
-        // expected on Linux: the host user cannot unlink from the read-only subdirectory
-      }
-      assert.equal(
-        existsSync(work),
-        true,
-        'the host cannot remove the tree, so the fallback is needed'
-      );
+      assert.equal(made.status, 0, 'scratch tree with plaintext written by a container');
+      const locked = path.join(work, 'locked');
+      const refused = [];
+      const refusingHostRemove = (target) => {
+        if (target === locked) {
+          refused.push(target);
+          throw Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' });
+        }
+        rmSync(target, { recursive: true, force: true });
+      };
 
       mkdirSync(sandbox.backupDir, { recursive: true, mode: 0o700 });
       const runner = new DockerRunner({ bin: 'docker', containerEnv: {}, env: process.env });
       runner.bindLedger(new Ledger(sandbox.backupDir));
-      assert.equal(await removeTemp(work, runner), true, 'the fallback removed the tree');
+      assert.equal(
+        await removeTemp(work, runner, refusingHostRemove),
+        true,
+        'the fallback removed the tree'
+      );
+      assert.deepEqual(
+        refused,
+        [locked],
+        'the host removal was refused for the plaintext subdirectory'
+      );
       assert.equal(existsSync(work), false, 'directory gone');
-      assert.deepEqual(toolContainers('cleanup-'), [], 'no cleanup container survives');
+      assert.deepEqual(toolContainers('cleanup'), [], 'no cleanup container survives');
       assert.equal(existsSync(path.join(sandbox.backupDir, LEDGER_NAME)), false, 'ledger cleared');
       assert.equal(await runner.settle(), true, 'nothing left under this runner');
     });

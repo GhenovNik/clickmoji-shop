@@ -16,6 +16,9 @@ export const CONTAINER_DIR = path.resolve(
 
 export class Interrupted extends Error {}
 
+// How long a docker client may take to close after a stop step before the next step runs.
+export const STOP_GRACE_MS = 5000;
+
 const mount = (source, target, readonly = false) =>
   `type=bind,source=${source},target=${target}${readonly ? ',readonly' : ''}`;
 
@@ -249,11 +252,11 @@ export class DockerRunner {
     });
   }
 
-  // Stops this run: kills running docker clients, waits for them to close, then removes every
-  // container whose identity is still known and proves each one absent. Resolves true only when no
-  // identity is left. Memoized: every caller gets the same result. A signal that arrives later still
-  // stops any client that is running (the cleanup container, for example), since the clients are
-  // killed on every call; the containers themselves are removed by settle().
+  // Stops this run: kills running docker clients, removes every container whose identity is still
+  // known and proves each one absent. Resolves true only when no identity is left. Memoized: every
+  // caller gets the same result. A signal that arrives later still stops any client that is running
+  // (the cleanup container, for example), since the clients are killed on every call; the containers
+  // themselves are removed by settle().
   shutdown() {
     this.aborted = true;
     for (const child of this.children.keys()) child.kill('SIGTERM');
@@ -261,9 +264,27 @@ export class DockerRunner {
     return this.shutdownPromise;
   }
 
+  // Order matters. SIGTERM to the docker client is forwarded to its container, whose PID 1 is a
+  // shell that ignores it while a child (pg_dump) is blocked: the client then never closes. So no
+  // step waits on a client without a bound, and containers are removed by name before the last wait.
   async stopChildren() {
-    await Promise.all([...this.children.values()]);
+    await this.#closed(STOP_GRACE_MS);
+    if (this.children.size > 0) await this.settle();
+    await this.#closed(STOP_GRACE_MS);
+    for (const child of this.children.keys()) child.kill('SIGKILL');
+    await this.#closed(STOP_GRACE_MS);
     return this.settle();
+  }
+
+  // Resolves when every client running now has closed, or after `ms`, whichever comes first.
+  #closed(ms) {
+    return new Promise((resolve) => {
+      const timer = setTimeout(resolve, ms);
+      Promise.all([...this.children.values()]).then(() => {
+        clearTimeout(timer);
+        resolve();
+      });
+    });
   }
 
   // Removes and proves absent every container whose identity is still known. Up to three rounds;

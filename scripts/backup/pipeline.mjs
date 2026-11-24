@@ -96,9 +96,12 @@ function fsyncFile(file) {
 
 const backupKey = (backupDir) => crypto.createHash('sha256').update(backupDir).digest('hex');
 
-function removeQuietly(target) {
+// The host's own removal. Injected only by tests (see removeTemp), which need a deterministic refusal.
+const hostRemove = (target) => rmSync(target, { recursive: true, force: true });
+
+function removeQuietly(target, remove = hostRemove) {
   try {
-    rmSync(target, { recursive: true, force: true });
+    remove(target);
   } catch {
     // Left in place; the caller checks whether the directory is gone.
   }
@@ -322,7 +325,7 @@ async function recoverContainers(docker, ledger) {
 }
 
 // Every entry of the directory except the ownership marker.
-function removeContents(tempDir) {
+function removeContents(tempDir, remove) {
   let entries;
   try {
     entries = readdirSync(tempDir);
@@ -330,7 +333,7 @@ function removeContents(tempDir) {
     return;
   }
   for (const entry of entries) {
-    if (entry !== TEMP_MARKER) removeQuietly(path.join(tempDir, entry));
+    if (entry !== TEMP_MARKER) removeQuietly(path.join(tempDir, entry), remove);
   }
 }
 
@@ -350,18 +353,18 @@ function contentsLeft(tempDir) {
 // be proven (absent) before the host looks again; an unproven fallback stops everything here, so
 // nothing is removed under a container that may still exist. The marker goes last, so a directory
 // that is not fully removed keeps the marker a later sweep needs. Exported for the real-Docker test.
-export async function removeTemp(tempDir, docker) {
-  removeContents(tempDir);
+export async function removeTemp(tempDir, docker, remove = hostRemove) {
+  removeContents(tempDir, remove);
   if (contentsLeft(tempDir)) {
     const cleanup = await docker.runAfterShutdown(
       cleanupArgs({ name: containerName('cleanup'), workDir: tempDir })
     );
     if (!cleanup.absent) return false;
-    removeContents(tempDir);
+    removeContents(tempDir, remove);
     if (contentsLeft(tempDir)) return false;
   }
-  removeQuietly(path.join(tempDir, TEMP_MARKER));
-  removeQuietly(tempDir);
+  removeQuietly(path.join(tempDir, TEMP_MARKER), remove);
+  removeQuietly(tempDir, remove);
   return !existsSync(tempDir);
 }
 
