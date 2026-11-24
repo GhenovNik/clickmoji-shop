@@ -32,6 +32,9 @@ export const EXIT = Object.freeze({
   busy: 3,
   unavailable: 4,
   interrupted: 130,
+  // The copy was published, but its status line could not be written. Distinct from every
+  // failure code, so a scheduler can tell "copy saved, status missing" from "copy not saved".
+  statusFailed: 5,
 });
 
 // Fixed, sanitized status texts. They never contain a database address, a
@@ -45,6 +48,9 @@ export const MESSAGES = Object.freeze({
   publish: 'сбой: публикация не удалась',
   busy: 'сбой: уже выполняется другое снятие',
   cleanup: 'сбой: очистка временной папки не удалась',
+  containers: 'сбой: не удалось подтвердить остановку контейнера',
+  status: 'сбой: статус не записан',
+  statusSaved: 'сбой: копия сохранена, статус не записан',
   internal: 'сбой: внутренняя ошибка',
   interrupted: 'сбой: прервано',
 });

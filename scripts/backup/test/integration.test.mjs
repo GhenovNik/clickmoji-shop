@@ -5,12 +5,14 @@
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
 import crypto from 'node:crypto';
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, it } from 'node:test';
-import { buildImageArgs, CONTAINER_DIR } from '../docker.mjs';
+import { buildImageArgs, CONTAINER_DIR, DockerRunner } from '../docker.mjs';
+import { Ledger } from '../ledger.mjs';
+import { removeTemp } from '../pipeline.mjs';
 import { libpqEnv, LIBPQ_ENV_NAMES } from '../config.mjs';
-import { EXIT, POSTGRES_BASE_IMAGE, TOOLS_IMAGE } from '../constants.mjs';
+import { EXIT, LEDGER_NAME, POSTGRES_BASE_IMAGE, TOOLS_IMAGE } from '../constants.mjs';
 import { CLI, listCopies, lockIsFree, makeSandbox, readStatus, seedBackups } from './helpers.mjs';
 
 const enabled = process.env.CLICKMOJI_BACKUP_INTEGRATION === '1';
@@ -327,6 +329,43 @@ describe(
       );
       assert.doesNotMatch(`${output}${readStatus(sandbox)}`, new RegExp(password));
       assert.match(readStatus(sandbox), /\tfailed\tсбой: прервано\n$/);
+    });
+
+    it('the cleanup fallback removes a tree the host cannot delete, with its container proven gone', async () => {
+      // Written by root inside the container: a read-only subdirectory the host user cannot unlink from.
+      const work = path.join(sandbox.tmp, 'clickmoji-backup-realcleanup');
+      mkdirSync(work, { recursive: true, mode: 0o700 });
+      const made = docker([
+        'run',
+        '--rm',
+        '--entrypoint',
+        '/bin/sh',
+        '--mount',
+        `type=bind,source=${work},target=/work`,
+        TOOLS_IMAGE,
+        '-c',
+        'mkdir /work/locked && echo PLAINTEXT > /work/locked/dump.custom && chmod 555 /work/locked',
+      ]);
+      assert.equal(made.status, 0, 'root-owned scratch tree written');
+      try {
+        rmSync(work, { recursive: true, force: true });
+      } catch {
+        // expected on Linux: the host user cannot unlink from the read-only subdirectory
+      }
+      assert.equal(
+        existsSync(work),
+        true,
+        'the host cannot remove the tree, so the fallback is needed'
+      );
+
+      mkdirSync(sandbox.backupDir, { recursive: true, mode: 0o700 });
+      const runner = new DockerRunner({ bin: 'docker', containerEnv: {}, env: process.env });
+      runner.bindLedger(new Ledger(sandbox.backupDir));
+      assert.equal(await removeTemp(work, runner), true, 'the fallback removed the tree');
+      assert.equal(existsSync(work), false, 'directory gone');
+      assert.deepEqual(toolContainers('cleanup-'), [], 'no cleanup container survives');
+      assert.equal(existsSync(path.join(sandbox.backupDir, LEDGER_NAME)), false, 'ledger cleared');
+      assert.equal(await runner.settle(), true, 'nothing left under this runner');
     });
 
     it('removes the source container and the sandbox', () => {

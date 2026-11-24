@@ -31,6 +31,7 @@ import {
   makeSandbox,
   readDockerLog,
   readStatus,
+  runCli,
   runWithFake,
   seedBackups,
   syntheticDatabase,
@@ -279,7 +280,7 @@ describe('interruption stops containers before anything is removed', () => {
     const result = await run.done;
 
     assert.equal(result.ok, false);
-    assert.equal(result.key, 'cleanup');
+    assert.equal(result.key, 'containers');
     assert.equal(containersLeft(sandbox).length, 1, 'the container identity is still known');
     assert.equal(tempLeft().length, 1, 'temporary directory kept, not deleted under a container');
     assert.equal(
@@ -291,7 +292,7 @@ describe('interruption stops containers before anything is removed', () => {
 
     const runsBefore = readDockerLog(sandbox).filter((call) => call.argv[0] === 'run').length;
     const blocked = await runWithFake(sandbox, db, { FAKE_DOCKER_RM: 'fail' });
-    assert.equal(blocked.key, 'cleanup');
+    assert.equal(blocked.key, 'containers');
     assert.equal(
       readDockerLog(sandbox).filter((call) => call.argv[0] === 'run').length,
       runsBefore,
@@ -457,5 +458,195 @@ describe('temporary directories', () => {
         if (existsSync(out)) chmodSync(out, 0o755);
       }
     }
+  });
+});
+
+// Makes every leftover scratch tree removable again, so the sandbox can be deleted.
+function unlockTemp() {
+  for (const name of readdirSync(sandbox.tmp)) {
+    const out = path.join(sandbox.tmp, name, 'out', 'restored');
+    if (existsSync(out)) chmodSync(out, 0o755);
+  }
+}
+
+const LATER = new Date(NOW.getTime() + 86_400_000);
+const ledgerPath = () => path.join(sandbox.backupDir, LEDGER_NAME);
+const ledgerNames = () =>
+  existsSync(ledgerPath()) ? JSON.parse(readFileSync(ledgerPath(), 'utf8')).containers : [];
+const runCalls = () => readDockerLog(sandbox).filter((call) => call.argv[0] === 'run');
+const isFallback = (call) => call.argv.some((arg) => arg.includes('rm -rf'));
+const nameOf = (call) => call.argv[call.argv.indexOf('--name') + 1];
+
+describe('a zero exit does not prove that the container is gone (B1a)', () => {
+  it('an unconfirmed daemon after a zero-exit dump: nothing is verified, published or pruned', async () => {
+    const old = seedBackups(sandbox.backupDir, 100);
+    const before = old.map((name) => readFileSync(path.join(sandbox.backupDir, name), 'utf8'));
+    const result = await runWithFake(sandbox, db, { FAKE_DOCKER_PS: 'fail' });
+
+    assert.equal(result.ok, false);
+    assert.equal(result.key, 'containers');
+    assert.equal(result.exit, EXIT.failed);
+    assert.equal(
+      runCalls().some((call) => call.argv.includes('/opt/backup/verify.sh')),
+      false,
+      'no verification after an unproven dump'
+    );
+    assert.equal(
+      runCalls().some((call) => call.argv.includes('age')),
+      false,
+      'no encryption after an unproven dump'
+    );
+    assert.deepEqual(listCopies(sandbox.backupDir).sort(), [...old].sort(), 'nothing pruned');
+    assert.ok(!listCopies(sandbox.backupDir).includes(NEW_NAME), 'nothing published');
+    old.forEach((name, i) =>
+      assert.equal(readFileSync(path.join(sandbox.backupDir, name), 'utf8'), before[i])
+    );
+    assert.equal(ledgerNames().length, 1, 'the ledger keeps the dump container');
+    assert.equal(readStatus(sandbox).trim().split('\t')[2], MESSAGES.containers);
+  });
+
+  it('the next run proves that container gone before anything else, then completes', async () => {
+    seedBackups(sandbox.backupDir, 2);
+    await runWithFake(sandbox, db, { FAKE_DOCKER_PS: 'fail' });
+    const [leftover] = ledgerNames();
+    assert.ok(leftover, 'a name is recorded');
+
+    const from = readDockerLog(sandbox).length;
+    const next = await runWithFake(sandbox, db);
+    assert.equal(next.ok, true);
+    const later = readDockerLog(sandbox).slice(from);
+    const removal = later.findIndex(
+      (call) => call.argv[0] === 'rm' && call.argv.includes(leftover)
+    );
+    const firstRun = later.findIndex((call) => call.argv[0] === 'run');
+    assert.ok(
+      removal >= 0 && removal < firstRun,
+      'the leftover is removed before any container starts'
+    );
+    assert.deepEqual(ledgerNames(), [], 'ledger cleared once absence is proven');
+  });
+});
+
+describe('the cleanup fallback is a tracked container too (B1b)', () => {
+  it('is recorded in the ledger before it starts and proven gone afterwards', async () => {
+    try {
+      const result = await runWithFake(sandbox, db, { FAKE_DOCKER_MODE: 'cleanup-fail' });
+      assert.equal(result.key, 'cleanup', 'the host still cannot remove the directory');
+      const [fallback] = runCalls().filter(isFallback);
+      assert.ok(fallback, 'the fallback ran');
+      assert.match(nameOf(fallback), /^clickmoji-backup-cleanup-/);
+      assert.equal(fallback.ledgerHas, true, 'recorded in the ledger before it started');
+      assert.deepEqual(containersLeft(sandbox), [], 'no container survives');
+      assert.deepEqual(ledgerNames(), [], 'ledger cleared once absence is proven');
+      assert.equal(tempLeft().length, 1, 'the directory is kept, not deleted under a container');
+    } finally {
+      unlockTemp();
+    }
+  });
+
+  it('a writer killed during the fallback leaves its container recorded; the next writer removes it first', async () => {
+    try {
+      const run = startLockedRun({
+        backupDir: sandbox.backupDir,
+        env: envFor(sandbox, db, { FAKE_DOCKER_MODE: 'cleanup-hang' }),
+        tempRoot: sandbox.tmp,
+      });
+      const fallbackName = () =>
+        containersLeft(sandbox).find((name) => name.startsWith('clickmoji-backup-cleanup-'));
+      assert.ok(await until(() => fallbackName(), 15_000), 'the fallback container is running');
+      run.child.kill('SIGKILL');
+      assert.equal(await run.done, null, 'the writer died without a result');
+      const leftover = fallbackName();
+      assert.deepEqual(ledgerNames(), [leftover], 'the fallback container is recorded');
+
+      const from = readDockerLog(sandbox).length;
+      const next = await runWithFake(sandbox, db, {}, LATER);
+      assert.equal(next.ok, true, 'the next run completes once the leftover is gone');
+      const later = readDockerLog(sandbox).slice(from);
+      const removal = later.findIndex(
+        (call) => call.argv[0] === 'rm' && call.argv.includes(leftover)
+      );
+      const firstRun = later.findIndex((call) => call.argv[0] === 'run');
+      assert.ok(removal >= 0 && removal < firstRun, 'removed before any container starts');
+      assert.deepEqual(containersLeft(sandbox), []);
+      assert.deepEqual(ledgerNames(), []);
+    } finally {
+      unlockTemp();
+    }
+  });
+
+  it('a stop during the fallback stops its container too, and the lock is released after it is gone', async () => {
+    try {
+      const run = startLockedRun({
+        backupDir: sandbox.backupDir,
+        env: envFor(sandbox, db, { FAKE_DOCKER_MODE: 'cleanup-hang' }),
+        tempRoot: sandbox.tmp,
+      });
+      assert.ok(
+        await until(
+          () =>
+            containersLeft(sandbox).some((name) => name.startsWith('clickmoji-backup-cleanup-')),
+          15_000
+        ),
+        'the fallback container is running'
+      );
+      run.child.kill('SIGTERM');
+      const result = await run.done;
+      assert.equal(result.key, 'cleanup', 'the copy was published; its plaintext directory stayed');
+      assert.deepEqual(containersLeft(sandbox), [], 'the fallback container is gone');
+      assert.deepEqual(ledgerNames(), [], 'ledger cleared');
+      assert.equal(await lockIsFree(sandbox.backupDir), true, 'lock released');
+    } finally {
+      unlockTemp();
+    }
+  });
+
+  it('every container of a full run is in the ledger when it starts', async () => {
+    await runWithFake(sandbox, db);
+    const starts = runCalls().filter((call) => call.argv.includes('--name'));
+    assert.equal(starts.length, 3, 'dump, verify and encrypt');
+    for (const call of starts) assert.equal(call.ledgerHas, true, nameOf(call));
+  });
+});
+
+describe('the status line can fail after the copy is saved', () => {
+  it('a saved copy keeps its bytes, exits with the status code, and says the status is missing', async () => {
+    const old = seedBackups(sandbox.backupDir, 3);
+    const result = await runWithFake(sandbox, db, { FAKE_SWAP_STATUS: sandbox.statusFile });
+    assert.equal(result.ok, true);
+    assert.equal(result.saved, true);
+    assert.equal(result.statusWritten, false);
+    assert.equal(result.exit, EXIT.statusFailed);
+    assert.ok(listCopies(sandbox.backupDir).includes(NEW_NAME), 'the copy is there');
+    assert.deepEqual(
+      listCopies(sandbox.backupDir)
+        .filter((name) => old.includes(name))
+        .sort(),
+      [...old].sort(),
+      'the copy is saved; retention keeps the three old copies'
+    );
+  });
+
+  it('without a saved copy the failure code stays, and the status is reported missing', async () => {
+    const result = await runWithFake(sandbox, db, {
+      FAKE_SWAP_STATUS: sandbox.statusFile,
+      FAKE_DOCKER_MODE: 'dump-fail',
+    });
+    assert.equal(result.saved, false);
+    assert.equal(result.statusWritten, false);
+    assert.equal(result.exit, EXIT.failed);
+  });
+
+  it('the CLI prints the distinction, exits 5 and prints no secret', async () => {
+    const result = await runCli(envFor(sandbox, db, { FAKE_SWAP_STATUS: sandbox.statusFile }));
+    assert.equal(result.code, EXIT.statusFailed);
+    assert.match(result.stdout, /^backup: ok clickmoji-/m);
+    assert.ok(result.stdout.includes(`backup: ${MESSAGES.statusSaved}`));
+    assert.equal(`${result.stdout}${result.stderr}`.includes(db.password), false);
+    assert.equal(
+      listCopies(sandbox.backupDir).length,
+      1,
+      'the copy is there (the CLI uses the real clock)'
+    );
   });
 });

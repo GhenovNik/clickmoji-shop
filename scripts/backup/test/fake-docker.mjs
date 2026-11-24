@@ -7,6 +7,13 @@
 // interrupt starts a dump that never ends; when its client is killed the container survives,
 // as it does in the daemon, until `docker rm -f` removes it.
 // FAKE_DOCKER_RM=fail makes `docker rm -f` fail, so a container can outlive the run.
+// cleanup-hang is cleanup-fail with the in-image cleanup container kept running until something
+// removes it (`docker rm -f`), as a daemon keeps it when its client was killed.
+// FAKE_DOCKER_PS=fail makes `docker ps` fail: the daemon cannot be asked, so no absence is proven.
+// FAKE_SWAP_STATUS=<path> replaces the status file by a directory when the run starts, so the
+// status line cannot be written any more (the path was replaced after configuration).
+// Each `docker run` with --name is logged with ledgerHas: whether FAKE_WATCH_LEDGER (the ledger
+// file) already named that container at the moment it started.
 //
 // Containers live in FAKE_DOCKER_STATE/containers (one file per name, --rm removes it when the
 // container exits normally). Container output goes to FAKE_DAEMON_LOG unless the container was
@@ -51,6 +58,8 @@ const STATE = process.env.FAKE_DOCKER_STATE;
 const REGISTRY = STATE ? path.join(STATE, 'containers') : null;
 
 if (process.env.FAKE_DOCKER_LOG) {
+  const nameArg = argv.includes('--name') ? argv[argv.indexOf('--name') + 1] : null;
+  const ledgerFile = process.env.FAKE_WATCH_LEDGER;
   appendFileSync(
     process.env.FAKE_DOCKER_LOG,
     `${JSON.stringify({
@@ -61,6 +70,10 @@ if (process.env.FAKE_DOCKER_LOG) {
           (name) => [name, process.env[name] === expected[name]]
         )
       ),
+      ledgerHas:
+        nameArg && ledgerFile
+          ? existsSync(ledgerFile) && readFileSync(ledgerFile, 'utf8').includes(nameArg)
+          : null,
     })}\n`
   );
 }
@@ -119,13 +132,17 @@ function writeReports(workDir) {
     `${process.env.FAKE_RESTORED_MIGRATION ?? process.env.FAKE_MIGRATION ?? 'm_2'}\n`
   );
   writeFileSync(path.join(out, 'restored', 'counts.tsv'), `${countLines}\n`);
-  if (mode === 'cleanup-fail') {
+  if (mode === 'cleanup-fail' || mode === 'cleanup-hang') {
     // A read-only directory with a file in it: the host cannot delete it without privilege.
     chmodSync(path.join(out, 'restored'), 0o555);
   }
 }
 
 if (argv[0] === 'version') {
+  if (process.env.FAKE_SWAP_STATUS) {
+    rmSync(process.env.FAKE_SWAP_STATUS, { recursive: true, force: true });
+    mkdirSync(process.env.FAKE_SWAP_STATUS);
+  }
   if (mode === 'docker-down') {
     // Real docker may echo the connection string; the pipeline must not forward it.
     process.stderr.write(`Cannot connect to ${process.env.PGPASSWORD ?? ''}\n`);
@@ -139,6 +156,7 @@ if (argv[0] === 'image' && argv[1] === 'inspect') process.exit(mode === 'pull-fa
 if (argv[0] === 'build') process.exit(mode === 'pull-fail' ? 1 : 0);
 
 if (argv[0] === 'ps') {
+  if (process.env.FAKE_DOCKER_PS === 'fail') process.exit(1);
   const filter = optionValue('--filter') ?? '';
   const match = /^name=\^(.*)\$$/.exec(filter);
   if (!match || !REGISTRY || !existsSync(REGISTRY)) process.exit(0);
@@ -176,7 +194,6 @@ function runContainer(quiet) {
     writeFileSync(path.join(workDir, 'dump.custom'), 'FAKE-DUMP');
     if (mode === 'interrupt') {
       // Plaintext exists now; the host must kill this process and remove the container.
-      setInterval(() => {}, 1000);
       return undefined;
     }
     if (mode === 'dump-fail') {
@@ -204,6 +221,7 @@ function runContainer(quiet) {
     return 0;
   }
   if (argv.some((arg) => arg.includes('rm -rf'))) {
+    if (mode === 'cleanup-hang') return undefined;
     if (mode === 'cleanup-fail') return 0;
     for (const entry of readdirSync(workDir))
       rmSync(path.join(workDir, entry), { recursive: true, force: true });
@@ -221,7 +239,12 @@ if (argv[0] === 'run') {
   }
   const code = runContainer(quiet);
   if (code === undefined) {
-    // Keeps running: the container stays registered after its client is killed.
+    // Keeps running: the container stays registered. Its client lives as long as the container and
+    // exits when `docker rm -f` removes it, as a real client does.
+    if (name && REGISTRY)
+      setInterval(() => {
+        if (!existsSync(containerFile(name))) process.exit(0);
+      }, 50);
   } else {
     if (name && REGISTRY) rmSync(containerFile(name), { force: true }); // --rm
     process.exit(code);

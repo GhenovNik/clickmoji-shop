@@ -7,7 +7,8 @@
 //   BACKUP_AGE_RECIPIENT_FILE     file holding one public age recipient (age1...)
 // Optional: BACKUP_DOCKER_BIN (default "docker").
 // Exit codes: 0 ok, 1 failed (old copies intact), 2 published but flagged, 3 busy,
-// 4 docker or image unavailable, 130 interrupted.
+// 4 docker or image unavailable, 5 copy published but its status line could not be written,
+// 130 interrupted.
 // Configuration is read only from the environment (see config.mjs). The database address
 // is never printed, passed in argv, or written to the status file.
 //
@@ -63,6 +64,9 @@ export async function main(env = process.env) {
     ? `backup: ok ${result.name} verify=${result.verify}`
     : `backup: ${MESSAGES[result.key]}`;
   process.stdout.write(`${summary}\n`);
+  if (!result.statusWritten) {
+    process.stdout.write(`backup: ${MESSAGES[result.saved ? 'statusSaved' : 'status']}\n`);
+  }
   return result.exit;
 }
 

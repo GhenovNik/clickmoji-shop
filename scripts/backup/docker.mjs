@@ -140,6 +140,11 @@ const nameOf = (args) => (args.includes('--name') ? args[args.indexOf('--name') 
 // Container identities are kept from the moment a `docker run` starts until the daemon has
 // shown that the container is gone. Killing the client does not remove its container, so the
 // identity is never dropped because a client exited; shutdown() removes what is left.
+//
+// Every container of this tool goes through #start(), cleanup included. A client's exit code is
+// not evidence that its container is gone: a result reports `absent` only after the daemon has
+// been asked and listed no container of that name. Callers must treat `absent: false` as a
+// failure, because the container may still exist and may still write.
 export class DockerRunner {
   constructor({ bin = 'docker', containerEnv, env = process.env }) {
     this.bin = bin;
@@ -159,7 +164,7 @@ export class DockerRunner {
     this.ledger = ledger;
   }
 
-  // Unchecked call, used for cleanup. Resolves with the exit code.
+  // Unchecked call, used for removal only. Resolves with the exit code.
   exec(args) {
     return new Promise((resolve) => {
       const child = spawn(this.bin, args, { env: this.env, stdio: ['ignore', 'ignore', 'ignore'] });
@@ -187,15 +192,42 @@ export class DockerRunner {
     return result.code === 0 && result.stdout.trim() === '';
   }
 
+  // Proves `name` absent and, only then, forgets it (ledger first, then the set). Returns false
+  // when the container may still exist or when the ledger cannot be updated: the identity stays.
+  async #forgetIfAbsent(name) {
+    if (!(await this.proveAbsent(name))) return false;
+    try {
+      this.ledger?.remove(name);
+      this.containers.delete(name);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   // Tracked call. Rejects with Interrupted if abort() happens before or while it runs.
   async run(args) {
     if (this.aborted) throw new Interrupted('aborted');
+    const result = await this.#start(args);
+    if (this.aborted) throw new Interrupted('aborted');
+    return result;
+  }
+
+  // Tracked call that is allowed after shutdown(): the cleanup of the temporary directory runs once
+  // every earlier container is proven gone, and it is tracked exactly like any other container.
+  runAfterShutdown(args) {
+    return this.#start(args);
+  }
+
+  // Starts one container. Resolves { code, absent }. The ledger write happens before spawn, so a
+  // container that can exist is always recorded, even when this process dies right after.
+  #start(args) {
     const name = nameOf(args);
     if (name) {
       this.ledger?.add(name); // durable before the daemon can know about the container
       this.containers.add(name);
     }
-    return new Promise((resolve, reject) => {
+    return new Promise((resolve) => {
       const child = spawn(this.bin, args, { env: this.env, stdio: ['ignore', 'ignore', 'ignore'] });
       let settle;
       const closed = new Promise((done) => {
@@ -208,9 +240,8 @@ export class DockerRunner {
         finished = true;
         this.children.delete(child);
         settle();
-        if (name && (await this.proveAbsent(name))) this.forget(name);
-        if (this.aborted) reject(new Interrupted('aborted'));
-        else resolve({ code });
+        const absent = name ? await this.#forgetIfAbsent(name) : true;
+        resolve({ code, absent });
       };
       child.on('error', () => finish(127));
       child.on('close', (code) => finish(code ?? 128));
@@ -218,28 +249,32 @@ export class DockerRunner {
   }
 
   // Stops this run: kills running docker clients, waits for them to close, then removes every
-  // container whose identity is still known and proves each one absent. Resolves true only
-  // when no identity is left. Memoized: every caller gets the same result.
+  // container whose identity is still known and proves each one absent. Resolves true only when no
+  // identity is left. Memoized: every caller gets the same result. A signal that arrives later still
+  // stops any client that is running (the cleanup container, for example), since the clients are
+  // killed on every call; the containers themselves are removed by settle().
   shutdown() {
     this.aborted = true;
-    this.shutdownPromise ??= this.stopAll();
+    for (const child of this.children.keys()) child.kill('SIGTERM');
+    this.shutdownPromise ??= this.stopChildren();
     return this.shutdownPromise;
   }
 
-  async stopAll() {
-    for (const child of this.children.keys()) child.kill('SIGTERM');
+  async stopChildren() {
     await Promise.all([...this.children.values()]);
+    return this.settle();
+  }
+
+  // Removes and proves absent every container whose identity is still known. Up to three rounds;
+  // a container that stays unproven keeps its identity and its ledger entry. True only when none is left.
+  async settle() {
     for (let attempt = 0; attempt < 3 && this.containers.size > 0; attempt += 1) {
       for (const name of [...this.containers]) {
+        if (await this.#forgetIfAbsent(name)) continue;
         await this.exec(removeArgs(name));
-        if (await this.proveAbsent(name)) this.forget(name);
+        await this.#forgetIfAbsent(name);
       }
     }
     return this.containers.size === 0;
-  }
-
-  forget(name) {
-    this.containers.delete(name);
-    this.ledger?.remove(name);
   }
 }

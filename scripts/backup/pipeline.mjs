@@ -199,9 +199,12 @@ function publish({ backupDir, encryptedFile, name, meta }) {
 // The lock is checked again before the copy becomes visible and before anything is pruned:
 // a run that no longer holds it must not touch the shared backup names.
 async function executeBackup({ config, docker, now, tempDir, lock }) {
+  // A step counts only when its client exited 0 AND the daemon has been seen to hold no container
+  // of its name. A zero exit alone is not proof: the daemon may be unreachable or still hold it.
   const run = async (args, key, exit = EXIT.failed) => {
     const result = await docker.run(args);
     if (result.code !== 0) throw new StepError(key, exit);
+    if (!result.absent) throw new StepError('containers', EXIT.failed);
   };
 
   await run(versionArgs(), 'docker', EXIT.unavailable);
@@ -298,22 +301,24 @@ async function recoverContainers(docker, ledger) {
   try {
     names = ledger.list();
   } catch (error) {
-    if (error instanceof LedgerError) throw new StepError('cleanup', EXIT.failed);
+    if (error instanceof LedgerError) throw new StepError('containers', EXIT.failed);
     throw error;
   }
   for (const name of names) {
     await docker.exec(removeArgs(name));
-    if (!(await docker.proveAbsent(name))) throw new StepError('cleanup', EXIT.failed);
+    if (!(await docker.proveAbsent(name))) throw new StepError('containers', EXIT.failed);
     ledger.remove(name);
   }
 }
 
 // Returns true when the directory is gone. Container-written files may belong to another
-// uid, so a failed plain removal is retried from inside the tools image.
-async function removeTemp(tempDir, docker) {
+// uid, so a failed plain removal is retried from inside the tools image. That fallback is a
+// container like any other: tracked in the ledger before it starts and proven absent after it
+// exits (the caller's settle() repeats the proof). Exported for the real-Docker test.
+export async function removeTemp(tempDir, docker) {
   removeQuietly(tempDir);
   if (!existsSync(tempDir)) return true;
-  await docker.exec(cleanupArgs({ name: containerName('cleanup'), workDir: tempDir }));
+  await docker.runAfterShutdown(cleanupArgs({ name: containerName('cleanup'), workDir: tempDir }));
   removeQuietly(tempDir);
   return !existsSync(tempDir);
 }
@@ -325,7 +330,11 @@ function classify(error) {
   return { ok: false, key: 'internal', exit: EXIT.failed };
 }
 
-function report(config, now, result) {
+// `saved` is true when the encrypted copy was published, whatever happened to cleanup afterwards.
+// A status line that cannot be written (the path no longer qualifies, or the write fails) is
+// reported as statusWritten: false. When the copy was saved, that gets its own exit code, so the
+// copy is not mistaken for a missing one.
+function report(config, now, result, saved = false) {
   const when = now();
   const line = result.ok
     ? formatStatusLine({
@@ -334,17 +343,24 @@ function report(config, now, result) {
         detail: `size=${result.sizeBytes} verify=${result.verify} file=${result.name} prune=${result.pruned}`,
       })
     : formatStatusLine({ now: when, outcome: 'failed', detail: MESSAGES[result.key] });
-  // The status path is checked again: a file may have been replaced since configuration. A
-  // status line that cannot be written safely is dropped; the exit code still tells the outcome.
+  // The status path is checked again: a file may have been replaced since configuration.
+  let statusWritten = true;
   try {
     checkStatusTarget(config.statusFile, config.backupDir);
     appendStatus(config.statusFile, line);
   } catch {
-    // Nothing is written to a path that no longer qualifies.
+    statusWritten = false; // nothing is written to a path that no longer qualifies
   }
+  const outcomeExit = result.ok
+    ? result.verify === 'suspicious'
+      ? EXIT.suspicious
+      : EXIT.ok
+    : result.exit;
   return {
     ...result,
-    exit: result.ok ? (result.verify === 'suspicious' ? EXIT.suspicious : EXIT.ok) : result.exit,
+    saved,
+    statusWritten,
+    exit: !statusWritten && saved ? EXIT.statusFailed : outcomeExit,
   };
 }
 
@@ -367,6 +383,7 @@ export async function runBackup({
   docker.bindLedger(ledger);
 
   let result;
+  let saved = false;
   let tempDir = null;
   try {
     await recoverContainers(docker, ledger);
@@ -378,6 +395,7 @@ export async function runBackup({
       { mode: 0o600 }
     );
     result = { ok: true, ...(await executeBackup({ config, docker, now, tempDir, lock })) };
+    saved = true; // publish is the last step that can fail; nothing after it can undo it
   } catch (error) {
     result = classify(error);
   }
@@ -393,19 +411,30 @@ export async function runBackup({
   }
   if (!containersGone) {
     await releaseQuietly(lock);
-    return report(config, now, { ok: false, key: 'cleanup', exit: EXIT.failed });
+    return report(config, now, { ok: false, key: 'containers', exit: EXIT.failed }, saved);
   }
 
+  let removed = true;
   try {
-    if (tempDir && !(await removeTemp(tempDir, docker))) {
-      // Plaintext left on disk is reported even when the copy itself succeeded.
-      result = { ok: false, key: 'cleanup', exit: EXIT.failed };
-    }
+    if (tempDir) removed = await removeTemp(tempDir, docker);
   } catch {
-    result = { ok: false, key: 'cleanup', exit: EXIT.failed };
+    removed = false;
+  }
+  // The cleanup container was started after shutdown(): it must be proven gone as well.
+  let allGone = false;
+  try {
+    allGone = await docker.settle();
+  } catch {
+    allGone = false;
   }
   await releaseQuietly(lock);
-  return report(config, now, result);
+  if (!allGone)
+    return report(config, now, { ok: false, key: 'containers', exit: EXIT.failed }, saved);
+  if (!removed) {
+    // Plaintext left on disk is reported even when the copy itself succeeded.
+    result = { ok: false, key: 'cleanup', exit: EXIT.failed };
+  }
+  return report(config, now, result, saved);
 }
 
 // Release is the last thing a run does. A failure here cannot leave a live owner behind: the

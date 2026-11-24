@@ -15,6 +15,7 @@ import {
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { LEDGER_NAME } from '../constants.mjs';
 import { loadConfig } from '../config.mjs';
 import { LAUNCH_BUSY, LAUNCH_FAILED, launchLocked } from '../lock.mjs';
 import { reportBusy } from '../pipeline.mjs';
@@ -93,6 +94,7 @@ export function envFor(sandbox, db, extra = {}) {
     FAKE_DOCKER_STATE: sandbox.dockerState,
     FAKE_DAEMON_LOG: sandbox.daemonLog,
     FAKE_WATCH_LOCK: path.join(sandbox.backupDir, '.backup.lock'),
+    FAKE_WATCH_LEDGER: path.join(sandbox.backupDir, LEDGER_NAME),
     ...extra,
   };
 }
@@ -139,8 +141,9 @@ export function startLockedRun({ backupDir, env, now = NOW, tempRoot }) {
         resolve(reportBusy(loadConfig(env), () => now));
         return;
       }
+      // A writer killed before it printed its result has no line: that is null, not an error.
       const line = stdout.trim().split('\n').pop();
-      resolve(JSON.parse(line));
+      resolve(line ? JSON.parse(line) : null);
     });
   });
   return { child, done };
