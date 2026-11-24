@@ -282,7 +282,11 @@ describe('interruption stops containers before anything is removed', () => {
     assert.equal(result.key, 'cleanup');
     assert.equal(containersLeft(sandbox).length, 1, 'the container identity is still known');
     assert.equal(tempLeft().length, 1, 'temporary directory kept, not deleted under a container');
-    assert.equal(existsSync(path.join(sandbox.backupDir, LEDGER_NAME)), true, 'the ledger records it');
+    assert.equal(
+      existsSync(path.join(sandbox.backupDir, LEDGER_NAME)),
+      true,
+      'the ledger records it'
+    );
     assert.equal(await lockIsFree(sandbox.backupDir), true, 'the lock is free; the ledger blocks');
 
     const runsBefore = readDockerLog(sandbox).filter((call) => call.argv[0] === 'run').length;

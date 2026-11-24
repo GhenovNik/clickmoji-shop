@@ -79,7 +79,11 @@ describe('one owner at a time', () => {
     writeFileSync(gate, '');
     await Promise.all(holders.map((holder) => holder.exited));
     assert.equal(await lockIsFree(sandbox.backupDir), true, 'the owner released its lock');
-    assert.deepEqual(listCopies(sandbox.backupDir).sort(), [...old].sort(), 'no copy added or removed');
+    assert.deepEqual(
+      listCopies(sandbox.backupDir).sort(),
+      [...old].sort(),
+      'no copy added or removed'
+    );
     for (const name of old) {
       assert.deepEqual(
         readFileSync(path.join(sandbox.backupDir, name)),
@@ -127,7 +131,11 @@ describe('the descriptor the writer receives', () => {
     writeFileSync(LOCK(sandbox.backupDir), '');
     const fd = openSync(other, 'r');
     try {
-      assert.equal(heldLock(sandbox.backupDir, { [LOCK_FD_ENV]: String(fd) }), null, 'not the lock');
+      assert.equal(
+        heldLock(sandbox.backupDir, { [LOCK_FD_ENV]: String(fd) }),
+        null,
+        'not the lock'
+      );
     } finally {
       closeSync(fd);
     }
@@ -149,7 +157,11 @@ describe('the descriptor the writer receives', () => {
   });
 
   it('a child process of the writer does not receive the lock descriptor', async () => {
-    const holder = spawnLockHolder(sandbox.backupDir, path.join(sandbox.root, 'gate'), 'child-sees-lock');
+    const holder = spawnLockHolder(
+      sandbox.backupDir,
+      path.join(sandbox.root, 'gate'),
+      'child-sees-lock'
+    );
     const line = await holder.report;
     assert.equal(line.acquired, true);
     assert.equal(line.childSeesLock, false, 'the child cannot see the descriptor');
@@ -175,7 +187,11 @@ describe('release and crash safety', () => {
   });
 
   it('SIGKILL of the writer frees the lock even while its child process is still alive', async () => {
-    const holder = spawnLockHolder(sandbox.backupDir, path.join(sandbox.root, 'never-opened'), 'with-child');
+    const holder = spawnLockHolder(
+      sandbox.backupDir,
+      path.join(sandbox.root, 'never-opened'),
+      'with-child'
+    );
     const line = await holder.report;
     assert.equal(line.acquired, true);
     holder.child.kill('SIGKILL');
@@ -216,9 +232,10 @@ describe('the lock file is stable', () => {
       assert.equal(await lockIsFree(sandbox.backupDir), true, `cycle ${cycle} acquires`);
       assert.equal(statSync(LOCK(sandbox.backupDir)).ino, inode, 'same file');
     }
-    assert.deepEqual(readdirSync(sandbox.backupDir).filter((name) => name.startsWith(LOCK_NAME)), [
-      LOCK_NAME,
-    ]);
+    assert.deepEqual(
+      readdirSync(sandbox.backupDir).filter((name) => name.startsWith(LOCK_NAME)),
+      [LOCK_NAME]
+    );
   });
 
   it('a lock file with junk in it does not block: only the kernel lock decides', async () => {

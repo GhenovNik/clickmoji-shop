@@ -252,7 +252,18 @@ describe(
       // session is rolled back only after the run has ended.
       const holder = spawn(
         'docker',
-        ['exec', '-i', container, 'psql', '-U', 'postgres', '-d', 'postgres', '-v', 'ON_ERROR_STOP=1'],
+        [
+          'exec',
+          '-i',
+          container,
+          'psql',
+          '-U',
+          'postgres',
+          '-d',
+          'postgres',
+          '-v',
+          'ON_ERROR_STOP=1',
+        ],
         { stdio: ['pipe', 'pipe', 'pipe'] }
       );
       const holderClosed = new Promise((resolve) => holder.on('close', resolve));

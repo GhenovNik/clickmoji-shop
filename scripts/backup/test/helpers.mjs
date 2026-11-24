@@ -251,4 +251,3 @@ export function lockHeldSync(backupDir) {
   const result = spawnSync('/usr/bin/perl', ['-MFcntl=:flock', '-e', probe, LOCK(backupDir)]);
   return result.status === 3;
 }
-

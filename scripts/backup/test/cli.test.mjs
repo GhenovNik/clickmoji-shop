@@ -127,7 +127,9 @@ describe('interruption after plaintext exists', () => {
 
     assert.ok(await waitFor(() => findPlaintext(sandbox.tmp), 15_000), 'plaintext written');
     // The starter's only child is the writer: the launcher replaced itself with it.
-    const writer = spawnSync('pgrep', ['-P', String(child.pid)], { encoding: 'utf8' }).stdout.trim();
+    const writer = spawnSync('pgrep', ['-P', String(child.pid)], {
+      encoding: 'utf8',
+    }).stdout.trim();
     assert.match(writer, /^\d+$/, 'the writer is running');
     process.kill(Number(writer), 'SIGKILL');
 
