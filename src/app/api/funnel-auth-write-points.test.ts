@@ -54,7 +54,7 @@ vi.mock('next/headers', () => ({
 
 const { POST: registerPost } = await import('@/app/api/auth/register/route');
 const { authOptions } = await import('@/lib/auth');
-const { FUNNEL_GUEST_COOKIE } = await import('@/lib/funnel');
+const { FUNNEL_GUEST_COOKIE, signGuestId } = await import('@/lib/funnel');
 
 beforeEach(() => {
   vi.spyOn(console, 'error').mockImplementation(() => undefined);
@@ -68,7 +68,8 @@ beforeEach(() => {
   doubles.createManyLists.mockReset().mockResolvedValue({ count: 5 });
   doubles.funnelCreate.mockReset().mockResolvedValue({ id: 'evt-1' });
   doubles.funnelUpdateMany.mockReset().mockResolvedValue({ count: 1 });
-  doubles.guestCookie = 'guest_auth_1234567890';
+  process.env.AUTH_SECRET = 'test-auth-secret-for-funnel-tests';
+  doubles.guestCookie = signGuestId('guest_auth_1234567890') ?? undefined;
 });
 
 describe('funnel auth write points', () => {
@@ -78,7 +79,7 @@ describe('funnel auth write points', () => {
         method: 'POST',
         headers: {
           'content-type': 'application/json',
-          cookie: `NEXT_LOCALE=en; ${FUNNEL_GUEST_COOKIE}=guest_reg_1234567890`,
+          cookie: `NEXT_LOCALE=en; ${FUNNEL_GUEST_COOKIE}=${signGuestId('guest_reg_1234567890')}`,
         },
         body: JSON.stringify({ email: 'new@example.com', password: 'password1', name: 'New' }),
       })
@@ -103,7 +104,7 @@ describe('funnel auth write points', () => {
         method: 'POST',
         headers: {
           'content-type': 'application/json',
-          cookie: `${FUNNEL_GUEST_COOKIE}=guest_reg_1234567890`,
+          cookie: `${FUNNEL_GUEST_COOKIE}=${signGuestId('guest_reg_1234567890')}`,
         },
         body: JSON.stringify({ email: 'new@example.com', password: 'password1', name: 'New' }),
       })

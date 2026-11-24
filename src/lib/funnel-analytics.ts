@@ -112,20 +112,24 @@ export function aggregateFunnelWindow(
 
   const inWindow = sortedAll.filter((event) => event.createdAt.getTime() >= windowStartMs);
 
-  const personMaxStage = new Map<string, number>();
+  // A step counts only when it is the next stage AND its timestamp is strictly later than the
+  // previous counted step. Equal timestamps do not prove order, so they never create progression.
+  const personProgress = new Map<string, { stage: number; atMs: number }>();
   for (const event of inWindow) {
     const personKey = resolvePersonKey(event, guestLinks);
     if (!personKey) continue;
 
     const stageIndex = STAGE_INDEX[event.type];
-    const currentStage = personMaxStage.get(personKey) ?? -1;
-    if (stageIndex === currentStage + 1) {
-      personMaxStage.set(personKey, stageIndex);
+    const eventMs = event.createdAt.getTime();
+    const current = personProgress.get(personKey);
+    const currentStage = current?.stage ?? -1;
+    if (stageIndex === currentStage + 1 && (!current || eventMs > current.atMs)) {
+      personProgress.set(personKey, { stage: stageIndex, atMs: eventMs });
     }
   }
 
   const counts = FUNNEL_STAGES.map(() => 0);
-  for (const maxStage of personMaxStage.values()) {
+  for (const { stage: maxStage } of personProgress.values()) {
     for (let stage = 0; stage <= maxStage; stage += 1) {
       counts[stage] += 1;
     }

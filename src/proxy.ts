@@ -9,10 +9,10 @@ import {
 } from '@/lib/auth-security';
 import {
   FUNNEL_GUEST_COOKIE,
-  FUNNEL_GUEST_HEADER,
   FUNNEL_GUEST_MAX_AGE_SECONDS,
-  generateGuestId,
-  sanitizeGuestId,
+  mintGuestCredential,
+  recordFunnelEvent,
+  verifyGuestToken,
 } from '@/lib/funnel';
 
 const publicRoutes = [
@@ -44,6 +44,17 @@ const isPrefetchRequest = (request: NextRequest) =>
   request.headers.get('next-router-prefetch') === '1' ||
   request.headers.get('purpose') === 'prefetch' ||
   Boolean(request.headers.get('sec-purpose')?.toLowerCase().includes('prefetch'));
+
+/** Public pages a visitor can enter directly, without going through the homepage. */
+const isFunnelEntryRoute = (pathname: string) =>
+  pathname === '/' ||
+  pathname === '/login' ||
+  pathname === '/register' ||
+  isPublicCatalogRoute(pathname);
+
+/** A full document load: not a prefetch and not a client-side RSC navigation. */
+const isDocumentGetRequest = (request: NextRequest) =>
+  request.method === 'GET' && !isPrefetchRequest(request) && request.headers.get('rsc') !== '1';
 
 const hasPlaywrightAuthBypass = (request: NextRequest) => {
   const bypassToken = process.env.PLAYWRIGHT_AUTH_BYPASS_TOKEN;
@@ -105,32 +116,36 @@ export default async function proxy(request: NextRequest) {
     return NextResponse.redirect(new URL('/', request.url));
   }
 
-  if (pathname === '/' && request.method === 'GET' && !isPrefetchRequest(request)) {
-    const existingGuestId = sanitizeGuestId(request.cookies.get(FUNNEL_GUEST_COOKIE)?.value);
-    const guestId = existingGuestId ?? generateGuestId();
-    const requestHeaders = new Headers(request.headers);
-    requestHeaders.set(FUNNEL_GUEST_HEADER, guestId);
-
-    const response = NextResponse.next({
-      request: {
-        headers: requestHeaders,
-      },
-    });
-
-    if (!existingGuestId) {
-      response.cookies.set(FUNNEL_GUEST_COOKIE, guestId, {
-        httpOnly: true,
-        sameSite: 'lax',
-        secure: process.env.NODE_ENV === 'production',
-        path: '/',
-        maxAge: FUNNEL_GUEST_MAX_AGE_SECONDS,
-      });
-    }
-
-    return response;
+  if (isFunnelEntryRoute(pathname) && isDocumentGetRequest(request)) {
+    return recordEntryVisit(request, typeof token?.id === 'string' ? token.id : null);
   }
 
   return NextResponse.next();
+}
+
+/**
+ * Records a VISIT for a direct document entry (homepage, login, register or public catalog).
+ * Only a server-signed guest cookie is trusted; an absent or forged cookie is replaced with a new
+ * minted one. Recording is best-effort and never blocks the page response.
+ */
+async function recordEntryVisit(request: NextRequest, userId: string | null) {
+  const verifiedGuestId = verifyGuestToken(request.cookies.get(FUNNEL_GUEST_COOKIE)?.value);
+  const minted = verifiedGuestId ? null : mintGuestCredential();
+  const guestId = verifiedGuestId ?? minted?.guestId ?? null;
+
+  await recordFunnelEvent({ type: 'VISIT', guestId, userId });
+
+  const response = NextResponse.next();
+  if (minted) {
+    response.cookies.set(FUNNEL_GUEST_COOKIE, minted.cookieValue, {
+      httpOnly: true,
+      sameSite: 'lax',
+      secure: process.env.NODE_ENV === 'production',
+      path: '/',
+      maxAge: FUNNEL_GUEST_MAX_AGE_SECONDS,
+    });
+  }
+  return response;
 }
 
 export const config = {

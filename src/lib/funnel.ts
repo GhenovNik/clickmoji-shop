@@ -1,9 +1,8 @@
 import crypto from 'node:crypto';
-import { cookies, headers } from 'next/headers';
+import { cookies } from 'next/headers';
 import { prisma } from '@/lib/prisma';
 
 export const FUNNEL_GUEST_COOKIE = 'clickmoji_funnel_guest';
-export const FUNNEL_GUEST_HEADER = 'x-clickmoji-funnel-guest';
 export const FUNNEL_GUEST_MAX_AGE_SECONDS = 60 * 60 * 24 * 90;
 
 export const FUNNEL_EVENT_TYPES = [
@@ -18,6 +17,7 @@ export const FUNNEL_EVENT_TYPES = [
 export type FunnelEventType = (typeof FUNNEL_EVENT_TYPES)[number];
 
 const GUEST_ID_PATTERN = /^[a-zA-Z0-9_-]{16,64}$/;
+const GUEST_SIGNATURE_CONTEXT = 'clickmoji-funnel-guest:v1:';
 
 export function sanitizeGuestId(value: string | null | undefined): string | null {
   if (typeof value !== 'string') return null;
@@ -25,8 +25,47 @@ export function sanitizeGuestId(value: string | null | undefined): string | null
   return GUEST_ID_PATTERN.test(trimmed) ? trimmed : null;
 }
 
-export function generateGuestId(): string {
-  return crypto.randomUUID();
+function getGuestSigningSecret(): string | null {
+  return process.env.AUTH_SECRET || process.env.NEXTAUTH_SECRET || null;
+}
+
+/**
+ * Signs a server-side guest ID as `<guestId>.<HMAC-SHA256>`. Returns null when no auth secret is
+ * configured, so guest tracking fails closed instead of trusting unsigned values.
+ */
+export function signGuestId(guestId: string): string | null {
+  const secret = getGuestSigningSecret();
+  if (!secret || !GUEST_ID_PATTERN.test(guestId)) return null;
+  const signature = crypto
+    .createHmac('sha256', secret)
+    .update(`${GUEST_SIGNATURE_CONTEXT}${guestId}`)
+    .digest('base64url');
+  return `${guestId}.${signature}`;
+}
+
+/** Returns the guest ID only when the whole value carries a valid server signature. */
+export function verifyGuestToken(value: string | null | undefined): string | null {
+  if (typeof value !== 'string') return null;
+  const separator = value.lastIndexOf('.');
+  if (separator <= 0) return null;
+
+  const guestId = value.slice(0, separator);
+  if (!GUEST_ID_PATTERN.test(guestId)) return null;
+
+  const expected = signGuestId(guestId);
+  if (!expected) return null;
+
+  const expectedBuffer = Buffer.from(expected);
+  const actualBuffer = Buffer.from(value);
+  if (expectedBuffer.length !== actualBuffer.length) return null;
+  return crypto.timingSafeEqual(expectedBuffer, actualBuffer) ? guestId : null;
+}
+
+/** Mints a fresh server-side guest ID and its signed cookie value. Only the proxy calls this. */
+export function mintGuestCredential(): { guestId: string; cookieValue: string } | null {
+  const guestId = crypto.randomUUID();
+  const cookieValue = signGuestId(guestId);
+  return cookieValue ? { guestId, cookieValue } : null;
 }
 
 export function getGuestIdFromCookieHeader(cookieHeader: string | null | undefined): string | null {
@@ -37,20 +76,22 @@ export function getGuestIdFromCookieHeader(cookieHeader: string | null | undefin
     if (!trimmed.startsWith(prefix)) continue;
     const raw = trimmed.slice(prefix.length);
     try {
-      return sanitizeGuestId(decodeURIComponent(raw));
+      return verifyGuestToken(decodeURIComponent(raw));
     } catch {
-      return sanitizeGuestId(raw);
+      return verifyGuestToken(raw);
     }
   }
   return null;
 }
 
+/**
+ * Guest identity comes only from the signed cookie. Internal forwarding headers are never read,
+ * so a client-supplied header cannot choose or reassign a guest ID.
+ */
 export function getGuestIdFromHeaders(
   headerStore: Pick<Headers, 'get'> | null | undefined
 ): string | null {
   if (!headerStore) return null;
-  const fromHeader = sanitizeGuestId(headerStore.get(FUNNEL_GUEST_HEADER));
-  if (fromHeader) return fromHeader;
   return getGuestIdFromCookieHeader(headerStore.get('cookie'));
 }
 
@@ -60,20 +101,13 @@ export function getGuestIdFromRequest(request?: Pick<Request, 'headers'>): strin
 }
 
 /**
- * Reads the opaque guest ID from the active Next.js request scope (header set by proxy.ts
- * or cookie). Returns null outside a Next.js request scope (e.g., direct unit tests).
+ * Reads the verified guest ID from the active Next.js request cookies. Returns null outside a
+ * Next.js request scope (e.g., direct unit tests).
  */
 export async function readGuestIdFromRequestScope(): Promise<string | null> {
   try {
-    const headerGuestId = getGuestIdFromHeaders(await headers());
-    if (headerGuestId) return headerGuestId;
-  } catch {
-    // Not inside a Next.js request scope.
-  }
-
-  try {
     const cookieStore = await cookies();
-    return sanitizeGuestId(cookieStore.get(FUNNEL_GUEST_COOKIE)?.value);
+    return verifyGuestToken(cookieStore.get(FUNNEL_GUEST_COOKIE)?.value);
   } catch {
     return null;
   }

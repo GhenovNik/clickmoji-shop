@@ -2,7 +2,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createFakeInitDb } from '@/test/fake-init-db';
 import { createFakeListDb, product, type FakeItem } from '@/test/fake-list-db';
-import { FUNNEL_GUEST_COOKIE } from '@/lib/funnel';
+import { FUNNEL_GUEST_COOKIE, signGuestId } from '@/lib/funnel';
 
 const holder = vi.hoisted(() => ({
   db: null as unknown as { prisma: Record<string, unknown> },
@@ -33,9 +33,11 @@ const { POST: addItems } = await import('@/app/api/lists/[listId]/items/route');
 const { PUT: updateItem } = await import('@/app/api/lists/[listId]/items/[itemId]/route');
 
 const GUEST_ID = 'guest_lists_1234567890';
+process.env.AUTH_SECRET = 'test-auth-secret-for-funnel-tests';
+const SIGNED_GUEST_COOKIE = signGuestId(GUEST_ID) ?? '';
 const COOKIE_HEADERS = {
   'content-type': 'application/json',
-  cookie: `NEXT_LOCALE=en; ${FUNNEL_GUEST_COOKIE}=${GUEST_ID}`,
+  cookie: `NEXT_LOCALE=en; ${FUNNEL_GUEST_COOKIE}=${SIGNED_GUEST_COOKIE}`,
 };
 
 const makeItem = (id: string, isPurchased = false): FakeItem => ({
@@ -93,7 +95,7 @@ describe('POST /api/lists and POST /api/lists/init funnel recording', () => {
     const firstRes = await initLists(
       new Request('http://localhost/api/lists/init', {
         method: 'POST',
-        headers: { cookie: `NEXT_LOCALE=en; ${FUNNEL_GUEST_COOKIE}=${GUEST_ID}` },
+        headers: { cookie: `NEXT_LOCALE=en; ${FUNNEL_GUEST_COOKIE}=${SIGNED_GUEST_COOKIE}` },
       })
     );
     expect(firstRes.status).toBe(200);
@@ -106,7 +108,7 @@ describe('POST /api/lists and POST /api/lists/init funnel recording', () => {
     const secondRes = await initLists(
       new Request('http://localhost/api/lists/init', {
         method: 'POST',
-        headers: { cookie: `NEXT_LOCALE=en; ${FUNNEL_GUEST_COOKIE}=${GUEST_ID}` },
+        headers: { cookie: `NEXT_LOCALE=en; ${FUNNEL_GUEST_COOKIE}=${SIGNED_GUEST_COOKIE}` },
       })
     );
     expect(secondRes.status).toBe(200);
