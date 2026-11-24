@@ -447,7 +447,11 @@ describe('import funnel recording', () => {
     expect(result.addedProductIds).toEqual(['milk']);
     expect(result.body.results.failed).toHaveLength(1);
     expect(state.record).toHaveBeenCalledOnce();
-    expect(state.record).toHaveBeenCalledWith({ type: 'ITEM_ADD', userId: 'user-b', guestId: null });
+    expect(state.record).toHaveBeenCalledWith({
+      type: 'ITEM_ADD',
+      userId: 'user-b',
+      guestId: null,
+    });
   });
 
   it('does not record when no item persists', async () => {
