@@ -35,7 +35,7 @@ export async function main(env = process.env) {
   // lock and writes the status line before it returns; the exit code reflects the interruption.
   for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
     process.on(signal, () => {
-      docker.shutdown();
+      docker.shutdown().catch(() => {}); // the run reports the outcome when it ends
     });
   }
 

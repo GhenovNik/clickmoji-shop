@@ -151,6 +151,12 @@ export class DockerRunner {
     this.containers = new Set(); // names whose removal has not been proven yet
     this.aborted = false;
     this.shutdownPromise = null;
+    this.ledger = null; // set by the pipeline once the lock is held
+  }
+
+  // Containers are recorded in the ledger before they start, and forgotten only once absent.
+  bindLedger(ledger) {
+    this.ledger = ledger;
   }
 
   // Unchecked call, used for cleanup. Resolves with the exit code.
@@ -182,12 +188,15 @@ export class DockerRunner {
   }
 
   // Tracked call. Rejects with Interrupted if abort() happens before or while it runs.
-  run(args) {
-    if (this.aborted) return Promise.reject(new Interrupted('aborted'));
+  async run(args) {
+    if (this.aborted) throw new Interrupted('aborted');
     const name = nameOf(args);
+    if (name) {
+      this.ledger?.add(name); // durable before the daemon can know about the container
+      this.containers.add(name);
+    }
     return new Promise((resolve, reject) => {
       const child = spawn(this.bin, args, { env: this.env, stdio: ['ignore', 'ignore', 'ignore'] });
-      if (name) this.containers.add(name);
       let settle;
       const closed = new Promise((done) => {
         settle = done;
@@ -199,7 +208,7 @@ export class DockerRunner {
         finished = true;
         this.children.delete(child);
         settle();
-        if (name && (await this.proveAbsent(name))) this.containers.delete(name);
+        if (name && (await this.proveAbsent(name))) this.forget(name);
         if (this.aborted) reject(new Interrupted('aborted'));
         else resolve({ code });
       };
@@ -223,9 +232,14 @@ export class DockerRunner {
     for (let attempt = 0; attempt < 3 && this.containers.size > 0; attempt += 1) {
       for (const name of [...this.containers]) {
         await this.exec(removeArgs(name));
-        if (await this.proveAbsent(name)) this.containers.delete(name);
+        if (await this.proveAbsent(name)) this.forget(name);
       }
     }
     return this.containers.size === 0;
+  }
+
+  forget(name) {
+    this.containers.delete(name);
+    this.ledger?.remove(name);
   }
 }

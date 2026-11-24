@@ -1,17 +1,22 @@
-// Backup lock: one owner at a time, stale recovery, owner-bound release, abandoned acquisition.
-// The contention test runs real child processes against the same directory; a gate file keeps
-// the winner holding the lock until every other process has made its attempt, so the outcome
-// does not depend on scheduling.
+// Backup lock: one owner at a time (kernel flock), a stable lock file that is never renamed or
+// removed, release confirmed by the helper's exit, and recovery from SIGKILL of the owner or of
+// its helper. Contention uses real child processes against the same directory; a gate file keeps
+// the winner holding the lock until every other process has made its attempt.
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import { acquireLock } from '../lock.mjs';
 import { LOCK_NAME } from '../constants.mjs';
-import { HERE, LOCK, listCopies, makeSandbox, seedBackups, writeLock } from './helpers.mjs';
-
-const WORKER = path.join(HERE, 'lock-worker.mjs');
+import {
+  listCopies,
+  LOCK,
+  lockIsFree,
+  makeSandbox,
+  seedBackups,
+  spawnLockHolder,
+} from './helpers.mjs';
 
 let sandbox;
 
@@ -24,6 +29,8 @@ afterEach(() => {
   sandbox.cleanup();
 });
 
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
 // A pid that belonged to a process which has exited.
 async function deadPid() {
   const child = spawn(process.execPath, ['-e', '']);
@@ -31,59 +38,35 @@ async function deadPid() {
   return child.pid;
 }
 
-// Reads one JSON line per child from its stdout, resolving with the first `count` lines.
-function firstLines(child, count) {
-  return new Promise((resolve) => {
-    const lines = [];
-    let buffer = '';
-    child.stdout.on('data', (chunk) => {
-      buffer += chunk;
-      let nl = buffer.indexOf('\n');
-      while (nl !== -1) {
-        lines.push(JSON.parse(buffer.slice(0, nl)));
-        buffer = buffer.slice(nl + 1);
-        nl = buffer.indexOf('\n');
-      }
-      if (lines.length >= count) resolve(lines.slice(0, count));
-    });
-  });
+async function until(check, timeoutMs) {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    if (await check()) return true;
+    await sleep(25);
+  }
+  return false;
 }
 
 describe('one owner at a time', () => {
-  it('four processes contend for a stale lock: exactly one acquires, the others are refused, copies unchanged', async () => {
+  it('four processes contend for the lock while a dead owner record is on disk: exactly one acquires, the others are refused, copies unchanged', async () => {
     const old = seedBackups(sandbox.backupDir, 14);
     const bytesBefore = Object.fromEntries(
       old.map((name) => [name, readFileSync(path.join(sandbox.backupDir, name))])
     );
-    writeLock(sandbox.backupDir, { pid: await deadPid() });
+    // A record left behind by an earlier version. The kernel lock does not read it.
+    writeFileSync(LOCK(sandbox.backupDir), JSON.stringify({ pid: await deadPid(), token: 'old' }));
     const gate = path.join(sandbox.root, 'gate');
 
-    const children = Array.from({ length: 4 }, () =>
-      spawn(process.execPath, [WORKER, sandbox.backupDir, gate], {
-        stdio: ['ignore', 'pipe', 'inherit'],
-      })
-    );
-    const exits = children.map((child) => new Promise((resolve) => child.on('close', resolve)));
-    const attempts = await Promise.all(children.map((child) => firstLines(child, 1)));
-    const outcomes = attempts.map(([line]) => line);
-
-    assert.equal(outcomes.filter((line) => line.acquired).length, 1, 'exactly one owner');
-    assert.equal(outcomes.filter((line) => !line.acquired).length, 3, 'the others are refused');
-    const winner = outcomes.find((line) => line.acquired);
-    assert.equal(
-      JSON.parse(readFileSync(LOCK(sandbox.backupDir), 'utf8')).pid,
-      winner.pid,
-      'the record names the owner'
-    );
+    const holders = Array.from({ length: 4 }, () => spawnLockHolder(sandbox.backupDir, gate));
+    const acquired = await Promise.all(holders.map((holder) => holder.acquired));
+    assert.equal(acquired.filter(Boolean).length, 1, 'exactly one owner');
+    assert.equal(acquired.filter((value) => !value).length, 3, 'the others are refused');
+    assert.equal(await lockIsFree(sandbox.backupDir), false, 'the owner still holds the lock');
 
     writeFileSync(gate, '');
-    await Promise.all(exits);
-    assert.equal(existsSync(LOCK(sandbox.backupDir)), false, 'the owner released its lock');
-    assert.deepEqual(
-      listCopies(sandbox.backupDir).sort(),
-      [...old].sort(),
-      'no copy added or removed'
-    );
+    await Promise.all(holders.map((holder) => holder.exited));
+    assert.equal(await lockIsFree(sandbox.backupDir), true, 'the owner released its lock');
+    assert.deepEqual(listCopies(sandbox.backupDir).sort(), [...old].sort(), 'no copy added or removed');
     for (const name of old) {
       assert.deepEqual(
         readFileSync(path.join(sandbox.backupDir, name)),
@@ -93,70 +76,117 @@ describe('one owner at a time', () => {
     }
     assert.deepEqual(
       readdirSync(sandbox.backupDir).filter((name) => name.startsWith(LOCK_NAME)),
-      [],
-      'no lock leftovers'
+      [LOCK_NAME],
+      'only the stable lock file is left'
     );
   });
 
-  it('a lock held by a live process refuses a second acquisition in the same process too', () => {
-    const first = acquireLock(sandbox.backupDir);
+  it('a second acquisition in the same process is refused until the first is released', async () => {
+    const first = await acquireLock(sandbox.backupDir);
     assert.ok(first, 'first acquisition succeeds');
-    assert.equal(acquireLock(sandbox.backupDir), null, 'second acquisition refused');
-    first.release();
-    assert.ok(acquireLock(sandbox.backupDir), 'free again after release');
+    assert.equal(await acquireLock(sandbox.backupDir), null, 'second acquisition refused');
+    await first.release();
+    const again = await acquireLock(sandbox.backupDir);
+    assert.ok(again, 'free again after release');
+    await again.release();
   });
 });
 
-describe('owner-bound release', () => {
-  it('a handle whose record was replaced cannot remove the new owner lock', () => {
-    const mine = acquireLock(sandbox.backupDir);
-    const replacedWith = writeLock(sandbox.backupDir, { pid: process.pid });
-    assert.equal(mine.held(), false, 'the handle no longer holds the lock');
-    mine.release();
-    const record = JSON.parse(readFileSync(LOCK(sandbox.backupDir), 'utf8'));
-    assert.equal(record.token, replacedWith, 'the other owner record is still there');
-  });
-});
-
-describe('stale and abandoned state', () => {
-  it('a lock whose owner is gone is taken over, and the new record names this process', async () => {
-    writeLock(sandbox.backupDir, { pid: await deadPid() });
-    const lock = acquireLock(sandbox.backupDir);
-    assert.ok(lock, 'taken over');
-    assert.equal(JSON.parse(readFileSync(LOCK(sandbox.backupDir), 'utf8')).pid, process.pid);
-    assert.equal(lock.held(), true);
-    lock.release();
+describe('the lock file is stable', () => {
+  it('is created once and never renamed or removed: the same inode across acquisitions', async () => {
+    const first = await acquireLock(sandbox.backupDir);
+    const inode = statSync(LOCK(sandbox.backupDir)).ino;
+    await first.release();
+    for (let cycle = 0; cycle < 3; cycle += 1) {
+      const lock = await acquireLock(sandbox.backupDir);
+      assert.ok(lock, `cycle ${cycle} acquires`);
+      assert.equal(statSync(LOCK(sandbox.backupDir)).ino, inode, 'same file');
+      await lock.release();
+    }
+    assert.deepEqual(readdirSync(sandbox.backupDir).filter((name) => name.startsWith(LOCK_NAME)), [
+      LOCK_NAME,
+    ]);
   });
 
-  it('an unreadable lock record is treated as stale rather than blocking the directory forever', () => {
-    mkdirSync(sandbox.backupDir, { recursive: true });
+  it('a lock file with junk in it does not block: only the kernel lock decides', async () => {
     writeFileSync(LOCK(sandbox.backupDir), 'not json');
-    assert.ok(acquireLock(sandbox.backupDir), 'taken over');
+    const lock = await acquireLock(sandbox.backupDir);
+    assert.ok(lock, 'acquired');
+    await lock.release();
+  });
+});
+
+describe('release', () => {
+  it('resolves only after the helper has exited, so the next acquisition succeeds at once', async () => {
+    const lock = await acquireLock(sandbox.backupDir);
+    await lock.release();
+    assert.equal(lock.held(), false);
+    assert.equal(await lock.confirm(), false, 'a released lock is not confirmed');
+    const next = await acquireLock(sandbox.backupDir);
+    assert.ok(next, 'free immediately');
+    await next.release();
   });
 
-  it('an acquisition abandoned before its link leaves nothing that blocks the next run', async () => {
-    mkdirSync(sandbox.backupDir, { recursive: true });
-    const tmp = path.join(sandbox.backupDir, `${LOCK_NAME}.tmp-${await deadPid()}-abc`);
-    writeFileSync(
-      tmp,
-      JSON.stringify({ pid: Number(tmp.split('tmp-')[1].split('-')[0]), token: 'abc' })
-    );
-    const lock = acquireLock(sandbox.backupDir);
-    assert.ok(lock, 'acquired without a lock file ever existing');
-    assert.equal(existsSync(tmp), false, 'the abandoned record is swept');
-    lock.release();
+  it('a second release does nothing', async () => {
+    const lock = await acquireLock(sandbox.backupDir);
+    await lock.release();
+    await lock.release();
+    assert.equal(lock.held(), false);
   });
 
-  it('a renamed-away stale lock left by a crashed takeover is swept', async () => {
-    mkdirSync(sandbox.backupDir, { recursive: true });
-    const reap = path.join(sandbox.backupDir, `${LOCK_NAME}.reap-${await deadPid()}-x`);
-    writeFileSync(
-      reap,
-      JSON.stringify({ pid: Number(reap.split('reap-')[1].split('-')[0]), token: 'x' })
+  it('release does not report a loss', async () => {
+    const lock = await acquireLock(sandbox.backupDir);
+    let lost = false;
+    lock.onLost(() => {
+      lost = true;
+    });
+    await lock.release();
+    await sleep(50);
+    assert.equal(lost, false);
+  });
+});
+
+describe('crash safety', () => {
+  it('SIGKILL of the owner process frees the lock for the next process', async () => {
+    const gate = path.join(sandbox.root, 'never-opened');
+    const holder = spawnLockHolder(sandbox.backupDir, gate);
+    assert.equal(await holder.acquired, true);
+    assert.equal(await lockIsFree(sandbox.backupDir), false, 'held by the live owner');
+
+    holder.child.kill('SIGKILL');
+    await holder.exited;
+    assert.equal(
+      await until(() => lockIsFree(sandbox.backupDir), 10_000),
+      true,
+      'freed by the kernel when the owner died'
     );
-    const lock = acquireLock(sandbox.backupDir);
-    assert.ok(lock);
-    assert.equal(existsSync(reap), false);
-    lock.release();
+  });
+
+  it('SIGKILL of the helper is detected: the owner loses the lock, confirm() is false, onLost fires', async () => {
+    const lock = await acquireLock(sandbox.backupDir);
+    const lostEvent = new Promise((resolve) => lock.onLost(resolve));
+    process.kill(lock.helperPid, 'SIGKILL');
+    await lostEvent;
+    assert.equal(lock.held(), false, 'the owner no longer holds the lock');
+    assert.equal(await lock.confirm(), false, 'confirmation is refused');
+    await lock.release();
+    assert.equal(await lockIsFree(sandbox.backupDir), true, 'the lock is free');
+  });
+
+  it('a live owner is confirmed, and keeps the lock until it releases', async () => {
+    const lock = await acquireLock(sandbox.backupDir);
+    assert.equal(await lock.confirm(), true);
+    assert.equal(await lockIsFree(sandbox.backupDir), false);
+    await lock.release();
+  });
+
+  it('a lock held by a process that is still alive is never taken, however old its record looks', async () => {
+    writeFileSync(LOCK(sandbox.backupDir), JSON.stringify({ pid: 1, token: 'ancient' }));
+    const gate = path.join(sandbox.root, 'never-opened');
+    const holder = spawnLockHolder(sandbox.backupDir, gate);
+    assert.equal(await holder.acquired, true);
+    assert.equal(await acquireLock(sandbox.backupDir), null, 'refused');
+    holder.child.kill('SIGKILL');
+    await holder.exited;
   });
 });

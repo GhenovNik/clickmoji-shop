@@ -1,6 +1,6 @@
 // Shared helpers for the backup tests. Every credential is generated at runtime and every
 // file lives in a sandbox under the OS temp directory, outside the repository.
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import crypto from 'node:crypto';
 import {
   chmodSync,
@@ -16,12 +16,14 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadConfig } from '../config.mjs';
+import { acquireLock } from '../lock.mjs';
 import { DockerRunner } from '../docker.mjs';
 import { runBackup } from '../pipeline.mjs';
 
 export const HERE = path.dirname(fileURLToPath(import.meta.url));
 export const CLI = path.join(HERE, '..', 'cli.mjs');
 export const FAKE_DOCKER = path.join(HERE, 'fake-docker.mjs');
+export const LOCK_WORKER = path.join(HERE, 'lock-worker.mjs');
 chmodSync(FAKE_DOCKER, 0o755);
 
 // Fixed clock for the tests: the new copy is named clickmoji-20261124T120000Z.dump.age.
@@ -188,9 +190,40 @@ export function readDockerLog(sandbox) {
 
 export const LOCK = (backupDir) => path.join(backupDir, '.backup.lock');
 
-// A lock record in the format lock.mjs writes: the owner pid and a token.
-export function writeLock(backupDir, { pid, token = crypto.randomBytes(16).toString('hex') }) {
-  mkdirSync(backupDir, { recursive: true });
-  writeFileSync(LOCK(backupDir), JSON.stringify({ pid, token }));
-  return token;
+// A child process that takes the real backup lock and holds it until `gate` exists (or until it
+// is killed). Resolves `acquired` with whether it got the lock on its first attempt.
+export function spawnLockHolder(backupDir, gate) {
+  const child = spawn(process.execPath, [LOCK_WORKER, backupDir, gate], {
+    stdio: ['ignore', 'pipe', 'inherit'],
+  });
+  let buffer = '';
+  const acquired = new Promise((resolve) => {
+    child.stdout.on('data', (chunk) => {
+      buffer += chunk;
+      const at = buffer.indexOf('\n');
+      if (at === -1) return;
+      const line = JSON.parse(buffer.slice(0, at));
+      resolve(line.acquired === true);
+    });
+    child.on('close', () => resolve(false));
+  });
+  const exited = new Promise((resolve) => child.on('close', resolve));
+  return { child, acquired, exited };
 }
+
+// True when no live process holds the backup lock. Probes by taking it and giving it back.
+export async function lockIsFree(backupDir) {
+  const probe = await acquireLock(backupDir);
+  if (!probe) return false;
+  await probe.release();
+  return true;
+}
+
+// True while some other open file description holds an exclusive flock on the lock file. Used
+// from child processes (the fake docker) that cannot take the Node lock object.
+export function lockHeldSync(backupDir) {
+  const probe = `open my $f, "<", $ARGV[0] or exit 2; exit(flock($f, LOCK_EX | LOCK_NB) ? 0 : 3);`;
+  const result = spawnSync('/usr/bin/perl', ['-MFcntl=:flock', '-e', probe, LOCK(backupDir)]);
+  return result.status === 3;
+}
+

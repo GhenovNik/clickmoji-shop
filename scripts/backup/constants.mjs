@@ -20,6 +20,8 @@ export const BACKUP_SUFFIX = '.dump.age';
 export const BACKUP_NAME_PATTERN = /^clickmoji-(\d{8}T\d{6}Z)\.dump\.age$/;
 export const META_DIR = 'meta';
 export const LOCK_NAME = '.backup.lock';
+// Containers started by a run that the daemon has not yet been seen to remove (the recovery marker).
+export const LEDGER_NAME = '.backup.ledger';
 export const TEMP_PREFIX = 'clickmoji-backup-';
 
 // Process exit codes.

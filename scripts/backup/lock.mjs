@@ -1,33 +1,74 @@
-// One backup at a time per backup directory.
+// One backup at a time per backup directory, enforced by the operating system.
 //
-// The lock is a file that appears whole: its owner record (pid and random token) is written to a
-// private temporary file first, then `link(2)` gives it the lock name. link fails when the name
-// exists, so there is exactly one creator, and no reader ever sees a lock without its record.
+// The lock is an exclusive flock(2) on a stable file, `.backup.lock`. That file is created once
+// and never renamed, replaced or removed, so there is no name that two processes can judge
+// differently. Nothing is read from the file to decide ownership: a stale pid, an old record or
+// an inode comparison cannot take a live owner's lock, because the kernel does not care about
+// any of them. The lock is released by the kernel when its holder exits, including on SIGKILL.
 //
-// Only the holder of a token may remove its lock (release is owner-bound). A lock whose pid is
-// gone is taken over this way: the stale file is renamed away, and the renamed file must be the
-// very inode that was judged stale. A different inode means a live lock was moved by mistake; it
-// is linked back and the caller gives up. Leftovers of a crashed run (temporary files and
-// renamed-away locks) are swept by pid, so an abandoned acquisition never blocks the directory.
-import crypto from 'node:crypto';
-import {
-  closeSync,
-  fstatSync,
-  linkSync,
-  lstatSync,
-  openSync,
-  readdirSync,
-  readFileSync,
-  renameSync,
-  rmSync,
-  writeFileSync,
-} from 'node:fs';
+// Node has no flock binding, so the lock is held by a tiny helper process: the macOS system
+// perl (/usr/bin/perl, present on every supported host, nothing is installed). The helper takes
+// the flock, reports `locked`, and then serves a control pipe:
+//   ping     -> alive     (the helper is running and still holds the lock)
+//   release  -> released  (unlock, then exit)
+// End of the pipe (the parent exited, or crashed) makes the helper exit, and the exit releases
+// the lock. The owner therefore never releases the lock by itself: release() ends the pipe only
+// after the caller's critical work is finished, and resolves only once the helper has exited.
+//
+// Fail closed: if the helper dies while its owner runs, the owner loses the lock. held() and
+// confirm() then say so, and the owner's onLost callbacks run, so it stops before it writes.
+import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { LOCK_NAME } from './constants.mjs';
 
-const TMP_MARK = `${LOCK_NAME}.tmp-`;
-const REAP_MARK = `${LOCK_NAME}.reap-`;
-const ATTEMPTS = 5;
+const PERL = '/usr/bin/perl';
+
+// The helper. Opens the lock file without following links and without truncating it.
+const HOLDER = `
+use strict;
+use warnings;
+use Fcntl qw(:flock O_RDWR O_CREAT O_NOFOLLOW);
+$| = 1;
+my ($path) = @ARGV;
+sysopen(my $fh, $path, O_RDWR | O_CREAT | O_NOFOLLOW, 0600) or do { print "error\\n"; exit 0 };
+if (!flock($fh, LOCK_EX | LOCK_NB)) { print "busy\\n"; exit 0 }
+print "locked\\n";
+while (defined(my $line = <STDIN>)) {
+  if ($line eq "ping\\n") { print "alive\\n"; next }
+  if ($line eq "release\\n") { flock($fh, LOCK_UN); print "released\\n"; exit 0 }
+}
+exit 0;
+`;
+
+// Lines of a stream, delivered one at a time; null once the stream has closed.
+function lineQueue(stream) {
+  const lines = [];
+  const waiters = [];
+  let buffer = '';
+  let closed = false;
+  stream.setEncoding('utf8');
+  stream.on('data', (chunk) => {
+    buffer += chunk;
+    let at = buffer.indexOf('\n');
+    while (at !== -1) {
+      const line = buffer.slice(0, at);
+      buffer = buffer.slice(at + 1);
+      if (waiters.length > 0) waiters.shift()(line);
+      else lines.push(line);
+      at = buffer.indexOf('\n');
+    }
+  });
+  stream.on('close', () => {
+    closed = true;
+    while (waiters.length > 0) waiters.shift()(null);
+  });
+  stream.on('error', () => {});
+  return () => {
+    if (lines.length > 0) return Promise.resolve(lines.shift());
+    if (closed) return Promise.resolve(null);
+    return new Promise((resolve) => waiters.push(resolve));
+  };
+}
 
 // True when a process with this pid exists (EPERM means it exists under another user).
 export function pidAlive(pid) {
@@ -39,135 +80,75 @@ export function pidAlive(pid) {
   }
 }
 
-// Identity and owner record of the entry at `file`, or null when there is no entry. A record
-// that cannot be parsed has pid and token null: it is never a live owner's record.
-function readRecord(file) {
-  let stat;
-  try {
-    stat = lstatSync(file);
-  } catch (error) {
-    if (error.code === 'ENOENT') return null;
-    throw error;
-  }
-  const record = { dev: stat.dev, ino: stat.ino, pid: null, token: null };
-  if (!stat.isFile()) return record;
-  let fd;
-  try {
-    fd = openSync(file, 'r');
-    const opened = fstatSync(fd);
-    if (opened.dev !== stat.dev || opened.ino !== stat.ino) return record;
-    const meta = JSON.parse(readFileSync(fd, 'utf8'));
-    if (Number.isInteger(meta?.pid)) record.pid = meta.pid;
-    if (typeof meta?.token === 'string') record.token = meta.token;
-  } catch (error) {
-    if (error.code === 'ENOENT') return null;
-  } finally {
-    if (fd !== undefined) closeSync(fd);
-  }
-  return record;
-}
+export class Lock {
+  #child;
+  #nextLine;
+  #exited;
+  #released = false;
+  #lost = false;
+  #lostCallbacks = [];
 
-function removeQuietly(file) {
-  rmSync(file, { recursive: true, force: true });
-}
-
-// Leftovers of crashed runs. Temporary records of dead processes are removed. A renamed-away
-// lock of a dead owner is removed; one that is still alive was moved by mistake, so it goes back.
-function sweepLeftovers(backupDir, lockFile) {
-  let names;
-  try {
-    names = readdirSync(backupDir);
-  } catch {
-    return;
-  }
-  for (const name of names) {
-    const isTmp = name.startsWith(TMP_MARK);
-    const isReap = name.startsWith(REAP_MARK);
-    if (!isTmp && !isReap) continue;
-    const file = path.join(backupDir, name);
-    const record = readRecord(file);
-    if (!record) continue;
-    if (record.pid !== null && pidAlive(record.pid)) {
-      if (isReap) restoreLock(file, lockFile);
-      continue;
-    }
-    removeQuietly(file);
-  }
-}
-
-// Puts a renamed-away live lock back under the lock name, unless another lock took the name.
-function restoreLock(reapFile, lockFile) {
-  try {
-    linkSync(reapFile, lockFile);
-  } catch (error) {
-    if (error.code !== 'EEXIST') throw error;
-  }
-  removeQuietly(reapFile);
-}
-
-// Takes over a lock judged stale. True: the stale record was removed and acquisition may retry.
-// False: the record moved was not the stale one, so it was restored and this run must stop.
-function reapStale(backupDir, lockFile, judged) {
-  const reapFile = path.join(
-    backupDir,
-    `${REAP_MARK}${process.pid}-${crypto.randomBytes(8).toString('hex')}`
-  );
-  try {
-    renameSync(lockFile, reapFile);
-  } catch (error) {
-    if (error.code === 'ENOENT') return true; // someone else removed it first
-    throw error;
-  }
-  const moved = readRecord(reapFile);
-  if (!moved) return true; // the leftover was swept concurrently; retry
-  if (moved.dev === judged.dev && moved.ino === judged.ino) {
-    removeQuietly(reapFile);
-    return true;
-  }
-  restoreLock(reapFile, lockFile);
-  return false;
-}
-
-function ownedBy(lockFile, token) {
-  return {
-    held() {
-      return readRecord(lockFile)?.token === token;
-    },
-    release() {
-      if (readRecord(lockFile)?.token === token) removeQuietly(lockFile);
-    },
-  };
-}
-
-// Returns { held(), release() } for this run, or null when another live run holds the lock.
-// Throws only for an unexpected filesystem error; the caller reports that as busy.
-export function acquireLock(backupDir) {
-  const lockFile = path.join(backupDir, LOCK_NAME);
-  sweepLeftovers(backupDir, lockFile);
-  for (let attempt = 0; attempt < ATTEMPTS; attempt += 1) {
-    const token = crypto.randomBytes(16).toString('hex');
-    const tmpFile = path.join(backupDir, `${TMP_MARK}${process.pid}-${token}`);
-    writeFileSync(tmpFile, JSON.stringify({ pid: process.pid, token }), {
-      mode: 0o600,
-      flag: 'wx',
+  constructor(child, nextLine) {
+    this.#child = child;
+    this.#nextLine = nextLine;
+    this.#exited = new Promise((resolve) => {
+      child.once('exit', () => {
+        resolve();
+        if (this.#released || this.#lost) return;
+        this.#lost = true;
+        for (const callback of this.#lostCallbacks.splice(0)) callback();
+      });
     });
-    let created = false;
-    try {
-      linkSync(tmpFile, lockFile);
-      created = true;
-    } catch (error) {
-      if (error.code !== 'EEXIST') {
-        removeQuietly(tmpFile);
-        throw error;
-      }
-    }
-    removeQuietly(tmpFile);
-    if (created) return ownedBy(lockFile, token);
-
-    const current = readRecord(lockFile);
-    if (!current) continue; // released meanwhile
-    if (current.pid !== null && pidAlive(current.pid)) return null;
-    if (!reapStale(backupDir, lockFile, current)) return null;
+    child.stdin.on('error', () => {}); // a helper that already died is handled by its exit
   }
-  return null;
+
+  get helperPid() {
+    return this.#child.pid;
+  }
+
+  // Synchronous: false once released, or once the helper is known to have exited.
+  held() {
+    return !this.#released && !this.#lost;
+  }
+
+  // Asks the helper, which holds the lock, to confirm it is still alive. Use right before a
+  // critical step. False means the lock can no longer be relied on.
+  async confirm() {
+    if (!this.held()) return false;
+    this.#child.stdin.write('ping\n');
+    return (await this.#nextLine()) === 'alive' && this.held();
+  }
+
+  // Registers a callback for the moment the lock is lost without release().
+  onLost(callback) {
+    if (this.#lost) callback();
+    else if (!this.#released) this.#lostCallbacks.push(callback);
+  }
+
+  // Unlocks and resolves once the helper has exited, so the lock is free for the next process.
+  async release() {
+    if (this.#released) return this.#exited;
+    this.#released = true;
+    if (!this.#lost) {
+      this.#child.stdin.write('release\n');
+      this.#child.stdin.end();
+    }
+    await this.#exited;
+  }
+}
+
+// Takes the lock for backupDir, or returns null when another live process holds it. Throws
+// when the helper cannot run at all; the caller reports that as busy.
+export async function acquireLock(backupDir) {
+  const file = path.join(backupDir, LOCK_NAME);
+  const child = spawn(PERL, ['-e', HOLDER, file], { stdio: ['pipe', 'pipe', 'ignore'] });
+  const nextLine = lineQueue(child.stdout);
+  const first = await Promise.race([
+    nextLine(),
+    new Promise((resolve) => child.once('exit', () => resolve(null))),
+  ]);
+  if (first === 'locked') return new Lock(child, nextLine);
+  if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+  if (first === 'busy') return null;
+  throw new Error('lock helper failed');
 }

@@ -12,7 +12,7 @@
 // container exits normally). Container output goes to FAKE_DAEMON_LOG unless the container was
 // started with `--log-driver none`, which is how the daemon's own log is emulated.
 // Every removal is recorded in FAKE_DOCKER_STATE/events.jsonl with whether the work directory
-// and the lock file still existed at that moment.
+// existed and whether the backup lock was still held at that moment.
 import {
   appendFileSync,
   chmodSync,
@@ -23,6 +23,7 @@ import {
   rmSync,
   writeFileSync,
 } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 
 // Source variables the host forwards by name. Values are compared in memory.
@@ -147,6 +148,12 @@ if (argv[0] === 'ps') {
   process.exit(0);
 }
 
+// True while another open file description holds an exclusive flock on the lock file.
+function lockHeldBy(file) {
+  const probe = 'open my $f, "<", $ARGV[0] or exit 2; exit(flock($f, LOCK_EX | LOCK_NB) ? 0 : 3);';
+  return spawnSync('/usr/bin/perl', ['-MFcntl=:flock', '-e', probe, file]).status === 3;
+}
+
 if (argv[0] === 'rm') {
   const name = argv[argv.length - 1];
   if (process.env.FAKE_DOCKER_RM === 'fail' || !containerExists(name)) process.exit(1);
@@ -156,7 +163,7 @@ if (argv[0] === 'rm') {
     op: 'rm',
     name,
     workDirExists: work ? existsSync(work) : null,
-    lockExists: lock ? existsSync(lock) : null,
+    lockHeld: lock ? lockHeldBy(lock) : null,
   });
   rmSync(containerFile(name), { force: true });
   process.exit(0);

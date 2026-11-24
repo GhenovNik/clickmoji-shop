@@ -10,8 +10,8 @@ import path from 'node:path';
 import { describe, it } from 'node:test';
 import { buildImageArgs, CONTAINER_DIR } from '../docker.mjs';
 import { libpqEnv, LIBPQ_ENV_NAMES } from '../config.mjs';
-import { EXIT, LOCK_NAME, POSTGRES_BASE_IMAGE, TOOLS_IMAGE } from '../constants.mjs';
-import { CLI, listCopies, makeSandbox, readStatus, seedBackups } from './helpers.mjs';
+import { EXIT, POSTGRES_BASE_IMAGE, TOOLS_IMAGE } from '../constants.mjs';
+import { CLI, listCopies, lockIsFree, makeSandbox, readStatus, seedBackups } from './helpers.mjs';
 
 const enabled = process.env.CLICKMOJI_BACKUP_INTEGRATION === '1';
 const dockerUp =
@@ -227,11 +227,45 @@ describe(
       assert.doesNotMatch(`${result.stdout}${result.stderr}`, new RegExp(password));
     });
 
-    it('a stop during the active dump or restore leaves no container, scratch, plaintext, and no copy changed', async () => {
+    it('a stop during the active dump leaves no container, scratch, plaintext, and no copy changed', async () => {
       const old = seedBackups(sandbox.backupDir, 3);
       const bytesBefore = old.map((name) =>
         readFileSync(path.join(sandbox.backupDir, name), 'utf8')
       );
+      const serverSql = (sql) =>
+        docker([
+          'exec',
+          container,
+          'psql',
+          '-U',
+          'postgres',
+          '-d',
+          'postgres',
+          '-tA',
+          '-c',
+          sql,
+        ]).stdout.trim();
+
+      // Hold the dump phase deterministically, without touching the tool. An access-exclusive lock
+      // on the bulk table is taken in a psql session this test controls. pg_dump needs that table
+      // and waits for the lock; the wait is observed on the server before the stop is sent, and the
+      // session is rolled back only after the run has ended.
+      const holder = spawn(
+        'docker',
+        ['exec', '-i', container, 'psql', '-U', 'postgres', '-d', 'postgres', '-v', 'ON_ERROR_STOP=1'],
+        { stdio: ['pipe', 'pipe', 'pipe'] }
+      );
+      const holderClosed = new Promise((resolve) => holder.on('close', resolve));
+      holder.stdin.write('BEGIN;\nLOCK TABLE "Bulk" IN ACCESS EXCLUSIVE MODE;\n');
+      const held = await waitUntil(
+        () =>
+          serverSql(
+            `SELECT count(*) FROM pg_locks WHERE relation = '"Bulk"'::regclass AND mode = 'AccessExclusiveLock' AND granted`
+          ) === '1',
+        30_000
+      );
+      assert.ok(held, 'the test holds the bulk table');
+
       const env = {
         PATH: process.env.PATH,
         TMPDIR: sandbox.tmp,
@@ -252,12 +286,14 @@ describe(
         child.on('close', (code, signal) => resolve(code ?? `signal:${signal}`))
       );
 
-      // Wait for a real dump or restore container, and check its daemon logging while it runs.
-      const active = await waitUntil(
-        () => toolContainers('dump-')[0] ?? toolContainers('verify-')[0],
+      const waiting = await waitUntil(
+        () =>
+          toolContainers('dump-')[0] &&
+          serverSql(`SELECT count(*) FROM pg_stat_activity WHERE wait_event_type = 'Lock'`) !== '0',
         120_000
       );
-      assert.ok(active, 'a dump or restore container was started');
+      assert.ok(waiting, 'the dump container is running and waiting on the held table');
+      const active = toolContainers('dump-')[0];
       assert.equal(
         docker(['inspect', '--format', '{{.HostConfig.LogConfig.Type}}', active]).stdout.trim(),
         'none',
@@ -265,12 +301,15 @@ describe(
       );
 
       child.kill('SIGTERM');
-      assert.equal(await exited, EXIT.interrupted);
+      const code = await exited;
+      holder.stdin.end('ROLLBACK;\n');
+      await holderClosed;
+      assert.equal(code, EXIT.interrupted);
 
       assert.deepEqual(toolContainers(), [], 'no tool container survives the stop');
       const scratch = filesUnder(sandbox.tmp).filter((file) => /dump\.(custom|age)$/.test(file));
       assert.deepEqual(scratch, [], 'no plaintext or ciphertext scratch file is left');
-      assert.equal(existsSync(path.join(sandbox.backupDir, LOCK_NAME)), false, 'lock released');
+      assert.equal(await lockIsFree(sandbox.backupDir), true, 'lock released');
       assert.deepEqual(listCopies(sandbox.backupDir).sort(), [...old].sort(), 'copies unchanged');
       old.forEach((name, i) =>
         assert.equal(readFileSync(path.join(sandbox.backupDir, name), 'utf8'), bytesBefore[i])

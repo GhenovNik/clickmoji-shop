@@ -39,6 +39,7 @@ import {
 } from './compare.mjs';
 import { checkStatusTarget } from './config.mjs';
 import { acquireLock, pidAlive } from './lock.mjs';
+import { Ledger, LedgerError } from './ledger.mjs';
 import { selectRetention } from './retention.mjs';
 import { appendStatus, formatStatusLine } from './status.mjs';
 import {
@@ -48,6 +49,7 @@ import {
   encryptArgs,
   inspectImageArgs,
   Interrupted,
+  removeArgs,
   verifyArgs,
   versionArgs,
 } from './docker.mjs';
@@ -268,12 +270,12 @@ async function executeBackup({ config, docker, now, tempDir, lock }) {
     counts: Object.fromEntries(counts),
     flagged: drops.map((drop) => drop.table),
   };
-  if (!lock.held()) throw new StepError('busy', EXIT.busy);
+  if (!(await lock.confirm())) throw new StepError('busy', EXIT.busy);
   publish({ backupDir: config.backupDir, encryptedFile, name, meta });
 
   // Pruning runs only after the new copy is in place, and only for the lock holder.
   let pruned = 'ok';
-  if (!lock.held()) {
+  if (!(await lock.confirm())) {
     pruned = 'skipped';
   } else {
     try {
@@ -287,6 +289,23 @@ async function executeBackup({ config, docker, now, tempDir, lock }) {
     }
   }
   return { name, sizeBytes: meta.sizeBytes, verify, pruned };
+}
+
+// Containers a previous run started and could not prove gone (or was killed before it could).
+// Each is removed again and must be proven absent; until all are, this run does nothing else.
+async function recoverContainers(docker, ledger) {
+  let names;
+  try {
+    names = ledger.list();
+  } catch (error) {
+    if (error instanceof LedgerError) throw new StepError('cleanup', EXIT.failed);
+    throw error;
+  }
+  for (const name of names) {
+    await docker.exec(removeArgs(name));
+    if (!(await docker.proveAbsent(name))) throw new StepError('cleanup', EXIT.failed);
+    ledger.remove(name);
+  }
 }
 
 // Returns true when the directory is gone. Container-written files may belong to another
@@ -330,6 +349,8 @@ function report(config, now, result) {
 }
 
 // Never throws for an expected failure: the outcome is written to the status file and returned.
+// The lock is held from acquisition until the very end: containers, plaintext and the temporary
+// directory are all dealt with before release() lets the next process in.
 export async function runBackup({
   config,
   docker,
@@ -339,15 +360,23 @@ export async function runBackup({
   mkdirSync(config.backupDir, { recursive: true, mode: 0o700 });
   let lock;
   try {
-    lock = acquireLock(config.backupDir);
+    lock = await acquireLock(config.backupDir);
   } catch {
     return report(config, now, { ok: false, key: 'busy', exit: EXIT.busy });
   }
   if (!lock) return report(config, now, { ok: false, key: 'busy', exit: EXIT.busy });
 
+  const ledger = new Ledger(config.backupDir);
+  docker.bindLedger(ledger);
+  // The helper died while this run owned the lock: stop every container before anything else.
+  lock.onLost(() => {
+    docker.shutdown().catch(() => {}); // the outcome is reported by runBackup's own shutdown
+  });
+
   let result;
   let tempDir = null;
   try {
+    await recoverContainers(docker, ledger);
     sweepStaleTemp(tempRoot, config.backupDir);
     tempDir = mkdtempSync(path.join(tempRoot, TEMP_PREFIX));
     writeFileSync(
@@ -360,16 +389,19 @@ export async function runBackup({
     result = classify(error);
   }
 
-  // Containers first. Until every container is proven gone, nothing may be removed under them:
-  // the temporary directory and the lock stay as they are, and the lock is left to the next run
-  // to take over once this process has exited.
+  // Containers first. Until every container is proven gone, nothing may be removed under them.
+  // A container that stays unproven remains in the ledger, which blocks every later run until
+  // it is proven gone; the temporary directory is kept for the same reason.
   let containersGone = false;
   try {
     containersGone = await docker.shutdown();
   } catch {
     containersGone = false;
   }
-  if (!containersGone) return report(config, now, { ok: false, key: 'cleanup', exit: EXIT.failed });
+  if (!containersGone) {
+    await releaseQuietly(lock);
+    return report(config, now, { ok: false, key: 'cleanup', exit: EXIT.failed });
+  }
 
   try {
     if (tempDir && !(await removeTemp(tempDir, docker))) {
@@ -378,12 +410,17 @@ export async function runBackup({
     }
   } catch {
     result = { ok: false, key: 'cleanup', exit: EXIT.failed };
-  } finally {
-    try {
-      lock.release();
-    } catch {
-      // Not released: the record names this process, which is gone when it exits; the next run takes it over.
-    }
   }
+  await releaseQuietly(lock);
   return report(config, now, result);
+}
+
+// Release is the last thing a run does. A failure here cannot leave a live owner behind: the
+// helper exits with this process, and the kernel frees the lock.
+async function releaseQuietly(lock) {
+  try {
+    await lock.release();
+  } catch {
+    // Nothing more to do: the lock belongs to a helper that is gone or exiting.
+  }
 }

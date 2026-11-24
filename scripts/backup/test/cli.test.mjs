@@ -11,11 +11,11 @@ import {
   writeFileSync,
 } from 'node:fs';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import {
   CLI,
-  LOCK,
+  lockIsFree,
   containersLeft,
   envFor,
   listCopies,
@@ -93,6 +93,32 @@ describe('cli failure outcomes', () => {
 });
 
 describe('interruption after plaintext exists', () => {
+  it('the lock helper dying mid-run stops the run: containers removed, nothing published', async () => {
+    const old = seedBackups(sandbox.backupDir, 20);
+    const env = envFor(sandbox, db, { FAKE_DOCKER_MODE: 'interrupt' });
+    const child = spawn(process.execPath, [CLI], { env, stdio: ['ignore', 'pipe', 'pipe'] });
+    child.stdout.on('data', () => {});
+    child.stderr.on('data', () => {});
+    const exited = new Promise((resolve) =>
+      child.on('close', (exitCode, signal) => resolve(exitCode ?? `signal:${signal}`))
+    );
+
+    assert.ok(await waitFor(() => findPlaintext(sandbox.tmp), 15_000), 'plaintext written');
+    // The lock helper is the run's only direct perl child.
+    const helper = spawnSync('pgrep', ['-P', String(child.pid), '-x', 'perl'], {
+      encoding: 'utf8',
+    }).stdout.trim();
+    assert.match(helper, /^\d+$/, 'the lock helper is running');
+    process.kill(Number(helper), 'SIGKILL');
+
+    assert.equal(await exited, EXIT.interrupted);
+    assert.deepEqual(containersLeft(sandbox), [], 'the dump container is gone');
+    assert.equal(findPlaintext(sandbox.tmp), null, 'plaintext removed');
+    assert.deepEqual(tempLeft(), [], 'temporary directory removed');
+    assert.deepEqual(listCopies(sandbox.backupDir).sort(), [...old].sort(), 'nothing published');
+    assert.match(readStatus(sandbox), /\tfailed\tсбой: прервано\n$/);
+  });
+
   it('SIGTERM kills the dump container, removes plaintext and the cluster, releases the lock', async () => {
     const old = seedBackups(sandbox.backupDir, 20);
     const env = envFor(sandbox, db, { FAKE_DOCKER_MODE: 'interrupt' });
@@ -122,10 +148,10 @@ describe('interruption after plaintext exists', () => {
     assert.deepEqual(containersLeft(sandbox), [], 'the dump container is gone');
     const [removal] = removalEvents(sandbox);
     assert.equal(removal?.workDirExists, true, 'container removed before the plaintext directory');
-    assert.equal(removal?.lockExists, true, 'container removed before the lock is released');
+    assert.equal(removal?.lockHeld, true, 'container removed before the lock is released');
     assert.equal(findPlaintext(sandbox.tmp), null, 'plaintext removed');
     assert.deepEqual(tempLeft(), [], 'temporary directory removed');
-    assert.equal(existsSync(LOCK(sandbox.backupDir)), false, 'lock released');
+    assert.equal(await lockIsFree(sandbox.backupDir), true, 'lock released');
     assert.deepEqual(listCopies(sandbox.backupDir).sort(), [...old].sort(), 'old copies intact');
     assert.match(readStatus(sandbox), /\tfailed\tсбой: прервано\n$/);
     assertNoSecrets(stdout + stderr + readStatus(sandbox));
