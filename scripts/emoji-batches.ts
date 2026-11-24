@@ -244,36 +244,44 @@ ${universalPrompt(items)}
 `;
 }
 
-async function main() {
-  const file = JSON.parse(readFileSync(join(DIR, 'candidates.json'), 'utf8')) as CandidatesFile;
-  const snapshot = JSON.parse(readFileSync(join(DIR, SNAPSHOT), 'utf8')) as Snapshot;
+export async function main(dir = DIR, formatMarkdown = format) {
+  const file = JSON.parse(readFileSync(join(dir, 'candidates.json'), 'utf8')) as CandidatesFile;
+  const snapshot = JSON.parse(readFileSync(join(dir, SNAPSHOT), 'utf8')) as Snapshot;
   const batches = planBatches(collectCandidates(file, snapshot));
 
-  const batchDir = join(DIR, 'batches');
-  rmSync(batchDir, { recursive: true, force: true });
-  mkdirSync(batchDir, { recursive: true });
+  const batchDir = join(dir, 'batches');
 
   const prettierOptions = await resolveConfig(join(batchDir, 'batch.md'));
-  const manifest = await Promise.all(
+  const prepared = await Promise.all(
     batches.map(async (batch) => {
-      writeFileSync(
-        join(batchDir, `${batch.id}.md`),
-        await format(batchMarkdown(batch), { ...prettierOptions, parser: 'markdown' })
-      );
+      const markdown = await formatMarkdown(batchMarkdown(batch), {
+        ...prettierOptions,
+        parser: 'markdown',
+      });
       return {
-        batch: batch.id,
-        kind: batch.kind,
-        file: `${batch.id}.png`,
-        ...(batch.kind === 'text' && { fileEn: `${batch.id}-en.png` }),
-        cells: batch.items.map((item, i) => {
-          const supersededBy = batch.supersededBy?.get(i + 1);
-          return { cell: i + 1, ...item, ...(supersededBy && { supersededBy }) };
-        }),
+        markdown,
+        entry: {
+          batch: batch.id,
+          kind: batch.kind,
+          file: `${batch.id}.png`,
+          ...(batch.kind === 'text' && { fileEn: `${batch.id}-en.png` }),
+          cells: batch.items.map((item, i) => {
+            const supersededBy = batch.supersededBy?.get(i + 1);
+            return { cell: i + 1, ...item, ...(supersededBy && { supersededBy }) };
+          }),
+        },
       };
     })
   );
+  const manifest = prepared.map(({ entry }) => entry);
+  const manifestJson = `${JSON.stringify(manifest, null, 2)}\n`;
 
-  writeFileSync(join(DIR, 'manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`);
+  rmSync(batchDir, { recursive: true, force: true });
+  mkdirSync(batchDir, { recursive: true });
+  for (const { markdown, entry } of prepared) {
+    writeFileSync(join(batchDir, `${entry.batch}.md`), markdown);
+  }
+  writeFileSync(join(dir, 'manifest.json'), manifestJson);
   const count = (kind: BatchKind) => manifest.filter((b) => b.kind === kind).length;
   console.log(
     `${count('universal')} text-free batches, ${count('text')} text batches, ${

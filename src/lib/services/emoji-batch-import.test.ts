@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { PrismaClient } from '@prisma/client';
@@ -370,6 +370,24 @@ describe('applyCell', () => {
 });
 
 describe('batch prompts', () => {
+  it('preserves existing batches and manifest when formatting fails', async () => {
+    const { main } = await import('../../../scripts/emoji-batches');
+    const dir = mkdtempSync(join(tmpdir(), 'emoji-generator-'));
+    dirs.push(dir);
+    for (const name of ['candidates.json', 'catalog-snapshot-2026-10-30.json']) {
+      copyFileSync(join('docs/emoji-batches', name), join(dir, name));
+    }
+    mkdirSync(join(dir, 'batches'));
+    writeFileSync(join(dir, 'batches', 'old.md'), 'old batch');
+    writeFileSync(join(dir, 'manifest.json'), 'old manifest');
+
+    await expect(
+      main(dir, vi.fn().mockRejectedValue(new Error('formatter failed')))
+    ).rejects.toThrow('formatter failed');
+    expect(readFileSync(join(dir, 'batches', 'old.md'), 'utf8')).toBe('old batch');
+    expect(readFileSync(join(dir, 'manifest.json'), 'utf8')).toBe('old manifest');
+  });
+
   it('emits the shared style and category rule', async () => {
     const { universalPrompt, textPrompt } = await import('../../../scripts/emoji-batches');
     for (const prompt of [universalPrompt([]), textPrompt([])]) {
