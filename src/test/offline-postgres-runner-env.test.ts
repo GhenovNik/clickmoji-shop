@@ -3,10 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import {
-  buildOfflinePrismaEnv,
-  resolveLocalSchemaEngine,
-} from './offline-postgres-runner-env';
+import { buildOfflinePrismaEnv, resolveLocalSchemaEngine } from './offline-postgres-runner-env';
 
 const DB_URL = 'postgresql://postgres@127.0.0.1:49999/legacy_locales_test';
 const ENGINE = '/repo/node_modules/@prisma/engines/schema-engine-darwin-arm64';

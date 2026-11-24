@@ -1,5 +1,10 @@
 import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
+import { resolve } from 'node:path';
+import {
+  buildOfflinePrismaEnv,
+  resolveLocalSchemaEngine,
+} from '../src/test/offline-postgres-runner-env';
 
 // Pre-staged local immutable digest of postgres:17-alpine; never pull during offline tests.
 const LEGACY_LOCALES_POSTGRES_IMAGE =
@@ -45,6 +50,8 @@ function assertLocalPinnedImageAvailable(image: string): void {
 async function main() {
   // Verify the pinned image exists locally before creating or cleaning up any container.
   assertLocalPinnedImageAvailable(LEGACY_LOCALES_POSTGRES_IMAGE);
+  // Likewise the Prisma schema engine must already be installed; the CLI must never download it.
+  const schemaEngine = resolveLocalSchemaEngine(resolve('node_modules/@prisma/engines'));
 
   // No dotenv, caller URL or host database: this command owns a fresh, loopback-only container.
   const container = `clickmoji-legacy-locales-test-${randomUUID()}`;
@@ -84,7 +91,7 @@ async function main() {
     if (!port) throw new Error('Expected a loopback-only Docker port');
 
     const url = `postgresql://postgres@127.0.0.1:${port}/legacy_locales_test`;
-    const env = { ...process.env, DATABASE_URL: url, INTEGRATION_DATABASE_URL: url };
+    const env = buildOfflinePrismaEnv(process.env, url, schemaEngine);
 
     execFileSync(process.execPath, ['node_modules/prisma/build/index.js', 'migrate', 'deploy'], {
       env,
