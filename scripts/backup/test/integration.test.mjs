@@ -3,15 +3,15 @@
 // The source is a local container created here and removed afterwards; no production or
 // Neon database is involved. Credentials and keys are generated at runtime and never printed.
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import crypto from 'node:crypto';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, it } from 'node:test';
 import { buildImageArgs, CONTAINER_DIR } from '../docker.mjs';
 import { libpqEnv, LIBPQ_ENV_NAMES } from '../config.mjs';
-import { EXIT, POSTGRES_BASE_IMAGE, TOOLS_IMAGE } from '../constants.mjs';
-import { CLI, listCopies, makeSandbox, readStatus } from './helpers.mjs';
+import { EXIT, LOCK_NAME, POSTGRES_BASE_IMAGE, TOOLS_IMAGE } from '../constants.mjs';
+import { CLI, listCopies, makeSandbox, readStatus, seedBackups } from './helpers.mjs';
 
 const enabled = process.env.CLICKMOJI_BACKUP_INTEGRATION === '1';
 const dockerUp =
@@ -35,7 +35,34 @@ INSERT INTO "Product" (title) SELECT 'synthetic ' || g FROM generate_series(1, 7
 CREATE SCHEMA audit;
 CREATE TABLE audit.event (id serial PRIMARY KEY, kind text NOT NULL);
 INSERT INTO audit.event (kind) SELECT 'synthetic' FROM generate_series(1, 3) g;
+-- Bulk rows make the restore take long enough to interrupt while it is running.
+CREATE TABLE "Bulk" (id serial PRIMARY KEY, payload text NOT NULL);
+INSERT INTO "Bulk" (payload) SELECT repeat(md5(g::text), 8) FROM generate_series(1, 150000) g;
 `;
+
+// Containers this tool starts are named clickmoji-backup-<step>-<hex>.
+const toolContainers = (step = '') =>
+  docker(['ps', '-a', '--filter', `name=^clickmoji-backup-${step}`, '--format', '{{.Names}}'])
+    .stdout.split('\n')
+    .filter(Boolean);
+
+async function waitUntil(check, timeoutMs) {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    const value = check();
+    if (value) return value;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  return null;
+}
+
+// Every file under a directory, for finding plaintext or scratch left behind.
+function filesUnder(dir) {
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir, { withFileTypes: true }).flatMap((entry) =>
+    entry.isDirectory() ? filesUnder(path.join(dir, entry.name)) : [path.join(dir, entry.name)]
+  );
+}
 
 describe(
   'integration: real docker, disposable PostgreSQL 17',
@@ -91,6 +118,20 @@ describe(
         }
       );
       assert.equal(load.status, 0, 'fixtures loaded');
+    });
+
+    it('the tools image is PostgreSQL 17 for dump and restore alike', () => {
+      const version = docker([
+        'run',
+        '--rm',
+        '--entrypoint',
+        '/bin/sh',
+        TOOLS_IMAGE,
+        '-c',
+        'pg_dump --version && pg_restore --version',
+      ]);
+      assert.equal(version.status, 0);
+      assert.equal((version.stdout.match(/ 17\./g) ?? []).length, 2, 'both tools report 17.x');
     });
 
     it('publishes an encrypted copy that decrypts to a dump matching the source', () => {
@@ -184,6 +225,58 @@ describe(
       );
       assert.notEqual(result.status, 0, 'verification of a corrupt dump fails');
       assert.doesNotMatch(`${result.stdout}${result.stderr}`, new RegExp(password));
+    });
+
+    it('a stop during the active dump or restore leaves no container, scratch, plaintext, and no copy changed', async () => {
+      const old = seedBackups(sandbox.backupDir, 3);
+      const bytesBefore = old.map((name) =>
+        readFileSync(path.join(sandbox.backupDir, name), 'utf8')
+      );
+      const env = {
+        PATH: process.env.PATH,
+        TMPDIR: sandbox.tmp,
+        DATABASE_URL: state.url,
+        BACKUP_DIR: sandbox.backupDir,
+        BACKUP_STATUS_FILE: sandbox.statusFile,
+        BACKUP_AGE_RECIPIENT_FILE: sandbox.recipientFile,
+      };
+      const child = spawn(process.execPath, [CLI], { env, stdio: ['ignore', 'pipe', 'pipe'] });
+      let output = '';
+      child.stdout.on('data', (chunk) => {
+        output += chunk;
+      });
+      child.stderr.on('data', (chunk) => {
+        output += chunk;
+      });
+      const exited = new Promise((resolve) =>
+        child.on('close', (code, signal) => resolve(code ?? `signal:${signal}`))
+      );
+
+      // Wait for a real dump or restore container, and check its daemon logging while it runs.
+      const active = await waitUntil(
+        () => toolContainers('dump-')[0] ?? toolContainers('verify-')[0],
+        120_000
+      );
+      assert.ok(active, 'a dump or restore container was started');
+      assert.equal(
+        docker(['inspect', '--format', '{{.HostConfig.LogConfig.Type}}', active]).stdout.trim(),
+        'none',
+        'the active container keeps no daemon log'
+      );
+
+      child.kill('SIGTERM');
+      assert.equal(await exited, EXIT.interrupted);
+
+      assert.deepEqual(toolContainers(), [], 'no tool container survives the stop');
+      const scratch = filesUnder(sandbox.tmp).filter((file) => /dump\.(custom|age)$/.test(file));
+      assert.deepEqual(scratch, [], 'no plaintext or ciphertext scratch file is left');
+      assert.equal(existsSync(path.join(sandbox.backupDir, LOCK_NAME)), false, 'lock released');
+      assert.deepEqual(listCopies(sandbox.backupDir).sort(), [...old].sort(), 'copies unchanged');
+      old.forEach((name, i) =>
+        assert.equal(readFileSync(path.join(sandbox.backupDir, name), 'utf8'), bytesBefore[i])
+      );
+      assert.doesNotMatch(`${output}${readStatus(sandbox)}`, new RegExp(password));
+      assert.match(readStatus(sandbox), /\tfailed\tсбой: прервано\n$/);
     });
 
     it('removes the source container and the sandbox', () => {
