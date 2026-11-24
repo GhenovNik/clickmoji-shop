@@ -1,0 +1,113 @@
+name: Production migration
+
+# Manual only. master deploys to production on Vercel at once and the build does not migrate
+# (docs/ops.md: migrate before the code that needs it). This applies pending Prisma migrations to the
+# production database with the direct URL, after a fresh verified backup. 2026-11-24: #152 went live
+# before its table (add_ai_monthly_budgets).
+# The repository is public, so the dump is never uploaded as an artifact: it lives only inside this run and
+# is proven restorable into a throwaway PostgreSQL 17 before any migration. Recovery after a bad
+# migration is Neon point-in-time restore.
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type "migrate production" to apply pending migrations'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-migration
+  cancel-in-progress: false
+
+jobs:
+  migrate:
+    if: ${{ inputs.confirm == 'migrate production' && github.ref == 'refs/heads/master' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Prepare backup file name
+        id: meta
+        shell: bash
+        run: |
+          ts="$(date -u +%Y%m%d-%H%M%S)"
+          echo "file_name=neon-prod-premigrate-${ts}.dump" >> "$GITHUB_OUTPUT"
+
+      - name: Backup production database
+        env:
+          PROD_DATABASE_URL: ${{ secrets.PROD_DATABASE_URL }}
+        shell: bash
+        run: |
+          if [[ -z "${PROD_DATABASE_URL}" ]]; then
+            echo "PROD_DATABASE_URL secret is required"
+            exit 1
+          fi
+          mkdir -p backups
+          docker run --rm \
+            -e DATABASE_URL="${PROD_DATABASE_URL}" \
+            -v "${GITHUB_WORKSPACE}/backups:/backups" \
+            postgres:17-alpine \
+            sh -lc "pg_dump \"\$DATABASE_URL\" -Fc -f \"/backups/${{ steps.meta.outputs.file_name }}\"" \
+            > /dev/null 2>&1 || { echo "backup failed; migration not applied"; exit 1; }
+          echo "backup created"
+
+      - name: Prove the backup restores
+        # Output is suppressed: a failing COPY can print production values and the repository is public.
+        shell: bash
+        run: |
+          test -s "backups/${{ steps.meta.outputs.file_name }}"
+          docker network create restore-check > /dev/null
+          docker run -d --rm --name scratch --network restore-check --log-driver none \
+            -e POSTGRES_PASSWORD=scratch -e POSTGRES_DB=restore_check postgres:17-alpine > /dev/null
+          ready=""
+          for _ in $(seq 1 60); do
+            if docker exec scratch pg_isready -h 127.0.0.1 -p 5432 -U postgres > /dev/null 2>&1; then ready=1; break; fi
+            sleep 2
+          done
+          [ -n "$ready" ] || { echo "scratch database did not start; migration not applied"; docker stop scratch > /dev/null 2>&1 || true; exit 1; }
+          if docker run --rm --network restore-check --log-driver none \
+              -v "${GITHUB_WORKSPACE}/backups:/backups" -e PGPASSWORD=scratch postgres:17-alpine \
+              sh -lc "pg_restore --exit-on-error --no-owner --no-privileges -h scratch -U postgres -d restore_check \"/backups/${{ steps.meta.outputs.file_name }}\"" \
+              > /dev/null 2>&1; then
+            echo "backup restored into a scratch PostgreSQL 17"
+          else
+            echo "backup restore check failed; migration not applied"
+            docker stop scratch > /dev/null 2>&1 || true
+            exit 1
+          fi
+          docker stop scratch > /dev/null 2>&1 || true
+          rm -f "backups/${{ steps.meta.outputs.file_name }}"
+
+      # Prisma prints database error details (P3018) and connection info; the repository is public.
+      - name: Apply pending migrations
+        env:
+          DATABASE_URL: ${{ secrets.PROD_DATABASE_URL }}
+        shell: bash
+        run: |
+          if npx prisma migrate deploy > /dev/null 2>&1; then
+            echo "migrations applied"
+          else
+            echo "migrate deploy failed; production may be partially migrated — check in Neon, restore point-in-time if needed"
+            exit 1
+          fi
+          if npx prisma migrate status > /dev/null 2>&1; then
+            echo "migrate status: up to date"
+          else
+            echo "migrate status reports pending or failed migrations"
+            exit 1
+          fi
