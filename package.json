@@ -34,7 +34,7 @@
     "test:watch": "vitest",
     "test:ui": "vitest --ui",
     "test:coverage": "vitest --coverage",
-    "test:backup": "node --test scripts/backup/test/unit.test.mjs scripts/backup/test/pipeline.test.mjs scripts/backup/test/inner.test.mjs scripts/backup/test/cli.test.mjs scripts/backup/test/integration.test.mjs",
+    "test:backup": "node --test scripts/backup/test/unit.test.mjs scripts/backup/test/pipeline.test.mjs scripts/backup/test/lock.test.mjs scripts/backup/test/inner.test.mjs scripts/backup/test/cli.test.mjs scripts/backup/test/integration.test.mjs",
     "test:e2e": "playwright test",
     "test:e2e:smoke": "playwright test --grep @smoke --project=chromium",
     "test:e2e:variants": "playwright test --config playwright.variants.config.ts",

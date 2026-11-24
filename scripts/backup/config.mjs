@@ -1,6 +1,6 @@
 // Configuration for the verified backup. Everything comes from the environment;
 // nothing has a default for the database address, the recipient, or the paths.
-import { readFileSync } from 'node:fs';
+import { lstatSync, readFileSync, realpathSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -23,6 +23,43 @@ function requireAbsolute(env, name) {
 function isInside(child, parent) {
   const relative = path.relative(parent, child);
   return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
+}
+
+// The path with every symlink resolved. Parts that do not exist yet are kept as written, after
+// the nearest existing ancestor has been resolved.
+function canonical(target) {
+  let current = path.resolve(target);
+  const missing = [];
+  for (;;) {
+    try {
+      return path.join(realpathSync(current), ...missing.reverse());
+    } catch (error) {
+      const parent = path.dirname(current);
+      if (error.code !== 'ENOENT' || parent === current) throw error;
+      missing.push(path.basename(current));
+      current = parent;
+    }
+  }
+}
+
+// The status file is only ever appended to. It must not be a place where backup data lives:
+// not inside the backup directory under any alias (symlinked parents included), not a symlink,
+// and not a hard link, since a second name for a file could be a copy or a copy's metadata.
+// Checked before anything runs, and again before each status write.
+export function checkStatusTarget(statusFile, backupDir) {
+  if (isInside(canonical(statusFile), canonical(backupDir))) {
+    throw new ConfigError('BACKUP_STATUS_FILE: путь внутри каталога резервных копий');
+  }
+  let stat;
+  try {
+    stat = lstatSync(statusFile);
+  } catch (error) {
+    if (error.code === 'ENOENT') return;
+    throw new ConfigError('BACKUP_STATUS_FILE: файл не читается');
+  }
+  if (stat.isSymbolicLink()) throw new ConfigError('BACKUP_STATUS_FILE: символическая ссылка');
+  if (!stat.isFile()) throw new ConfigError('BACKUP_STATUS_FILE: нужен обычный файл');
+  if (stat.nlink > 1) throw new ConfigError('BACKUP_STATUS_FILE: жёсткая ссылка на другой файл');
 }
 
 // libpq variables that carry the source connection into the containers. Containers receive
@@ -124,6 +161,7 @@ export function loadConfig(
   ]) {
     if (isInside(target, repoRoot)) throw new ConfigError(`${name}: путь внутри репозитория`);
   }
+  checkStatusTarget(statusFile, backupDir);
 
   let recipient;
   try {

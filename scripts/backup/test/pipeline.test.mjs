@@ -19,8 +19,12 @@ import { loadConfig } from '../config.mjs';
 import { DockerRunner } from '../docker.mjs';
 import { runBackup } from '../pipeline.mjs';
 import {
+  containersLeft,
+  daemonLog,
   envFor,
   LOCK,
+  removalEvents,
+  writeLock,
   NEW_NAME,
   NOW,
   listCopies,
@@ -188,8 +192,7 @@ describe('drops against the previous good copy', () => {
 describe('concurrency', () => {
   it('a live lock makes the second run stop without touching anything', async () => {
     const old = seedBackups(sandbox.backupDir, 5);
-    mkdirSync(LOCK(sandbox.backupDir));
-    writeFileSync(path.join(LOCK(sandbox.backupDir), 'pid'), String(process.pid));
+    writeLock(sandbox.backupDir, { pid: process.pid });
     const result = await runWithFake(sandbox, db);
     assert.equal(result.exit, EXIT.busy);
     assert.equal(result.key, 'busy');
@@ -201,11 +204,91 @@ describe('concurrency', () => {
   it('a lock whose owner has exited is taken over', async () => {
     const child = spawn(process.execPath, ['-e', '']);
     await new Promise((resolve) => child.on('close', resolve));
-    mkdirSync(LOCK(sandbox.backupDir), { recursive: true });
-    writeFileSync(path.join(LOCK(sandbox.backupDir), 'pid'), String(child.pid));
+    writeLock(sandbox.backupDir, { pid: child.pid });
     const result = await runWithFake(sandbox, db);
     assert.equal(result.ok, true);
     assert.equal(existsSync(LOCK(sandbox.backupDir)), false, 'lock released');
+  });
+
+  it('a lock whose holder is alive is never taken over, even when its record is old', async () => {
+    writeLock(sandbox.backupDir, { pid: process.pid });
+    const before = readFileSync(LOCK(sandbox.backupDir), 'utf8');
+    const result = await runWithFake(sandbox, db);
+    assert.equal(result.key, 'busy');
+    assert.equal(readFileSync(LOCK(sandbox.backupDir), 'utf8'), before, 'record untouched');
+  });
+});
+
+describe('interruption stops containers before anything is removed', () => {
+  it('a stop with a dump in progress removes its container, then plaintext and lock; copies intact', async () => {
+    const old = seedBackups(sandbox.backupDir, 20);
+    const env = envFor(sandbox, db, { FAKE_DOCKER_MODE: 'interrupt' });
+    const config = loadConfig(env);
+    const docker = new DockerRunner({
+      bin: config.dockerBin,
+      containerEnv: config.containerEnv,
+      env,
+    });
+    const run = runBackup({ config, docker, now: () => NOW, tempRoot: sandbox.tmp });
+    const started = Date.now();
+    while (containersLeft(sandbox).length === 0 && Date.now() - started < 15_000) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    assert.equal(containersLeft(sandbox).length, 1, 'the dump container is running');
+    docker.shutdown();
+    const result = await run;
+
+    assert.equal(result.key, 'interrupted');
+    assert.equal(result.exit, EXIT.interrupted);
+    assert.deepEqual(containersLeft(sandbox), [], 'no container survives the stop');
+    const [removal] = removalEvents(sandbox);
+    assert.equal(removal.workDirExists, true, 'container removed before the plaintext directory');
+    assert.equal(removal.lockExists, true, 'container removed before the lock is released');
+    assert.deepEqual(tempLeft(), [], 'temporary directory removed afterwards');
+    assert.equal(existsSync(LOCK(sandbox.backupDir)), false, 'lock released last');
+    assert.deepEqual(listCopies(sandbox.backupDir).sort(), [...old].sort(), 'old copies intact');
+  });
+
+  it('a container that cannot be proven gone keeps the plaintext and the lock, and reports cleanup', async () => {
+    const env = envFor(sandbox, db, { FAKE_DOCKER_MODE: 'interrupt', FAKE_DOCKER_RM: 'fail' });
+    const config = loadConfig(env);
+    const docker = new DockerRunner({
+      bin: config.dockerBin,
+      containerEnv: config.containerEnv,
+      env,
+    });
+    const run = runBackup({ config, docker, now: () => NOW, tempRoot: sandbox.tmp });
+    const started = Date.now();
+    while (containersLeft(sandbox).length === 0 && Date.now() - started < 15_000) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    docker.shutdown();
+    const result = await run;
+
+    assert.equal(result.ok, false);
+    assert.equal(result.key, 'cleanup');
+    assert.equal(containersLeft(sandbox).length, 1, 'the container identity is still known');
+    assert.equal(existsSync(LOCK(sandbox.backupDir)), true, 'lock kept while the container exists');
+    assert.equal(tempLeft().length, 1, 'temporary directory kept, not deleted under a container');
+  });
+});
+
+describe('the daemon keeps no container output', () => {
+  it('every container runs with the log driver disabled, and a failure marker never reaches the daemon log', async () => {
+    const failed = await runWithFake(sandbox, db, { FAKE_DOCKER_MODE: 'dump-fail' });
+    assert.equal(failed.key, 'dump');
+    const succeeded = await runWithFake(sandbox, db);
+    assert.equal(succeeded.ok, true);
+
+    const containerRuns = readDockerLog(sandbox).filter((call) => call.argv[0] === 'run');
+    assert.equal(containerRuns.length, 4, 'failed dump, then dump, verify and encrypt');
+    for (const call of containerRuns) {
+      const i = call.argv.indexOf('--log-driver');
+      assert.equal(call.argv[i + 1], 'none', 'log driver disabled for every container');
+    }
+    assert.equal(daemonLog(sandbox).includes(db.password), false, 'password not in daemon log');
+    assert.equal(readStatus(sandbox).includes(db.password), false);
+    assert.equal(readStatus(sandbox).includes('connection failed'), false);
   });
 });
 

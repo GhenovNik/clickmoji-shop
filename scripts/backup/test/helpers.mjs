@@ -48,6 +48,8 @@ export function makeSandbox() {
     backupDir: path.join(root, 'backups'),
     statusFile: path.join(root, 'status.log'),
     logFile: path.join(root, 'docker.log'),
+    dockerState: path.join(root, 'docker-state'),
+    daemonLog: path.join(root, 'daemon.log'),
     recipientFile,
     cleanup: () => rmSync(root, { recursive: true, force: true }),
   };
@@ -86,8 +88,31 @@ export function envFor(sandbox, db, extra = {}) {
     BACKUP_AGE_RECIPIENT_FILE: sandbox.recipientFile,
     BACKUP_DOCKER_BIN: FAKE_DOCKER,
     FAKE_DOCKER_LOG: sandbox.logFile,
+    FAKE_DOCKER_STATE: sandbox.dockerState,
+    FAKE_DAEMON_LOG: sandbox.daemonLog,
+    FAKE_WATCH_LOCK: path.join(sandbox.backupDir, '.backup.lock'),
     ...extra,
   };
+}
+
+// Containers the fake daemon still knows about (killed clients leave theirs behind).
+export function containersLeft(sandbox) {
+  const dir = path.join(sandbox.dockerState, 'containers');
+  return existsSync(dir) ? readdirSync(dir) : [];
+}
+
+// Removals the fake daemon performed, in order.
+export function removalEvents(sandbox) {
+  const file = path.join(sandbox.dockerState, 'events.jsonl');
+  if (!existsSync(file)) return [];
+  return readFileSync(file, 'utf8')
+    .split('\n')
+    .filter(Boolean)
+    .map((line) => JSON.parse(line));
+}
+
+export function daemonLog(sandbox) {
+  return existsSync(sandbox.daemonLog) ? readFileSync(sandbox.daemonLog, 'utf8') : '';
 }
 
 // In-process run of the pipeline with the fake docker.
@@ -162,3 +187,10 @@ export function readDockerLog(sandbox) {
 }
 
 export const LOCK = (backupDir) => path.join(backupDir, '.backup.lock');
+
+// A lock record in the format lock.mjs writes: the owner pid and a token.
+export function writeLock(backupDir, { pid, token = crypto.randomBytes(16).toString('hex') }) {
+  mkdirSync(backupDir, { recursive: true });
+  writeFileSync(LOCK(backupDir), JSON.stringify({ pid, token }));
+  return token;
+}

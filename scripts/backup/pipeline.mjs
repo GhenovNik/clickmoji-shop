@@ -37,6 +37,7 @@ import {
   parseIdentities,
   parseMigration,
 } from './compare.mjs';
+import { checkStatusTarget } from './config.mjs';
 import { acquireLock, pidAlive } from './lock.mjs';
 import { selectRetention } from './retention.mjs';
 import { appendStatus, formatStatusLine } from './status.mjs';
@@ -193,7 +194,9 @@ function publish({ backupDir, encryptedFile, name, meta }) {
 }
 
 // Throws StepError for a failed step, or Interrupted when the run is aborted.
-async function executeBackup({ config, docker, now, tempDir }) {
+// The lock is checked again before the copy becomes visible and before anything is pruned:
+// a run that no longer holds it must not touch the shared backup names.
+async function executeBackup({ config, docker, now, tempDir, lock }) {
   const run = async (args, key, exit = EXIT.failed) => {
     const result = await docker.run(args);
     if (result.code !== 0) throw new StepError(key, exit);
@@ -265,18 +268,23 @@ async function executeBackup({ config, docker, now, tempDir }) {
     counts: Object.fromEntries(counts),
     flagged: drops.map((drop) => drop.table),
   };
+  if (!lock.held()) throw new StepError('busy', EXIT.busy);
   publish({ backupDir: config.backupDir, encryptedFile, name, meta });
 
-  // Pruning runs only after the new copy is in place.
+  // Pruning runs only after the new copy is in place, and only for the lock holder.
   let pruned = 'ok';
-  try {
-    const { remove } = selectRetention(listBackups(config.backupDir));
-    for (const old of remove) {
-      rmSync(path.join(config.backupDir, old), { force: true });
-      rmSync(path.join(config.backupDir, META_DIR, `${old}.json`), { force: true });
+  if (!lock.held()) {
+    pruned = 'skipped';
+  } else {
+    try {
+      const { remove } = selectRetention(listBackups(config.backupDir));
+      for (const old of remove) {
+        rmSync(path.join(config.backupDir, old), { force: true });
+        rmSync(path.join(config.backupDir, META_DIR, `${old}.json`), { force: true });
+      }
+    } catch {
+      pruned = 'incomplete';
     }
-  } catch {
-    pruned = 'incomplete';
   }
   return { name, sizeBytes: meta.sizeBytes, verify, pruned };
 }
@@ -307,7 +315,14 @@ function report(config, now, result) {
         detail: `size=${result.sizeBytes} verify=${result.verify} file=${result.name} prune=${result.pruned}`,
       })
     : formatStatusLine({ now: when, outcome: 'failed', detail: MESSAGES[result.key] });
-  appendStatus(config.statusFile, line);
+  // The status path is checked again: a file may have been replaced since configuration. A
+  // status line that cannot be written safely is dropped; the exit code still tells the outcome.
+  try {
+    checkStatusTarget(config.statusFile, config.backupDir);
+    appendStatus(config.statusFile, line);
+  } catch {
+    // Nothing is written to a path that no longer qualifies.
+  }
   return {
     ...result,
     exit: result.ok ? (result.verify === 'suspicious' ? EXIT.suspicious : EXIT.ok) : result.exit,
@@ -322,7 +337,12 @@ export async function runBackup({
   tempRoot = os.tmpdir(),
 }) {
   mkdirSync(config.backupDir, { recursive: true, mode: 0o700 });
-  const lock = acquireLock(config.backupDir);
+  let lock;
+  try {
+    lock = acquireLock(config.backupDir);
+  } catch {
+    return report(config, now, { ok: false, key: 'busy', exit: EXIT.busy });
+  }
   if (!lock) return report(config, now, { ok: false, key: 'busy', exit: EXIT.busy });
 
   let result;
@@ -335,10 +355,22 @@ export async function runBackup({
       JSON.stringify({ pid: process.pid, backupKey: backupKey(config.backupDir) }),
       { mode: 0o600 }
     );
-    result = { ok: true, ...(await executeBackup({ config, docker, now, tempDir })) };
+    result = { ok: true, ...(await executeBackup({ config, docker, now, tempDir, lock })) };
   } catch (error) {
     result = classify(error);
   }
+
+  // Containers first. Until every container is proven gone, nothing may be removed under them:
+  // the temporary directory and the lock stay as they are, and the lock is left to the next run
+  // to take over once this process has exited.
+  let containersGone = false;
+  try {
+    containersGone = await docker.shutdown();
+  } catch {
+    containersGone = false;
+  }
+  if (!containersGone) return report(config, now, { ok: false, key: 'cleanup', exit: EXIT.failed });
+
   try {
     if (tempDir && !(await removeTemp(tempDir, docker))) {
       // Plaintext left on disk is reported even when the copy itself succeeded.
@@ -350,7 +382,7 @@ export async function runBackup({
     try {
       lock.release();
     } catch {
-      // A lock left behind names this process, which is gone when it exits; the next run takes it over.
+      // Not released: the record names this process, which is gone when it exits; the next run takes it over.
     }
   }
   return report(config, now, result);

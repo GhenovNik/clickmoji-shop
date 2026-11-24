@@ -31,11 +31,11 @@ export async function main(env = process.env) {
     containerEnv: config.containerEnv,
     env,
   });
-  // The run finishes its cleanup (kill containers, remove plaintext, release the lock,
-  // write the status line) and then returns; the exit code reflects the interruption.
+  // The run stops its containers (and proves them gone), then removes plaintext, releases the
+  // lock and writes the status line before it returns; the exit code reflects the interruption.
   for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
     process.on(signal, () => {
-      docker.abort();
+      docker.shutdown();
     });
   }
 

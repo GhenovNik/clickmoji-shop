@@ -1,16 +1,27 @@
 // CLI tests: the real entry point as a child process, so what it prints is what we assert on.
 import assert from 'node:assert/strict';
-import { existsSync, readdirSync, statSync } from 'node:fs';
+import {
+  existsSync,
+  linkSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import {
   CLI,
   LOCK,
+  containersLeft,
   envFor,
   listCopies,
   makeSandbox,
   readStatus,
+  removalEvents,
   runCli,
   seedBackups,
   syntheticDatabase,
@@ -108,6 +119,10 @@ describe('interruption after plaintext exists', () => {
     );
 
     assert.equal(code, EXIT.interrupted);
+    assert.deepEqual(containersLeft(sandbox), [], 'the dump container is gone');
+    const [removal] = removalEvents(sandbox);
+    assert.equal(removal?.workDirExists, true, 'container removed before the plaintext directory');
+    assert.equal(removal?.lockExists, true, 'container removed before the lock is released');
     assert.equal(findPlaintext(sandbox.tmp), null, 'plaintext removed');
     assert.deepEqual(tempLeft(), [], 'temporary directory removed');
     assert.equal(existsSync(LOCK(sandbox.backupDir)), false, 'lock released');
@@ -116,6 +131,89 @@ describe('interruption after plaintext exists', () => {
     assertNoSecrets(stdout + stderr + readStatus(sandbox));
   });
 });
+
+describe('the status file cannot alias backup data', () => {
+  // Each case makes the status path point into or onto the backup tree. The run must refuse
+  // before any Docker call, print nothing secret, and leave every byte of the copies as it was.
+  const copyBytes = (name) => readFileSync(path.join(sandbox.backupDir, name), 'utf8');
+
+  it('a hard link to an existing copy is refused and the copy keeps its bytes, even with docker down', async () => {
+    const old = seedBackups(sandbox.backupDir, 3);
+    linkSync(path.join(sandbox.backupDir, old[0]), path.join(sandbox.root, 'alias.log'));
+    const before = copyBytes(old[0]);
+    const result = await runCli(
+      envFor(sandbox, db, {
+        BACKUP_STATUS_FILE: path.join(sandbox.root, 'alias.log'),
+        FAKE_DOCKER_MODE: 'docker-down',
+      })
+    );
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /жёсткая ссылка/);
+    assert.equal(copyBytes(old[0]), before, 'copy bytes unchanged');
+    assert.equal(readDockerCalls(), 0, 'docker was never called');
+    assertNoSecrets(result.stdout + result.stderr);
+  });
+
+  it('a status path inside the backup directory is refused', async () => {
+    const old = seedBackups(sandbox.backupDir, 2);
+    const result = await runCli(
+      envFor(sandbox, db, { BACKUP_STATUS_FILE: path.join(sandbox.backupDir, old[0]) })
+    );
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /внутри каталога резервных копий/);
+    assert.equal(readFileSync(path.join(sandbox.backupDir, old[0]), 'utf8'), 'old 1');
+  });
+
+  it('a symlink to a file outside the tree is refused and the target is not appended to', async () => {
+    seedBackups(sandbox.backupDir, 1);
+    const target = path.join(sandbox.root, 'elsewhere.log');
+    writeFileSync(target, 'untouched\n');
+    const link = path.join(sandbox.root, 'link.log');
+    symlinkSync(target, link);
+    const result = await runCli(envFor(sandbox, db, { BACKUP_STATUS_FILE: link }));
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /символическая ссылка/);
+    assert.equal(readFileSync(target, 'utf8'), 'untouched\n');
+  });
+
+  it('a symlink to a copy is refused and the copy keeps its bytes', async () => {
+    const old = seedBackups(sandbox.backupDir, 2);
+    const link = path.join(sandbox.root, 'link.log');
+    symlinkSync(path.join(sandbox.backupDir, old[1]), link);
+    const result = await runCli(envFor(sandbox, db, { BACKUP_STATUS_FILE: link }));
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /внутри каталога резервных копий|символическая ссылка/);
+    assert.equal(copyBytes(old[1]), 'old 2', 'copy bytes unchanged');
+  });
+
+  it('a directory whose path leads into the backup tree through a symlink is refused', async () => {
+    seedBackups(sandbox.backupDir, 1);
+    const alias = path.join(sandbox.root, 'alias-dir');
+    symlinkSync(sandbox.backupDir, alias);
+    const result = await runCli(
+      envFor(sandbox, db, { BACKUP_STATUS_FILE: path.join(alias, 'status.log') })
+    );
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /внутри каталога резервных копий/);
+    assert.equal(existsSync(path.join(sandbox.backupDir, 'status.log')), false);
+  });
+
+  it('a status file outside the tree, not linked, is accepted as before', async () => {
+    mkdirSync(path.join(sandbox.root, 'logs'));
+    writeFileSync(path.join(sandbox.root, 'logs', 'status.log'), '');
+    seedBackups(sandbox.backupDir, 1);
+    const result = await runCli(
+      envFor(sandbox, db, { BACKUP_STATUS_FILE: path.join(sandbox.root, 'logs', 'status.log') })
+    );
+    assert.equal(result.code, EXIT.ok);
+  });
+});
+
+function readDockerCalls() {
+  return existsSync(sandbox.logFile)
+    ? readFileSync(sandbox.logFile, 'utf8').split('\n').filter(Boolean).length
+    : 0;
+}
 
 // Looks for the plaintext dump inside any clickmoji-backup-* directory under the sandbox temp.
 function findPlaintext(tmp) {
