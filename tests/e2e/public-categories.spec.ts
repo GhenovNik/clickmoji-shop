@@ -43,10 +43,10 @@ test.describe('Public categories flows', () => {
     await mockPublicCatalog(page);
   });
 
-  test('landing catalog CTA opens categories for anonymous users @smoke', async ({ page }) => {
+  test('landing start CTA opens categories for anonymous users @smoke', async ({ page }) => {
     await page.goto('/');
 
-    await page.getByRole('link', { name: /Открыть каталог/ }).click();
+    await page.getByRole('main').getByRole('link', { name: 'Начать' }).click();
 
     await expect(page).toHaveURL(/\/categories$/);
     await expect(page).not.toHaveURL(/\/login/);
