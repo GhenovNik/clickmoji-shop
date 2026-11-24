@@ -25,15 +25,63 @@ function isInside(child, parent) {
   return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
 }
 
-// Address for the containers: the process env carries it, argv never does.
-// localhost is not reachable from inside a container, so it maps to the host gateway.
-export function containerDatabaseUrl(rawUrl) {
+// libpq variables that carry the source connection into the containers. Containers receive
+// them by name (`-e PGHOST`), so no value is ever part of docker argv, and inside the
+// container pg_dump, psql and pg_restore read them from the environment, not from argv.
+export const LIBPQ_ENV_NAMES = Object.freeze([
+  'PGHOST',
+  'PGPORT',
+  'PGDATABASE',
+  'PGUSER',
+  'PGPASSWORD',
+  'PGSSLMODE',
+  'PGSSLROOTCERT',
+  'PGSSLCERT',
+  'PGSSLKEY',
+  'PGCONNECT_TIMEOUT',
+  'PGAPPNAME',
+  'PGCHANNELBINDING',
+  'PGOPTIONS',
+]);
+
+// URL query parameters that have a libpq environment equivalent. Any other parameter is
+// refused: silently dropping a connection option would change how the copy is taken.
+const QUERY_TO_LIBPQ = Object.freeze({
+  sslmode: 'PGSSLMODE',
+  sslrootcert: 'PGSSLROOTCERT',
+  sslcert: 'PGSSLCERT',
+  sslkey: 'PGSSLKEY',
+  connect_timeout: 'PGCONNECT_TIMEOUT',
+  application_name: 'PGAPPNAME',
+  channel_binding: 'PGCHANNELBINDING',
+  options: 'PGOPTIONS',
+});
+
+// Prisma's own parameter; libpq does not know it, so it is dropped on purpose.
+const IGNORED_QUERY = new Set(['schema']);
+
+// Connection settings as libpq environment variables. localhost is not reachable from
+// inside a container, so it maps to the host gateway.
+export function libpqEnv(rawUrl) {
   const parsed = new URL(rawUrl);
-  parsed.searchParams.delete('schema');
-  if (parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1') {
-    parsed.hostname = 'host.docker.internal';
+  const env = {};
+  for (const [key, value] of parsed.searchParams) {
+    if (IGNORED_QUERY.has(key)) continue;
+    const name = QUERY_TO_LIBPQ[key];
+    if (!name) throw new ConfigError(`DATABASE_URL: параметр ${key} не поддерживается`);
+    env[name] = value;
   }
-  return parsed.toString();
+  let host = parsed.hostname.replace(/^\[(.*)\]$/, '$1');
+  if (host === 'localhost' || host === '127.0.0.1') host = 'host.docker.internal';
+  env.PGHOST = host;
+  env.PGPORT = parsed.port || '5432';
+  const database = decodeURIComponent(parsed.pathname.replace(/^\//, ''));
+  if (database) env.PGDATABASE = database;
+  const user = decodeURIComponent(parsed.username);
+  if (user) env.PGUSER = user;
+  const password = decodeURIComponent(parsed.password);
+  if (password) env.PGPASSWORD = password;
+  return env;
 }
 
 export function readRecipient(text) {
@@ -62,6 +110,7 @@ export function loadConfig(
   if (protocol !== 'postgres:' && protocol !== 'postgresql:') {
     throw new ConfigError('DATABASE_URL: ожидается схема postgres');
   }
+  const containerEnv = libpqEnv(rawUrl);
 
   const backupDir = requireAbsolute(env, 'BACKUP_DIR');
   const statusFile = requireAbsolute(env, 'BACKUP_STATUS_FILE');
@@ -83,8 +132,7 @@ export function loadConfig(
   }
 
   return {
-    databaseUrl: rawUrl,
-    containerDatabaseUrl: containerDatabaseUrl(rawUrl),
+    containerEnv,
     backupDir,
     statusFile,
     recipientFile,

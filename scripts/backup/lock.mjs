@@ -4,6 +4,16 @@ import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { LOCK_NAME } from './constants.mjs';
 
+// True when a process with this pid exists (EPERM means it exists under another user).
+export function pidAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error.code === 'EPERM';
+  }
+}
+
 function ownerAlive(lockDir) {
   let pid;
   try {
@@ -12,12 +22,7 @@ function ownerAlive(lockDir) {
     return true; // the owner is still writing its pid: treat as busy
   }
   if (!Number.isInteger(pid) || pid <= 0) return true;
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return error.code === 'EPERM';
-  }
+  return pidAlive(pid);
 }
 
 // Returns { release() } or null when another live run holds the lock.

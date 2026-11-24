@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, it } from 'node:test';
-import { ConfigError, containerDatabaseUrl, loadConfig, REPO_ROOT } from '../config.mjs';
+import { ConfigError, libpqEnv, LIBPQ_ENV_NAMES, loadConfig, REPO_ROOT } from '../config.mjs';
 import {
   POSTGRES_BASE_DIGEST,
   POSTGRES_BASE_IMAGE,
@@ -105,15 +105,49 @@ describe('config', () => {
     assert.throws(bad('AGE-SECRET-KEY-1ABC'), (error) => !error.message.includes('AGE-SECRET'));
   });
 
-  it('maps localhost for containers and drops the schema parameter', () => {
-    assert.equal(
-      containerDatabaseUrl('postgresql://u:p@localhost:5432/db?schema=public&sslmode=disable'),
-      'postgresql://u:p@host.docker.internal:5432/db?sslmode=disable'
+  it('maps the address to libpq variables: host, port, database, user, password, ssl', () => {
+    assert.deepEqual(
+      libpqEnv('postgresql://u:p%40x@db.example.invalid/db?sslmode=require&schema=x'),
+      {
+        PGSSLMODE: 'require',
+        PGHOST: 'db.example.invalid',
+        PGPORT: '5432',
+        PGDATABASE: 'db',
+        PGUSER: 'u',
+        PGPASSWORD: 'p@x',
+      }
     );
-    assert.equal(
-      containerDatabaseUrl('postgresql://u:p@db.example.invalid/db?sslmode=require&schema=x'),
-      'postgresql://u:p@db.example.invalid/db?sslmode=require'
+  });
+
+  it('maps localhost to the host gateway for containers and keeps channel binding', () => {
+    const env = libpqEnv(
+      'postgresql://u:p@localhost:6543/db?schema=public&sslmode=disable&channel_binding=require'
     );
+    assert.equal(env.PGHOST, 'host.docker.internal');
+    assert.equal(env.PGPORT, '6543');
+    assert.equal(env.PGSSLMODE, 'disable');
+    assert.equal(env.PGCHANNELBINDING, 'require');
+    assert.equal('schema' in env, false, 'Prisma-only parameter is dropped');
+  });
+
+  it('refuses a connection parameter it cannot pass to libpq, without echoing its value', () => {
+    assert.throws(
+      () => libpqEnv('postgresql://u:p@h/db?pgbouncer=true&sslmode=require'),
+      (error) =>
+        error instanceof ConfigError &&
+        error.message === 'DATABASE_URL: параметр pgbouncer не поддерживается' &&
+        !error.message.includes('true')
+    );
+  });
+
+  it('only ever yields names libpq reads, and every one is forwarded by name', () => {
+    const env = libpqEnv(
+      'postgresql://u:p@h/db?sslmode=require&sslrootcert=/x/ca.pem&connect_timeout=5&application_name=b'
+    );
+    for (const name of Object.keys(env)) assert.ok(LIBPQ_ENV_NAMES.includes(name), name);
+    assert.equal(env.PGSSLROOTCERT, '/x/ca.pem');
+    assert.equal(env.PGCONNECT_TIMEOUT, '5');
+    assert.equal(env.PGAPPNAME, 'b');
   });
 });
 
@@ -288,14 +322,34 @@ describe('pins and docker arguments', () => {
     assert.ok(!all.includes('postgresql://'));
   });
 
-  it('forwards the database address by name only', () => {
-    const args = dumpArgs({ name: 'n1', workDir: '/tmp/x' });
-    const index = args.indexOf('-e');
-    assert.equal(args[index + 1], 'DATABASE_URL');
-    assert.equal(
-      args.some((arg) => arg.startsWith('DATABASE_URL=')),
-      false
-    );
+  it('forwards every libpq variable by name only, never with a value', () => {
+    for (const args of [
+      dumpArgs({ name: 'n1', workDir: '/tmp/x' }),
+      verifyArgs({ name: 'n2', workDir: '/tmp/x' }),
+    ]) {
+      const forwarded = args.flatMap((arg, i) => (arg === '-e' ? [args[i + 1]] : []));
+      assert.deepEqual(forwarded, [...LIBPQ_ENV_NAMES]);
+      assert.equal(
+        args.some((arg) => arg.includes('=') && arg.startsWith('PG')),
+        false,
+        'no PG variable with a value'
+      );
+      assert.equal(
+        args.some((arg) => arg.startsWith('DATABASE_URL')),
+        false,
+        'no URL variable'
+      );
+    }
+  });
+
+  it('the dump and verify steps run the committed scripts, with no address in their command', () => {
+    assert.equal(dumpArgs({ name: 'n1', workDir: '/tmp/x' }).at(-1), '/opt/backup/dump.sh');
+    assert.equal(verifyArgs({ name: 'n2', workDir: '/tmp/x' }).at(-1), '/opt/backup/verify.sh');
+    for (const script of ['dump.sh', 'verify.sh']) {
+      const text = containerFile(script);
+      assert.doesNotMatch(text, /DATABASE_URL|postgres(ql)?:\/\//, `${script} takes no URL`);
+      assert.doesNotMatch(text, /--dbname|\$PG_?URL/, `${script} passes no connection string`);
+    }
   });
 
   it('the sandbox helper lives outside the repository', () => {

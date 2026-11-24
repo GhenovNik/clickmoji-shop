@@ -60,7 +60,6 @@ export function syntheticDatabase() {
   const host = 'synthetic-db.test.invalid';
   return {
     url: `postgresql://app_user:${password}@${host}:5432/clickmoji?sslmode=require&schema=public`,
-    containerUrl: `postgresql://app_user:${password}@${host}:5432/clickmoji?sslmode=require`,
     password,
     host,
   };
@@ -86,7 +85,7 @@ export async function runWithFake(sandbox, db, extra = {}, now = NOW) {
   const config = loadConfig(env);
   const docker = new DockerRunner({
     bin: config.dockerBin,
-    containerDatabaseUrl: config.containerDatabaseUrl,
+    containerEnv: config.containerEnv,
     env,
   });
   return runBackup({ config, docker, now: () => now, tempRoot: sandbox.tmp });

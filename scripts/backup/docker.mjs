@@ -1,10 +1,12 @@
 // docker CLI wrapper. Argument builders are pure so tests can read exactly what runs.
-// The database address travels only in the environment (`-e DATABASE_URL` forwards the
-// variable by name); no argv contains it, including the command run inside a container.
+// The source connection travels only in the environment: every `-e NAME` below forwards a
+// libpq variable by name, so no argv (host or container) contains the address, host,
+// user or password. Inside the containers the tools read those variables themselves.
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { TOOLS_IMAGE } from './constants.mjs';
+import { LIBPQ_ENV_NAMES } from './config.mjs';
 
 export const CONTAINER_DIR = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -15,6 +17,9 @@ export class Interrupted extends Error {}
 
 const mount = (source, target, readonly = false) =>
   `type=bind,source=${source},target=${target}${readonly ? ',readonly' : ''}`;
+
+// ['-e', 'PGHOST', '-e', 'PGPORT', ...]: names only, every time, so the forwarded set is fixed.
+const forwardLibpq = () => LIBPQ_ENV_NAMES.flatMap((name) => ['-e', name]);
 
 export const versionArgs = () => ['version', '--format', '{{.Server.Version}}'];
 export const inspectImageArgs = () => ['image', 'inspect', TOOLS_IMAGE];
@@ -34,15 +39,15 @@ export function dumpArgs({ name, workDir }) {
     '--rm',
     '--name',
     name,
-    '-e',
-    'DATABASE_URL',
+    ...forwardLibpq(),
     '--mount',
     mount(workDir, '/work'),
+    '--mount',
+    mount(CONTAINER_DIR, '/opt/backup', true),
     '--entrypoint',
     '/bin/sh',
     TOOLS_IMAGE,
-    '-c',
-    'pg_dump "$DATABASE_URL" --format=custom --no-owner --no-privileges --serializable-deferrable --file=/work/dump.custom',
+    '/opt/backup/dump.sh',
   ];
 }
 
@@ -52,8 +57,7 @@ export function verifyArgs({ name, workDir }) {
     '--rm',
     '--name',
     name,
-    '-e',
-    'DATABASE_URL',
+    ...forwardLibpq(),
     '--mount',
     mount(workDir, '/work'),
     '--mount',
@@ -102,11 +106,15 @@ export function cleanupArgs({ name, workDir }) {
   ];
 }
 
-// Runs docker with the forwarded database address in its environment only.
+// Runs docker with the libpq variables in its environment. Variables from the caller's own
+// environment with the same names are removed first, so only the configured source is used.
 export class DockerRunner {
-  constructor({ bin = 'docker', containerDatabaseUrl, env = process.env }) {
+  constructor({ bin = 'docker', containerEnv, env = process.env }) {
     this.bin = bin;
-    this.env = { ...env, DATABASE_URL: containerDatabaseUrl };
+    const inherited = Object.fromEntries(
+      Object.entries(env).filter(([key]) => !LIBPQ_ENV_NAMES.includes(key))
+    );
+    this.env = { ...inherited, ...containerEnv };
     this.children = new Map(); // child -> Promise that settles when it closes
     this.containers = new Set();
     this.aborted = false;
@@ -124,8 +132,8 @@ export class DockerRunner {
   // Tracked call. Rejects with Interrupted if abort() happens before or while it runs.
   run(args) {
     if (this.aborted) return Promise.reject(new Interrupted('aborted'));
-    const name = args[args.indexOf('--name') + 1];
     const hasName = args.includes('--name');
+    const name = hasName ? args[args.indexOf('--name') + 1] : null;
     return new Promise((resolve, reject) => {
       const child = spawn(this.bin, args, { env: this.env, stdio: ['ignore', 'ignore', 'ignore'] });
       if (hasName) this.containers.add(name);

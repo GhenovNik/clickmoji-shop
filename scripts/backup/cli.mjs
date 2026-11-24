@@ -28,7 +28,7 @@ export async function main(env = process.env) {
 
   const docker = new DockerRunner({
     bin: config.dockerBin,
-    containerDatabaseUrl: config.containerDatabaseUrl,
+    containerEnv: config.containerEnv,
     env,
   });
   // The run finishes its cleanup (kill containers, remove plaintext, release the lock,

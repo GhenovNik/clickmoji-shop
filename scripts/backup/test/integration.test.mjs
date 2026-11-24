@@ -9,6 +9,7 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, it } from 'node:test';
 import { buildImageArgs, CONTAINER_DIR } from '../docker.mjs';
+import { libpqEnv, LIBPQ_ENV_NAMES } from '../config.mjs';
 import { EXIT, POSTGRES_BASE_IMAGE, TOOLS_IMAGE } from '../constants.mjs';
 import { CLI, listCopies, makeSandbox, readStatus } from './helpers.mjs';
 
@@ -30,6 +31,10 @@ INSERT INTO _prisma_migrations (id, checksum, finished_at, migration_name, appli
          ('2', 'y', now(), '20261124000000_add_ai_monthly_budgets', 1);
 INSERT INTO "User" (email) SELECT 'user' || g || '@example.invalid' FROM generate_series(1, 50) g;
 INSERT INTO "Product" (title) SELECT 'synthetic ' || g FROM generate_series(1, 7) g;
+-- A second schema: every user schema is compared, not only public.
+CREATE SCHEMA audit;
+CREATE TABLE audit.event (id serial PRIMARY KEY, kind text NOT NULL);
+INSERT INTO audit.event (kind) SELECT 'synthetic' FROM generate_series(1, 3) g;
 `;
 
 describe(
@@ -152,8 +157,9 @@ describe(
       );
       assert.equal(meta.verify, 'ok');
       assert.equal(meta.migration, '20261124000000_add_ai_monthly_budgets');
-      assert.equal(meta.counts.User, 50);
-      assert.equal(meta.counts.Product, 7);
+      assert.equal(meta.counts['public."User"'], 50);
+      assert.equal(meta.counts['public."Product"'], 7);
+      assert.equal(meta.counts['audit.event'], 3, 'a table outside public is counted');
     });
 
     it('a truncated dump fails the restore check', () => {
@@ -164,8 +170,7 @@ describe(
         [
           'run',
           '--rm',
-          '-e',
-          'DATABASE_URL',
+          ...LIBPQ_ENV_NAMES.flatMap((name) => ['-e', name]),
           '--mount',
           `type=bind,source=${work},target=/work`,
           '--mount',
@@ -175,7 +180,7 @@ describe(
           TOOLS_IMAGE,
           '/opt/backup/verify.sh',
         ],
-        { env: { ...process.env, DATABASE_URL: state.url } }
+        { env: { ...process.env, ...libpqEnv(state.url) } }
       );
       assert.notEqual(result.status, 0, 'verification of a corrupt dump fails');
       assert.doesNotMatch(`${result.stdout}${result.stderr}`, new RegExp(password));

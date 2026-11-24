@@ -37,7 +37,7 @@ import {
   parseIdentities,
   parseMigration,
 } from './compare.mjs';
-import { acquireLock } from './lock.mjs';
+import { acquireLock, pidAlive } from './lock.mjs';
 import { selectRetention } from './retention.mjs';
 import { appendStatus, formatStatusLine } from './status.mjs';
 import {
@@ -51,7 +51,10 @@ import {
   versionArgs,
 } from './docker.mjs';
 
-const STALE_TEMP_MS = 60 * 60 * 1000;
+// Written into every temporary directory before anything else goes in: which backup
+// directory the run serves and which process owns it. Directories without it are never
+// removed by a sweep.
+const TEMP_MARKER = 'owner.json';
 
 export class StepError extends Error {
   constructor(key, exit) {
@@ -92,18 +95,41 @@ function fsyncFile(file) {
   }
 }
 
-// Temp directories left behind by a run that was SIGKILLed. Only old ones are removed,
-// so a run in another backup directory that is still working is not disturbed.
-function sweepStaleTemp(tempRoot, nowMs) {
-  for (const entry of readdirSync(tempRoot)) {
+const backupKey = (backupDir) => crypto.createHash('sha256').update(backupDir).digest('hex');
+
+function removeQuietly(target) {
+  try {
+    rmSync(target, { recursive: true, force: true });
+  } catch {
+    // Left in place; the caller checks whether the directory is gone.
+  }
+}
+
+// Removes temporary directories that an earlier run of THIS backup directory left behind
+// (for example after SIGKILL). A directory is removed only when its marker names this backup
+// directory and a process that no longer exists. The caller holds this directory's lock, so
+// no live run of it can exist. Other backup directories, unmarked entries and entries of
+// live processes are never touched, whatever their age.
+function sweepStaleTemp(tempRoot, backupDir) {
+  let entries;
+  try {
+    entries = readdirSync(tempRoot);
+  } catch {
+    return;
+  }
+  const key = backupKey(backupDir);
+  for (const entry of entries) {
     if (!entry.startsWith(TEMP_PREFIX)) continue;
     const full = path.join(tempRoot, entry);
+    let marker;
     try {
-      if (nowMs - statSync(full).mtimeMs > STALE_TEMP_MS)
-        rmSync(full, { recursive: true, force: true });
+      marker = JSON.parse(readFileSync(path.join(full, TEMP_MARKER), 'utf8'));
     } catch {
-      // Not ours to fix; the run does not depend on it.
+      continue;
     }
+    if (marker?.backupKey !== key || !Number.isInteger(marker.pid)) continue;
+    if (pidAlive(marker.pid)) continue;
+    removeQuietly(full);
   }
 }
 
@@ -258,10 +284,10 @@ async function executeBackup({ config, docker, now, tempDir }) {
 // Returns true when the directory is gone. Container-written files may belong to another
 // uid, so a failed plain removal is retried from inside the tools image.
 async function removeTemp(tempDir, docker) {
-  rmSync(tempDir, { recursive: true, force: true });
+  removeQuietly(tempDir);
   if (!existsSync(tempDir)) return true;
   await docker.exec(cleanupArgs({ name: containerName('cleanup'), workDir: tempDir }));
-  rmSync(tempDir, { recursive: true, force: true });
+  removeQuietly(tempDir);
   return !existsSync(tempDir);
 }
 
@@ -302,17 +328,30 @@ export async function runBackup({
   let result;
   let tempDir = null;
   try {
-    sweepStaleTemp(tempRoot, now().getTime());
+    sweepStaleTemp(tempRoot, config.backupDir);
     tempDir = mkdtempSync(path.join(tempRoot, TEMP_PREFIX));
+    writeFileSync(
+      path.join(tempDir, TEMP_MARKER),
+      JSON.stringify({ pid: process.pid, backupKey: backupKey(config.backupDir) }),
+      { mode: 0o600 }
+    );
     result = { ok: true, ...(await executeBackup({ config, docker, now, tempDir })) };
   } catch (error) {
     result = classify(error);
-  } finally {
+  }
+  try {
     if (tempDir && !(await removeTemp(tempDir, docker))) {
       // Plaintext left on disk is reported even when the copy itself succeeded.
       result = { ok: false, key: 'cleanup', exit: EXIT.failed };
     }
-    lock.release();
+  } catch {
+    result = { ok: false, key: 'cleanup', exit: EXIT.failed };
+  } finally {
+    try {
+      lock.release();
+    } catch {
+      // A lock left behind names this process, which is gone when it exits; the next run takes it over.
+    }
   }
   return report(config, now, result);
 }
