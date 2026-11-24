@@ -4,7 +4,18 @@ import { fixtureUrl } from './helpers.mjs';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, it } from 'node:test';
-import { ConfigError, libpqEnv, LIBPQ_ENV_NAMES, loadConfig, REPO_ROOT } from '../config.mjs';
+import {
+  ConfigError,
+  libpqEnv,
+  LIBPQ_ENV_NAMES,
+  loadConfig,
+  parseDockerTimeout,
+  REPO_ROOT,
+} from '../config.mjs';
+import { Ledger, LedgerError } from '../ledger.mjs';
+import { DockerRunner } from '../docker.mjs';
+import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
+import os from 'node:os';
 import {
   POSTGRES_BASE_DIGEST,
   POSTGRES_BASE_IMAGE,
@@ -392,5 +403,60 @@ describe('pins and docker arguments', () => {
 
   it('the sandbox helper lives outside the repository', () => {
     assert.ok(!HERE.startsWith(REPO_ROOT + path.sep) || HERE.includes('scripts'));
+  });
+});
+
+describe('docker calls are bounded and a hung client is killed (B2, round 6)', () => {
+  it('a management call that never answers is killed and reported as timed out, not as an answer', async () => {
+    const runner = new DockerRunner({ bin: process.execPath, containerEnv: {}, env: process.env });
+    const started = Date.now();
+    const result = await runner.manage(['-e', 'setInterval(() => {}, 1000)'], { timeoutMs: 300 });
+    const elapsed = Date.now() - started;
+    assert.equal(result.timedOut, true);
+    assert.equal(result.code, 124, 'a timed-out call is a failure, never a zero exit');
+    assert.ok(
+      elapsed < 4000,
+      `the client was reaped on the kill, not after the fallback (${elapsed} ms)`
+    );
+  });
+
+  it('BACKUP_DOCKER_TIMEOUT_MS: unset means the default, a bad value is a configuration error', () => {
+    assert.equal(parseDockerTimeout(undefined), 20_000);
+    assert.equal(parseDockerTimeout(' 1500 '), 1500);
+    for (const bad of ['0', '50', '600001', 'abc', '1.5', '-1']) {
+      assert.throws(() => parseDockerTimeout(bad), ConfigError, `rejects ${bad}`);
+    }
+  });
+});
+
+describe('the ledger reads an older name-only file as pending (round 6)', () => {
+  it('a names-only ledger gives every name the pending state, which only a sighting can settle', () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'clickmoji-ledger-'));
+    try {
+      const name = 'clickmoji-backup-dump-0123456789ab';
+      writeFileSync(path.join(dir, '.backup.ledger'), JSON.stringify({ containers: [name] }));
+      assert.deepEqual(new Ledger(dir).entries(), [{ name, state: 'pending' }]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('states are written with the names, and an unknown state fails closed', () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'clickmoji-ledger-'));
+    try {
+      mkdirSync(dir, { recursive: true, mode: 0o700 });
+      const ledger = new Ledger(dir);
+      const name = 'clickmoji-backup-dump-0123456789ab';
+      ledger.add(name);
+      ledger.setState(name, 'exists');
+      assert.deepEqual(ledger.entries(), [{ name, state: 'exists' }]);
+      writeFileSync(
+        path.join(dir, '.backup.ledger'),
+        JSON.stringify({ containers: [name], states: { [name]: 'gone' } })
+      );
+      assert.throws(() => ledger.entries(), LedgerError);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

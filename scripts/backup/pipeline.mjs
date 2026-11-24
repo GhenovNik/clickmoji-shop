@@ -24,6 +24,7 @@ import {
   BACKUP_NAME_PATTERN,
   BACKUP_PREFIX,
   BACKUP_SUFFIX,
+  BUILD_TIMEOUT_MS,
   DROP_THRESHOLD_PERCENT,
   EXIT,
   META_DIR,
@@ -50,7 +51,6 @@ import {
   encryptArgs,
   inspectImageArgs,
   Interrupted,
-  removeArgs,
   verifyArgs,
   versionArgs,
 } from './docker.mjs';
@@ -212,18 +212,32 @@ function publish({ backupDir, encryptedFile, name, meta }) {
 // The lock is checked again before the copy becomes visible and before anything is pruned:
 // a run that no longer holds it must not touch the shared backup names.
 async function executeBackup({ config, docker, now, tempDir, lock }) {
-  // A step counts only when its client exited 0 AND the daemon has been seen to hold no container
-  // of its name. A zero exit alone is not proof: the daemon may be unreachable or still hold it.
+  // A container step counts only when its start exited 0 AND the daemon has been seen to hold no
+  // container of its name. A zero exit alone is not proof: the daemon may be unreachable or still
+  // hold it. A failure of the runner itself (a ledger that cannot be written) is a containers failure.
   const run = async (args, key, exit = EXIT.failed) => {
-    const result = await docker.run(args);
+    let result;
+    try {
+      result = await docker.run(args);
+    } catch (error) {
+      if (error instanceof Interrupted) throw error;
+      throw new StepError('containers', EXIT.failed);
+    }
     if (result.code !== 0) throw new StepError(key, exit);
     if (!result.absent) throw new StepError('containers', EXIT.failed);
   };
 
-  await run(versionArgs(), 'docker', EXIT.unavailable);
+  // Management calls are bounded by the runner. A call that does not answer is a failure here, never
+  // a result: nothing after it runs, and nothing is removed because of it.
+  const manage = async (args, key, exit, options) => {
+    const result = await docker.manage(args, options);
+    if (result.code !== 0) throw new StepError(key, exit);
+  };
 
-  if ((await docker.run(inspectImageArgs())).code !== 0) {
-    await run(buildImageArgs(), 'image', EXIT.unavailable);
+  await manage(versionArgs(), 'docker', EXIT.unavailable);
+
+  if ((await docker.manage(inspectImageArgs())).code !== 0) {
+    await manage(buildImageArgs(), 'image', EXIT.unavailable, { timeoutMs: BUILD_TIMEOUT_MS });
   }
 
   const startedAt = now();
@@ -307,20 +321,20 @@ async function executeBackup({ config, docker, now, tempDir, lock }) {
   return { name, sizeBytes: meta.sizeBytes, verify, pruned };
 }
 
-// Containers a previous run started and could not prove gone (or was killed before it could).
-// Each is removed again and must be proven absent; until all are, this run does nothing else.
+// Containers a previous run recorded and could not clear. Each is reconciled from the state the
+// ledger holds for it, and must be cleared; until all are, this run does nothing else. A name that is
+// still pending (its create was never seen) stays, and so does this run.
 async function recoverContainers(docker, ledger) {
-  let names;
+  let entries;
   try {
-    names = ledger.list();
+    entries = ledger.entries();
   } catch (error) {
     if (error instanceof LedgerError) throw new StepError('containers', EXIT.failed);
     throw error;
   }
-  for (const name of names) {
-    await docker.exec(removeArgs(name));
-    if (!(await docker.proveAbsent(name))) throw new StepError('containers', EXIT.failed);
-    ledger.remove(name);
+  for (const { name, state } of entries) {
+    if (!(await docker.reconcileRecorded(name, state)))
+      throw new StepError('containers', EXIT.failed);
   }
 }
 

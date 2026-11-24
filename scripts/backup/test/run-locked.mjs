@@ -12,7 +12,12 @@ const { env, now, tempRoot } = JSON.parse(input);
 
 const config = loadConfig(env);
 const lock = heldLock(config.backupDir, process.env);
-const docker = new DockerRunner({ bin: config.dockerBin, containerEnv: config.containerEnv, env });
+const docker = new DockerRunner({
+  bin: config.dockerBin,
+  containerEnv: config.containerEnv,
+  timeoutMs: config.dockerTimeoutMs,
+  env,
+});
 for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
   process.on(signal, () => {
     docker.shutdown().catch(() => {});

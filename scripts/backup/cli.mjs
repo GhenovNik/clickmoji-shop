@@ -5,7 +5,8 @@
 //   BACKUP_DIR                    absolute directory outside the repository
 //   BACKUP_STATUS_FILE            absolute status file outside the repository
 //   BACKUP_AGE_RECIPIENT_FILE     file holding one public age recipient (age1...)
-// Optional: BACKUP_DOCKER_BIN (default "docker").
+// Optional: BACKUP_DOCKER_BIN (default "docker"); BACKUP_DOCKER_TIMEOUT_MS (ms a management docker call
+// may take before it is killed and its outcome counted as unknown; default 20000).
 // Exit codes: 0 ok, 1 failed (old copies intact), 2 published but flagged, 3 busy,
 // 4 docker or image unavailable, 5 copy published but its status line could not be written,
 // 130 interrupted.
@@ -49,6 +50,7 @@ export async function main(env = process.env) {
   const docker = new DockerRunner({
     bin: config.dockerBin,
     containerEnv: config.containerEnv,
+    timeoutMs: config.dockerTimeoutMs,
     env,
   });
   // The run stops its containers (and proves them gone), then removes plaintext, releases the

@@ -11,14 +11,21 @@
 // removes it (`docker rm -f`), as a daemon keeps it when its client was killed.
 // FAKE_DOCKER_PS=fail makes `docker ps` fail: the daemon cannot be asked, so no absence is proven.
 // FAKE_DOCKER_PS=fail-cleanup makes it fail only for cleanup containers: the fallback is unproven.
+// FAKE_DOCKER_HANG=<cmd,...> makes the named subcommands (version, image, build, ps, rm, create,
+// start) never answer: the client stays alive until the caller kills it.
+// FAKE_DOCKER_CREATE=fail makes `docker create` answer with an error, without creating anything.
+// FAKE_DOCKER_LATE_CREATE=<gate file> makes `docker create` hang, as a client whose request the daemon
+// has not answered. The daemon still creates the container once the gate file exists, even after the
+// client has been killed: the create lands at a time the test chooses.
 // FAKE_SWAP_STATUS=<path> replaces the status file by a directory when the run starts, so the
 // status line cannot be written any more (the path was replaced after configuration).
-// Each `docker run` with --name is logged with ledgerHas: whether FAKE_WATCH_LEDGER (the ledger
+// Each `docker create` with --name is logged with ledgerHas: whether FAKE_WATCH_LEDGER (the ledger
 // file) already named that container at the moment it started.
 //
-// Containers live in FAKE_DOCKER_STATE/containers (one file per name, --rm removes it when the
-// container exits normally). Container output goes to FAKE_DAEMON_LOG unless the container was
-// started with `--log-driver none`, which is how the daemon's own log is emulated.
+// Containers live in FAKE_DOCKER_STATE/containers (one file per name, holding the create argv). `create`
+// registers the container; `start -a` runs it with the arguments it was created with; --rm removes it when
+// it exits normally. Container output goes to FAKE_DAEMON_LOG unless the container was created with
+// `--log-driver none`, which is how the daemon's own log is emulated.
 // Every removal is recorded in FAKE_DOCKER_STATE/events.jsonl with whether the work directory
 // existed and whether the backup lock was still held at that moment.
 import {
@@ -31,7 +38,7 @@ import {
   rmSync,
   writeFileSync,
 } from 'node:fs';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import path from 'node:path';
 
 // Source variables the host forwards by name. Values are compared in memory.
@@ -53,10 +60,13 @@ const PG_NAMES = [
 ];
 const expected = JSON.parse(process.env.FAKE_EXPECTED_CONNECTION ?? '{}');
 
-const argv = process.argv.slice(2);
+// The invocation's own argv. A `start` runs with the argv its container was created with.
+let argv = process.argv.slice(2);
+const command = argv[0];
 const mode = process.env.FAKE_DOCKER_MODE || 'ok';
 const STATE = process.env.FAKE_DOCKER_STATE;
 const REGISTRY = STATE ? path.join(STATE, 'containers') : null;
+const HANG = new Set((process.env.FAKE_DOCKER_HANG ?? '').split(',').filter(Boolean));
 
 if (process.env.FAKE_DOCKER_LOG) {
   const nameArg = argv.includes('--name') ? argv[argv.indexOf('--name') + 1] : null;
@@ -139,55 +149,137 @@ function writeReports(workDir) {
   }
 }
 
-if (argv[0] === 'version') {
-  if (process.env.FAKE_SWAP_STATUS) {
-    rmSync(process.env.FAKE_SWAP_STATUS, { recursive: true, force: true });
-    mkdirSync(process.env.FAKE_SWAP_STATUS);
-  }
-  if (mode === 'docker-down') {
-    // Real docker may echo the connection string; the pipeline must not forward it.
-    process.stderr.write(`Cannot connect to ${process.env.PGPASSWORD ?? ''}\n`);
-    process.exit(1);
-  }
-  process.stdout.write('29.9.3\n');
-  process.exit(0);
+// Never answers. The caller's timeout is what ends this client.
+function hang() {
+  setInterval(() => {}, 1000);
 }
 
-if (argv[0] === 'image' && argv[1] === 'inspect') process.exit(mode === 'pull-fail' ? 1 : 0);
-if (argv[0] === 'build') process.exit(mode === 'pull-fail' ? 1 : 0);
-
-if (argv[0] === 'ps') {
-  if (process.env.FAKE_DOCKER_PS === 'fail') process.exit(1);
-  const filter = optionValue('--filter') ?? '';
-  const match = /^name=\^(.*)\$$/.exec(filter);
-  if (process.env.FAKE_DOCKER_PS === 'fail-cleanup' && match?.[1].includes('-cleanup-'))
-    process.exit(1);
-  if (!match || !REGISTRY || !existsSync(REGISTRY)) process.exit(0);
-  for (const entry of readdirSync(REGISTRY)) {
-    if (entry === match[1]) process.stdout.write(`${entry}\n`);
+// Writes a container registration once FAKE_DOCKER_LATE_CREATE's gate file exists. Runs detached, so
+// it outlives the create client that the test kills. Its inputs come from the environment.
+const LATE_WRITER = `
+const fs = require('fs');
+const path = require('path');
+const deadline = Date.now() + 60000;
+const timer = setInterval(() => {
+  if (fs.existsSync(process.env.GATE)) {
+    clearInterval(timer);
+    fs.mkdirSync(path.dirname(process.env.FILE), { recursive: true });
+    fs.writeFileSync(process.env.FILE, process.env.BODY);
+    process.exit(0);
   }
-  process.exit(0);
+  if (Date.now() > deadline) process.exit(0);
+}, 20);
+`;
+
+function main() {
+  if (HANG.has(command)) return hang();
+
+  if (command === 'version') {
+    if (process.env.FAKE_SWAP_STATUS) {
+      rmSync(process.env.FAKE_SWAP_STATUS, { recursive: true, force: true });
+      mkdirSync(process.env.FAKE_SWAP_STATUS);
+    }
+    if (mode === 'docker-down') {
+      // Real docker may echo the connection string; the pipeline must not forward it.
+      process.stderr.write(`Cannot connect to ${process.env.PGPASSWORD ?? ''}\n`);
+      process.exit(1);
+    }
+    process.stdout.write('29.9.3\n');
+    process.exit(0);
+  }
+
+  if (command === 'image' && argv[1] === 'inspect') process.exit(mode === 'pull-fail' ? 1 : 0);
+  if (command === 'build') process.exit(mode === 'pull-fail' ? 1 : 0);
+
+  if (command === 'ps') {
+    if (process.env.FAKE_DOCKER_PS === 'fail') process.exit(1);
+    const filter = optionValue('--filter') ?? '';
+    const match = /^name=\^(.*)\$$/.exec(filter);
+    if (process.env.FAKE_DOCKER_PS === 'fail-cleanup' && match?.[1].includes('-cleanup-'))
+      process.exit(1);
+    if (!match || !REGISTRY || !existsSync(REGISTRY)) process.exit(0);
+    for (const entry of readdirSync(REGISTRY)) {
+      if (entry === match[1]) process.stdout.write(`${entry}\n`);
+    }
+    process.exit(0);
+  }
+
+  if (command === 'rm') {
+    const name = argv[argv.length - 1];
+    if (process.env.FAKE_DOCKER_RM === 'fail' || !containerExists(name)) process.exit(1);
+    const stored = JSON.parse(readFileSync(containerFile(name), 'utf8'));
+    const work = mountFrom(stored.argv, '/work');
+    const lock = process.env.FAKE_WATCH_LOCK ?? null;
+    recordEvent({
+      op: 'rm',
+      name,
+      workDirExists: work ? existsSync(work) : null,
+      lockHeld: lock ? lockHeldBy(lock) : null,
+    });
+    rmSync(containerFile(name), { force: true });
+    process.exit(0);
+  }
+
+  if (command === 'create') {
+    const name = optionValue('--name');
+    const body = JSON.stringify({ argv });
+    if (process.env.FAKE_DOCKER_CREATE === 'fail') process.exit(1);
+    if (process.env.FAKE_DOCKER_LATE_CREATE) {
+      // The daemon takes the request, but the client never hears back in time: the create lands only
+      // when the test releases the gate, and this client is the one the caller kills.
+      mkdirSync(REGISTRY, { recursive: true });
+      spawn(process.execPath, ['-e', LATE_WRITER], {
+        detached: true,
+        stdio: 'ignore',
+        env: {
+          GATE: process.env.FAKE_DOCKER_LATE_CREATE,
+          FILE: containerFile(name),
+          BODY: body,
+        },
+      }).unref();
+      return hang();
+    }
+    mkdirSync(REGISTRY, { recursive: true });
+    writeFileSync(containerFile(name), body);
+    process.exit(0);
+  }
+
+  if (command === 'start') {
+    const name = argv[argv.length - 1];
+    if (!containerExists(name)) process.exit(1);
+    // The container runs with the arguments it was created with.
+    argv = JSON.parse(readFileSync(containerFile(name), 'utf8')).argv;
+    const quiet = optionValue('--log-driver') === 'none';
+    const code = runContainer(quiet);
+    if (code === undefined) {
+      // Keeps running: the container stays registered. Its client lives as long as the container and
+      // exits when `docker rm -f` removes it, as a real client does.
+      setInterval(() => {
+        if (!existsSync(containerFile(name))) process.exit(0);
+      }, 50);
+      return undefined;
+    }
+    if (argv.includes('--rm')) rmSync(containerFile(name), { force: true });
+    process.exit(code);
+  }
+
+  process.exit(2);
+}
+
+// Host directory mounted at /work in the argv a container was created with.
+function mountFrom(list, target) {
+  for (let i = 0; i < list.length; i += 1) {
+    if (list[i] !== '--mount') continue;
+    const match = /source=([^,]+),target=([^,]+)/.exec(list[i + 1]);
+    if (match && match[2] === target) return match[1];
+  }
+  return null;
 }
 
 // True while another open file description holds an exclusive flock on the lock file.
 function lockHeldBy(file) {
   const probe = 'open my $f, "<", $ARGV[0] or exit 2; exit(flock($f, LOCK_EX | LOCK_NB) ? 0 : 3);';
   return spawnSync('/usr/bin/perl', ['-MFcntl=:flock', '-e', probe, file]).status === 3;
-}
-
-if (argv[0] === 'rm') {
-  const name = argv[argv.length - 1];
-  if (process.env.FAKE_DOCKER_RM === 'fail' || !containerExists(name)) process.exit(1);
-  const work = JSON.parse(readFileSync(containerFile(name), 'utf8')).workDir;
-  const lock = process.env.FAKE_WATCH_LOCK ?? null;
-  recordEvent({
-    op: 'rm',
-    name,
-    workDirExists: work ? existsSync(work) : null,
-    lockHeld: lock ? lockHeldBy(lock) : null,
-  });
-  rmSync(containerFile(name), { force: true });
-  process.exit(0);
 }
 
 // Returns the container's exit code, or undefined when the container keeps running.
@@ -235,25 +327,4 @@ function runContainer(quiet) {
   return 2;
 }
 
-if (argv[0] === 'run') {
-  const name = optionValue('--name');
-  const quiet = optionValue('--log-driver') === 'none';
-  if (name && REGISTRY) {
-    mkdirSync(REGISTRY, { recursive: true });
-    writeFileSync(containerFile(name), JSON.stringify({ workDir: mountSource('/work') }));
-  }
-  const code = runContainer(quiet);
-  if (code === undefined) {
-    // Keeps running: the container stays registered. Its client lives as long as the container and
-    // exits when `docker rm -f` removes it, as a real client does.
-    if (name && REGISTRY)
-      setInterval(() => {
-        if (!existsSync(containerFile(name))) process.exit(0);
-      }, 50);
-  } else {
-    if (name && REGISTRY) rmSync(containerFile(name), { force: true }); // --rm
-    process.exit(code);
-  }
-} else {
-  process.exit(2);
-}
+main();

@@ -12,6 +12,12 @@ export const TOOLS_IMAGE = `clickmoji-backup-tools:pg17-${POSTGRES_BASE_DIGEST.s
 // A table whose row count falls by more than this share versus the previous good copy is flagged.
 export const DROP_THRESHOLD_PERCENT = 20;
 
+// Bounds for docker calls that are not container runs: version, ps, rm, create, image inspect.
+// A call that does not answer in time is killed and its outcome is unknown. The default may be
+// overridden with BACKUP_DOCKER_TIMEOUT_MS (milliseconds, see config.mjs). Image build is slower.
+export const DOCKER_TIMEOUT_MS = 20_000;
+export const BUILD_TIMEOUT_MS = 15 * 60_000;
+
 // Keep at most 7 daily, 4 weekly and 3 monthly copies (14 in total).
 export const RETENTION = Object.freeze({ daily: 7, weekly: 4, monthly: 3 });
 

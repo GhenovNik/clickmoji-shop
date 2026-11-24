@@ -6,7 +6,7 @@
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { TEMP_MARKER, TOOLS_IMAGE } from './constants.mjs';
+import { DOCKER_TIMEOUT_MS, TEMP_MARKER, TOOLS_IMAGE } from './constants.mjs';
 import { LIBPQ_ENV_NAMES } from './config.mjs';
 
 export const CONTAINER_DIR = path.resolve(
@@ -18,6 +18,8 @@ export class Interrupted extends Error {}
 
 // How long a docker client may take to close after a stop step before the next step runs.
 export const STOP_GRACE_MS = 5000;
+// After a timed-out client is killed, how long we wait for it to be reaped before giving up on it.
+const REAP_MS = 5000;
 
 const mount = (source, target, readonly = false) =>
   `type=bind,source=${source},target=${target}${readonly ? ',readonly' : ''}`;
@@ -57,10 +59,14 @@ export const listNamedArgs = (name) => [
   '{{.Names}}',
 ];
 export const removeArgs = (name) => ['rm', '-f', name];
+// The container is created first (`create`, bounded) and only then started (`start -a`, which
+// runs for as long as the step takes). Splitting the two gives a point at which the daemon is
+// known to hold the container: once `create` has exited 0.
+export const startArgs = (name) => ['start', '-a', name];
 
 export function dumpArgs({ name, workDir }) {
   return [
-    'run',
+    'create',
     '--rm',
     '--name',
     name,
@@ -79,7 +85,7 @@ export function dumpArgs({ name, workDir }) {
 
 export function verifyArgs({ name, workDir }) {
   return [
-    'run',
+    'create',
     '--rm',
     '--name',
     name,
@@ -98,7 +104,7 @@ export function verifyArgs({ name, workDir }) {
 
 export function encryptArgs({ name, workDir, recipientFile }) {
   return [
-    'run',
+    'create',
     '--rm',
     '--name',
     name,
@@ -120,7 +126,7 @@ export function encryptArgs({ name, workDir, recipientFile }) {
 
 export function cleanupArgs({ name, workDir }) {
   return [
-    'run',
+    'create',
     '--rm',
     '--name',
     name,
@@ -138,140 +144,230 @@ export function cleanupArgs({ name, workDir }) {
 
 const nameOf = (args) => (args.includes('--name') ? args[args.indexOf('--name') + 1] : null);
 
+// What the daemon is known to hold for a container name, as recorded in the ledger:
+//   pending  - a create was sent and its outcome is not known. The daemon may still create it,
+//              at any later time. Only seeing it in a listing settles that.
+//   settled  - the create client exited by itself (not signalled, not timed out), so the daemon
+//              has answered and nothing is pending. A name it did not create is absent for good.
+//   exists   - the daemon has shown the container: create exited 0, or a listing showed it.
+// An empty listing clears a name only from `settled` or `exists`, never from `pending`.
+export const STATES = Object.freeze(['pending', 'settled', 'exists']);
+
 // Runs docker with the libpq variables in its environment. Variables from the caller's own
 // environment with the same names are removed first, so only the configured source is used.
 //
-// Container identities are kept from the moment a `docker run` starts until the daemon has
-// shown that the container is gone. Killing the client does not remove its container, so the
-// identity is never dropped because a client exited; shutdown() removes what is left.
+// Every container of this tool goes through #container(), cleanup included: create, then start,
+// then reconcile. A result reports `absent` only after the daemon has been asked, the name is no
+// longer pending, and nothing lists it. Callers must treat `absent: false` as a failure, because
+// the container may still exist and may still write.
 //
-// Every container of this tool goes through #start(), cleanup included. A client's exit code is
-// not evidence that its container is gone: a result reports `absent` only after the daemon has
-// been asked and listed no container of that name. Callers must treat `absent: false` as a
-// failure, because the container may still exist and may still write.
+// Every management call is bounded (timeoutMs). A client that does not answer in time is killed
+// and reaped, and its outcome is treated as unknown, never as a result.
 export class DockerRunner {
-  constructor({ bin = 'docker', containerEnv, env = process.env }) {
+  constructor({ bin = 'docker', containerEnv, env = process.env, timeoutMs = DOCKER_TIMEOUT_MS }) {
     this.bin = bin;
+    this.timeoutMs = timeoutMs;
     const inherited = Object.fromEntries(
       Object.entries(env).filter(([key]) => !SOURCE_ENV_NAMES.includes(key))
     );
     this.env = { ...inherited, ...containerEnv };
-    this.children = new Map(); // child -> Promise that settles when it closes
-    this.containers = new Set(); // names whose removal has not been proven yet
+    this.children = new Map(); // tracked child -> { signalled, closed }
+    this.containers = new Map(); // name -> state (see STATES), for names not yet cleared
     this.aborted = false;
     this.shutdownPromise = null;
     this.ledger = null; // set by the pipeline once the lock is held
   }
 
-  // Containers are recorded in the ledger before they start, and forgotten only once absent.
+  // Containers are recorded in the ledger before they are created, and forgotten only once absent.
   bindLedger(ledger) {
     this.ledger = ledger;
   }
 
-  // Unchecked call, used for removal only. Resolves with the exit code.
-  exec(args) {
+  // One client, bounded when timeoutMs is set. A tracked client is one a shutdown must stop. A
+  // client that outlives its timeout is killed; it is reported as timedOut and never as a result.
+  // Resolves { code, signal, signalled, timedOut, stdout }. `signalled` is true when this process
+  // sent it a signal: its daemon request may then still be pending.
+  #spawnOnce(args, { timeoutMs = null, tracked = false, capture = false } = {}) {
     return new Promise((resolve) => {
-      const child = spawn(this.bin, args, { env: this.env, stdio: ['ignore', 'ignore', 'ignore'] });
-      child.on('error', () => resolve(127));
-      child.on('close', (code) => resolve(code ?? 128));
-    });
-  }
-
-  // Unchecked call that returns stdout as well.
-  query(args) {
-    return new Promise((resolve) => {
-      const child = spawn(this.bin, args, { env: this.env, stdio: ['ignore', 'pipe', 'ignore'] });
-      let stdout = '';
-      child.stdout.on('data', (chunk) => {
-        stdout += chunk;
+      const child = spawn(this.bin, args, {
+        env: this.env,
+        stdio: ['ignore', capture ? 'pipe' : 'ignore', 'ignore'],
       });
-      child.on('error', () => resolve({ code: 127, stdout: '' }));
-      child.on('close', (code) => resolve({ code: code ?? 128, stdout }));
+      const record = { signalled: false, closed: null };
+      let settleClosed;
+      record.closed = new Promise((done) => {
+        settleClosed = done;
+      });
+      if (tracked) this.children.set(child, record);
+      let stdout = '';
+      if (capture)
+        child.stdout.on('data', (chunk) => {
+          stdout += chunk;
+        });
+      let timedOut = false;
+      let finished = false;
+      let timer = null;
+      const finish = (code, signal) => {
+        if (finished) return;
+        finished = true;
+        clearTimeout(timer);
+        resolve({
+          code: timedOut ? 124 : (code ?? (signal ? 128 : 1)),
+          signal: signal ?? null,
+          signalled: record.signalled,
+          timedOut,
+          stdout,
+        });
+      };
+      child.on('error', () => finish(127, null));
+      child.on('close', (code, signal) => {
+        this.children.delete(child);
+        settleClosed();
+        finish(code, signal);
+      });
+      if (timeoutMs) {
+        timer = setTimeout(() => {
+          timedOut = true;
+          record.signalled = true;
+          child.kill('SIGKILL');
+          // Reaping normally takes a moment; the caller is not held beyond REAP_MS.
+          setTimeout(() => finish(null, 'SIGKILL'), REAP_MS).unref();
+        }, timeoutMs);
+      }
     });
   }
 
-  // True only when the daemon answers and lists no container with this name.
-  async proveAbsent(name) {
-    const result = await this.query(listNamedArgs(name));
-    return result.code === 0 && result.stdout.trim() === '';
+  // Management call that is not a container: version, image inspect, build. Bounded and untracked.
+  async manage(args, { timeoutMs = this.timeoutMs } = {}) {
+    if (this.aborted) throw new Interrupted('aborted');
+    const result = await this.#spawnOnce(args, { timeoutMs });
+    if (this.aborted) throw new Interrupted('aborted');
+    return result;
   }
 
-  // Proves `name` absent and, only then, forgets it (ledger first, then the set). Returns false
-  // when the container may still exist or when the ledger cannot be updated: the identity stays.
-  async #forgetIfAbsent(name) {
-    if (!(await this.proveAbsent(name))) return false;
+  // The daemon's answer about a name: 'present' when listed, 'absent' when the daemon answered
+  // with an empty listing, 'unknown' when it did not answer or failed.
+  async #observe(name) {
+    const result = await this.#spawnOnce(listNamedArgs(name), {
+      timeoutMs: this.timeoutMs,
+      capture: true,
+    });
+    if (result.code !== 0) return 'unknown';
+    return result.stdout.trim() === '' ? 'absent' : 'present';
+  }
+
+  #setState(name, state) {
+    this.ledger?.setState(name, state); // durable first; throws when the ledger cannot be written
+    this.containers.set(name, state);
+  }
+
+  // Clears a name only when it is absent and the daemon's answer about it is final: from `settled`
+  // or `exists`. A pending name is never removed and never cleared here: a create may still land, and
+  // a removal would erase the only evidence of it. Removal of a settled or existing name is followed by
+  // a fresh listing, which is the proof; the removal itself is never the proof.
+  // Returns true only when the name is cleared.
+  async #reconcile(name) {
+    const first = await this.#observe(name);
+    if (first === 'present') this.#setState(name, 'exists');
+    if (this.containers.get(name) === 'pending') return false;
+    await this.#spawnOnce(removeArgs(name), { timeoutMs: this.timeoutMs });
+    const seen = await this.#observe(name);
+    if (seen === 'present') this.#setState(name, 'exists');
+    if (seen !== 'absent') return false;
     try {
       this.ledger?.remove(name);
-      this.containers.delete(name);
-      return true;
+    } catch {
+      return false;
+    }
+    this.containers.delete(name);
+    return true;
+  }
+
+  // Never throws: any failure keeps the name.
+  async #reconcileSafely(name) {
+    try {
+      return await this.#reconcile(name);
     } catch {
       return false;
     }
   }
 
-  // Tracked call. Rejects with Interrupted if abort() happens before or while it runs.
-  async run(args) {
+  // create (bounded) -> start -a (unbounded) -> reconcile. The identity is recorded before create.
+  // `boundedStart` is for the cleanup step only: it is a short removal, and once its create has exited 0
+  // the container is known to exist, so a start that does not finish is killed and the container removed.
+  async #container(createArgs, { afterAbort = false, boundedStart = false } = {}) {
+    const name = nameOf(createArgs);
+    this.ledger?.add(name); // durable before the daemon can know about the container
+    this.containers.set(name, 'pending');
+    const created = await this.#spawnOnce(createArgs, {
+      timeoutMs: this.timeoutMs,
+      tracked: true,
+    });
+    if (created.code === 0) {
+      this.#setState(name, 'exists');
+    } else if (!created.signalled && created.signal === null) {
+      // The client answered on its own, so the daemon's reply is in. Nothing is pending.
+      this.#setState(name, 'settled');
+    }
+    if (created.code !== 0) {
+      return { code: created.code, absent: await this.#reconcileSafely(name) };
+    }
+    if (this.aborted && !afterAbort) {
+      // A stop arrived while the create was in flight: the container is known, so it is removed.
+      return { code: 130, absent: await this.#reconcileSafely(name) };
+    }
+    const started = await this.#spawnOnce(startArgs(name), {
+      tracked: true,
+      timeoutMs: boundedStart ? this.timeoutMs : null,
+    });
+    return { code: started.code, absent: await this.#reconcileSafely(name) };
+  }
+
+  // Tracked container step. Rejects with Interrupted if abort() happens before or while it runs.
+  async run(createArgs) {
     if (this.aborted) throw new Interrupted('aborted');
-    const result = await this.#start(args);
+    const result = await this.#container(createArgs);
     if (this.aborted) throw new Interrupted('aborted');
     return result;
   }
 
-  // Tracked call that is allowed after shutdown(): the cleanup of the temporary directory runs once
-  // every earlier container is proven gone, and it is tracked exactly like any other container.
-  runAfterShutdown(args) {
-    return this.#start(args);
+  // Tracked container step that is allowed after shutdown(): the cleanup of the temporary directory
+  // runs once every earlier container is proven gone, and it is tracked exactly like any other.
+  runAfterShutdown(createArgs) {
+    return this.#container(createArgs, { afterAbort: true, boundedStart: true });
   }
 
-  // Starts one container. Resolves { code, absent }. The ledger write happens before spawn, so a
-  // container that can exist is always recorded, even when this process dies right after.
-  #start(args) {
-    const name = nameOf(args);
-    if (name) {
-      this.ledger?.add(name); // durable before the daemon can know about the container
-      this.containers.add(name);
-    }
-    return new Promise((resolve) => {
-      const child = spawn(this.bin, args, { env: this.env, stdio: ['ignore', 'ignore', 'ignore'] });
-      let settle;
-      const closed = new Promise((done) => {
-        settle = done;
-      });
-      this.children.set(child, closed);
-      let finished = false;
-      const finish = async (code) => {
-        if (finished) return;
-        finished = true;
-        this.children.delete(child);
-        settle();
-        const absent = name ? await this.#forgetIfAbsent(name) : true;
-        resolve({ code, absent });
-      };
-      child.on('error', () => finish(127));
-      child.on('close', (code) => finish(code ?? 128));
-    });
+  // A name recorded by an earlier run, with the state the ledger holds for it.
+  async reconcileRecorded(name, state) {
+    this.containers.set(name, state);
+    return this.#reconcileSafely(name);
   }
 
-  // Stops this run: kills running docker clients, removes every container whose identity is still
+  // Stops this run: signals running docker clients, removes every container whose identity is still
   // known and proves each one absent. Resolves true only when no identity is left. Memoized: every
   // caller gets the same result. A signal that arrives later still stops any client that is running
-  // (the cleanup container, for example), since the clients are killed on every call; the containers
-  // themselves are removed by settle().
+  // (the cleanup container, for example), since the clients are signalled on every call.
   shutdown() {
     this.aborted = true;
-    for (const child of this.children.keys()) child.kill('SIGTERM');
+    for (const [child, record] of this.children) {
+      record.signalled = true;
+      child.kill('SIGTERM');
+    }
     this.shutdownPromise ??= this.stopChildren();
     return this.shutdownPromise;
   }
 
-  // Order matters. SIGTERM to the docker client is forwarded to its container, whose PID 1 is a
+  // Order matters. SIGTERM to the start client is forwarded to its container, whose PID 1 is a
   // shell that ignores it while a child (pg_dump) is blocked: the client then never closes. So no
   // step waits on a client without a bound, and containers are removed by name before the last wait.
   async stopChildren() {
     await this.#closed(STOP_GRACE_MS);
     if (this.children.size > 0) await this.settle();
     await this.#closed(STOP_GRACE_MS);
-    for (const child of this.children.keys()) child.kill('SIGKILL');
+    for (const [child, record] of this.children) {
+      record.signalled = true;
+      child.kill('SIGKILL');
+    }
     await this.#closed(STOP_GRACE_MS);
     return this.settle();
   }
@@ -280,7 +376,7 @@ export class DockerRunner {
   #closed(ms) {
     return new Promise((resolve) => {
       const timer = setTimeout(resolve, ms);
-      Promise.all([...this.children.values()]).then(() => {
+      Promise.all([...this.children.values()].map((record) => record.closed)).then(() => {
         clearTimeout(timer);
         resolve();
       });
@@ -288,14 +384,10 @@ export class DockerRunner {
   }
 
   // Removes and proves absent every container whose identity is still known. Up to three rounds;
-  // a container that stays unproven keeps its identity and its ledger entry. True only when none is left.
+  // a name that stays unproven keeps its identity and its ledger entry. True only when none is left.
   async settle() {
     for (let attempt = 0; attempt < 3 && this.containers.size > 0; attempt += 1) {
-      for (const name of [...this.containers]) {
-        if (await this.#forgetIfAbsent(name)) continue;
-        await this.exec(removeArgs(name));
-        await this.#forgetIfAbsent(name);
-      }
+      for (const name of [...this.containers.keys()]) await this.#reconcileSafely(name);
     }
     return this.containers.size === 0;
   }

@@ -3,6 +3,7 @@
 import { lstatSync, readFileSync, realpathSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { DOCKER_TIMEOUT_MS } from './constants.mjs';
 
 export const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 
@@ -178,5 +179,16 @@ export function loadConfig(
     recipientFile,
     recipient,
     dockerBin: env.BACKUP_DOCKER_BIN?.trim() || 'docker',
+    dockerTimeoutMs: parseDockerTimeout(env.BACKUP_DOCKER_TIMEOUT_MS),
   };
+}
+
+// Milliseconds a management docker call may take (see DOCKER_TIMEOUT_MS). Unset means the default.
+export function parseDockerTimeout(raw) {
+  if (raw === undefined || raw.trim() === '') return DOCKER_TIMEOUT_MS;
+  const value = raw.trim();
+  if (!/^\d+$/.test(value)) throw new ConfigError('BACKUP_DOCKER_TIMEOUT_MS: нужно целое число мс');
+  const ms = Number(value);
+  if (ms < 100 || ms > 600_000) throw new ConfigError('BACKUP_DOCKER_TIMEOUT_MS: от 100 до 600000');
+  return ms;
 }

@@ -292,11 +292,11 @@ describe('interruption stops containers before anything is removed', () => {
     );
     assert.equal(await lockIsFree(sandbox.backupDir), true, 'the lock is free; the ledger blocks');
 
-    const runsBefore = readDockerLog(sandbox).filter((call) => call.argv[0] === 'run').length;
+    const runsBefore = readDockerLog(sandbox).filter((call) => call.argv[0] === 'create').length;
     const blocked = await runWithFake(sandbox, db, { FAKE_DOCKER_RM: 'fail' });
     assert.equal(blocked.key, 'containers');
     assert.equal(
-      readDockerLog(sandbox).filter((call) => call.argv[0] === 'run').length,
+      readDockerLog(sandbox).filter((call) => call.argv[0] === 'create').length,
       runsBefore,
       'no container is started while the ledger is not clear'
     );
@@ -314,7 +314,7 @@ describe('the daemon keeps no container output', () => {
     const succeeded = await runWithFake(sandbox, db);
     assert.equal(succeeded.ok, true);
 
-    const containerRuns = readDockerLog(sandbox).filter((call) => call.argv[0] === 'run');
+    const containerRuns = readDockerLog(sandbox).filter((call) => call.argv[0] === 'create');
     assert.equal(containerRuns.length, 4, 'failed dump, then dump, verify and encrypt');
     for (const call of containerRuns) {
       const i = call.argv.indexOf('--log-driver');
@@ -475,7 +475,7 @@ const LATER = new Date(NOW.getTime() + 86_400_000);
 const ledgerPath = () => path.join(sandbox.backupDir, LEDGER_NAME);
 const ledgerNames = () =>
   existsSync(ledgerPath()) ? JSON.parse(readFileSync(ledgerPath(), 'utf8')).containers : [];
-const runCalls = () => readDockerLog(sandbox).filter((call) => call.argv[0] === 'run');
+const runCalls = () => readDockerLog(sandbox).filter((call) => call.argv[0] === 'create');
 const isFallback = (call) => call.argv.some((arg) => arg.includes('rm -rf'));
 const nameOf = (call) => call.argv[call.argv.indexOf('--name') + 1];
 
@@ -520,7 +520,7 @@ describe('a zero exit does not prove that the container is gone (B1a)', () => {
     const removal = later.findIndex(
       (call) => call.argv[0] === 'rm' && call.argv.includes(leftover)
     );
-    const firstRun = later.findIndex((call) => call.argv[0] === 'run');
+    const firstRun = later.findIndex((call) => call.argv[0] === 'create');
     assert.ok(
       removal >= 0 && removal < firstRun,
       'the leftover is removed before any container starts'
@@ -569,7 +569,7 @@ describe('the cleanup fallback is a tracked container too (B1b)', () => {
       const removal = later.findIndex(
         (call) => call.argv[0] === 'rm' && call.argv.includes(leftover)
       );
-      const firstRun = later.findIndex((call) => call.argv[0] === 'run');
+      const firstRun = later.findIndex((call) => call.argv[0] === 'create');
       assert.ok(removal >= 0 && removal < firstRun, 'removed before any container starts');
       assert.deepEqual(containersLeft(sandbox), []);
       assert.deepEqual(ledgerNames(), []);
@@ -678,7 +678,7 @@ function plantStale({ locked = true } = {}) {
 const runCallsFrom = (from) =>
   readDockerLog(sandbox)
     .slice(from)
-    .filter((call) => call.argv[0] === 'run');
+    .filter((call) => call.argv[0] === 'create');
 
 describe('stale scratch from a killed run is recovered, or the run fails closed (B1b)', () => {
   const failing = { FAKE_DOCKER_MODE: 'cleanup-fail' };
@@ -772,4 +772,227 @@ describe('stale scratch from a killed run is recovered, or the run fails closed 
     assert.equal(run.status, 0);
     assert.deepEqual(readdirSync(dir), ['owner.json']);
   });
+});
+
+// Ledger entries as the file holds them: [{ name, state }]. A name without a state is pending.
+const ledgerEntries = () => {
+  if (!existsSync(ledgerPath())) return [];
+  const body = JSON.parse(readFileSync(ledgerPath(), 'utf8'));
+  return body.containers.map((name) => ({ name, state: body.states?.[name] ?? 'pending' }));
+};
+const callsFrom = (from) => readDockerLog(sandbox).slice(from);
+const startsOrCreates = (calls) =>
+  calls.filter((call) => call.argv[0] === 'create' || call.argv[0] === 'start');
+const waitForCreate = () =>
+  until(() => readDockerLog(sandbox).some((call) => call.argv[0] === 'create'), 15_000);
+
+describe('a create whose answer is pending is never cleared by an empty listing (B1, round 6)', () => {
+  it(
+    'a late create: an empty early listing clears nothing, the next writer waits, and once the container is seen it is removed first',
+    { timeout: 120_000 },
+    async () => {
+      seedBackups(sandbox.backupDir, 2);
+      const old = listCopies(sandbox.backupDir);
+      const gate = path.join(sandbox.root, 'daemon-create.gate');
+      const env = envFor(sandbox, db, { FAKE_DOCKER_LATE_CREATE: gate });
+
+      // The create client is sent and never answers. The run is stopped while the create is in flight.
+      const run = startLockedRun({ backupDir: sandbox.backupDir, env, tempRoot: sandbox.tmp });
+      assert.equal(await waitForCreate(), true, 'the dump create was sent');
+      run.child.kill('SIGTERM');
+      const result = await run.done;
+      assert.equal(result.ok, false);
+      assert.equal(result.key, 'containers');
+
+      // The shutdown listed the name, found nothing, and must not have cleared it.
+      const [pending] = ledgerEntries();
+      assert.equal(ledgerEntries().length, 1);
+      assert.equal(pending.state, 'pending', 'an empty listing does not settle a pending create');
+      assert.deepEqual(containersLeft(sandbox), [], 'the create has not landed');
+      assert.equal(tempLeft().length, 1, 'scratch kept: the container may still be created');
+      assert.equal(startsOrCreates(readDockerLog(sandbox)).length, 1, 'only the create was sent');
+      assert.equal(
+        await lockIsFree(sandbox.backupDir),
+        true,
+        'the lock is free; the ledger blocks'
+      );
+
+      // The next writer, while the create is still unanswered, starts nothing and publishes nothing.
+      const before = readDockerLog(sandbox).length;
+      const blocked = await runWithFake(sandbox, db);
+      assert.equal(blocked.key, 'containers');
+      assert.deepEqual(
+        startsOrCreates(callsFrom(before)),
+        [],
+        'no container starts for the next writer'
+      );
+      assert.deepEqual(listCopies(sandbox.backupDir), old, 'nothing published or pruned');
+      assert.deepEqual(ledgerEntries(), [pending], 'the pending name is still recorded');
+      assert.equal(tempLeft().length, 1, 'scratch still kept');
+
+      // The daemon creates the container late. The next writer sees it, removes it, proves it gone,
+      // and only then starts its own run.
+      writeFileSync(gate, '');
+      assert.equal(
+        await until(() => containersLeft(sandbox).includes(pending.name), 15_000),
+        true,
+        'the late create landed'
+      );
+      const from = readDockerLog(sandbox).length;
+      const recovered = await runWithFake(sandbox, db);
+      assert.equal(
+        recovered.ok,
+        true,
+        'once the late container is seen and removed, the run completes'
+      );
+      const later = callsFrom(from);
+      const removal = later.findIndex(
+        (call) => call.argv[0] === 'rm' && call.argv.includes(pending.name)
+      );
+      const firstCreate = later.findIndex((call) => call.argv[0] === 'create');
+      assert.ok(
+        removal >= 0 && removal < firstCreate,
+        'the late container is removed before any new create'
+      );
+      assert.deepEqual(ledgerEntries(), [], 'ledger cleared once the removal was proven');
+      assert.deepEqual(containersLeft(sandbox), [], 'no container survives');
+      assert.deepEqual(tempLeft(), [], 'scratch of the stopped run removed');
+    }
+  );
+
+  it(
+    'a create the daemon refuses answers on its own: its name is settled, the ledger clears and the next run completes',
+    { timeout: 120_000 },
+    async () => {
+      const refused = await runWithFake(sandbox, db, { FAKE_DOCKER_CREATE: 'fail' });
+      assert.equal(refused.ok, false);
+      assert.equal(refused.key, 'dump', 'a refused create is a failed step, not an unknown one');
+      assert.deepEqual(ledgerEntries(), [], 'the refused name is cleared at once');
+      assert.deepEqual(containersLeft(sandbox), []);
+      const next = await runWithFake(sandbox, db);
+      assert.equal(next.ok, true);
+    }
+  );
+});
+
+describe('docker management calls are bounded, and a hung call is a failure (B2, round 6)', () => {
+  const bounded = { BACKUP_DOCKER_TIMEOUT_MS: '1000' };
+
+  it(
+    'a version call that never answers ends the run as docker-unavailable: old copies intact, no scratch, no container',
+    { timeout: 120_000 },
+    async () => {
+      const old = seedBackups(sandbox.backupDir, 3);
+      const before = old.map((name) => readFileSync(path.join(sandbox.backupDir, name), 'utf8'));
+      const started = Date.now();
+      const result = await runWithFake(sandbox, db, { ...bounded, FAKE_DOCKER_HANG: 'version' });
+      assert.ok(Date.now() - started < 20_000, 'the call was bounded');
+      assert.equal(result.ok, false);
+      assert.equal(result.key, 'docker');
+      assert.equal(result.exit, EXIT.unavailable);
+      assert.deepEqual(startsOrCreates(readDockerLog(sandbox)), [], 'no container was sent');
+      assert.deepEqual(tempLeft(), [], 'no scratch was created or touched');
+      assert.deepEqual(listCopies(sandbox.backupDir).sort(), [...old].sort());
+      old.forEach((name, i) =>
+        assert.equal(readFileSync(path.join(sandbox.backupDir, name), 'utf8'), before[i])
+      );
+      assert.match(readStatus(sandbox), new RegExp(`\t${MESSAGES.docker}\n$`));
+    }
+  );
+
+  it(
+    'a ps that never answers after the dump: nothing verified, published or pruned; scratch kept; the next run proves it gone and completes',
+    { timeout: 120_000 },
+    async () => {
+      const old = seedBackups(sandbox.backupDir, 3);
+      const before = old.map((name) => readFileSync(path.join(sandbox.backupDir, name), 'utf8'));
+      const result = await runWithFake(sandbox, db, { ...bounded, FAKE_DOCKER_HANG: 'ps' });
+      assert.equal(result.ok, false);
+      assert.equal(result.key, 'containers');
+      assert.equal(
+        callsFrom(0).some((call) => call.argv.includes('/opt/backup/verify.sh')),
+        false,
+        'no verification without proof'
+      );
+      assert.deepEqual(
+        listCopies(sandbox.backupDir).sort(),
+        [...old].sort(),
+        'nothing published or pruned'
+      );
+      old.forEach((name, i) =>
+        assert.equal(readFileSync(path.join(sandbox.backupDir, name), 'utf8'), before[i])
+      );
+      assert.equal(ledgerEntries().length, 1, 'the dump container stays recorded');
+      assert.equal(ledgerEntries()[0].state, 'exists', 'the daemon had created it');
+      assert.equal(tempLeft().length, 1, 'scratch kept, not removed under an unproven container');
+      assert.equal(
+        existsSync(path.join(sandbox.tmp, tempLeft()[0], 'dump.custom')),
+        true,
+        'the plaintext is still there, untouched'
+      );
+
+      const from = readDockerLog(sandbox).length;
+      const next = await runWithFake(sandbox, db);
+      assert.equal(next.ok, true, 'with ps answering again the next run reconciles and completes');
+      assert.ok(
+        callsFrom(from).some((call) => call.argv[0] === 'start'),
+        'the next run did its own dump'
+      );
+      assert.deepEqual(ledgerEntries(), []);
+      assert.deepEqual(tempLeft(), []);
+    }
+  );
+
+  it(
+    'an rm that never answers while a dump is stopped: the container stays recorded, scratch kept, the next writer waits until removal answers',
+    { timeout: 120_000 },
+    async () => {
+      const old = seedBackups(sandbox.backupDir, 3);
+      const before = old.map((name) => readFileSync(path.join(sandbox.backupDir, name), 'utf8'));
+      const env = envFor(sandbox, db, {
+        FAKE_DOCKER_MODE: 'interrupt',
+        ...bounded,
+        FAKE_DOCKER_HANG: 'rm',
+      });
+      const run = startLockedRun({ backupDir: sandbox.backupDir, env, tempRoot: sandbox.tmp });
+      assert.equal(
+        await until(() => containersLeft(sandbox).length === 1, 15_000),
+        true,
+        'the dump container is running'
+      );
+      run.child.kill('SIGTERM');
+      const result = await run.done;
+      assert.equal(result.ok, false);
+      assert.equal(result.key, 'containers');
+      assert.equal(containersLeft(sandbox).length, 1, 'the removal never answered');
+      const [entry] = ledgerEntries();
+      assert.equal(entry.state, 'exists');
+      assert.equal(tempLeft().length, 1, 'scratch kept under a container that may still exist');
+      assert.deepEqual(listCopies(sandbox.backupDir).sort(), [...old].sort());
+
+      const from = readDockerLog(sandbox).length;
+      const blocked = await runWithFake(sandbox, db, { ...bounded, FAKE_DOCKER_HANG: 'rm' });
+      assert.equal(blocked.key, 'containers');
+      assert.deepEqual(
+        startsOrCreates(callsFrom(from)),
+        [],
+        'nothing starts while removal is unanswered'
+      );
+      assert.deepEqual(ledgerEntries(), [entry]);
+      old.forEach((name, i) =>
+        assert.equal(readFileSync(path.join(sandbox.backupDir, name), 'utf8'), before[i])
+      );
+
+      const recovered = await runWithFake(sandbox, db);
+      assert.equal(
+        recovered.ok,
+        true,
+        'once removal answers, the stopped container is proven gone'
+      );
+      assert.deepEqual(containersLeft(sandbox), []);
+      const removal = removalEvents(sandbox).find((event) => event.name === entry.name);
+      assert.ok(removal && removal.lockHeld === true, 'removed by the writer holding the lock');
+      assert.deepEqual(tempLeft(), []);
+    }
+  );
 });
