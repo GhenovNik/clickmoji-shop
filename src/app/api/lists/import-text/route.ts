@@ -7,6 +7,7 @@ import {
 } from '@/lib/ai-input-validation';
 import { estimateShoppingListPromptTokens } from '@/lib/ai-pricing';
 import { prisma } from '@/lib/prisma';
+import { getGuestIdFromRequest, recordFunnelEvent } from '@/lib/funnel';
 import { localizedName } from '@/lib/catalog-name';
 import { requireUser } from '@/lib/auth-guards';
 import { visibleProductsWhere } from '@/lib/product-visibility';
@@ -271,6 +272,18 @@ export async function POST(request: Request) {
         // Log only an allowlisted code, never prompts or upstream error details.
         console.error('Error importing a list entry:', textAiErrorCode(error));
         results.failed.push(failedEntry(product, t('api.import.entryFailed')));
+      }
+    }
+
+    if (results.added.length > 0) {
+      try {
+        await recordFunnelEvent({
+          type: 'ITEM_ADD',
+          userId: session.user.id,
+          guestId: getGuestIdFromRequest(request),
+        });
+      } catch {
+        // Recording analytics must not change the import result.
       }
     }
 
