@@ -4,6 +4,9 @@ name: Production migration
 # (docs/ops.md: migrate before the code that needs it). This applies pending Prisma migrations to the
 # production database with the direct URL, after a fresh verified backup. 2026-11-24: #152 went live
 # before its table (add_ai_monthly_budgets).
+# The repository is public, so the dump is never uploaded as an artifact: it lives only inside this run and
+# is proven restorable into a throwaway PostgreSQL 17 before any migration. Recovery after a bad
+# migration is Neon point-in-time restore.
 
 on:
   workflow_dispatch:
@@ -22,9 +25,19 @@ concurrency:
 
 jobs:
   migrate:
-    if: ${{ inputs.confirm == 'migrate production' }}
+    if: ${{ inputs.confirm == 'migrate production' && github.ref == 'refs/heads/master' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    services:
+      scratch:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_PASSWORD: scratch
+          POSTGRES_DB: restore_check
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 20
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -61,22 +74,15 @@ jobs:
             postgres:17-alpine \
             sh -lc "pg_dump \"\$DATABASE_URL\" -Fc -f \"/backups/${{ steps.meta.outputs.file_name }}\""
 
-      - name: Verify backup is readable
+      - name: Prove the backup restores
         shell: bash
         run: |
           test -s "backups/${{ steps.meta.outputs.file_name }}"
-          docker run --rm \
+          docker run --rm --network host \
             -v "${GITHUB_WORKSPACE}/backups:/backups" \
+            -e PGPASSWORD=scratch \
             postgres:17-alpine \
-            sh -lc "pg_restore --list \"/backups/${{ steps.meta.outputs.file_name }}\" > /dev/null"
-
-      - name: Upload backup artifact
-        uses: actions/upload-artifact@v7
-        with:
-          name: db-backup-${{ steps.meta.outputs.file_name }}
-          path: backups/${{ steps.meta.outputs.file_name }}
-          if-no-files-found: error
-          retention-days: 30
+            sh -lc "pg_restore --exit-on-error --no-owner --no-privileges -h 127.0.0.1 -U postgres -d restore_check \"/backups/${{ steps.meta.outputs.file_name }}\""
 
       - name: Migration status before
         env:
