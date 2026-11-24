@@ -158,101 +158,155 @@ models (e.g. `gemini-3.1-flash-lite-image`, `imagen-4.0-*`) also fail closed bef
 
 ### Production recovery
 
-Never restore into the live database. Identify the incident time and last known good data; keep
-writes stopped during the final switch so new writes are not lost. Restore to a separate target,
-verify it, then change the site's production `DATABASE_URL` in Vercel and redeploy. Keep the old
-target until the operator approves its retirement. A failed check blocks the switch.
+Never restore into the live database. Restore to a separate target, verify it, then point the production
+`DATABASE_URL` at it in Vercel and redeploy. Keep the old target until the operator approves its retirement.
+A failed check blocks the switch. The switch is not run until the decisions in _Write barrier and
+reconciliation_ are recorded.
 
-Production copies belong on the Mac mini and the Lenovo machine. The verified backup command is
-`npm run db:backup:verified` (`scripts/backup/cli.mjs`). Its operator configuration uses the read-only
-source `DATABASE_URL`, `BACKUP_DIR`, `BACKUP_AGE_RECIPIENT_FILE`, and `BACKUP_STATUS_FILE`. Use a
-separate shell for recovery. Select a verified `clickmoji-<UTC timestamp>.dump.age` from the backup
-directory and its verification record, including table counts and latest migration.
+Terms used below:
+
+- **Recovery point**: the time the restored data represents: `RECOVERY_TIME` for a point-in-time branch, or
+  the `createdAt` of the verification record for an encrypted copy (`meta/<copy>.json`, next to the copy).
+  Write its timestamp in the incident ticket.
+- **Write stop** (`WRITE_STOP_AT`): the time production writes stop. Changes committed after the recovery
+  point and before the write stop are **post-point changes**. The switch loses them unless they are
+  reconciled or their loss is approved.
+- **Writers**: every process that can write to production: the production Vercel deployment of `master`
+  (its write routes under `src/app/api`), operator scripts that write (`scripts/catalog-cleanup.ts`,
+  `scripts/emoji-import.ts --apply`, the write commands of `scripts/db-*.ts` and `scripts/db-transfer.ts`),
+  `prisma migrate deploy`, and any other client that holds a production URL or role. Preview deployments
+  never hold a production URL. The backup only reads.
+- **Restore role** (`<owner-role>`): owns the restored target. Used for restore, verification and grants.
+  It is never the site's `DATABASE_URL`.
+- **Runtime role** (`<runtime-role>`): the role in the site's production `DATABASE_URL`. It is not an owner
+  and not a superuser, has no `CREATEROLE`, `CREATEDB` or `BYPASSRLS`, cannot create objects in `public`,
+  and holds the same table privileges as the production runtime role (checked below).
 
 #### Shell and prerequisites
 
-- Commands are written for **zsh or bash** (zsh is the default on the operator's Mac). Hidden input
-  uses `printf` followed by `read -rs NAME`, which works in both; do not use the zsh-only
-  `read -rs 'NAME?prompt'` form.
-- Needed: Docker running on the operator machine; the Neon CLI (`neon`) authenticated by the operator
-  for the Neon steps; a checkout of the reviewed release for the Prisma steps. Nothing is installed on
-  the host by these steps; `age` runs inside the disposable container.
+- Commands are written for **zsh or bash** (zsh is the default on the operator's Mac). Hidden input uses
+  `printf` followed by `read -rs NAME`, which works in both; do not use the zsh-only `read -rs 'NAME?prompt'`
+  form.
+- Needed: Docker running on the operator machine; the Neon CLI (`neon`, version 4.9.0 or newer, check with
+  `neon --version`) authenticated by the operator for the Neon steps; Node.js; and a checkout of the reviewed
+  release that contains `scripts/backup/` (the verified backup implementation). Run the Node helper from that
+  checkout's root. Nothing is installed on the host by these steps; `age` runs inside the disposable container.
 - Use the same official PostgreSQL image digest as the verified backup container.
-- Work only in a private terminal: no shell tracing (`set -x`), no session recording, no shared
-  screens. Never write a connection URL or identity into a file, a log or a ticket.
+- Every `docker run` below passes `--log-driver none`. Without it the daemon keeps container stdout and
+  stderr, including the printed age identity, in its own log outside this terminal. With it, `docker logs`
+  has nothing to show for these containers.
+- Connection values never appear in argv. Containers receive `PGHOST`, `PGPORT`, `PGDATABASE`, `PGUSER`,
+  `PGPASSWORD`, `PGSSLMODE` and `PGCHANNELBINDING` **by name** (`-e NAME`), with values from this shell's
+  environment. The only connection-related argument is the database name in `pg_restore --dbname "$PGDATABASE"`,
+  which is not a secret.
+- Work only in a private terminal: no shell tracing (`set -x`), no session recording, no shared screens.
+  Never write a connection URL or identity into a file, a log or a ticket.
 
 ```sh
 IMAGE='postgres:17-alpine@sha256:f9cf3e1f0066f0eb0c48707d864f0ac5941e9ff454a072077d97a4d278d07d73'
 NEON_PROJECT_ID='<neon-project-id>'
+
+# Runs the pinned image with the libpq variables forwarded by name. Add -i only when stdin carries SQL or
+# the age identity; without it a command that reads the terminal could hang.
+pg_run() {
+  docker run --rm --log-driver none \
+    -e PGHOST -e PGPORT -e PGDATABASE -e PGUSER -e PGPASSWORD -e PGSSLMODE -e PGCHANNELBINDING -e PGOPTIONS \
+    "$@"
+}
+
+# Loads the libpq variables for the URL passed as $1 into this shell, exported and never printed.
+# It uses the verified backup's parser (scripts/backup/config.mjs, run from the checkout root). It fails
+# closed on any URL parameter outside the allowed set and on any TLS mode other than require, verify-ca
+# or verify-full. The URL itself is only an argument of this shell function; no process receives it in argv.
+load_libpq_env() {
+  unset PGHOST PGPORT PGDATABASE PGUSER PGPASSWORD PGSSLMODE PGCHANNELBINDING PGOPTIONS
+  _libpq=$(LIBPQ_URL=$1 node --input-type=module <<'JS'
+import { libpqEnv } from './scripts/backup/config.mjs';
+const env = libpqEnv(process.env.LIBPQ_URL);
+const allowed = ['PGHOST', 'PGPORT', 'PGDATABASE', 'PGUSER', 'PGPASSWORD', 'PGSSLMODE', 'PGCHANNELBINDING'];
+for (const key of Object.keys(env)) if (!allowed.includes(key)) throw new Error(`unsupported setting ${key}`);
+if (!['require', 'verify-ca', 'verify-full'].includes(env.PGSSLMODE)) throw new Error('TLS mode required');
+if (!env.PGDATABASE || !env.PGUSER || !env.PGPASSWORD) throw new Error('database, user and password required');
+for (const [key, value] of Object.entries(env)) console.log(`export ${key}='${value.replaceAll("'", "'\\''")}'`);
+JS
+  ) || return 1
+  eval "$_libpq"
+  unset _libpq
+}
 ```
 
 #### Create the target
 
-Each option creates a **new** target, never the production database. Confirm the Neon project and the
-target branch in the Neon console before continuing.
+Each option creates a **new** target, never the production database. Confirm the Neon project and the target
+branch in the Neon console before continuing.
 
-1. **Recent incident (point-in-time branch).** Use a time before the incident, inside Neon's restore
-   window for the plan. Confirm the production branch is the project's default first
-   (`neon branches list --project-id "$NEON_PROJECT_ID"`). The branch is a copy of production at that
-   time and already contains data, so it skips the emptiness check; go to _Verification and switch_.
+1. **Recent incident (point-in-time branch).** Use a time before the incident, inside Neon's restore window
+   for the plan. Confirm the production branch is the project's default first
+   (`neon branches list --project-id "$NEON_PROJECT_ID"`). The branch is a copy of production at that time
+   and already contains data, so it skips the emptiness check. Its verification is in
+   _Verify the point-in-time branch_.
 
    ```sh
    RECOVERY_TIME='<RFC 3339 time before the incident, e.g. 2026-11-24T10:00:00Z>'
    RECOVERY_BRANCH='recovery-<incident-id>'
-   neon branches create --project-id "$NEON_PROJECT_ID" --name "$RECOVERY_BRANCH" --parent "$RECOVERY_TIME"
-   TARGET_URL=$(neon connection-string "$RECOVERY_BRANCH" --project-id "$NEON_PROJECT_ID" --database-name '<database-name>' --role-name '<role-name>')
-   export TARGET_URL
+   neon branches create --project-id "$NEON_PROJECT_ID" --name "$RECOVERY_BRANCH" --parent "$RECOVERY_TIME" --no-secrets
+   TARGET_URL=$(neon connection-string "$RECOVERY_BRANCH" --project-id "$NEON_PROJECT_ID" --database-name '<database-name>' --role-name '<owner-role>')
+   load_libpq_env "$TARGET_URL"
    ```
 
-   The connection string is captured into a variable and not printed. Omitting `--pooled` returns the
-   direct URL.
+   `--no-secrets` leaves the connection string out of the command output. The URL is captured into a shell
+   variable and never printed. Omitting `--pooled` returns the direct URL, which the restore role uses.
 
-2. **Older incident (encrypted copy).** A Neon branch inherits its parent's databases, so create a new
-   database inside the new branch and use only that database. Verify it is empty (below) before any
-   restore.
+2. **Older incident (encrypted copy).** A Neon branch inherits its parent's databases, so create a new database
+   inside the new branch and use only that database. Verify it is empty (below) before any restore.
 
    ```sh
    RESTORE_BRANCH='restore-<incident-id>'
    RESTORE_DB='<new-database-name>'
-   neon branches create --project-id "$NEON_PROJECT_ID" --name "$RESTORE_BRANCH"
+   neon branches create --project-id "$NEON_PROJECT_ID" --name "$RESTORE_BRANCH" --no-secrets
    neon databases create --project-id "$NEON_PROJECT_ID" --branch "$RESTORE_BRANCH" --name "$RESTORE_DB" --owner-name '<owner-role>'
    TARGET_URL=$(neon connection-string "$RESTORE_BRANCH" --project-id "$NEON_PROJECT_ID" --database-name "$RESTORE_DB" --role-name '<owner-role>')
-   export TARGET_URL
+   load_libpq_env "$TARGET_URL"
    ```
 
-3. **Neon unavailable.** Provision PostgreSQL 17 with a fresh empty database and TLS at another
-   provider (the provider's own steps; not covered here). Enter its direct URL without echo:
+3. **Neon unavailable.** Provision PostgreSQL 17 with a fresh empty database and TLS at another provider (the
+   provider's own steps; not covered here). Enter its direct URL without echo:
 
    ```sh
    printf 'Direct URL of NEW empty database (not echoed): '
    read -rs TARGET_URL
    echo
-   export TARGET_URL
+   load_libpq_env "$TARGET_URL"
    ```
+
+`load_libpq_env` stops with an error for a URL it cannot represent exactly (for example one with a TLS mode
+other than the three listed or with an extra parameter). Stop and treat that as a blocker, not as a reason to
+edit the URL by hand. `TARGET_URL` is kept only as a shell variable, for the Prisma check below. Remove it when
+the procedure ends.
 
 #### Container and key preparation
 
-The age identity is created once, by the operator, on a trusted machine. Its private key is printed to
-the terminal only; do not redirect the output and do not save it as a file. Record it directly in the
-password manager and on paper, and give only the `age1...` public recipient to the backup
-configuration. Do not share the private key, record the terminal, or use a newly generated key to
-decrypt an existing backup.
+The age identity is created once, by the operator, on a trusted machine. Its private key is printed to the
+terminal only; do not redirect the output and do not save it as a file. Record it directly in the password
+manager and on paper, and give only the `age1...` public recipient to the backup configuration. Do not share
+the private key, record the terminal, or use a newly generated key to decrypt an existing backup.
 
 ```sh
-docker run --rm "$IMAGE" sh -c 'apk add --no-cache age >/dev/null && age-keygen'
+docker run --rm --log-driver none "$IMAGE" sh -c 'apk add --no-cache age >/dev/null && age-keygen'
 ```
 
-`age-keygen` writes the private key to standard output and the `Public key:` line to standard error;
-both appear on screen. The `sh -c` argument contains no single quotes, so it can be copied as shown.
+`age-keygen` writes the private key to standard output and the `Public key:` line to standard error; both
+appear on screen. `--log-driver none` keeps them out of the daemon log. The `sh -c` argument contains no single
+quotes, so it can be copied as shown.
 
-#### Empty-target check (before any restore)
+#### Empty-target check (encrypted copy, before any restore)
 
-Run it against the target created above. Expected result: `(0 rows)`. Any row, or a failed connection,
-stops the procedure. Independently confirm that the provider, project, branch and database are the
-intended new target. The SQL is passed by a quoted heredoc, so `$` and quotes reach psql unchanged.
+Run it against the database created above. Expected result: `(0 rows)`. Any row, or a failed connection, stops
+the procedure. Independently confirm that the provider, project, branch and database are the intended new
+target. The SQL goes in by a quoted heredoc, so `$` and quotes reach psql unchanged.
 
 ```sh
-docker run --rm -i -e TARGET_URL "$IMAGE" sh -c 'psql "$TARGET_URL" -v ON_ERROR_STOP=1 -f -' <<'SQL'
+pg_run -i "$IMAGE" sh -c 'psql -X -v ON_ERROR_STOP=1 -f -' <<'SQL'
 SELECT n.nspname AS schema_name, c.relname AS object_name, c.relkind
 FROM pg_class c
 JOIN pg_namespace n ON n.oid = c.relnamespace
@@ -263,146 +317,354 @@ SQL
 
 #### Restore the encrypted copy
 
-Set the placeholders in the private terminal. `BACKUP_DIR` must be an absolute path. The directory is
-mounted read-only. `TARGET_URL` must be the new empty database from the previous step, never the
-production database. The URL reaches the container through `-e TARGET_URL` (a name, not a value), so it
-does not appear in the `docker run` arguments; it is still visible to privileged Docker administrators
-while the container runs.
+Set the placeholders in the private terminal. `BACKUP_DIR` must be an absolute path. The directory is mounted
+read-only. `TARGET_URL` must be the new empty database from the previous step, never the production database.
+The libpq variables come from it through `load_libpq_env` and reach the container by name only.
 
 ```sh
 BACKUP_DIR='<absolute-directory-containing-encrypted-copy>'
-BACKUP_FILE='<selected-copy>.dump.age'
-export BACKUP_DIR BACKUP_FILE
+BACKUP_FILE='clickmoji-<UTC timestamp>.dump.age'
+RECORD="$BACKUP_DIR/meta/$BACKUP_FILE.json"
+export BACKUP_DIR BACKUP_FILE RECORD
 printf 'Age private identity (not echoed): '
 read -rs AGE_IDENTITY
 echo
-printf '%s\n' "$AGE_IDENTITY" | docker run --rm -i -e TARGET_URL \
-  -v "$BACKUP_DIR:/backup:ro" -e BACKUP_FILE "$IMAGE" sh -c '
-    set -eu
-    set -o pipefail
-    apk add --no-cache age >/dev/null
-    age -d -i /dev/stdin "/backup/$BACKUP_FILE" | pg_restore --no-owner --no-privileges --exit-on-error --dbname "$TARGET_URL"
-  '
+printf '%s\n' "$AGE_IDENTITY" | pg_run -i -v "$BACKUP_DIR:/backup:ro" -e BACKUP_FILE "$IMAGE" sh -c '
+  set -eu
+  set -o pipefail
+  apk add --no-cache age >/dev/null
+  age -d -i /dev/stdin "/backup/$BACKUP_FILE" | pg_restore --no-owner --no-privileges --exit-on-error --dbname "$PGDATABASE"
+'
 RESTORE_STATUS=$?
 unset AGE_IDENTITY
 printf 'Restore exit: %s\n' "$RESTORE_STATUS"
 ```
 
-Proceed only on `Restore exit: 0`. The identity is passed on stdin and is never written to a key file;
-no plaintext dump is written by this procedure. `unset` does not erase shell memory, so close the
-terminal afterwards. A restore that stops partway must be discarded and retried in another fresh empty
-database; do not repair it in place. Clean up any plaintext or temporary files created outside this
-procedure.
+Proceed only on `Restore exit: 0`. The identity is passed on stdin and is never written to a key file; no
+plaintext dump is written by this procedure. `--dbname "$PGDATABASE"` is required: without an explicit
+`--dbname`, `pg_restore` writes the SQL to standard output instead of restoring. `unset` does not erase shell
+memory, so close the terminal afterwards. A restore that stops partway must be discarded and retried in another
+fresh empty database; do not repair it in place.
 
-`set -o pipefail` inside the container's `sh` requires a shell that supports it (the Alpine image's
-`sh` is BusyBox); this is verified by the Docker acceptance run, not assumed here.
+`set -o pipefail` inside the container's `sh` requires a shell that supports it (the Alpine image's `sh` is
+BusyBox); this is verified by the Docker acceptance run, not assumed here.
 
-#### Verification and switch
+#### Verification queries
 
-Run the read-only checks against the target. The row counts are generated by `\gexec`, so the table
-list does not need to be typed.
+The three queries are the ones the verified backup uses (`scripts/backup/container/verify.sh`). Keep them
+unchanged, so the same definitions decide every check.
 
 ```sh
-docker run --rm -i -e TARGET_URL "$IMAGE" sh -c 'psql "$TARGET_URL" -v ON_ERROR_STOP=1 -f -' <<'SQL'
-SELECT current_database() AS database_name, version();
-
-SELECT c.relname AS table_name
+IDENTITY_SQL="SELECT format('%I.%I', n.nspname, c.relname) || E'\t' || string_agg(format('%I %s %s', a.attname, format_type(a.atttypid, a.atttypmod), CASE WHEN a.attnotnull THEN 'NOT NULL' ELSE 'NULL' END), ',' ORDER BY a.attnum)
 FROM pg_class c
 JOIN pg_namespace n ON n.oid = c.relnamespace
-WHERE n.nspname = 'public' AND c.relkind = 'r'
-ORDER BY c.relname;
-
-SELECT format('SELECT %L AS table_name, count(*) AS row_count FROM public.%I', c.relname, c.relname)
+JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped
+WHERE c.relkind IN ('r', 'p') AND n.nspname NOT IN ('pg_catalog', 'information_schema')
+  AND n.nspname NOT LIKE 'pg_toast%' AND n.nspname NOT LIKE 'pg_temp%'
+GROUP BY n.nspname, c.relname
+ORDER BY 1;"
+COUNTS_SQL="SELECT format('%I.%I', n.nspname, c.relname) || E'\t' || (xpath('/row/c/text()', query_to_xml(format('SELECT count(*) AS c FROM %I.%I', n.nspname, c.relname), false, true, '')))[1]::text
 FROM pg_class c
 JOIN pg_namespace n ON n.oid = c.relnamespace
-WHERE n.nspname = 'public' AND c.relkind = 'r'
-ORDER BY c.relname \gexec
-
-SELECT migration_name, finished_at, rolled_back_at
-FROM _prisma_migrations
+WHERE c.relkind IN ('r', 'p') AND n.nspname NOT IN ('pg_catalog', 'information_schema')
+  AND n.nspname NOT LIKE 'pg_toast%' AND n.nspname NOT LIKE 'pg_temp%'
+ORDER BY 1;"
+MIGRATION_SQL="SELECT migration_name FROM public._prisma_migrations
 WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL
-ORDER BY finished_at DESC
-LIMIT 1;
-SQL
+ORDER BY migration_name DESC LIMIT 1;"
+# The release's latest migration, from the release checkout (same ordering as migration_name DESC).
+RELEASE_MIGRATION=$(ls -1 prisma/migrations | grep -v '^migration_lock.toml$' | LC_ALL=C sort | tail -1)
 ```
 
-Compare the output with the selected copy's verification record:
+- `IDENTITY_SQL`: every user table and partitioned table in every user schema, with column names, types and
+  nullability (a table with no columns is reported as missing).
+- `COUNTS_SQL`: exact `count(*)` per table, keyed `schema.table`, tab-separated.
+- `MIGRATION_SQL`: the latest applied Prisma migration, ordered by `migration_name` as the backup does.
 
-- the table list and every row count must match the record exactly (a missing table, or a count that
-  fell by more than a fifth, blocks the switch);
-- the latest successful migration name must match the record. Expected for the release being
-  deployed, from the release checkout:
+#### Verify the encrypted copy (age oracle)
 
-  ```sh
-  ls -1 prisma/migrations | grep -v '^migration_lock.toml$' | sort | tail -1
-  ```
+The verification record was written by the backup from the restored dump. It holds the migration and the exact
+counts keyed `schema.table`, with a `verify` status. Restoring the same dump must reproduce them exactly. The
+record keeps no column definitions; those were compared with production when the copy was made.
 
-  If the restored migration is older than the release, stop and decide as an operator; do not run
-  `migrate deploy` against restored data without that decision.
+```sh
+TARGET_COUNTS=$(pg_run "$IMAGE" psql -X -q -A -t -v ON_ERROR_STOP=1 -c "$COUNTS_SQL")
+TARGET_MIGRATION=$(pg_run "$IMAGE" psql -X -q -A -t -v ON_ERROR_STOP=1 -c "$MIGRATION_SQL")
+RECORD_MIGRATION=$(node -e 'process.stdout.write(require(process.argv[1]).migration)' "$RECORD")
 
-Then confirm the Prisma view of the target, using the release checkout with dependencies installed.
-`prisma.config.ts` reads `DATABASE_URL` and falls back to a localhost URL when it is unset, so the
-variable must be set explicitly:
+# Empty output means a mismatch: a record that is not "ok" exits early, so the left side is empty.
+diff \
+  <(node -e 'const r = require(process.argv[1]); if (r.verify !== "ok") process.exit(3); for (const [t, n] of Object.entries(r.counts)) console.log(t + "\t" + n)' "$RECORD" | LC_ALL=C sort) \
+  <(printf '%s\n' "$TARGET_COUNTS" | LC_ALL=C sort) && echo "counts: exact match"
+
+printf 'migration: record=%s target=%s release=%s\n' "$RECORD_MIGRATION" "$TARGET_MIGRATION" "$RELEASE_MIGRATION"
+```
+
+Pass only when all of these hold:
+
+- restore exit is `0`, and the record's `verify` is `ok` (`suspicious` means the backup flagged a large count
+  drop; that is an operator decision, not a pass);
+- the table list and every count equal the record exactly (a missing or extra table blocks the switch);
+- `record`, `target` and `release` migration names are identical. If the restored migration is older than the
+  release, or newer, stop and decide as an operator; do not run `migrate deploy` against restored data without
+  that decision.
+
+#### Verify the point-in-time branch (PITR oracle)
+
+A branch has no verification record, so it is compared with **production's metadata read now**, through the
+read-only source URL the backup uses (a role that only reads; the session is forced read-only). Writes after the
+recovery point are absent from the branch by design, so counts are not compared exactly. They are checked for a
+large drop against the latest verified copy, and the post-point query in the next section uses them.
+
+```sh
+# Read-only source: the backup's source URL, loaded in a subshell so no variable leaks into this shell.
+PROD_READONLY_URL='<read-only production URL, the same role the backup uses>'
+PROD_IDENTITY=$( load_libpq_env "$PROD_READONLY_URL" && export PGOPTIONS='-c default_transaction_read_only=on' && pg_run "$IMAGE" psql -X -q -A -t -v ON_ERROR_STOP=1 -c "$IDENTITY_SQL" )
+PROD_MIGRATION=$( load_libpq_env "$PROD_READONLY_URL" && export PGOPTIONS='-c default_transaction_read_only=on' && pg_run "$IMAGE" psql -X -q -A -t -v ON_ERROR_STOP=1 -c "$MIGRATION_SQL" )
+
+load_libpq_env "$TARGET_URL"
+TARGET_IDENTITY=$(pg_run "$IMAGE" psql -X -q -A -t -v ON_ERROR_STOP=1 -c "$IDENTITY_SQL")
+TARGET_MIGRATION=$(pg_run "$IMAGE" psql -X -q -A -t -v ON_ERROR_STOP=1 -c "$MIGRATION_SQL")
+TARGET_COUNTS=$(pg_run "$IMAGE" psql -X -q -A -t -v ON_ERROR_STOP=1 -c "$COUNTS_SQL")
+
+[ -n "$PROD_IDENTITY" ] && [ "$PROD_IDENTITY" = "$TARGET_IDENTITY" ] && echo "schema: same as production now"
+printf 'migration: production=%s target=%s release=%s\n' "$PROD_MIGRATION" "$TARGET_MIGRATION" "$RELEASE_MIGRATION"
+
+# Large drops against the latest verified copy (same rule as the backup: below 80% of the earlier count).
+# RECORD must point at the latest verified copy's record: set in the restore step for an encrypted copy, or
+# set it here, as an absolute path, when only a point-in-time branch is being verified.
+TARGET_COUNTS="$TARGET_COUNTS" node -e '
+const before = require(process.env.RECORD).counts;
+const after = Object.fromEntries(process.env.TARGET_COUNTS.trim().split("\n").map((line) => line.split("\t")));
+const drops = Object.keys(before).filter((t) => before[t] > 0 && Number(after[t] ?? 0) * 100 < before[t] * 80);
+console.log(drops.length ? "drops: " + drops.join(", ") : "drops: none");
+'
+```
+
+Pass only when all of these hold:
+
+- the identity of the branch equals production's identity read now (`same as production now`). A difference
+  means a schema change happened after the recovery point: stop and decide;
+- `production`, `target` and `release` migration names are identical. Otherwise stop and decide;
+- no drops are reported, or each drop is explained and approved by the operator.
+
+Then confirm the Prisma view, using the release checkout with dependencies installed. `prisma.config.ts`
+reads `DATABASE_URL` and falls back to a localhost URL when it is unset, so the variable must be set explicitly:
 
 ```sh
 DATABASE_URL="$TARGET_URL" npx prisma migrate status
 ```
 
-Investigate any mismatch or nonzero status before switching. Inspect representative users, lists and
-products without exposing personal data, and test sign-in and reading a test list against the target in
-an isolated preview. Do not seed restored data.
+Investigate any mismatch or nonzero status before switching. Inspect representative users, lists and products
+without exposing personal data, and test sign-in and reading a test list against the target in an isolated
+preview. Do not seed restored data.
 
-**Switch (real incident only, after every check passes):**
+#### Write barrier and reconciliation
 
-1. Stop writes by the operator's agreed method and note the time. Keep writes stopped until step 5.
-2. Store the current production `DATABASE_URL` value in the password manager (the value, not in a
-   file or a ticket), so the old target can be restored in one step if the switch fails.
-3. Get the pooled URL for the verified target (Neon: add `--pooled`; use the target's database and role
-   names as above):
+The switch loses every write made to production after the recovery point, unless it is reconciled. Nothing here
+may be skipped: a green smoke test does not show that post-point changes were kept.
 
-   ```sh
-   CUTOVER_URL=$(neon connection-string "$RESTORE_BRANCH" --project-id "$NEON_PROJECT_ID" --database-name "$RESTORE_DB" --role-name '<owner-role>' --pooled)
+1. **Baseline, before stopping writes.** Run the statements below through the read-only production subshell
+   shown in _Verify the point-in-time branch_ (`( load_libpq_env "$PROD_READONLY_URL" && export PGOPTIONS=... && pg_run -i ... )`).
+   Record the write counter and the counts in the incident ticket as `WRITE_BASELINE` and `PRE_STOP_COUNTS`. They
+   are the old database's state for the rollback check.
+
+   ```sql
+   SELECT coalesce(sum(n_tup_ins + n_tup_upd + n_tup_del), 0) AS write_counter FROM pg_stat_user_tables;
    ```
 
-   For the point-in-time branch, use `"$RECOVERY_BRANCH"` and its database instead. For another
-   provider, use that provider's pooled URL with TLS.
+   Also run `COUNTS_SQL`.
 
-4. Update the existing Vercel production variable from the linked release checkout. Check the project
-   and keep writes stopped if the update or deployment fails.
+2. **Stop every writer.** The barrier is at the database, so it also stops writers that are not in the app
+   (old deployments, scripts with the owner role). Before revoking, save the runtime role's privileges (grants
+   only, no secrets) in the ticket: they are the exact list to restore on rollback.
+
+   ```sql
+   SELECT n.nspname AS schema_name, c.relname AS object_name, c.relkind, a.privilege_type
+   FROM pg_class c
+   JOIN pg_namespace n ON n.oid = c.relnamespace
+   CROSS JOIN LATERAL aclexplode(c.relacl) AS a
+   JOIN pg_roles r ON r.oid = a.grantee
+   WHERE r.rolname = '<runtime-role>' AND n.nspname = 'public' AND c.relkind IN ('r', 'p', 'S')
+   ORDER BY 1, 2, 4;
+
+   REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON ALL TABLES IN SCHEMA public FROM <runtime-role>;
+   ```
+
+   The grant list is read from `pg_class` ACLs, which every role can read. The `information_schema` grant views
+   show only privileges the current role granted or received, so the read-only role would see an empty list.
+
+   Run the `REVOKE` as the owner role, record the time as `WRITE_STOP_AT`, and stop every operator script or
+   migration that holds the owner role. Stop any writer that does not use the runtime role by the operator's
+   method, and record which one.
+
+3. **Verify the barrier.** Repeat at least two minutes apart; both must hold:
+
+   - no other client session is active (`state <> 'idle'`), except the operator's own. Run it as a role that
+     can read other sessions (superuser or `pg_read_all_stats`); a role that cannot sees only its own sessions,
+     and an empty result then proves nothing:
+
+     ```sql
+     SELECT usename, application_name, client_addr, state, backend_start
+     FROM pg_stat_activity
+     WHERE datname = current_database() AND backend_type = 'client backend' AND pid <> pg_backend_pid() AND state <> 'idle';
+     ```
+
+   - the write counter equals `WRITE_BASELINE` (the statistics can lag briefly; a counter that is stable over
+     two minutes is the evidence, not one read);
+   - the runtime role has no table write privilege left. This query returns `0`:
+
+     ```sql
+     SELECT count(*)
+     FROM pg_class c
+     JOIN pg_namespace n ON n.oid = c.relnamespace
+     CROSS JOIN LATERAL aclexplode(c.relacl) AS a
+     JOIN pg_roles r ON r.oid = a.grantee
+     WHERE r.rolname = '<runtime-role>' AND n.nspname = 'public' AND c.relkind IN ('r', 'p')
+       AND a.privilege_type IN ('INSERT', 'UPDATE', 'DELETE', 'TRUNCATE');
+     ```
+
+4. **Post-point changes** (read-only production, after the barrier). Tables with Prisma timestamps (`createdAt`
+   or `updatedAt`) report rows created or changed after the recovery point. The generator builds one count query per
+   such table and `\gexec` runs them in the same session. The output lines are `table|changed_rows`:
+
+   ```sh
+   export POINT='<RECOVERY_POINT, RFC 3339, e.g. 2026-11-24T10:00:00Z>'
+   (
+     load_libpq_env "$PROD_READONLY_URL" && export PGOPTIONS='-c default_transaction_read_only=on' &&
+     pg_run -i -e POINT "$IMAGE" sh -c 'psql -X -q -A -t -v ON_ERROR_STOP=1 -v point="$POINT" -f -' <<'SQL'
+   SELECT format(
+     'SELECT %L AS table_name, count(*) AS changed_rows FROM %I.%I WHERE %s',
+     n.nspname || '.' || c.relname, n.nspname, c.relname,
+     string_agg(format('%I > %L', a.attname, :'point'), ' OR ' ORDER BY a.attname)
+   )
+   FROM pg_class c
+   JOIN pg_namespace n ON n.oid = c.relnamespace
+   JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped
+   WHERE c.relkind = 'r' AND n.nspname = 'public' AND a.attname IN ('createdAt', 'updatedAt')
+   GROUP BY n.nspname, c.relname
+   ORDER BY c.relname \gexec
+   SQL
+   )
+   ```
+
+   Limits to state in the ticket: deleted rows and changes made by raw SQL that do not touch `updatedAt` are
+   **not** visible here. `updatedAt` is set by the Prisma client, not by the database.
+
+5. **Decision, written in the ticket before any switch.** One of:
+
+   - **Reconcile**: export the rows reported above (read-only, to the operator's encrypted private storage,
+     never GitHub), review them, and apply them to the target as the owner role. Then repeat the age or PITR
+     checks and the runtime checks; or
+   - **Accept loss**: explicit written approval that names the `changed_rows` totals, `WRITE_STOP_AT`, and the
+     limits above.
+
+   Without one of these, do not switch. This is a question for the operator, not a default.
+
+#### Runtime role on the target (before the switch)
+
+The site must reach the target as the runtime role, never as the restore role. The runtime role is created on
+the target by the operator, with the provider's own method, and its password is set without echo. It must
+match production's privileges:
+
+```sh
+# Run the same query (the grant list from the barrier step) on production through the read-only session and on
+# the target through the owner role: the two outputs must be identical. Tables, partitions and sequences are covered.
+SELECT n.nspname AS schema_name, c.relname AS object_name, c.relkind, a.privilege_type
+FROM pg_class c
+JOIN pg_namespace n ON n.oid = c.relnamespace
+CROSS JOIN LATERAL aclexplode(c.relacl) AS a
+JOIN pg_roles r ON r.oid = a.grantee
+WHERE r.rolname = '<runtime-role>' AND n.nspname = 'public' AND c.relkind IN ('r', 'p', 'S')
+ORDER BY 1, 2, 4;
+```
+
+Then build the runtime URL and check it reaches the target as the runtime role:
+
+```sh
+CUTOVER_URL=$(neon connection-string "$RESTORE_BRANCH" --project-id "$NEON_PROJECT_ID" --database-name "$RESTORE_DB" --role-name '<runtime-role>' --pooled)
+# (For the point-in-time branch use "$RECOVERY_BRANCH" and its database instead.)
+load_libpq_env "$CUTOVER_URL"
+pg_run -i "$IMAGE" sh -c 'psql -X -q -A -t -v ON_ERROR_STOP=1 -f -' <<'SQL'
+SELECT current_database(), current_user, rolsuper, rolcreaterole, rolcreatedb, rolbypassrls,
+       has_schema_privilege(current_user, 'public', 'CREATE') AS can_create_in_public
+FROM pg_roles WHERE rolname = current_user;
+SQL
+```
+
+Expected: `<database>|<runtime-role>|f|f|f|f|f`. Anything else stops the switch. The runtime role must not own
+any table in `public` (`SELECT tablename FROM pg_tables WHERE schemaname = 'public' AND tableowner = current_user;`
+returns no rows).
+
+#### Vercel production-only setting
+
+- In the Vercel dashboard (Project Settings → Environment Variables), confirm that the existing `DATABASE_URL`
+  entry is scoped to **Production only**. If it also covers Preview or Development, stop: updating the entry
+  changes every environment that it covers. Split the entry in the dashboard first; that is an operator action.
+- Run the CLI from the linked release checkout and confirm `.vercel/project.json` names the Clickmoji production
+  project.
+
+#### Switch (real incident only, after every check and decision above)
+
+1. The write barrier is in place, `WRITE_STOP_AT` is recorded, and the post-point decision is written.
+2. Store the current production `DATABASE_URL` value in the password manager (the value, not in a file or a
+   ticket), so the old target can be restored in one step if the switch fails. Keep the saved grant list from
+   the barrier step in the ticket.
+3. Update the existing Vercel production variable from the linked release checkout. The value comes from stdin,
+   never from argv. Check the project and keep writes stopped if the update or deployment fails.
 
    ```sh
    printf '%s' "$CUTOVER_URL" | vercel env update DATABASE_URL production --yes &&
      vercel deploy --prod
    ```
 
-   In the Vercel dashboard, edit the existing Production variable under Project Settings →
-   Environment Variables, then redeploy. The CLI reads the value from stdin.
+   In the Vercel dashboard, edit the existing Production variable under Project Settings → Environment Variables,
+   then redeploy. Do not add a Preview or Development entry.
 
-5. Verify the deployed site: sign-in, reading a test list, and the runtime error view in Vercel. Only
-   then resume writes.
-6. Record the selected backup or time, the target name (not its URL), the checks that passed, and the
-   switch time, without credentials.
+4. Record the write counter of the target right after the deployment (`TARGET_BASELINE`). It is the rollback
+   reference.
+5. Verify the deployed site: sign-in, reading a test list, and the runtime error view in Vercel. Only then resume
+   writes. Writes now go to the target, which already has the runtime role's grants from the check above. The old
+   database stays barrier-protected and receives no writes after the switch.
+6. Record the selected backup or time, the target name (not its URL), the checks that passed, the decision used,
+   `WRITE_STOP_AT` and the switch time, without credentials.
 
-If any step fails, keep the old setting: update the variable with the value saved in step 2 and redeploy, then investigate. Finally unset the variables and remove temporary targets and
-files when they are no longer needed:
+#### Rollback
+
+- **Before any write reaches the target.** Check that the target's write counter still equals `TARGET_BASELINE`.
+  Then put the saved URL back in the Production variable, redeploy, and restore the old runtime role's grants
+  from the saved list. Before lifting the old database's barrier, check that it is unchanged since the barrier:
+  `COUNTS_SQL` equals `PRE_STOP_COUNTS` and the write counter equals `WRITE_BASELINE`. A difference means a writer
+  got past the barrier: stop and decide.
+- **After any write reached the target.** There is no blind rollback. Writes made on the target must first be
+  reconciled into the old database through the same decision as above. Rolling back without that loses them.
+- Do not mark or delete the old target while a rollback is still possible.
+
+If any step fails, keep the old setting: update the variable with the value saved in step 2 and redeploy, then
+investigate. Finally unset the variables and remove temporary targets and files when they are no longer needed:
 
 ```sh
-unset TARGET_URL CUTOVER_URL RECOVERY_TIME RESTORE_DB
+unset TARGET_URL CUTOVER_URL PROD_READONLY_URL POINT RECOVERY_TIME RESTORE_DB AGE_IDENTITY
+unset PGHOST PGPORT PGDATABASE PGUSER PGPASSWORD PGSSLMODE PGCHANNELBINDING PGOPTIONS
 ```
 
 Retain the selected encrypted backup according to policy.
 
-#### Recovery drill
+#### Recovery drill and cutover dry run
 
-Quarterly and before the first users, use the latest verified encrypted copy and the same commands
-above (_Create the target_ step 2, empty-target check, restore, verification) against a fresh empty
-disposable database. Verify the key, the restore exit status, the generic and the Clickmoji-specific
-checks, record the outcome and delete the disposable database. Never change site settings during a
-drill.
+Quarterly and before the first users, use the latest verified encrypted copy and the commands above (_Create the
+target_ step 2, empty-target check, restore, _Verify the encrypted copy_, and the runtime-role check) against a
+fresh empty disposable database. Record the outcome and delete the disposable database. Never change site settings
+during a drill.
 
-For a synthetic drill, encrypt a known custom-format test dump to the same recipient and restore it
-with the identical commands, then compare its expected tables and counts. The Clickmoji migration and
-application checks apply only to an actual Clickmoji copy.
+Before the first real switch, run the cutover dry run on a disposable target with a synthetic production copy: the
+baseline, barrier, post-point query, runtime checks and rollback check, stopping before `vercel env update`.
+
+For a synthetic drill, encrypt a known custom-format test dump to the same recipient and write a verification
+record with the same fields (`verify`, `migration`, `counts` keyed `schema.table`) and run the same checks. The
+expected outcomes are: an exact match passes; a record whose counts differ from the restored data fails the age
+check; and a point-in-time comparison against a copy with a different schema fails the schema check. The
+Clickmoji migration and application checks apply only to an actual Clickmoji copy.
 
 ### Duplicate variant repair (AGE-1536 / AGE-1545)
 
