@@ -1,5 +1,6 @@
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { format, resolveConfig } from 'prettier';
 
 // Builds the emoji batches for the operator (AGE-1465 item 1): docs/emoji-batches/candidates.json
 // minus the catalog snapshot → batches of 9 with a ready Gemini prompt and a cell manifest.
@@ -243,7 +244,7 @@ ${universalPrompt(items)}
 `;
 }
 
-function main() {
+async function main() {
   const file = JSON.parse(readFileSync(join(DIR, 'candidates.json'), 'utf8')) as CandidatesFile;
   const snapshot = JSON.parse(readFileSync(join(DIR, SNAPSHOT), 'utf8')) as Snapshot;
   const batches = planBatches(collectCandidates(file, snapshot));
@@ -252,19 +253,25 @@ function main() {
   rmSync(batchDir, { recursive: true, force: true });
   mkdirSync(batchDir, { recursive: true });
 
-  const manifest = batches.map((batch) => {
-    writeFileSync(join(batchDir, `${batch.id}.md`), batchMarkdown(batch));
-    return {
-      batch: batch.id,
-      kind: batch.kind,
-      file: `${batch.id}.png`,
-      ...(batch.kind === 'text' && { fileEn: `${batch.id}-en.png` }),
-      cells: batch.items.map((item, i) => {
-        const supersededBy = batch.supersededBy?.get(i + 1);
-        return { cell: i + 1, ...item, ...(supersededBy && { supersededBy }) };
-      }),
-    };
-  });
+  const prettierOptions = await resolveConfig(join(batchDir, 'batch.md'));
+  const manifest = await Promise.all(
+    batches.map(async (batch) => {
+      writeFileSync(
+        join(batchDir, `${batch.id}.md`),
+        await format(batchMarkdown(batch), { ...prettierOptions, parser: 'markdown' })
+      );
+      return {
+        batch: batch.id,
+        kind: batch.kind,
+        file: `${batch.id}.png`,
+        ...(batch.kind === 'text' && { fileEn: `${batch.id}-en.png` }),
+        cells: batch.items.map((item, i) => {
+          const supersededBy = batch.supersededBy?.get(i + 1);
+          return { cell: i + 1, ...item, ...(supersededBy && { supersededBy }) };
+        }),
+      };
+    })
+  );
 
   writeFileSync(join(DIR, 'manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`);
   const count = (kind: BatchKind) => manifest.filter((b) => b.kind === kind).length;
