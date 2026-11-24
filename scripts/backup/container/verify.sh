@@ -2,20 +2,33 @@
 # Runs inside the pinned tools image as root. Writes reports for the host:
 #   $WORK/out/source/{identities.tsv,migration.txt}               live database, metadata only
 #   $WORK/out/restored/{identities.tsv,migration.txt,counts.tsv}  the restored copy
-# Restores $WORK/dump.custom into a temporary PostgreSQL 17 cluster. The cluster lives in
-# /tmp/pgcluster inside this container, never in the bind-mounted work directory, so the
-# server (which runs as the postgres user) needs no access to host files and no plaintext
-# cluster is left on the host. Clients run as root and reach the server through its socket.
+# Restores $WORK/dump.custom into a temporary PostgreSQL 17 cluster. The cluster lives in a
+# fresh mktemp directory inside this container, never in the bind-mounted work directory, so
+# the server (which runs as the postgres user) needs no access to host files and no plaintext
+# cluster is left on the host. The container itself is disposable (--rm, removed by the host
+# on abort). The cluster is also stopped and deleted on every exit path, including HUP/INT/TERM.
+# Clients run as root and reach the server through its socket.
 # Any failed command stops the script with a non-zero status (set -e, ON_ERROR_STOP).
 set -eu
 
+# The host forwards DATABASE_URL by name; the libpq variables carry the same connection, so
+# the URL itself is dropped before any tool runs.
+unset DATABASE_URL
+
 WORK=${BACKUP_WORK:-/work}
 OUT="$WORK/out"
-CLUSTER=${BACKUP_CLUSTER:-/tmp/pgcluster}
+CLUSTER=${BACKUP_CLUSTER:-$(mktemp -d /tmp/pgcluster.XXXXXX)}
 PGDATA="$CLUSTER/data"
 RUNDIR="$CLUSTER/run"
 LOGDIR="$CLUSTER/log"
 PORT=5432
+
+stop_cluster() {
+  su-exec postgres pg_ctl -D "$PGDATA" -m fast stop > /dev/null 2>&1 || true
+  rm -rf "$CLUSTER"
+}
+trap stop_cluster EXIT
+trap 'exit 130' HUP INT TERM
 
 command -v su-exec > /dev/null 2>&1 || { echo "verify: su-exec is missing from the image" >&2; exit 1; }
 
@@ -59,11 +72,6 @@ unset PGPASSWORD
 
 mkdir -p "$PGDATA" "$RUNDIR" "$LOGDIR"
 chown -R postgres:postgres "$CLUSTER"
-
-stop_cluster() {
-  su-exec postgres pg_ctl -D "$PGDATA" -m fast stop > /dev/null 2>&1 || true
-}
-trap stop_cluster EXIT
 
 su-exec postgres initdb -D "$PGDATA" -U postgres --auth=trust -E UTF8 > "$LOGDIR/initdb.log" 2>&1
 su-exec postgres pg_ctl -D "$PGDATA" -w -l "$LOGDIR/server.log" \

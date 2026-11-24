@@ -214,6 +214,7 @@ describe('what reaches docker', () => {
   const expectedForwarded = (db) => {
     const url = new URL(db.url);
     return {
+      DATABASE_URL: digest(db.url),
       PGHOST: digest(url.hostname),
       PGPORT: digest(url.port),
       PGDATABASE: digest('clickmoji'),

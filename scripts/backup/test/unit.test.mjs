@@ -322,22 +322,40 @@ describe('pins and docker arguments', () => {
     assert.ok(!all.includes('postgresql://'));
   });
 
-  it('forwards every libpq variable by name only, never with a value', () => {
+  it('forwards DATABASE_URL and every libpq variable by name only, never with a value', () => {
     for (const args of [
       dumpArgs({ name: 'n1', workDir: '/tmp/x' }),
       verifyArgs({ name: 'n2', workDir: '/tmp/x' }),
     ]) {
       const forwarded = args.flatMap((arg, i) => (arg === '-e' ? [args[i + 1]] : []));
-      assert.deepEqual(forwarded, [...LIBPQ_ENV_NAMES]);
+      assert.deepEqual(forwarded, ['DATABASE_URL', ...LIBPQ_ENV_NAMES]);
+      // Name-only: the element after each -e is exactly the variable name.
+      for (const [i, arg] of args.entries()) {
+        if (arg === '-e') assert.doesNotMatch(args[i + 1], /=/, 'no value in -e');
+      }
       assert.equal(
         args.some((arg) => arg.includes('=') && arg.startsWith('PG')),
         false,
         'no PG variable with a value'
       );
       assert.equal(
-        args.some((arg) => arg.startsWith('DATABASE_URL')),
+        args.some((arg) => arg.startsWith('DATABASE_URL=') || arg.startsWith('postgres')),
         false,
-        'no URL variable'
+        'no URL value'
+      );
+    }
+  });
+
+  it('encrypt and cleanup containers forward no source variable at all', () => {
+    for (const args of [
+      encryptArgs({ name: 'n3', workDir: '/tmp/x', recipientFile: '/tmp/r.txt' }),
+      cleanupArgs({ name: 'n4', workDir: '/tmp/x' }),
+    ]) {
+      assert.equal(args.includes('-e'), false, args.join(' '));
+      assert.equal(
+        args.some((arg) => arg.includes('DATABASE_URL') || /^PG/.test(arg)),
+        false,
+        args.join(' ')
       );
     }
   });
@@ -347,7 +365,12 @@ describe('pins and docker arguments', () => {
     assert.equal(verifyArgs({ name: 'n2', workDir: '/tmp/x' }).at(-1), '/opt/backup/verify.sh');
     for (const script of ['dump.sh', 'verify.sh']) {
       const text = containerFile(script);
-      assert.doesNotMatch(text, /DATABASE_URL|postgres(ql)?:\/\//, `${script} takes no URL`);
+      // DATABASE_URL may appear in code only as the statement that drops it from the environment.
+      const mentions = text
+        .split('\n')
+        .filter((line) => !line.trimStart().startsWith('#') && line.includes('DATABASE_URL'));
+      assert.deepEqual(mentions, ['unset DATABASE_URL'], `${script} only unsets the URL`);
+      assert.doesNotMatch(text, /postgres(ql)?:\/\//, `${script} holds no URL literal`);
       assert.doesNotMatch(text, /--dbname|\$PG_?URL/, `${script} passes no connection string`);
     }
   });

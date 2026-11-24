@@ -170,7 +170,7 @@ describe(
         [
           'run',
           '--rm',
-          ...LIBPQ_ENV_NAMES.flatMap((name) => ['-e', name]),
+          ...['DATABASE_URL', ...LIBPQ_ENV_NAMES].flatMap((name) => ['-e', name]),
           '--mount',
           `type=bind,source=${work},target=/work`,
           '--mount',
@@ -180,7 +180,7 @@ describe(
           TOOLS_IMAGE,
           '/opt/backup/verify.sh',
         ],
-        { env: { ...process.env, ...libpqEnv(state.url) } }
+        { env: { ...process.env, DATABASE_URL: state.url, ...libpqEnv(state.url) } }
       );
       assert.notEqual(result.status, 0, 'verification of a corrupt dump fails');
       assert.doesNotMatch(`${result.stdout}${result.stderr}`, new RegExp(password));

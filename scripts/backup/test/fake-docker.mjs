@@ -8,8 +8,9 @@ import { appendFileSync, chmodSync, mkdirSync, readdirSync, rmSync, writeFileSyn
 import crypto from 'node:crypto';
 import path from 'node:path';
 
-// libpq variables the host forwards by name. Only digests of their values are logged.
+// Source variables the host forwards by name. Only digests of their values are logged.
 const PG_NAMES = [
+  'DATABASE_URL',
   'PGHOST',
   'PGPORT',
   'PGDATABASE',

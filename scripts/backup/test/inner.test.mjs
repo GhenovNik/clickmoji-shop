@@ -5,7 +5,7 @@
 // This covers the arguments and environment the inner processes really get; the SQL itself
 // runs only in the integration test against a real PostgreSQL 17.
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import crypto from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
@@ -23,7 +23,7 @@ name=$(basename "$0")
 {
   printf 'tool=%s\\n' "$name"
   for arg in "$@"; do printf 'arg=%s\\n' "$arg"; done
-  for var in PGHOST PGPORT PGDATABASE PGUSER PGPASSWORD PGSSLMODE; do
+  for var in DATABASE_URL PGHOST PGPORT PGDATABASE PGUSER PGPASSWORD PGSSLMODE; do
     eval "value=\\\${$var:-}"
     if [ -n "$value" ]; then printf 'env=%s:set\\n' "$var"; fi
   done
@@ -93,13 +93,33 @@ function innerEnv(extra = {}) {
     SHIM_IDENTITIES: fixtures.identities,
     SHIM_COUNTS: fixtures.counts,
     SHIM_MIGRATION: fixtures.migration,
+    DATABASE_URL: db.url,
     ...forwarded,
     ...extra,
   };
 }
 
+// No tool may receive the URL in its environment: the scripts drop it before the first tool.
+function assertNoUrlInTools(message) {
+  for (const call of shimCalls()) {
+    assert.equal(call.env.includes('DATABASE_URL:set'), false, `${message}: ${call.tool} has URL`);
+  }
+}
+
 function runScript(script, env) {
   return spawnSync('/bin/sh', [path.join(CONTAINER_DIR, script)], { env, encoding: 'utf8' });
+}
+
+function waitFor(predicate, timeoutMs = 10000) {
+  return new Promise((resolve, reject) => {
+    const started = Date.now();
+    const tick = () => {
+      if (predicate()) resolve();
+      else if (Date.now() - started > timeoutMs) reject(new Error('condition not reached'));
+      else setTimeout(tick, 50);
+    };
+    tick();
+  });
 }
 
 // Whatever the inner processes logged must never contain the synthetic secret or host.
@@ -149,6 +169,7 @@ describe('dump.sh as the inner process', () => {
     assert.match(log, /^env=PGPASSWORD:set$/m, 'password arrives by environment');
     assert.match(log, /^env=PGHOST:set$/m);
     assertNoSecretInLog('dump');
+    assertNoUrlInTools('dump');
   });
 
   it('fails when pg_dump fails, so the host sees a non-zero exit', () => {
@@ -182,6 +203,7 @@ describe('verify.sh as the inner process', () => {
     );
     assert.equal(result.stdout.trim().endsWith('describe: done'), true);
     assertNoSecretInLog('verify');
+    assertNoUrlInTools('verify');
   });
 
   it('reads the source with the password only; the local cluster never gets it', () => {
@@ -215,22 +237,53 @@ describe('verify.sh as the inner process', () => {
     assertNoSecretInLog('verify local');
   });
 
-  it('runs the server as the postgres user and keeps the cluster out of the work directory', () => {
+  it('runs the server as the postgres user in the cluster directory, and removes it on exit', () => {
     const result = runScript('verify.sh', innerEnv());
     assert.equal(result.status, 0, result.stderr);
-    const calls = shimCalls();
-    const serverStart = calls.find(
+    const serverStart = shimCalls().find(
       (call) =>
         call.tool === 'su-exec' && call.args.includes('pg_ctl') && call.args.includes('start')
     );
     assert.ok(serverStart, 'server started through su-exec');
     assert.equal(serverStart.args[0], 'postgres');
+    assert.ok(serverStart.args.includes(path.join(cluster, 'data')), 'data dir is the cluster');
     assert.equal(existsSync(path.join(work, 'pgdata')), false, 'no cluster in the work directory');
-    assert.equal(
-      existsSync(path.join(cluster, 'data')),
-      true,
-      'cluster in the container cluster directory'
+    assert.equal(existsSync(cluster), false, 'cluster deleted on normal exit');
+  });
+
+  it('uses a fresh private directory under /tmp when no cluster path is given', () => {
+    const env = innerEnv();
+    delete env.BACKUP_CLUSTER;
+    const result = runScript('verify.sh', env);
+    assert.equal(result.status, 0, result.stderr);
+    const serverStart = shimCalls().find(
+      (call) =>
+        call.tool === 'su-exec' && call.args.includes('pg_ctl') && call.args.includes('start')
     );
+    const dataDir = serverStart.args[serverStart.args.indexOf('-D') + 1];
+    const clusterDir = path.dirname(dataDir);
+    assert.match(clusterDir, /^\/tmp\/pgcluster\.[A-Za-z0-9]{6}$/);
+    assert.equal(existsSync(clusterDir), false, 'default cluster deleted on exit');
+  });
+
+  it('deletes the cluster when the copy fails after the server started', () => {
+    writeShim('pg_restore', '#!/bin/sh\nexit 1\n');
+    const result = runScript('verify.sh', innerEnv());
+    assert.notEqual(result.status, 0);
+    assert.equal(existsSync(cluster), false, 'cluster deleted after failure');
+  });
+
+  it('deletes the cluster when terminated by SIGTERM during the copy', async () => {
+    writeShim('pg_restore', `#!/bin/sh\necho 'tool=pg_restore' >> "$SHIM_LOG"\nsleep 2\n`);
+    const child = spawn('/bin/sh', [path.join(CONTAINER_DIR, 'verify.sh')], {
+      env: innerEnv(),
+      stdio: 'ignore',
+    });
+    const exited = new Promise((resolve) => child.on('close', (code) => resolve(code)));
+    await waitFor(() => shimLog().includes('tool=pg_restore'));
+    child.kill('SIGTERM');
+    assert.equal(await exited, 130, 'exit status of the signal path');
+    assert.equal(existsSync(cluster), false, 'cluster deleted after SIGTERM');
   });
 
   it('refuses to run when su-exec is missing from the image', () => {

@@ -110,7 +110,9 @@ export function loadConfig(
   if (protocol !== 'postgres:' && protocol !== 'postgresql:') {
     throw new ConfigError('DATABASE_URL: ожидается схема postgres');
   }
-  const containerEnv = libpqEnv(rawUrl);
+  // DATABASE_URL is forwarded by name to the dump and verify containers; the libpq variables
+  // are derived from this same value, so both describe one connection.
+  const containerEnv = { ...libpqEnv(rawUrl), DATABASE_URL: rawUrl };
 
   const backupDir = requireAbsolute(env, 'BACKUP_DIR');
   const statusFile = requireAbsolute(env, 'BACKUP_STATUS_FILE');

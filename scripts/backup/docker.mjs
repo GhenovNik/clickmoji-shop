@@ -1,7 +1,8 @@
 // docker CLI wrapper. Argument builders are pure so tests can read exactly what runs.
 // The source connection travels only in the environment: every `-e NAME` below forwards a
-// libpq variable by name, so no argv (host or container) contains the address, host,
-// user or password. Inside the containers the tools read those variables themselves.
+// variable by name (DATABASE_URL and the libpq variables derived from it), so no argv
+// (host or container) contains the address, host, user or password. Inside the containers
+// the tools read the libpq variables themselves.
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -21,6 +22,11 @@ const mount = (source, target, readonly = false) =>
 // ['-e', 'PGHOST', '-e', 'PGPORT', ...]: names only, every time, so the forwarded set is fixed.
 const forwardLibpq = () => LIBPQ_ENV_NAMES.flatMap((name) => ['-e', name]);
 
+// Source steps (dump, verify) get DATABASE_URL by name, then the libpq names.
+// Names only: the value stays in the client environment.
+const SOURCE_ENV_NAMES = Object.freeze(['DATABASE_URL', ...LIBPQ_ENV_NAMES]);
+const forwardSource = () => SOURCE_ENV_NAMES.flatMap((name) => ['-e', name]);
+
 export const versionArgs = () => ['version', '--format', '{{.Server.Version}}'];
 export const inspectImageArgs = () => ['image', 'inspect', TOOLS_IMAGE];
 export const buildImageArgs = () => [
@@ -39,7 +45,7 @@ export function dumpArgs({ name, workDir }) {
     '--rm',
     '--name',
     name,
-    ...forwardLibpq(),
+    ...forwardSource(),
     '--mount',
     mount(workDir, '/work'),
     '--mount',
@@ -57,7 +63,7 @@ export function verifyArgs({ name, workDir }) {
     '--rm',
     '--name',
     name,
-    ...forwardLibpq(),
+    ...forwardSource(),
     '--mount',
     mount(workDir, '/work'),
     '--mount',
@@ -112,7 +118,7 @@ export class DockerRunner {
   constructor({ bin = 'docker', containerEnv, env = process.env }) {
     this.bin = bin;
     const inherited = Object.fromEntries(
-      Object.entries(env).filter(([key]) => !LIBPQ_ENV_NAMES.includes(key))
+      Object.entries(env).filter(([key]) => !SOURCE_ENV_NAMES.includes(key))
     );
     this.env = { ...inherited, ...containerEnv };
     this.children = new Map(); // child -> Promise that settles when it closes
