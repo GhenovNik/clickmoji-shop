@@ -283,6 +283,60 @@ JS
 prod_ro() {
   ( load_libpq_env "$PROD_READONLY_URL" && export PGOPTIONS='-c default_transaction_read_only=on' && "$@" )
 }
+
+# Shell mode for every command below: a failing stage of a pipeline is the pipeline's status and is never hidden.
+set -o pipefail
+
+# psql_stdin: SQL arrives on stdin; ON_ERROR_STOP makes a failed or interrupted read exit nonzero.
+psql_stdin() { pg_run -i "$IMAGE" sh -c 'psql -X -q -A -t -v ON_ERROR_STOP=1 -f -'; }
+
+# checked_read FILE COMMAND [ARG...]: runs COMMAND (SQL on stdin) and stores its output in FILE. It fails, and removes
+# FILE, when COMMAND exits nonzero or prints nothing, so a partial or empty read never reaches a comparison.
+checked_read() {
+  _cr_file=$1
+  shift
+  if "$@" > "$_cr_file" && [ -s "$_cr_file" ]; then
+    return 0
+  fi
+  rm -f "$_cr_file"
+  echo 'checked_read: read failed or returned no rows' >&2
+  return 1
+}
+
+# checked_sha256 FILE [sort]: prints the SHA-256 of FILE, or of its lines sorted with LC_ALL=C when "sort" is given.
+# Fails, printing nothing, if FILE is missing or empty, or if hashing fails.
+checked_sha256() {
+  [ -s "$1" ] || return 1
+  if [ "${2:-}" = sort ]; then
+    _cs_out=$(LC_ALL=C sort "$1" | shasum -a 256) || return 1
+  else
+    _cs_out=$(shasum -a 256 < "$1") || return 1
+  fi
+  _cs_hash=${_cs_out%% *}
+  [ "${#_cs_hash}" -eq 64 ] || return 1
+  printf '%s\n' "$_cs_hash"
+}
+
+# checked_digest SQL COMMAND [ARG...]: sends SQL to COMMAND and prints the SHA-256 of its sorted output. It prints
+# nothing and fails on a failed read, an empty result or a failed hash. A database with no user tables also fails,
+# which is correct for a restored target. Use it as DIGEST=$(checked_digest ...) and stop when it fails.
+checked_digest() {
+  _cd_sql=$1
+  shift
+  _cd_file=$(mktemp) || return 1
+  printf '%s\n' "$_cd_sql" | checked_read "$_cd_file" "$@" && checked_sha256 "$_cd_file" sort
+  _cd_status=$?
+  rm -f "$_cd_file"
+  return "$_cd_status"
+}
+
+# same_digest EXPECTED ACTUAL: succeeds only when both are 64-character hashes and they are equal. An empty ACTUAL,
+# which is what a failed read produces, never matches.
+same_digest() {
+  [ "${#1}" -eq 64 ] && [ "$1" = "$2" ]
+}
+
+# Every `checked_*` call below is a stop point: when it fails, the following lines of that step must not run.
 ```
 
 The read-only URL is entered once, without echo, and stays in this shell:
@@ -390,14 +444,16 @@ mismatch blocks the recovery.
      -e POSTGRES_HOST_AUTH_METHOD=trust -p 127.0.0.1:55432:5432 "$IMAGE" > /dev/null
    until docker exec "$REF_NAME" pg_isready -q -U postgres; do sleep 1; done
    ( cd "$COMPAT_DIR" && npm ci && DATABASE_URL='postgresql://postgres@127.0.0.1:55432/postgres' npx prisma migrate deploy )
-   docker exec "$REF_NAME" psql -X -q -A -t -U postgres -d postgres -v ON_ERROR_STOP=1 -c "$IDENTITY_SQL" > "$EXP_DIR/identity.tsv"
-   docker exec "$REF_NAME" psql -X -q -A -t -U postgres -d postgres -v ON_ERROR_STOP=1 -c "$MIGRATION_SQL" > "$EXP_DIR/migration.txt"
+   EXPECTED_IDENTITY_SHA=$(checked_digest "$IDENTITY_SQL" docker exec -i "$REF_NAME" psql -X -q -A -t -U postgres -d postgres -v ON_ERROR_STOP=1 -f -)
+   REF_IDENTITY_STATUS=$?
+   REF_MIGRATION=$(docker exec "$REF_NAME" psql -X -q -A -t -U postgres -d postgres -v ON_ERROR_STOP=1 -c "$MIGRATION_SQL")
+   REF_MIGRATION_STATUS=$?
    docker stop "$REF_NAME" > /dev/null
-   EXPECTED_IDENTITY_SHA=$(shasum -a 256 "$EXP_DIR/identity.tsv" | cut -d' ' -f1)
    printf 'EXPECTED_IDENTITY_SHA=%s\n' "$EXPECTED_IDENTITY_SHA"
    ```
 
-   The reference migration (`$EXP_DIR/migration.txt`) must equal `EXPECTED_MIGRATION`; otherwise stop.
+   Stop unless `REF_IDENTITY_STATUS` and `REF_MIGRATION_STATUS` are both `0`, `EXPECTED_IDENTITY_SHA` is a 64-character
+   hash, and `REF_MIGRATION` equals `EXPECTED_MIGRATION`.
 
 3. **`EXPECTATIONS`**: incident-specific data checks. Each one is a read-only query on the target with an expected
    value and the evidence for that value. The evidence must come from before the bad change (for example a count
@@ -504,9 +560,14 @@ in its console before continuing.
    if [ "$CREATE_STATUS" -ne 0 ]; then
      # Nothing is identified and nothing is deleted. Look at the list for $RECOVERY_BRANCH by hand and record it.
      echo "stop: create failed (status $CREATE_STATUS); the branch list must be checked by hand"
-   elif ! RECOVERY_BRANCH_ID=$(branch_check post "$BRANCHES_BEFORE" "$RECOVERY_DIR/branches-after.json"); then
+   elif ! BRANCH_OUT=$(branch_check post "$BRANCHES_BEFORE" "$RECOVERY_DIR/branches-after.json"); then
+     # Fail closed: nothing is deleted here and no connection is made. The id printed before the verdict (if any) is
+     # kept for the ticket; its removal is a separate operator decision, by that exact id only.
+     RECOVERY_BRANCH_CANDIDATE=$BRANCH_OUT
      unset RECOVERY_BRANCH_ID
-     echo 'stop: the recovery branch failed its read-back (reason above); record it in the ticket'
+     echo 'stop: the recovery branch failed its read-back (reason above); record RECOVERY_BRANCH_CANDIDATE in the ticket'
+   else
+     RECOVERY_BRANCH_ID=$BRANCH_OUT
    fi
    ```
 
@@ -663,8 +724,7 @@ Pass only when **all** of these hold, all run on the restored target:
 4. the target's schema equals the reference: the identity's SHA-256 equals `EXPECTED_IDENTITY_SHA`:
 
    ```sh
-   pg_run "$IMAGE" psql -X -q -A -t -v ON_ERROR_STOP=1 -c "$IDENTITY_SQL" > "$EXP_DIR/target-identity.tsv"
-   [ "$(shasum -a 256 "$EXP_DIR/target-identity.tsv" | cut -d' ' -f1)" = "$EXPECTED_IDENTITY_SHA" ] && echo "schema: matches the compatible release"
+   same_digest "$EXPECTED_IDENTITY_SHA" "$(checked_digest "$IDENTITY_SQL" psql_stdin)" && echo "schema: matches the compatible release"
    ```
 
 5. every `EXPECTATIONS` check passes.
@@ -689,8 +749,7 @@ Pass only when **all** of these hold, all run on the branch:
 2. the schema identity equals the reference's, line for line:
 
    ```sh
-   pg_run "$IMAGE" psql -X -q -A -t -v ON_ERROR_STOP=1 -c "$IDENTITY_SQL" > "$EXP_DIR/branch-identity.tsv"
-   diff "$EXP_DIR/identity.tsv" "$EXP_DIR/branch-identity.tsv" && echo "schema: matches the compatible release"
+   same_digest "$EXPECTED_IDENTITY_SHA" "$(checked_digest "$IDENTITY_SQL" psql_stdin)" && echo "schema: matches the compatible release"
    ```
 
    A difference means the branch does not hold the compatible release's schema: stop and decide.
@@ -712,6 +771,8 @@ list against the target in an isolated preview. Do not seed restored data.
 
 Order matters, and it is fixed:
 
+0. the identity probe of _Runtime role on the target_ has passed. It writes only to the target, so a failure is known
+   before any writer is stopped;
 1. stop writers (step 1 below);
 2. verify the fence (step 2), until it passes;
 3. record the counters from frozen production (step 3);
@@ -784,14 +845,15 @@ FROZEN_AT='<UTC time of the last passing fence check>'
 WRITE_BASELINE=$(prod_ro pg_run -i "$IMAGE" sh -c 'psql -X -q -A -t -v ON_ERROR_STOP=1 -f -' <<< "$WRITE_COUNTER_SQL")
 SEQUENCE_BASELINE=$(prod_ro pg_run -i "$IMAGE" sh -c 'psql -X -q -A -t -v ON_ERROR_STOP=1 -f -' <<< "$SEQUENCE_SQL")
 PRE_STOP_COUNTS=$(prod_ro pg_run "$IMAGE" psql -X -q -A -t -v ON_ERROR_STOP=1 -c "$COUNTS_SQL")
-PRE_STOP_IDENTITY_SHA=$(prod_ro pg_run "$IMAGE" psql -X -q -A -t -v ON_ERROR_STOP=1 -c "$IDENTITY_SQL" | shasum -a 256 | cut -d' ' -f1)
-PRE_STOP_DIGEST=$(prod_ro pg_run -i "$IMAGE" sh -c 'psql -X -q -A -t -v ON_ERROR_STOP=1 -f -' <<< "$ROWHASH_SQL" | LC_ALL=C sort | shasum -a 256 | cut -d' ' -f1)
+PRE_STOP_IDENTITY_SHA=$(checked_digest "$IDENTITY_SQL" prod_ro psql_stdin)
+PRE_STOP_DIGEST=$(checked_digest "$ROWHASH_SQL" prod_ro psql_stdin)
 printf 'FROZEN_AT=%s write_baseline=%s identity=%s digest=%s\n' "$FROZEN_AT" "$WRITE_BASELINE" "$PRE_STOP_IDENTITY_SHA" "$PRE_STOP_DIGEST"
 ```
 
-Record `FROZEN_AT`, `WRITE_BASELINE`, `SEQUENCE_BASELINE`, `PRE_STOP_COUNTS`, `PRE_STOP_IDENTITY_SHA` and `PRE_STOP_DIGEST`
-in the ticket. They are the old database's state for the rollback check. `PRE_STOP_DIGEST` is the one that counts: the
-counters are kept for the record and are never proof that nothing was written.
+Stop unless `PRE_STOP_IDENTITY_SHA` and `PRE_STOP_DIGEST` are both 64-character hashes and the other reads above printed
+their values. Record `FROZEN_AT`, `WRITE_BASELINE`, `SEQUENCE_BASELINE`, `PRE_STOP_COUNTS`, `PRE_STOP_IDENTITY_SHA` and
+`PRE_STOP_DIGEST` in the ticket. They are the old database's state for the rollback check. `PRE_STOP_DIGEST` is the one
+that counts: the counters are kept for the record and are never proof that nothing was written.
 
 Limits, stated in the ticket: the fence is operator-enforced. The checks prove that no session exists and that the
 write counters are stable; they do not prove that a writer holding no session cannot act later. That is why writers are
@@ -818,15 +880,15 @@ explicit operator decision; it is not reconciled automatically.
 
 ```sh
 DIFF_DIR=$(mktemp -d "$HOME/recovery-diff-XXXXXX") && chmod 700 "$DIFF_DIR"
-prod_ro pg_run "$IMAGE" psql -X -q -A -t -v ON_ERROR_STOP=1 -c "$IDENTITY_SQL" > "$DIFF_DIR/identity-prod.txt"
+checked_read "$DIFF_DIR/identity-prod.txt" prod_ro psql_stdin <<< "$IDENTITY_SQL"
 load_libpq_env "$TARGET_URL"
-pg_run "$IMAGE" psql -X -q -A -t -v ON_ERROR_STOP=1 -c "$IDENTITY_SQL" > "$DIFF_DIR/identity-target.txt"
+checked_read "$DIFF_DIR/identity-target.txt" psql_stdin <<< "$IDENTITY_SQL"
 echo 'schema differs:'
 LC_ALL=C comm -3 <(LC_ALL=C sort "$DIFF_DIR/identity-prod.txt") <(LC_ALL=C sort "$DIFF_DIR/identity-target.txt") \
   | sed 's/^\t//' | cut -f1 | LC_ALL=C sort -u
-prod_ro pg_run -i "$IMAGE" sh -c 'psql -X -q -A -t -v ON_ERROR_STOP=1 -f -' <<< "$ROWHASH_SQL" > "$DIFF_DIR/prod.txt"
+checked_read "$DIFF_DIR/prod.txt" prod_ro psql_stdin <<< "$ROWHASH_SQL"
 load_libpq_env "$TARGET_URL"
-pg_run -i "$IMAGE" sh -c 'psql -X -q -A -t -v ON_ERROR_STOP=1 -f -' <<< "$ROWHASH_SQL" > "$DIFF_DIR/target.txt"
+checked_read "$DIFF_DIR/target.txt" psql_stdin <<< "$ROWHASH_SQL"
 LC_ALL=C sort "$DIFF_DIR/prod.txt" > "$DIFF_DIR/prod.sorted"
 LC_ALL=C sort "$DIFF_DIR/target.txt" > "$DIFF_DIR/target.sorted"
 
@@ -875,11 +937,21 @@ production's, across all user schemas (not only `public`), and it must own nothi
 # the outputs must be identical, and OWNERSHIP_SQL must return no rows.
 export RUNTIME_ROLE='<runtime-role>'
 ROLE_PSQL='psql -X -q -A -t -v ON_ERROR_STOP=1 -v role="$RUNTIME_ROLE" -f -'
-prod_ro pg_run -i -e RUNTIME_ROLE "$IMAGE" sh -c "$ROLE_PSQL" <<< "$GRANTS_SQL" > "$DIFF_DIR/grants-prod.txt"
+# ownership_none: succeeds only when the query exits 0 and prints no rows. An empty output is valid only here.
+ownership_none() {
+  _on_file=$(mktemp) || return 1
+  "$@" > "$_on_file"
+  _on_status=$?
+  [ "$_on_status" -eq 0 ] && [ ! -s "$_on_file" ]
+  _on_result=$?
+  rm -f "$_on_file"
+  return "$_on_result"
+}
+checked_read "$DIFF_DIR/grants-prod.txt" prod_ro pg_run -i -e RUNTIME_ROLE "$IMAGE" sh -c "$ROLE_PSQL" <<< "$GRANTS_SQL"
 load_libpq_env "$TARGET_URL"
-pg_run -i -e RUNTIME_ROLE "$IMAGE" sh -c "$ROLE_PSQL" <<< "$GRANTS_SQL" > "$DIFF_DIR/grants-target.txt"
-diff "$DIFF_DIR/grants-prod.txt" "$DIFF_DIR/grants-target.txt" && echo "grants: identical"
-test -z "$(pg_run -i -e RUNTIME_ROLE "$IMAGE" sh -c "$ROLE_PSQL" <<< "$OWNERSHIP_SQL")" && echo "ownership: none"
+checked_read "$DIFF_DIR/grants-target.txt" pg_run -i -e RUNTIME_ROLE "$IMAGE" sh -c "$ROLE_PSQL" <<< "$GRANTS_SQL"
+cmp -s "$DIFF_DIR/grants-prod.txt" "$DIFF_DIR/grants-target.txt" && echo "grants: identical"
+ownership_none pg_run -i -e RUNTIME_ROLE "$IMAGE" sh -c "$ROLE_PSQL" <<< "$OWNERSHIP_SQL" && echo "ownership: none"
 ```
 
 Then obtain the runtime URL and check that it reaches the target as the runtime role. Its attributes must be `f` for
@@ -914,6 +986,54 @@ SQL
 
 Expected: `<database>|<runtime-role>|f|f|f|f|f`. Anything else stops the switch.
 
+#### Identity probe (both URLs reach the same database)
+
+Equal database names, roles and migrations do not show that two URLs reach the same database: another cluster can have
+all of them. The probe uses the cluster itself. The owner writes a one-time random value that exists only on the target,
+the runtime role must read it back exactly, and the cluster identifier must match. It writes only to the target, and it
+must pass before the fence and before `TARGET_BASELINE` is recorded. Any failure holds the switch.
+
+```sh
+PROBE_NAME="clickmoji_probe_$(node -e 'process.stdout.write(require("crypto").randomBytes(8).toString("hex"))')"
+PROBE_NONCE=$(node -e 'process.stdout.write(require("crypto").randomBytes(32).toString("hex"))')
+IDENTITY_QUERY="SELECT system_identifier || '|' || current_database() || '|' || pg_is_in_recovery() FROM pg_control_system();"
+
+# 1. Owner identity, through the owner URL:
+load_libpq_env "$TARGET_URL"
+OWNER_ID=$(pg_run "$IMAGE" psql -X -q -A -t -v ON_ERROR_STOP=1 -c "$IDENTITY_QUERY")
+
+# 2. Owner writes the nonce and grants SELECT only. Steps 3 and 4 run only if this step exits 0.
+pg_run -i "$IMAGE" sh -c 'psql -X -q -A -t -v ON_ERROR_STOP=1 -f -' <<SQL
+CREATE TABLE public."$PROBE_NAME" (nonce text NOT NULL);
+INSERT INTO public."$PROBE_NAME" (nonce) VALUES ('$PROBE_NONCE');
+GRANT SELECT ON public."$PROBE_NAME" TO "$RUNTIME_ROLE";
+SQL
+PROBE_WRITE_STATUS=$?
+
+# 3. Runtime identity and the nonce, through the runtime URL:
+load_libpq_env "$CUTOVER_URL"
+RUNTIME_ID=$(pg_run "$IMAGE" psql -X -q -A -t -v ON_ERROR_STOP=1 -c "$IDENTITY_QUERY")
+RUNTIME_NONCE=$(pg_run "$IMAGE" psql -X -q -A -t -v ON_ERROR_STOP=1 -c "SELECT nonce FROM public.\"$PROBE_NAME\";")
+
+# 4. Pass only when every value agrees: the write exited 0, both identities are equal and not in recovery, and the
+#    nonce read back through the runtime URL is exactly the one written (an empty or multi-row result fails the match).
+[ "$PROBE_WRITE_STATUS" -eq 0 ] && [ -n "$OWNER_ID" ] && [ "$OWNER_ID" = "$RUNTIME_ID" ] \
+  && [ "${OWNER_ID##*|}" = false ] && [ "$RUNTIME_NONCE" = "$PROBE_NONCE" ] && echo "identity probe: same target"
+
+# 5. Always runs, pass or fail: the owner removes the probe and the absence is verified by the owner.
+load_libpq_env "$TARGET_URL"
+pg_run -i "$IMAGE" sh -c 'psql -X -q -A -t -v ON_ERROR_STOP=1 -f -' <<SQL
+DROP TABLE IF EXISTS public."$PROBE_NAME";
+SQL
+PROBE_CLEAN=$(pg_run "$IMAGE" psql -X -q -A -t -v ON_ERROR_STOP=1 -c "SELECT coalesce(to_regclass('public.\"$PROBE_NAME\"')::text, 'absent');")
+[ "$PROBE_CLEAN" = absent ] && echo "probe removed"
+```
+
+The identity probe passes only when step 4 prints `identity probe: same target` **and** step 5 prints `probe removed`. If
+step 4 fails, step 5 must still run; the switch is then held, and the target is not used for `TARGET_BASELINE` until the
+probe is removed and its absence is verified. The probe name and nonce are kept in shell variables only, and are not
+recorded in the ticket. Record the result (`identity probe: same target`, `probe removed`) and no other values.
+
 Migrate status through the runtime URL is read-only and must show the compatible release's migrations as applied, with
 `EXPECTED_MIGRATION` as the latest and no pending or failed migration:
 
@@ -943,7 +1063,8 @@ Preconditions, all recorded in the ticket:
 - **old source reachable and fenced**: the fence passed on the run that defines `FROZEN_AT`, and the `prod_ro` reads of
   the post-point comparison succeed. Without them the fence and the post-point changes cannot be established;
 - the post-point decision is written (reconcile or accept loss), and the sequence check printed nothing;
-- the runtime identity and the migrate status passed on `CUTOVER_URL`.
+- the runtime identity and the migrate status passed on `CUTOVER_URL`, and the identity probe passed in full (see
+  _Identity probe_);
 
 **Cutover is held** while any precondition is missing, in particular while the old source cannot be read or fenced. Then
 nothing changes in Vercel, the target stays restore-ready, and the hold is recorded in the ticket with its time and
@@ -956,12 +1077,15 @@ reason. This procedure has no route around the hold; any other action is a separ
 
    ```sh
    load_libpq_env "$TARGET_URL"
-   TARGET_BASELINE_DIGEST=$(pg_run -i "$IMAGE" sh -c 'psql -X -q -A -t -v ON_ERROR_STOP=1 -f -' <<< "$ROWHASH_SQL" | LC_ALL=C sort | shasum -a 256 | cut -d' ' -f1)
+   TARGET_BASELINE_DIGEST=$(checked_digest "$ROWHASH_SQL" psql_stdin)
    TARGET_BASELINE_WRITES=$(pg_run "$IMAGE" psql -X -q -A -t -v ON_ERROR_STOP=1 -c "$WRITE_COUNTER_SQL")
    TARGET_BASELINE_SEQUENCES=$(pg_run "$IMAGE" psql -X -q -A -t -v ON_ERROR_STOP=1 -c "$SEQUENCE_SQL")
    TARGET_BASELINE_COUNTS=$(pg_run "$IMAGE" psql -X -q -A -t -v ON_ERROR_STOP=1 -c "$COUNTS_SQL")
    printf 'TARGET_BASELINE_DIGEST=%s\n' "$TARGET_BASELINE_DIGEST"
    ```
+
+   Stop unless `TARGET_BASELINE_DIGEST` is a 64-character hash. The identity probe's probe table must already be removed
+   (its verification is in _Identity probe_), so the baseline contains only the restored data.
 
 2. Store the current production `DATABASE_URL` value in the password manager (the value, not in a file or a ticket), so the
    old target can be restored in one step.
@@ -970,15 +1094,27 @@ reason. This procedure has no route around the hold; any other action is a separ
    so rollback follows the exposed path in _Rollback_. If the update or the deployment fails, keep writes stopped.
 
    ```sh
-   printf '%s' "$CUTOVER_URL" | vercel env update DATABASE_URL production --yes &&
-     vercel deploy --prod
+   printf '%s' "$CUTOVER_URL" | vercel env update DATABASE_URL production --yes
+   UPDATE_STATUS=$?
+   DEPLOY_STATUS=1
+   [ "$UPDATE_STATUS" -eq 0 ] && vercel deploy --prod && DEPLOY_STATUS=0
+   printf 'env update: %s; deploy: %s\n' "$UPDATE_STATUS" "$DEPLOY_STATUS"
    ```
 
    In the Vercel dashboard, edit the existing Production variable under Project Settings → Environment Variables, then
-   redeploy. Do not add a Preview or Development entry.
+   redeploy. Do not add a Preview or Development entry. The dashboard path has the same statuses: both steps must be
+   confirmed as successful.
 
-4. Verify the deployed site: sign-in, reading a test list, and the runtime error view in Vercel. Only then resume writes
-   through the restored site. The old database stays fenced and receives no writes after the switch.
+4. Confirm the routing before any writer runs. Writers resume only when `env update: 0; deploy: 0` and all of these hold:
+   - the production domain's current deployment is the one deployed in step 3 (the deployment is listed as the production
+     alias in the dashboard, or `vercel inspect` on its URL shows it);
+   - a request to the site (sign-in and reading a test list) opens a session of `<runtime-role>` on the **target**, and
+     the old database shows no session from the site;
+   - sign-in, reading a test list and the runtime error view in Vercel are clean.
+
+   Only then resume writes through the restored site. The old database stays fenced and receives no writes after the
+   switch. A nonzero status or a failed routing check keeps writes stopped and the cutover is held.
+
 5. Record the selected copy or time, the target name (not its URL), the checks that passed, the decision used, `FROZEN_AT`,
    the switch time and the parent of the branch, without credentials.
 
@@ -997,11 +1133,17 @@ Vercel. The simplest safe rollback is to abandon the switch and reopen the old d
 
   ```sh
   load_libpq_env "$TARGET_URL"
-  [ "$(pg_run -i "$IMAGE" sh -c 'psql -X -q -A -t -v ON_ERROR_STOP=1 -f -' <<< "$ROWHASH_SQL" | LC_ALL=C sort | shasum -a 256 | cut -d' ' -f1)" = "$TARGET_BASELINE_DIGEST" ] && echo "target digest: unchanged"
+  same_digest "$TARGET_BASELINE_DIGEST" "$(checked_digest "$ROWHASH_SQL" psql_stdin)" && echo "target digest: unchanged"
   ```
 
 - the old database's digest equals `PRE_STOP_DIGEST`, its identity SHA-256 equals `PRE_STOP_IDENTITY_SHA`, and it has no
-  session other than the operator's and the verifier's; the digest is read through `prod_ro` as in _Fence production_;
+  session other than the operator's and the verifier's; both are read through `prod_ro` as in _Fence production_:
+
+  ```sh
+  same_digest "$PRE_STOP_DIGEST" "$(checked_digest "$ROWHASH_SQL" prod_ro psql_stdin)" && echo "old digest: unchanged"
+  same_digest "$PRE_STOP_IDENTITY_SHA" "$(checked_digest "$IDENTITY_SQL" prod_ro psql_stdin)" && echo "old identity: unchanged"
+  ```
+
 - the runtime role connects to the old database and returns the row of the runtime-role check.
 
 Then restore writers in the reverse order of the fence and record the time. Any difference means a write may have reached
@@ -1022,17 +1164,24 @@ Required steps:
    `ROWHASH` digest must equal the target's digest (after reconciliation), its identity SHA-256 must equal
    `PRE_STOP_IDENTITY_SHA`, its sessions must be only the operator's and the verifier's, and the runtime role must return
    its row.
-4. Only then put the old URL back and redeploy, and reopen writers in the reverse order of the fence:
+4. Only then put the old URL back and redeploy:
 
    ```sh
    printf 'Old production URL (not echoed): '
    read -rs OLD_URL
    echo
-   printf '%s' "$OLD_URL" | vercel env update DATABASE_URL production --yes &&
-     vercel deploy --prod
+   printf '%s' "$OLD_URL" | vercel env update DATABASE_URL production --yes
+   UPDATE_STATUS=$?
    unset OLD_URL
+   DEPLOY_STATUS=1
+   [ "$UPDATE_STATUS" -eq 0 ] && vercel deploy --prod && DEPLOY_STATUS=0
+   printf 'env update: %s; deploy: %s\n' "$UPDATE_STATUS" "$DEPLOY_STATUS"
    ```
 
+   Writers reopen only when `env update: 0; deploy: 0` **and** the routing check passes: the production domain's current
+   deployment is the redeployed one, a request to the site opens a session of `<runtime-role>` on the old database, and
+   the target shows no session other than the operator's and the verifier's. Then reopen writers one at a time in the
+   reverse order of the fence, re-checking each. A nonzero status or a failed routing check keeps every writer stopped.
    The target stays fenced and is kept for the ticket.
 
 Do not mark or delete the old target while a rollback is still possible. If any step fails, keep the old setting and
@@ -1040,7 +1189,7 @@ investigate before any further change. Finally, unset the variables and remove t
 are no longer needed:
 
 ```sh
-unset TARGET_URL CUTOVER_URL PROD_READONLY_URL OLD_URL RECOVERY_TIME RESTORE_DB AGE_IDENTITY
+unset TARGET_URL CUTOVER_URL PROD_READONLY_URL OLD_URL RECOVERY_TIME RESTORE_DB AGE_IDENTITY PROBE_NONCE RUNTIME_NONCE
 unset PGHOST PGPORT PGDATABASE PGUSER PGPASSWORD PGSSLMODE PGCHANNELBINDING PGOPTIONS
 rm -rf "$DIFF_DIR" "$EXP_DIR" "$RECOVERY_DIR"
 ```
@@ -1076,9 +1225,17 @@ The synthetic drill must show these outcomes:
 - a restore-ready result is reached on a target at another provider with no Neon CLI or Neon branch in the session.
 - with the old source made unreachable (or its reads refused), the switch is held: no `vercel env update` runs, the target
   stays restore-ready, and the hold is recorded.
-- a point-in-time branch whose read-back shows another parent, or another instant for `parent_timestamp`, is refused, and
-  its id is the only one deleted. The same instant written in another form (for example `+00:00` or extra zeros in the
-  fraction) passes.
+- a point-in-time branch whose read-back shows another parent, or another instant for `parent_timestamp`, is refused and
+  **nothing is deleted**: the drill checks that the candidate id is recorded and that no deletion runs. Any later removal
+  is a separate operator action by that exact id, after the operator confirms it belongs to this run, never by name. The
+  same instant written in another form (for example `+00:00` or extra zeros in the fraction) passes.
+- a different cluster with the same database name, roles and migrations fails the identity probe: its
+  `system_identifier` differs and the owner's nonce does not read back through its runtime URL. The same cluster passes.
+  The schema digest is equal on both clusters, so it is not used as identity.
+- a read that prints rows and then fails (for example `SELECT 'partial'; SELECT 1/0;`), or that prints nothing, is
+  rejected by `checked_digest`. A repeated full read reproduces the earlier digest exactly.
+- after an exposed rollback with a failed `vercel env update` or a failed `vercel deploy --prod`, every writer stays
+  stopped. The drill checks that writers reopen only after the routing check passes.
 
 The Clickmoji migration and application checks apply only to an actual Clickmoji copy.
 
