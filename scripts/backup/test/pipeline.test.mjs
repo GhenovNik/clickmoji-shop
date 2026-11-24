@@ -210,17 +210,16 @@ describe('concurrency', () => {
 });
 
 describe('what reaches docker', () => {
-  const digest = (value) => crypto.createHash('sha256').update(value).digest('hex');
   const expectedForwarded = (db) => {
     const url = new URL(db.url);
     return {
-      DATABASE_URL: digest(db.url),
-      PGHOST: digest(url.hostname),
-      PGPORT: digest(url.port),
-      PGDATABASE: digest('clickmoji'),
-      PGUSER: digest('app_user'),
-      PGPASSWORD: digest(db.password),
-      PGSSLMODE: digest('require'),
+      DATABASE_URL: db.url,
+      PGHOST: url.hostname,
+      PGPORT: url.port,
+      PGDATABASE: 'clickmoji',
+      PGUSER: 'app_user',
+      PGPASSWORD: db.password,
+      PGSSLMODE: 'require',
     };
   };
 
@@ -240,16 +239,16 @@ describe('what reaches docker', () => {
     }
   });
 
-  it('the source steps receive every libpq value from the environment, digest-checked', async () => {
-    await runWithFake(sandbox, db);
+  it('the source steps receive every libpq value from the environment with the expected values', async () => {
     const expected = expectedForwarded(db);
+    await runWithFake(sandbox, db, { FAKE_EXPECTED_CONNECTION: JSON.stringify(expected) });
     const sourceSteps = readDockerLog(sandbox).filter((call) =>
       call.argv.some((arg) => arg === '/opt/backup/dump.sh' || arg === '/opt/backup/verify.sh')
     );
     assert.equal(sourceSteps.length, 2);
     for (const call of sourceSteps) {
-      for (const [name, value] of Object.entries(expected)) {
-        assert.equal(call.forwarded[name], value, `${name} forwarded by value`);
+      for (const name of Object.keys(expected)) {
+        assert.equal(call.forwarded[name], true, `${name} forwarded by value`);
         assert.ok(call.argv.includes(name), `${name} forwarded by name`);
       }
     }

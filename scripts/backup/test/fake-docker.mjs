@@ -1,14 +1,13 @@
 #!/usr/bin/env node
-// Test double for the docker CLI. It appends every argv and digests of the forwarded libpq variables
+// Test double for the docker CLI. It appends every argv and comparison results for the forwarded libpq variables
 // to FAKE_DOCKER_LOG (a file inside the test sandbox) and emulates the few commands the
 // pipeline issues. Behaviour is selected with FAKE_DOCKER_MODE:
 //   ok | docker-down | pull-fail | dump-fail | interrupt | verify-fail | encrypt-fail | cleanup-fail
 // cleanup-fail leaves a directory the host cannot remove and makes the in-image cleanup a no-op.
 import { appendFileSync, chmodSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
-import crypto from 'node:crypto';
 import path from 'node:path';
 
-// Source variables the host forwards by name. Only digests of their values are logged.
+// Source variables the host forwards by name. Values are compared in memory.
 const PG_NAMES = [
   'DATABASE_URL',
   'PGHOST',
@@ -25,7 +24,7 @@ const PG_NAMES = [
   'PGCHANNELBINDING',
   'PGOPTIONS',
 ];
-const digest = (value) => crypto.createHash('sha256').update(value).digest('hex');
+const expected = JSON.parse(process.env.FAKE_EXPECTED_CONNECTION ?? '{}');
 
 const argv = process.argv.slice(2);
 const mode = process.env.FAKE_DOCKER_MODE || 'ok';
@@ -38,7 +37,7 @@ if (process.env.FAKE_DOCKER_LOG) {
       // Docker passes a variable into the container only when argv names it with -e.
       forwarded: Object.fromEntries(
         PG_NAMES.filter((name) => argv.includes(name) && process.env[name] !== undefined).map(
-          (name) => [name, digest(process.env[name])]
+          (name) => [name, process.env[name] === expected[name]]
         )
       ),
     })}\n`
