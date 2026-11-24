@@ -19,6 +19,7 @@ export type ImageReservationBounds = {
   model: string;
   maxPromptTokens: number;
   maxOutputTokens?: number;
+  candidateCount?: number;
   size?: string;
   quality?: string;
   imageSize?: string;

@@ -399,6 +399,8 @@ describe('cost calculation & provider reconciliation', () => {
         usageMetadata: {
           promptTokenCount: 20,
           candidatesTokenCount: 10,
+          thoughtsTokenCount: 0,
+          totalTokenCount: 30,
         },
       };
     });
@@ -501,11 +503,11 @@ describe('cost calculation & provider reconciliation', () => {
     expect(partialWithResidual).toBe(BigInt(Math.ceil(75 * 1.5) + Math.ceil(4925 * 7.5)));
 
     // Gemini image generateContent reserves all maxOutputTokens at imageOutputUsdPerMillion, so
-    // missing candidatesTokenCount with known thoughtsTokenCount bills remaining tokens (4096 - 500 = 3596)
+    // missing candidatesTokenCount with known thoughtsTokenCount bills remaining tokens (32768 - 500 = 32268)
     // as potential image outputs and stays within the reserved ceiling.
     const imageMissingCandidatesWithThoughts = calculateImageAttemptCostMicroUsd({
       provider: 'gemini',
-      model: 'gemini-3.1-flash-lite-image',
+      model: 'gemini-3.1-flash-image',
       promptChars: prompt.length,
       promptBytes,
       imageSize: '1K',
@@ -518,12 +520,12 @@ describe('cost calculation & provider reconciliation', () => {
       },
     });
     expect(imageMissingCandidatesWithThoughts).toBe(
-      BigInt(Math.ceil(60 * 0.25) + Math.ceil((4_096 - 500) * 30) + Math.ceil(500 * 1.5))
+      BigInt(Math.ceil(60 * 0.5) + Math.ceil((32_768 - 500) * 60) + Math.ceil(500 * 3.0))
     );
     expect(imageMissingCandidatesWithThoughts).toBeLessThanOrEqual(
       estimateImageCallCeilingMicroUsd({
         provider: 'gemini',
-        model: 'gemini-3.1-flash-lite-image',
+        model: 'gemini-3.1-flash-image',
         imageSize: '1K',
         aspectRatio: '1:1',
         outputCount: 1,
@@ -535,7 +537,7 @@ describe('cost calculation & provider reconciliation', () => {
     // omitted conservatively bills remaining (maxOutputTokens - candidatesTokenCount) at textOutputUsdPerMillion.
     const imageMissingThoughtsWithoutTotal = calculateImageAttemptCostMicroUsd({
       provider: 'gemini',
-      model: 'gemini-3.1-flash-lite-image',
+      model: 'gemini-3.1-flash-image',
       promptChars: prompt.length,
       promptBytes,
       imageSize: '1K',
@@ -548,12 +550,12 @@ describe('cost calculation & provider reconciliation', () => {
       },
     });
     expect(imageMissingThoughtsWithoutTotal).toBe(
-      BigInt(Math.ceil(60 * 0.25) + Math.ceil(1_120 * 30) + Math.ceil((4_096 - 1_120) * 1.5))
+      BigInt(Math.ceil(60 * 0.5) + Math.ceil(1_120 * 60) + Math.ceil((32_768 - 1_120) * 3.0))
     );
     expect(imageMissingThoughtsWithoutTotal).toBeLessThanOrEqual(
       estimateImageCallCeilingMicroUsd({
         provider: 'gemini',
-        model: 'gemini-3.1-flash-lite-image',
+        model: 'gemini-3.1-flash-image',
         maxPromptTokens: promptBytes + IMAGE_PROMPT_FRAMING_TOKEN_OVERHEAD,
       })
     );
@@ -562,7 +564,7 @@ describe('cost calculation & provider reconciliation', () => {
     // at imageOutputUsdPerMillion plus UTF-8 byte input bound.
     const imageMissingAllUsage = calculateImageAttemptCostMicroUsd({
       provider: 'gemini',
-      model: 'gemini-3.1-flash-lite-image',
+      model: 'gemini-3.1-flash-image',
       promptChars: prompt.length,
       promptBytes,
       imageSize: '1K',
@@ -573,9 +575,105 @@ describe('cost calculation & provider reconciliation', () => {
     expect(imageMissingAllUsage).toBe(
       estimateImageCallCeilingMicroUsd({
         provider: 'gemini',
-        model: 'gemini-3.1-flash-lite-image',
+        model: 'gemini-3.1-flash-image',
         maxPromptTokens: promptBytes + IMAGE_PROMPT_FRAMING_TOKEN_OVERHEAD,
       })
+    );
+
+    // AC-2 regression: missing promptTokenCount and thoughtsTokenCount with known candidatesTokenCount
+    // and totalTokenCount must never subtract an unmeasured prompt upper bound from totalTokenCount
+    // (which would mask missing thoughts under cheaper input rates).
+    const longPrompt = 'Молоко '.repeat(200);
+    const longPromptBytes = Buffer.byteLength(longPrompt, 'utf8');
+    const imageMaxPromptTokens = longPromptBytes + IMAGE_PROMPT_FRAMING_TOKEN_OVERHEAD;
+    const imageFullConsistentCost = calculateImageAttemptCostMicroUsd({
+      provider: 'gemini',
+      model: 'gemini-3.1-flash-image',
+      promptChars: longPrompt.length,
+      promptBytes: longPromptBytes,
+      imageSize: '1K',
+      aspectRatio: '1:1',
+      outputCount: 1,
+      outcome: 'ok',
+      googleUsageMetadata: {
+        promptTokenCount: 200,
+        candidatesTokenCount: 1_120,
+        thoughtsTokenCount: 1_000,
+        totalTokenCount: 2_320,
+      },
+    });
+    const imagePartialMissingPromptAndThoughts = calculateImageAttemptCostMicroUsd({
+      provider: 'gemini',
+      model: 'gemini-3.1-flash-image',
+      promptChars: longPrompt.length,
+      promptBytes: longPromptBytes,
+      imageSize: '1K',
+      aspectRatio: '1:1',
+      outputCount: 1,
+      outcome: 'ok',
+      googleUsageMetadata: {
+        candidatesTokenCount: 1_120,
+        totalTokenCount: 2_320,
+      },
+    });
+    expect(imagePartialMissingPromptAndThoughts).toBeGreaterThanOrEqual(imageFullConsistentCost);
+    expect(imagePartialMissingPromptAndThoughts).toBeLessThanOrEqual(
+      estimateImageCallCeilingMicroUsd({
+        provider: 'gemini',
+        model: 'gemini-3.1-flash-image',
+        maxPromptTokens: imageMaxPromptTokens,
+      })
+    );
+
+    // Analogous text estimator regressions:
+    // (a) missing promptTokenCount & thoughtsTokenCount with known candidatesTokenCount & totalTokenCount
+    const textFullConsistentCost = calculateTextAttemptCostMicroUsd({
+      model: 'gemini-3.8-flash',
+      promptChars: longPrompt.length,
+      promptBytes: longPromptBytes,
+      outcome: 'ok',
+      usageMetadata: {
+        promptTokenCount: 200,
+        candidatesTokenCount: 100,
+        thoughtsTokenCount: 1_200,
+        totalTokenCount: 1_500,
+      },
+    });
+    const textPartialMissingPromptAndThoughts = calculateTextAttemptCostMicroUsd({
+      model: 'gemini-3.8-flash',
+      promptChars: longPrompt.length,
+      promptBytes: longPromptBytes,
+      outcome: 'ok',
+      usageMetadata: {
+        candidatesTokenCount: 100,
+        totalTokenCount: 1_500,
+      },
+    });
+    expect(textPartialMissingPromptAndThoughts).toBeGreaterThanOrEqual(textFullConsistentCost);
+    expect(textPartialMissingPromptAndThoughts).toBeLessThanOrEqual(
+      estimateTextAttemptCeilingMicroUsd(
+        'gemini-3.8-flash',
+        longPromptBytes + TEXT_PROMPT_FRAMING_TOKEN_OVERHEAD
+      )
+    );
+
+    // (b) missing thoughtsTokenCount & totalTokenCount with known candidatesTokenCount
+    const textMissingThoughtsWithoutTotal = calculateTextAttemptCostMicroUsd({
+      model: 'gemini-3.8-flash',
+      promptChars: longPrompt.length,
+      promptBytes: longPromptBytes,
+      outcome: 'ok',
+      usageMetadata: {
+        promptTokenCount: 200,
+        candidatesTokenCount: 100,
+      },
+    });
+    expect(textMissingThoughtsWithoutTotal).toBeGreaterThanOrEqual(textFullConsistentCost);
+    expect(textMissingThoughtsWithoutTotal).toBeLessThanOrEqual(
+      estimateTextAttemptCeilingMicroUsd(
+        'gemini-3.8-flash',
+        longPromptBytes + TEXT_PROMPT_FRAMING_TOKEN_OVERHEAD
+      )
     );
   });
 
@@ -625,7 +723,7 @@ describe('cost calculation & provider reconciliation', () => {
   });
 
   it('releases full reservation ($0 spent) when Gemini image provider rejects with missing key', async () => {
-    vi.stubEnv(AI_MONTHLY_BUDGET_USD_ENV, '0.20');
+    vi.stubEnv(AI_MONTHLY_BUDGET_USD_ENV, '2.50');
     delete process.env.GOOGLE_GENAI_API_KEY;
 
     await expect(
@@ -647,7 +745,12 @@ describe('cost calculation & provider reconciliation', () => {
       vi.setSystemTime(new Date('2026-12-01T00:00:01.000Z'));
       return {
         text: '{"ok":true}',
-        usageMetadata: { promptTokenCount: 100, candidatesTokenCount: 100 },
+        usageMetadata: {
+          promptTokenCount: 100,
+          candidatesTokenCount: 100,
+          thoughtsTokenCount: 0,
+          totalTokenCount: 200,
+        },
       };
     });
 
@@ -686,7 +789,12 @@ describe('cost calculation & provider reconciliation', () => {
       await sdkBarrier;
       return {
         text: '{"ok":true}',
-        usageMetadata: { promptTokenCount: 100, candidatesTokenCount: 100 },
+        usageMetadata: {
+          promptTokenCount: 100,
+          candidatesTokenCount: 100,
+          thoughtsTokenCount: 0,
+          totalTokenCount: 200,
+        },
       };
     });
 
@@ -771,9 +879,9 @@ describe('cost calculation & provider reconciliation', () => {
       Buffer.from('fake-png-bytes'),
     ]).toString('base64');
     const monthKey = startOfUtcMonth(new Date()).toISOString();
-    vi.stubEnv(AI_MONTHLY_BUDGET_USD_ENV, '1.00');
+    vi.stubEnv(AI_MONTHLY_BUDGET_USD_ENV, '10.00');
 
-    // 1. Multi-image response (3 images = 3360 tokens + 200 thoughts) stays within 4096 * $30/1M ceiling.
+    // 1. Multi-image response (3 images = 3360 tokens + 200 thoughts) stays within 32768 * $60/1M ceiling.
     dbState.sdkImageBehavior.mockResolvedValueOnce({
       candidates: [
         {
@@ -798,7 +906,7 @@ describe('cost calculation & provider reconciliation', () => {
       generateEmojiImage({ productName: 'Milk' })
     );
     const expectedMultiImageCost = BigInt(
-      Math.ceil(80 * 0.25) + Math.ceil(3_360 * 30) + Math.ceil(200 * 1.5)
+      Math.ceil(80 * 0.5) + Math.ceil(3_360 * 60) + Math.ceil(200 * 3.0)
     );
     expect(dbState.rows.get(monthKey)).toEqual({
       reservedMicroUsd: ZERO,
@@ -818,10 +926,10 @@ describe('cost calculation & provider reconciliation', () => {
     const outMissing = await runImageAiCall({ id: 'admin-1', role: 'ADMIN' }, 'en', () =>
       generateEmojiImage({ productName: 'Milk' })
     );
-    expect(outMissing).toMatchObject({ model: 'gemini-3.1-flash-lite-image' });
+    expect(outMissing).toMatchObject({ model: 'gemini-3.1-flash-image' });
     const rowAfterMissing = dbState.rows.get(monthKey)!;
     expect(rowAfterMissing.reservedMicroUsd).toBe(ZERO);
-    expect(rowAfterMissing.spentMicroUsd).toBeGreaterThan(BigInt(122_880));
+    expect(rowAfterMissing.spentMicroUsd).toBeGreaterThan(BigInt(32_768 * 60));
 
     // 3. Overspend reported by mocked usageMetadata: records full actual spend, releases reserve, then fails closed.
     dbState.rows.clear();
@@ -834,9 +942,9 @@ describe('cost calculation & provider reconciliation', () => {
       ],
       usageMetadata: {
         promptTokenCount: 100,
-        candidatesTokenCount: 5_000, // exceeds 4096 maxOutputTokens ceiling
+        candidatesTokenCount: 35_000, // exceeds 32768 maxOutputTokens ceiling
         thoughtsTokenCount: 200,
-        totalTokenCount: 5_300,
+        totalTokenCount: 35_300,
       },
     });
     await expect(
@@ -848,22 +956,22 @@ describe('cost calculation & provider reconciliation', () => {
       reason: 'overspend_above_ceiling',
     });
     const expectedOverspend = BigInt(
-      Math.ceil(100 * 0.25) + Math.ceil(5_000 * 30) + Math.ceil(200 * 1.5)
+      Math.ceil(100 * 0.5) + Math.ceil(35_000 * 60) + Math.ceil(200 * 3.0)
     );
     expect(dbState.rows.get(monthKey)).toEqual({
       reservedMicroUsd: ZERO,
       spentMicroUsd: expectedOverspend,
     });
 
-    // 4. Overspend without usageMetadata (e.g. 5 final image parts emitted -> 5 * 1120 = 5600 > 4096)
-    // accounts full 5600 * $30/1M and fails closed.
+    // 4. Overspend without usageMetadata (e.g. 30 final image parts emitted -> 30 * 1120 = 33600 > 32768)
+    // accounts full 33600 * $60/1M and fails closed.
     dbState.rows.clear();
     dbState.sdkImageBehavior.mockResolvedValueOnce({
       candidates: [
         {
           finishReason: 'STOP',
           content: {
-            parts: Array.from({ length: 5 }, () => ({
+            parts: Array.from({ length: 30 }, () => ({
               inlineData: { mimeType: 'image/png', data: validPng },
             })),
           },
@@ -880,18 +988,37 @@ describe('cost calculation & provider reconciliation', () => {
     });
     const rowAfterMultiPartOverspend = dbState.rows.get(monthKey)!;
     expect(rowAfterMultiPartOverspend.reservedMicroUsd).toBe(ZERO);
-    expect(rowAfterMultiPartOverspend.spentMicroUsd).toBeGreaterThan(BigInt(5_600 * 30));
+    expect(rowAfterMultiPartOverspend.spentMicroUsd).toBeGreaterThan(BigInt(33_600 * 60));
   });
 
-  it('rejects unknown image bounds (model, size, quality, imageSize, outputCount) before DB reservation or SDK call', async () => {
-    vi.stubEnv(AI_MONTHLY_BUDGET_USD_ENV, '1.00');
-    vi.stubEnv('GOOGLE_IMAGE_MODEL', 'imagen-5.0-generate-preview');
-
+  it('rejects unproven/unknown image bounds (model, size, quality, imageSize, outputCount) before DB reservation or SDK call', async () => {
+    vi.stubEnv(AI_MONTHLY_BUDGET_USD_ENV, '10.00');
+    for (const unprovenModel of [
+      'gemini-3.1-flash-lite-image',
+      'gemini-2.5-flash-image',
+      'gemini-2.5-flash-image-preview',
+      'gemini-3-pro-image',
+      'imagen-4.0-generate-001',
+      'imagen-4.0-fast-generate-001',
+      'imagen-4.0-ultra-generate-001',
+      'imagen-5.0-generate-preview',
+    ]) {
+      vi.stubEnv('GOOGLE_IMAGE_MODEL', unprovenModel);
+      await expect(
+        runImageAiCall({ id: 'admin-1', role: 'ADMIN' }, 'en', () =>
+          generateEmojiImage({ productName: 'Milk' })
+        )
+      ).rejects.toThrow(/GOOGLE_IMAGE_MODEL/);
+    }
+    delete process.env.GOOGLE_IMAGE_MODEL;
+    vi.stubEnv('IMAGEN_MODEL', 'gemini-3.1-flash-lite-image');
     await expect(
       runImageAiCall({ id: 'admin-1', role: 'ADMIN' }, 'en', () =>
         generateEmojiImage({ productName: 'Milk' })
       )
-    ).rejects.toThrow(/GOOGLE_IMAGE_MODEL/);
+    ).rejects.toThrow(/IMAGEN_MODEL/);
+    delete process.env.IMAGEN_MODEL;
+
     expect(dbState.monthlyCalls).toHaveLength(0);
     expect(dbState.sdkImageCalls).toHaveLength(0);
 
@@ -916,8 +1043,8 @@ describe('cost calculation & provider reconciliation', () => {
     expect(() =>
       estimateImageCallCeilingMicroUsd({
         provider: 'gemini',
-        model: 'gemini-3.1-flash-lite-image',
-        imageSize: '4K',
+        model: 'gemini-3.1-flash-image',
+        imageSize: '8K',
       })
     ).toThrow(/Unsupported imageSize/);
 
@@ -929,40 +1056,14 @@ describe('cost calculation & provider reconciliation', () => {
       })
     ).toThrow(/Invalid image output count/);
 
-    // Verify Imagen & Gemini scaling with model output limits and outputCount
-    expect(
-      estimateImageCallCeilingMicroUsd({
-        provider: 'gemini',
-        model: 'imagen-4.0-fast-generate-001',
-        outputCount: 3,
-      })
-    ).toBe(BigInt(60_000));
-    expect(
-      estimateImageCallCeilingMicroUsd({
-        provider: 'gemini',
-        model: 'gemini-3-pro-image',
-        maxPromptTokens: 100,
-      })
-    ).toBeGreaterThan(
-      estimateImageCallCeilingMicroUsd({
-        provider: 'gemini',
-        model: 'gemini-3.1-flash-image',
-        maxPromptTokens: 100,
-      })
-    );
+    // Verify proven default gemini-3.1-flash-image reserves maxOutputTokens (32,768) + prompt bound.
     expect(
       estimateImageCallCeilingMicroUsd({
         provider: 'gemini',
         model: 'gemini-3.1-flash-image',
         maxPromptTokens: 100,
       })
-    ).toBeGreaterThan(
-      estimateImageCallCeilingMicroUsd({
-        provider: 'gemini',
-        model: 'gemini-3.1-flash-lite-image',
-        maxPromptTokens: 100,
-      })
-    );
+    ).toBe(BigInt(Math.ceil(100 * 0.5) + Math.ceil(32_768 * 60)));
 
     // calculateTextOperationCostMicroUsd when succeeded without recorded attempts uses ceilingMicroUsd
     expect(
@@ -987,7 +1088,12 @@ describe('cost calculation & provider reconciliation', () => {
     vi.stubEnv(AI_MONTHLY_BUDGET_USD_ENV, '1.00');
     dbState.sdkTextBehavior.mockResolvedValueOnce({
       text: '[]',
-      usageMetadata: { promptTokenCount: 200, candidatesTokenCount: 100 },
+      usageMetadata: {
+        promptTokenCount: 200,
+        candidatesTokenCount: 100,
+        thoughtsTokenCount: 0,
+        totalTokenCount: 300,
+      },
     });
     const out = await runMonthlyBudgetedTextAiCall({ prompt: 'Import milk' }, () =>
       generateGoogleText({ apiKey: 'synthetic-google-key', prompt: 'Import milk' })

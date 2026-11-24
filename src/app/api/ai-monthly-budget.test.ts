@@ -13,7 +13,11 @@ const doubles = vi.hoisted(() => ({
   monthlyReservationsCount: 0,
   textCalls: [] as Array<{ model: string; prompt: string }>,
   textBehavior: vi.fn(),
-  googleImageCalls: [] as Array<{ model: string; prompt: string }>,
+  googleImageCalls: [] as Array<{
+    model: string;
+    prompt: string;
+    config?: Record<string, unknown>;
+  }>,
   googleImageBehavior: vi.fn(),
   openaiImageCalls: [] as Array<{ model: string; prompt: string }>,
   openaiImageBehavior: vi.fn(),
@@ -51,7 +55,11 @@ vi.mock('@google/genai', () => ({
         config?: { responseModalities?: string[] };
       }) => {
         if (params.config?.responseModalities?.includes('IMAGE')) {
-          doubles.googleImageCalls.push({ model: params.model, prompt: params.contents });
+          doubles.googleImageCalls.push({
+            model: params.model,
+            prompt: params.contents,
+            config: params.config as Record<string, unknown>,
+          });
           return doubles.googleImageBehavior(params);
         }
         doubles.textCalls.push({ model: params.model, prompt: params.contents });
@@ -858,8 +866,8 @@ describe('server-side input bounds before providers (400/413)', () => {
       ],
       usageMetadata: {
         promptTokenCount: 100,
-        candidatesTokenCount: 5_000, // exceeds 4,096 maxOutputTokens on gemini-3.1-flash-lite-image
-        totalTokenCount: 5_100,
+        candidatesTokenCount: 35_000, // exceeds 32,768 maxOutputTokens on gemini-3.1-flash-image
+        totalTokenCount: 35_100,
       },
     });
     const imgRes = await emojiGenerateRoute.POST(
@@ -869,7 +877,30 @@ describe('server-side input bounds before providers (400/413)', () => {
     expect(doubles.uploadCalls).toBe(0);
     const [monthRow] = [...doubles.monthlyRows.values()];
     expect(monthRow.reservedMicroUsd).toBe(BigInt(0));
-    expect(monthRow.spentMicroUsd).toBe(BigInt(Math.ceil(100 * 0.25) + Math.ceil(5_000 * 30)));
+    expect(monthRow.spentMicroUsd).toBe(BigInt(Math.ceil(100 * 0.5) + Math.ceil(35_000 * 60)));
+
+    // Default route uses proven gemini-3.1-flash-image and passes explicit candidateCount: 1 & maxOutputTokens: 32768.
+    expect(doubles.googleImageCalls.at(-1)).toMatchObject({
+      model: 'gemini-3.1-flash-image',
+      config: {
+        candidateCount: 1,
+        maxOutputTokens: 32_768,
+      },
+    });
+
+    // Explicit unproven model fails closed before DB reservation or SDK dispatch.
+    doubles.monthlyRows.clear();
+    doubles.dailyCounts.clear();
+    doubles.googleImageCalls.length = 0;
+    process.env.GOOGLE_IMAGE_MODEL = 'gemini-3.1-flash-lite-image';
+    const unprovenRes = await emojiGenerateRoute.POST(
+      jsonReq('/api/emoji/generate', { productName: 'Milk' }, 'en')
+    );
+    delete process.env.GOOGLE_IMAGE_MODEL;
+    expect(unprovenRes.status).toBe(500);
+    expect(doubles.googleImageCalls).toHaveLength(0);
+    expect(doubles.monthlyRows.size).toBe(0);
+    expect(doubles.dailyCounts.size).toBe(0);
 
     // smart-create Stage 2 overspend must NOT silently fall back to 200 OK; it fails closed (500).
     doubles.monthlyRows.clear();
@@ -882,8 +913,8 @@ describe('server-side input bounds before providers (400/413)', () => {
       ],
       usageMetadata: {
         promptTokenCount: 100,
-        candidatesTokenCount: 5_000,
-        totalTokenCount: 5_100,
+        candidatesTokenCount: 35_000,
+        totalTokenCount: 35_100,
       },
     });
     const smartRes = await smartCreateRoute.POST(

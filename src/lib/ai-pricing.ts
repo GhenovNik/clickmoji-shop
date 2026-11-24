@@ -22,7 +22,7 @@ export const DEFAULT_TEXT_PROMPT_TOKEN_BOUND =
 export const DEFAULT_IMAGE_PROMPT_TOKEN_BOUND =
   AI_INPUT_LIMITS.MAX_IMAGE_PROMPT_BYTES + IMAGE_PROMPT_FRAMING_TOKEN_OVERHEAD;
 
-const DEFAULT_GOOGLE_IMAGE_MODEL = 'gemini-3.1-flash-lite-image';
+export const DEFAULT_GOOGLE_IMAGE_MODEL = 'gemini-3.1-flash-image';
 const DEFAULT_OPENAI_IMAGE_MODEL = 'gpt-image-2.5-flare';
 const DEFAULT_GOOGLE_ASPECT_RATIO = '1:1';
 const DEFAULT_OUTPUT_COUNT = 1;
@@ -61,44 +61,32 @@ type GoogleGenerateContentImageSpec = {
   // Documented hard output-token ceiling passed as `maxOutputTokens` on `generateContent`
   // (covers combined candidate outputs, including multiple images, and thinking tokens).
   maxOutputTokens: number;
+  candidateCount: 1;
   maxOutputCount: number;
 };
 
-type GoogleGenerateImagesSpec = {
-  provider: 'gemini';
-  adapter: 'generateImages';
-  perImageMicroUsd: bigint;
-  supportedAspectRatios: readonly string[];
-  maxOutputCount: number;
-};
-
-export type SupportedImageModelSpec = GoogleGenerateContentImageSpec | GoogleGenerateImagesSpec;
+export type SupportedImageModelSpec = GoogleGenerateContentImageSpec;
 
 /**
- * Official image model pricing and request bounds registry.
- * Sources: https://ai.google.dev/gemini-api/docs/pricing and
- * https://ai.google.dev/gemini-api/docs/models (plus docs/ai.md).
- * Models or parameter combinations outside this table have unknown cost bounds and are rejected
- * before budget reservation or SDK construction.
+ * Official image model pricing and enforceable request bounds registry.
+ * Sources:
+ * - https://ai.google.dev/gemini-api/docs/pricing
+ * - https://ai.google.dev/gemini-api/docs/models/gemini-3.1-flash-image
+ * - https://discuss.ai.google.dev/t/gemini-3-1-flash-image-generatecontent-enforceable-billing-bounds-for-six-inline-images/187561
+ *   (Google staff confirmation that for `gemini-3.1-flash-image` on `generateContent`,
+ *   `candidateCount` is fixed to 1 and `maxOutputTokens` sets a hard ceiling on combined
+ *   thinking tokens, output text, and generated image tokens).
  *
- * Note: OpenAI GPT Image models via `images.generate` (`gpt-image-2.5-flare`,
- * `gpt-image-2.5-sunburst`, `gpt-image-2`, `gpt-image-1.5`) have no documented fixed per-image
- * price or enforceable output-token ceiling and therefore fail closed before dispatch.
+ * Models without a verifiable enforceable ceiling over all billable outputs (including multiple
+ * generated images), retired models, and OpenAI GPT Image models fail closed before DB reservation
+ * or SDK construction:
+ * - `gemini-3.1-flash-lite-image`, `gemini-2.5-flash-image`, `gemini-3-pro-image`: no verifiable
+ *   provider contract that `maxOutputTokens` strictly caps combined multi-image/thinking/text output.
+ * - `gemini-2.5-flash-image-preview` (shut down 2026-01-15) and `imagen-4.0-*` (shut down
+ *   2026-08-17, removed from pricing docs / `/api/generate-images` 404): retired, no live contract.
+ * - `gpt-image-*`: OpenAI `images.generate` provides no fixed per-image price or enforceable ceiling.
  */
 const SUPPORTED_IMAGE_MODEL_SPECS: Record<string, SupportedImageModelSpec> = {
-  'gemini-3.1-flash-lite-image': {
-    provider: 'gemini',
-    adapter: 'generateContent',
-    inputUsdPerMillion: 0.25,
-    textOutputUsdPerMillion: 1.5,
-    imageOutputUsdPerMillion: 30,
-    imageSizeTokens: { '1K': 1_120 },
-    defaultImageSize: '1K',
-    supportedAspectRatios: ['1:1'],
-    // Official model output token limit (https://ai.google.dev/gemini-api/docs/models/gemini-3.1-flash-lite-image).
-    maxOutputTokens: 4_096,
-    maxOutputCount: 1,
-  },
   'gemini-3.1-flash-image': {
     provider: 'gemini',
     adapter: 'generateContent',
@@ -109,65 +97,8 @@ const SUPPORTED_IMAGE_MODEL_SPECS: Record<string, SupportedImageModelSpec> = {
     defaultImageSize: '1K',
     supportedAspectRatios: ['1:1'],
     maxOutputTokens: 32_768,
+    candidateCount: 1,
     maxOutputCount: 1,
-  },
-  'gemini-2.5-flash-image': {
-    provider: 'gemini',
-    adapter: 'generateContent',
-    inputUsdPerMillion: 0.3,
-    textOutputUsdPerMillion: 2.5,
-    imageOutputUsdPerMillion: 30,
-    imageSizeTokens: { '1K': 1_290 },
-    defaultImageSize: '1K',
-    supportedAspectRatios: ['1:1'],
-    // Thinking is not supported on gemini-2.5-flash-image; 32,768 is the documented output limit.
-    maxOutputTokens: 32_768,
-    maxOutputCount: 1,
-  },
-  'gemini-2.5-flash-image-preview': {
-    provider: 'gemini',
-    adapter: 'generateContent',
-    inputUsdPerMillion: 0.3,
-    textOutputUsdPerMillion: 2.5,
-    imageOutputUsdPerMillion: 30,
-    imageSizeTokens: { '1K': 1_290 },
-    defaultImageSize: '1K',
-    supportedAspectRatios: ['1:1'],
-    maxOutputTokens: 32_768,
-    maxOutputCount: 1,
-  },
-  'gemini-3-pro-image': {
-    provider: 'gemini',
-    adapter: 'generateContent',
-    inputUsdPerMillion: 2.0,
-    textOutputUsdPerMillion: 12.0,
-    imageOutputUsdPerMillion: 120,
-    imageSizeTokens: { '1K': 1_120, '2K': 1_120, '4K': 2_000 },
-    defaultImageSize: '1K',
-    supportedAspectRatios: ['1:1'],
-    maxOutputTokens: 32_768,
-    maxOutputCount: 1,
-  },
-  'imagen-4.0-generate-001': {
-    provider: 'gemini',
-    adapter: 'generateImages',
-    perImageMicroUsd: BigInt(40_000),
-    supportedAspectRatios: ['1:1', '3:4', '4:3', '9:16', '16:9'],
-    maxOutputCount: 4,
-  },
-  'imagen-4.0-fast-generate-001': {
-    provider: 'gemini',
-    adapter: 'generateImages',
-    perImageMicroUsd: BigInt(20_000),
-    supportedAspectRatios: ['1:1', '3:4', '4:3', '9:16', '16:9'],
-    maxOutputCount: 4,
-  },
-  'imagen-4.0-ultra-generate-001': {
-    provider: 'gemini',
-    adapter: 'generateImages',
-    perImageMicroUsd: BigInt(60_000),
-    supportedAspectRatios: ['1:1', '3:4', '4:3', '9:16', '16:9'],
-    maxOutputCount: 4,
   },
 };
 
@@ -477,10 +408,14 @@ export function estimateTextCallCeilingMicroUsd(options?: {
   return resolveTextCallPricingConfig(options).ceilingMicroUsd;
 }
 
-export function calculateTextAttemptCostMicroUsd(attempt: RecordedTextAttempt): bigint {
-  const rates = textRatesForModel(attempt.model);
-  const meta = attempt.usageMetadata;
-
+function parseUsageMetadataCounters(meta: GoogleUsageMetadataLike | undefined): {
+  promptTokens?: number;
+  toolTokens?: number;
+  candidatesTokens?: number;
+  thoughtsTokens?: number;
+  totalTokens?: number;
+  anyPositive: boolean;
+} {
   const promptTokens =
     meta && typeof meta === 'object' ? safeNonNegativeInt(meta.promptTokenCount) : undefined;
   const toolTokens =
@@ -492,40 +427,132 @@ export function calculateTextAttemptCostMicroUsd(attempt: RecordedTextAttempt): 
   const totalTokens =
     meta && typeof meta === 'object' ? safeNonNegativeInt(meta.totalTokenCount) : undefined;
 
-  if (attempt.outcome === 'rejected') {
-    const anyPositive =
-      (promptTokens ?? 0) > 0 ||
-      (toolTokens ?? 0) > 0 ||
-      (candidatesTokens ?? 0) > 0 ||
-      (thoughtsTokens ?? 0) > 0 ||
-      (totalTokens ?? 0) > 0;
-    if (!anyPositive) {
-      return ZERO_MICRO_USD;
+  const anyPositive =
+    (promptTokens ?? 0) > 0 ||
+    (toolTokens ?? 0) > 0 ||
+    (candidatesTokens ?? 0) > 0 ||
+    (thoughtsTokens ?? 0) > 0 ||
+    (totalTokens ?? 0) > 0;
+
+  return {
+    promptTokens,
+    toolTokens,
+    candidatesTokens,
+    thoughtsTokens,
+    totalTokens,
+    anyPositive,
+  };
+}
+
+/**
+ * Computes conservative upper-bound component token counts compatible with partial `UsageMetadata`.
+ * Never subtracts an unmeasured input estimate from `totalTokenCount`: when `totalTokenCount` is
+ * present, unattributed tokens above the measured minimums are allocated from highest-rate to
+ * lowest-rate missing components (`candidates` -> `thoughts` -> `prompt` -> `residual`).
+ */
+function resolveGenerateContentUsageBounds({
+  counters,
+  promptUpperBound,
+  maxOutputTokens,
+  minCandidatesTokens = 0,
+}: {
+  counters: ReturnType<typeof parseUsageMetadataCounters>;
+  promptUpperBound: number;
+  maxOutputTokens: number;
+  minCandidatesTokens?: number;
+}): {
+  inputTokens: number;
+  candidatesTokens: number;
+  thoughtsTokens: number;
+  residualTokens: number;
+} {
+  const { promptTokens, toolTokens, candidatesTokens, thoughtsTokens, totalTokens } = counters;
+  const knownTool = toolTokens ?? 0;
+
+  if (totalTokens === undefined) {
+    const effectivePrompt = promptTokens ?? promptUpperBound;
+    let effectiveCandidates: number;
+    let effectiveThoughts: number;
+
+    if (candidatesTokens !== undefined && thoughtsTokens !== undefined) {
+      effectiveCandidates = candidatesTokens;
+      effectiveThoughts = thoughtsTokens;
+    } else if (candidatesTokens === undefined && thoughtsTokens !== undefined) {
+      effectiveThoughts = thoughtsTokens;
+      effectiveCandidates = Math.max(
+        minCandidatesTokens,
+        Math.max(0, maxOutputTokens - thoughtsTokens)
+      );
+    } else if (candidatesTokens !== undefined && thoughtsTokens === undefined) {
+      effectiveCandidates = candidatesTokens;
+      effectiveThoughts = Math.max(0, maxOutputTokens - candidatesTokens);
+    } else {
+      effectiveCandidates = Math.max(minCandidatesTokens, maxOutputTokens);
+      effectiveThoughts = 0;
     }
+
+    return {
+      inputTokens: effectivePrompt + knownTool,
+      candidatesTokens: effectiveCandidates,
+      thoughtsTokens: effectiveThoughts,
+      residualTokens: 0,
+    };
   }
 
-  const effectivePromptTokens =
-    promptTokens ?? attemptInputTokenUpperBound(attempt, TEXT_PROMPT_FRAMING_TOKEN_OVERHEAD);
-  const inputTokens = effectivePromptTokens + (toolTokens ?? 0);
+  let effectivePrompt = promptTokens ?? 0;
+  let effectiveCandidates = candidatesTokens ?? minCandidatesTokens;
+  let effectiveThoughts = thoughtsTokens ?? 0;
+  let remaining = Math.max(
+    0,
+    totalTokens - (effectivePrompt + knownTool + effectiveCandidates + effectiveThoughts)
+  );
 
-  // `maxOutputTokens` (4096) is documented as a combined hard ceiling on candidates + thoughts
-  // (https://ai.google.dev/gemini-api/docs/thinking). When candidatesTokenCount is missing and
-  // thoughtsTokenCount is known, use only the remaining combined output bound for candidates so a
-  // single attempt never reconciles above the reserved MAX_TEXT_OUTPUT_TOKENS ceiling.
-  const knownThoughtsTokens = thoughtsTokens ?? 0;
-  const remainingCombinedOutputTokens = Math.max(0, MAX_TEXT_OUTPUT_TOKENS - knownThoughtsTokens);
-  const baseOutputTokens =
-    candidatesTokens !== undefined
-      ? candidatesTokens + knownThoughtsTokens
-      : knownThoughtsTokens + remainingCombinedOutputTokens;
+  if (candidatesTokens === undefined) {
+    const cHeadroom = Math.max(0, maxOutputTokens - effectiveCandidates - effectiveThoughts);
+    const addC = Math.min(remaining, cHeadroom);
+    effectiveCandidates += addC;
+    remaining -= addC;
+  }
 
-  const accountedTokens = inputTokens + baseOutputTokens;
-  const residualTokens =
-    totalTokens !== undefined && totalTokens > accountedTokens ? totalTokens - accountedTokens : 0;
-  const outputTokens = baseOutputTokens + residualTokens;
+  if (thoughtsTokens === undefined) {
+    const tHeadroom = Math.max(0, maxOutputTokens - effectiveCandidates - effectiveThoughts);
+    const addT = Math.min(remaining, tHeadroom);
+    effectiveThoughts += addT;
+    remaining -= addT;
+  }
+
+  if (promptTokens === undefined) {
+    const pHeadroom = Math.max(0, promptUpperBound - effectivePrompt);
+    const addP = Math.min(remaining, pHeadroom);
+    effectivePrompt += addP;
+    remaining -= addP;
+  }
+
+  return {
+    inputTokens: effectivePrompt + knownTool,
+    candidatesTokens: effectiveCandidates,
+    thoughtsTokens: effectiveThoughts,
+    residualTokens: remaining,
+  };
+}
+
+export function calculateTextAttemptCostMicroUsd(attempt: RecordedTextAttempt): bigint {
+  const rates = textRatesForModel(attempt.model);
+  const counters = parseUsageMetadataCounters(attempt.usageMetadata);
+
+  if (attempt.outcome === 'rejected' && !counters.anyPositive) {
+    return ZERO_MICRO_USD;
+  }
+
+  const bounds = resolveGenerateContentUsageBounds({
+    counters,
+    promptUpperBound: attemptInputTokenUpperBound(attempt, TEXT_PROMPT_FRAMING_TOKEN_OVERHEAD),
+    maxOutputTokens: MAX_TEXT_OUTPUT_TOKENS,
+  });
+  const outputTokens = bounds.candidatesTokens + bounds.thoughtsTokens + bounds.residualTokens;
 
   return (
-    usdPerMillionToMicroUsd(inputTokens, rates.inputUsdPerMillion) +
+    usdPerMillionToMicroUsd(bounds.inputTokens, rates.inputUsdPerMillion) +
     usdPerMillionToMicroUsd(outputTokens, rates.outputUsdPerMillion)
   );
 }
@@ -596,6 +623,7 @@ export type ResolvedImagePricingConfig = {
   aspectRatio?: string;
   outputCount: number;
   maxOutputTokens?: number;
+  candidateCount?: number;
   maxPromptTokens: number;
   ceilingMicroUsd: bigint;
 };
@@ -649,7 +677,7 @@ export function resolveImagePricingConfig(options?: {
   if (!spec || spec.provider !== active.provider) {
     throw new EmojiImageGenerationError(
       'configuration',
-      `Invalid ${active.env} value "${active.model}": expected a supported ${active.provider} image model with verified pricing (${SUPPORTED_GOOGLE_IMAGE_MODELS.join(', ')})`
+      `Invalid ${active.env} value "${active.model}": expected a supported ${active.provider} image model with verified enforceable cost bounds (${SUPPORTED_GOOGLE_IMAGE_MODELS.join(', ')})`
     );
   }
 
@@ -666,24 +694,6 @@ export function resolveImagePricingConfig(options?: {
       'configuration',
       `Invalid maxPromptTokens for model "${active.model}"`
     );
-  }
-
-  if (spec.adapter === 'generateImages') {
-    const aspectRatio = options?.aspectRatio ?? DEFAULT_GOOGLE_ASPECT_RATIO;
-    if (!spec.supportedAspectRatios.includes(aspectRatio)) {
-      throw new EmojiImageGenerationError(
-        'configuration',
-        `Unsupported aspect ratio "${aspectRatio}" for model "${active.model}"`
-      );
-    }
-    return {
-      ...active,
-      spec,
-      aspectRatio,
-      outputCount,
-      maxPromptTokens,
-      ceilingMicroUsd: spec.perImageMicroUsd * BigInt(outputCount),
-    };
   }
 
   // Google generateContent image model
@@ -703,9 +713,8 @@ export function resolveImagePricingConfig(options?: {
     );
   }
 
-  // Google generateContent image model: `generateContent` does not guarantee a single output image,
-  // while `maxOutputTokens` strictly bounds combined candidate + thinking tokens and
-  // `imageOutputUsdPerMillion >= textOutputUsdPerMillion` for every model.
+  // `candidateCount` is explicitly set to 1 and `maxOutputTokens` strictly bounds combined
+  // thinking + text + generated image tokens, with `imageOutputUsdPerMillion >= textOutputUsdPerMillion`.
   const ceilingMicroUsd =
     usdPerMillionToMicroUsd(maxPromptTokens, spec.inputUsdPerMillion) +
     usdPerMillionToMicroUsd(spec.maxOutputTokens, spec.imageOutputUsdPerMillion);
@@ -717,6 +726,7 @@ export function resolveImagePricingConfig(options?: {
     aspectRatio,
     outputCount,
     maxOutputTokens: spec.maxOutputTokens,
+    candidateCount: spec.candidateCount,
     maxPromptTokens,
     ceilingMicroUsd,
   };
@@ -737,8 +747,6 @@ export function estimateImageCallCeilingMicroUsd(options?: {
 }
 
 export function calculateImageAttemptCostMicroUsd(attempt: RecordedImageAttempt): bigint {
-  const effectiveOutputCount = attempt.outputCount ?? DEFAULT_OUTPUT_COUNT;
-  const specLookup = SUPPORTED_IMAGE_MODEL_SPECS[attempt.model];
   const config = resolveImagePricingConfig({
     provider: attempt.provider,
     model: attempt.model,
@@ -746,80 +754,34 @@ export function calculateImageAttemptCostMicroUsd(attempt: RecordedImageAttempt)
     quality: attempt.quality,
     imageSize: attempt.imageSize,
     aspectRatio: attempt.aspectRatio,
-    outputCount:
-      specLookup?.adapter === 'generateImages'
-        ? Math.min(effectiveOutputCount, specLookup.maxOutputCount)
-        : attempt.outputCount,
+    outputCount: attempt.outputCount,
     maxPromptTokens: attemptInputTokenUpperBound(attempt, IMAGE_PROMPT_FRAMING_TOKEN_OVERHEAD),
   });
 
-  if (config.spec.adapter === 'generateImages') {
-    if (attempt.outcome === 'rejected') {
-      return ZERO_MICRO_USD;
-    }
-    const billedCount = Math.max(config.outputCount, effectiveOutputCount);
-    return config.spec.perImageMicroUsd * BigInt(billedCount);
-  }
-
-  // Google generateContent image model
   const spec = config.spec;
-  const meta = attempt.googleUsageMetadata;
-  const promptTokens =
-    meta && typeof meta === 'object' ? safeNonNegativeInt(meta.promptTokenCount) : undefined;
-  const toolTokens =
-    meta && typeof meta === 'object' ? safeNonNegativeInt(meta.toolUsePromptTokenCount) : undefined;
-  const candidatesTokens =
-    meta && typeof meta === 'object' ? safeNonNegativeInt(meta.candidatesTokenCount) : undefined;
-  const thoughtsTokens =
-    meta && typeof meta === 'object' ? safeNonNegativeInt(meta.thoughtsTokenCount) : undefined;
-  const totalTokens =
-    meta && typeof meta === 'object' ? safeNonNegativeInt(meta.totalTokenCount) : undefined;
+  const counters = parseUsageMetadataCounters(attempt.googleUsageMetadata);
 
-  if (attempt.outcome === 'rejected') {
-    const anyPositive =
-      (promptTokens ?? 0) > 0 ||
-      (toolTokens ?? 0) > 0 ||
-      (candidatesTokens ?? 0) > 0 ||
-      (thoughtsTokens ?? 0) > 0 ||
-      (totalTokens ?? 0) > 0;
-    if (!anyPositive) return ZERO_MICRO_USD;
+  if (attempt.outcome === 'rejected' && !counters.anyPositive) {
+    return ZERO_MICRO_USD;
   }
 
   const tokensPerImage =
     spec.imageSizeTokens[config.imageSize ?? spec.defaultImageSize] ??
     spec.imageSizeTokens[spec.defaultImageSize];
-
-  const effectivePromptTokens =
-    promptTokens ?? attemptInputTokenUpperBound(attempt, IMAGE_PROMPT_FRAMING_TOKEN_OVERHEAD);
-  const effectiveInputTokens = effectivePromptTokens + (toolTokens ?? 0);
-
-  let effectiveCandidatesTokens: number;
-  let effectiveThoughtsTokens: number;
-  if (candidatesTokens === undefined) {
-    effectiveThoughtsTokens = thoughtsTokens ?? 0;
-    const partsLowerBound = (attempt.finalImagePartsCount ?? 0) * tokensPerImage;
-    effectiveCandidatesTokens = Math.max(
-      Math.max(0, spec.maxOutputTokens - effectiveThoughtsTokens),
-      partsLowerBound
-    );
-  } else {
-    effectiveCandidatesTokens = candidatesTokens;
-    effectiveThoughtsTokens =
-      thoughtsTokens !== undefined
-        ? thoughtsTokens
-        : totalTokens !== undefined
-          ? 0
-          : Math.max(0, spec.maxOutputTokens - effectiveCandidatesTokens);
-  }
-
-  const accounted = effectiveInputTokens + effectiveCandidatesTokens + effectiveThoughtsTokens;
-  const residual =
-    totalTokens !== undefined && totalTokens > accounted ? totalTokens - accounted : 0;
+  const bounds = resolveGenerateContentUsageBounds({
+    counters,
+    promptUpperBound: attemptInputTokenUpperBound(attempt, IMAGE_PROMPT_FRAMING_TOKEN_OVERHEAD),
+    maxOutputTokens: spec.maxOutputTokens,
+    minCandidatesTokens: (attempt.finalImagePartsCount ?? 0) * tokensPerImage,
+  });
 
   return (
-    usdPerMillionToMicroUsd(effectiveInputTokens, spec.inputUsdPerMillion) +
-    usdPerMillionToMicroUsd(effectiveCandidatesTokens + residual, spec.imageOutputUsdPerMillion) +
-    usdPerMillionToMicroUsd(effectiveThoughtsTokens, spec.textOutputUsdPerMillion)
+    usdPerMillionToMicroUsd(bounds.inputTokens, spec.inputUsdPerMillion) +
+    usdPerMillionToMicroUsd(
+      bounds.candidatesTokens + bounds.residualTokens,
+      spec.imageOutputUsdPerMillion
+    ) +
+    usdPerMillionToMicroUsd(bounds.thoughtsTokens, spec.textOutputUsdPerMillion)
   );
 }
 

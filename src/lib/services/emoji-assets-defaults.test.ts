@@ -108,11 +108,12 @@ const UNSET_MODEL_ENV: Array<{ label: string; value: string | undefined }> = [
 ];
 
 const EXPECTED_GEMINI_CONTENT_CALL = {
-  model: 'gemini-3.1-flash-lite-image',
+  model: 'gemini-3.1-flash-image',
   contents: GEMINI_PROMPT,
   config: {
+    candidateCount: 1,
     responseModalities: ['IMAGE'],
-    maxOutputTokens: 4_096,
+    maxOutputTokens: 32_768,
     imageConfig: { aspectRatio: '1:1' },
   },
 };
@@ -184,7 +185,7 @@ describe('AC-1 provider branch selection stays as before', () => {
       code: 'image_provider_unavailable',
       reason: 'missing-key',
       provider: 'gemini',
-      model: 'gemini-3.1-flash-lite-image',
+      model: 'gemini-3.1-flash-image',
     });
     expect(sdk.constructorCalls).toHaveLength(0);
   });
@@ -211,7 +212,7 @@ describe('AC-1 provider branch selection stays as before', () => {
   });
 });
 
-describe('AC-1 default Google model is Gemini 3.1 Flash Lite Image', () => {
+describe('AC-1 default Google model is proven Gemini 3.1 Flash Image', () => {
   for (const providerCase of GEMINI_BRANCH_PROVIDERS) {
     for (const envCase of UNSET_MODEL_ENV) {
       it(`calls generateContent with the default for ${providerCase.label} and ${envCase.label} GOOGLE_IMAGE_MODEL/IMAGEN_MODEL`, async () => {
@@ -231,7 +232,7 @@ describe('AC-1 default Google model is Gemini 3.1 Flash Lite Image', () => {
         expect(sdk.generateContentCalls[0]).toEqual(EXPECTED_GEMINI_CONTENT_CALL);
         expect(sdk.generateImagesCalls).toHaveLength(0);
         expect(sdk.imagesGenerateCalls).toHaveLength(0);
-        expect(result.model).toBe('gemini-3.1-flash-lite-image');
+        expect(result.model).toBe('gemini-3.1-flash-image');
         expect(result.provider).toBe('gemini');
         expect(result.imageBuffer.equals(TINY_PNG_BYTES)).toBe(true);
       });
@@ -280,20 +281,35 @@ describe('AC-2 Google model env resolution', () => {
     expect(result.model).toBe('gemini-3.1-flash-image');
   });
 
-  it('keeps the deprecated IMAGEN_MODEL synonym working for generateImages', async () => {
-    setEnv({ IMAGEN_MODEL: 'imagen-4.0-generate-001' });
+  it('keeps the deprecated IMAGEN_MODEL synonym working for proven gemini-3.1-flash-image', async () => {
+    setEnv({ IMAGEN_MODEL: 'gemini-3.1-flash-image' });
 
     const result = await generateEmojiImage(GENERATION_INPUT);
 
-    expect(sdk.generateImagesCalls).toHaveLength(1);
-    expect(sdk.generateImagesCalls[0]).toEqual({
-      model: 'imagen-4.0-generate-001',
-      prompt: GEMINI_PROMPT,
-      config: { numberOfImages: 1, aspectRatio: '1:1' },
-    });
-    expect(sdk.generateContentCalls).toHaveLength(0);
-    expect(result.model).toBe('imagen-4.0-generate-001');
+    expect(sdk.generateContentCalls).toHaveLength(1);
+    expect(sdk.generateContentCalls[0]).toEqual(EXPECTED_GEMINI_CONTENT_CALL);
+    expect(sdk.generateImagesCalls).toHaveLength(0);
+    expect(result.model).toBe('gemini-3.1-flash-image');
     expect(result.provider).toBe('gemini');
+  });
+
+  it('rejects explicitly configured unproven or retired Google models before SDK construction', async () => {
+    for (const [envName, model] of [
+      ['GOOGLE_IMAGE_MODEL', 'gemini-3.1-flash-lite-image'],
+      ['IMAGEN_MODEL', 'imagen-4.0-generate-001'],
+    ] as const) {
+      setEnv({ GOOGLE_IMAGE_MODEL: undefined, IMAGEN_MODEL: undefined, [envName]: model });
+
+      const generation = generateEmojiImage(GENERATION_INPUT);
+
+      await expect(generation).rejects.toThrow(new RegExp(envName));
+      await expect(generation).rejects.toThrow(
+        new RegExp(`value "${model.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}"`)
+      );
+      expect(sdk.constructorCalls).toHaveLength(0);
+      expect(sdk.generateImagesCalls).toHaveLength(0);
+      expect(sdk.generateContentCalls).toHaveLength(0);
+    }
   });
 
   it('reports a configuration error naming IMAGEN_MODEL for an invalid synonym value', async () => {
@@ -312,15 +328,15 @@ describe('AC-2 Google model env resolution', () => {
     it(`falls back to the trimmed IMAGEN_MODEL synonym with ${envCase.label} GOOGLE_IMAGE_MODEL`, async () => {
       setEnv({
         GOOGLE_IMAGE_MODEL: envCase.value,
-        IMAGEN_MODEL: ' imagen-4.0-generate-001 ',
+        IMAGEN_MODEL: ' gemini-3.1-flash-image ',
       });
 
       const result = await generateEmojiImage(GENERATION_INPUT);
 
-      expect(sdk.generateImagesCalls).toHaveLength(1);
-      expect(sdk.generateImagesCalls[0]?.model).toBe('imagen-4.0-generate-001');
-      expect(sdk.generateContentCalls).toHaveLength(0);
-      expect(result.model).toBe('imagen-4.0-generate-001');
+      expect(sdk.generateContentCalls).toHaveLength(1);
+      expect(sdk.generateContentCalls[0]?.model).toBe('gemini-3.1-flash-image');
+      expect(sdk.generateImagesCalls).toHaveLength(0);
+      expect(result.model).toBe('gemini-3.1-flash-image');
     });
   }
 
@@ -351,12 +367,12 @@ describe('AC-2 Google model env resolution', () => {
   });
 
   it('ignores an invalid OPENAI_IMAGE_MODEL while the Google provider is active', async () => {
-    setEnv({ GOOGLE_IMAGE_MODEL: 'imagen-4.0-generate-001', OPENAI_IMAGE_MODEL: 'dall-e-3' });
+    setEnv({ GOOGLE_IMAGE_MODEL: 'gemini-3.1-flash-image', OPENAI_IMAGE_MODEL: 'dall-e-3' });
 
     const result = await generateEmojiImage(GENERATION_INPUT);
 
-    expect(sdk.generateImagesCalls).toHaveLength(1);
-    expect(sdk.generateImagesCalls[0]?.model).toBe('imagen-4.0-generate-001');
+    expect(sdk.generateContentCalls).toHaveLength(1);
+    expect(sdk.generateContentCalls[0]?.model).toBe('gemini-3.1-flash-image');
     expect(sdk.imagesGenerateCalls).toHaveLength(0);
     expect(result.provider).toBe('gemini');
   });

@@ -36,7 +36,7 @@ OPENAI_API_KEY="your-openai-api-key"
 
 # Optional image model overrides. Leave them unset to use the defaults (see docs/ai.md).
 # Uncomment a line only to switch the model on purpose; copied as they are, they keep the defaults:
-# GOOGLE_IMAGE_MODEL="gemini-3.1-flash-lite-image"   # models.generateContent
+# GOOGLE_IMAGE_MODEL="gemini-3.1-flash-image"        # models.generateContent (sole verified bounded Google model)
 # OPENAI_IMAGE_MODEL="gpt-image-2.5-flare"           # images.generate, background transparent
 
 # Deprecated synonym of GOOGLE_IMAGE_MODEL; read only when that variable is unset/empty/whitespace.
@@ -93,24 +93,25 @@ independent evidence of the original reservation and whether the UPDATE committe
 ### Image model switch (Vercel)
 
 `GOOGLE_IMAGE_MODEL` and `OPENAI_IMAGE_MODEL` are optional. While `AI_PROVIDER` is unset (or
-anything other than `"gpt-image"`) production uses Google `gemini-3.1-flash-lite-image` through
-`models.generateContent`. Setting `AI_PROVIDER="gpt-image"` (with any `OPENAI_IMAGE_MODEL`, such
+anything other than `"gpt-image"`) production uses Google `gemini-3.1-flash-image` through
+`models.generateContent` (`candidateCount: 1`, `maxOutputTokens: 32768`). Setting
+`AI_PROVIDER="gpt-image"` (with any `OPENAI_IMAGE_MODEL`, such
 as `gpt-image-2.5-flare`, `gpt-image-2.5-sunburst`, `gpt-image-2`, or `gpt-image-1.5`) is rejected
 fail-closed **before** reserving budget or calling OpenAI because OpenAI `images.generate` lacks a
 documented fixed per-image price or enforceable output-token ceiling; `POST /api/emoji/generate`
 returns `503` (`api.aiQuota.unavailable`) and `POST /api/products/smart-create` falls back to the
-Unicode emoji while preserving bounded Gemini text analysis.
+Unicode emoji while preserving bounded Gemini text analysis. Explicit unproven or retired Google
+models (e.g. `gemini-3.1-flash-lite-image`, `imagen-4.0-*`) also fail closed before reservation or SDK dispatch.
 
 - Before any change, write down the current values and whether each of `AI_PROVIDER`,
   `GOOGLE_IMAGE_MODEL`, `IMAGEN_MODEL` and `OPENAI_IMAGE_MODEL` is present (no secrets).
 - Switch: set the variable in the Vercel project environment (Production and/or Preview) and redeploy.
   No code release is needed. Only the variables of the active provider are read.
 - Model EOL to plan against: `imagen-4.0-*` was retired by Google on 2026-08-17, `gpt-image-1.5` is
-  retired by OpenAI on 2026-12-01. The two current defaults have no announced shutdown date.
-- Verify the value against the grammar before saving, otherwise generation fails with a configuration
-  error naming the variable: `^imagen-[a-z0-9]+(?:[.-][a-z0-9]+)*$` for the Imagen adapter,
-  `^gemini-[a-z0-9]+(?:[.-][a-z0-9]+)*-image(-[a-z0-9]+(?:[.-][a-z0-9]+)*)?$` for the Gemini adapter,
-  `^gpt-image-[a-z0-9]+(?:[.-][a-z0-9]+)*$` for the OpenAI branch.
+  retired by OpenAI on 2026-12-01. `gemini-3.1-flash-image` has no announced shutdown date.
+- Verify the value against the proven allowlist (`SUPPORTED_GOOGLE_IMAGE_MODELS` in
+  `src/lib/ai-pricing.ts`, currently `gemini-3.1-flash-image`) before saving, otherwise generation
+  fails with a configuration error naming the variable before budget reservation or SDK dispatch.
 - Three separate actions, do not mix them up:
   - **roll back the configuration**: restore exactly the values written down above and redeploy;
   - **return to the default**: delete the override variable and redeploy (this is not a rollback);

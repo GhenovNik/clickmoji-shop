@@ -47,33 +47,49 @@ operators can explicitly select `gemini-3.5-flash-lite` now without changing the
 The image model is configuration, not code. Every value below is the operator default from the
 AGE-347 decision (2026-10-04); nothing has to be set in the environment to get a working service.
 
-| Variable             | Unset / empty / whitespace    | Non-empty value (trimmed)                                                                     |
-| -------------------- | ----------------------------- | --------------------------------------------------------------------------------------------- |
-| `GOOGLE_IMAGE_MODEL` | `gemini-3.1-flash-lite-image` | that model, routed by the id grammar below                                                    |
-| `IMAGEN_MODEL`       | same default                  | deprecated synonym of `GOOGLE_IMAGE_MODEL`, read only when that one is unset/empty/whitespace |
-| `OPENAI_IMAGE_MODEL` | `gpt-image-2.5-flare`         | that model, validated against the GPT Image id grammar                                        |
+| Variable             | Unset / empty / whitespace | Non-empty value (trimmed)                                                                     |
+| -------------------- | -------------------------- | --------------------------------------------------------------------------------------------- |
+| `GOOGLE_IMAGE_MODEL` | `gemini-3.1-flash-image`   | that model, validated against the proven priced allowlist below                               |
+| `IMAGEN_MODEL`       | same default               | deprecated synonym of `GOOGLE_IMAGE_MODEL`, read only when that one is unset/empty/whitespace |
+| `OPENAI_IMAGE_MODEL` | `gpt-image-2.5-flare`      | rejected fail-closed (no verified fixed price or enforceable output-token ceiling)            |
 
 Only the variables of the active provider (`AI_PROVIDER`) are read; the inactive provider's
 variables are neither read nor validated, and importing the module with an invalid value does not
-throw. An invalid value fails at generation time with a configuration error naming the variable and
-its value, before any SDK call.
+throw. An invalid or unproven value fails at generation time with a configuration error naming the
+variable and its value, before any DB reservation or SDK call. Explicitly configured values are
+never silently replaced by the default.
 
 ### Adapters
 
 `AI_PROVIDER=gemini` (or anything that is not exactly `gpt-image`) resolves the Google id as the
-first non-empty trimmed value of `GOOGLE_IMAGE_MODEL`, then `IMAGEN_MODEL`, then the default, and
-validates it against the verified priced allowlist in `src/lib/ai-pricing.ts`
-(`SUPPORTED_GOOGLE_IMAGE_MODELS`):
+first non-empty trimmed value of `GOOGLE_IMAGE_MODEL`, then `IMAGEN_MODEL`, then the default
+(`gemini-3.1-flash-image`), and validates it against the verified priced allowlist in
+`src/lib/ai-pricing.ts` (`SUPPORTED_GOOGLE_IMAGE_MODELS`):
 
-- `imagen-4.0-generate-001`, `imagen-4.0-fast-generate-001`, `imagen-4.0-ultra-generate-001` →
-  `models.generateImages`
-- `gemini-3.1-flash-lite-image`, `gemini-3.1-flash-image`, `gemini-2.5-flash-image`,
-  `gemini-2.5-flash-image-preview`, `gemini-3-pro-image` →
-  `models.generateContent({ model, contents: prompt, config: { responseModalities: ['IMAGE'],
-maxOutputTokens: <model output limit>, imageConfig: { aspectRatio: '1:1' } } })`
-- anything else (including unpriced/unknown-bound model IDs, uppercase, spaces, newlines, or
-  unsupported dimensions/quality/output count) → configuration error naming `GOOGLE_IMAGE_MODEL` or
-  `IMAGEN_MODEL` before budget reservation or SDK construction
+- `gemini-3.1-flash-image` →
+  `models.generateContent({ model, contents: prompt, config: { candidateCount: 1, responseModalities: ['IMAGE'], maxOutputTokens: 32768, imageConfig: { aspectRatio: '1:1' } } })`
+  (Verified against [model docs](https://ai.google.dev/gemini-api/docs/models/gemini-3.1-flash-image),
+  [pricing](https://ai.google.dev/gemini-api/docs/pricing), and [Google staff confirmation](https://discuss.ai.google.dev/t/gemini-3-1-flash-image-generatecontent-enforceable-billing-bounds-for-six-inline-images/187561):
+  `candidateCount` is fixed to `1` and `maxOutputTokens` sets a hard ceiling on combined thinking,
+  text, and generated image tokens.)
+- anything else — including `gemini-3.1-flash-lite-image`, `gemini-2.5-flash-image`,
+  `gemini-2.5-flash-image-preview` (shut down 2026-01-15), `gemini-3-pro-image` (all lacking
+  verifiable provider confirmation that `maxOutputTokens` strictly caps combined multi-image/thinking/text
+  output), retired `imagen-4.0-*` (shut down 2026-08-17, removed from pricing docs / `/api/generate-images` 404),
+  unknown IDs, uppercase, spaces, newlines, or unsupported dimensions/output count → configuration error
+  naming `GOOGLE_IMAGE_MODEL` or `IMAGEN_MODEL` before budget reservation or SDK construction.
+
+**Default switch compatibility and cost effect (AGE-1667):** when neither `GOOGLE_IMAGE_MODEL` nor
+`IMAGEN_MODEL` is set, the default switches from `gemini-3.1-flash-lite-image` (whose combined
+multi-image ceiling is unconfirmed) to `gemini-3.1-flash-image` so default image routes remain usable
+with a proven enforceable cap:
+
+- Compatibility: identical `models.generateContent` transport, `1:1` 1K PNG output (`1,120` image
+  tokens), `emoji-image-v1` white-background prompt, and error/quota classes; active with no shutdown date.
+- Cost effect: per-1K image output price increases from `$0.0336` (`$30/1M`) to `$0.0672` (`$60/1M`;
+  input `$0.25/1M` → `$0.50/1M`, text/thinking `$1.50/1M` → `$3.00/1M`), and pre-call reservation ceiling
+  rises from `$0.12288` (`4,096 * $30/1M`) to `$1.96608` (`32,768 * $60/1M`) + input bound (~5 concurrent
+  reservations under the `$10.00` monthly cap; unused reserve releases to actual usage on reconciliation).
 
 `AI_PROVIDER=gpt-image` (with `OPENAI_IMAGE_MODEL` unset/`gpt-image-2.5-flare`,
 `gpt-image-2.5-sunburst`, `gpt-image-2`, `gpt-image-1.5`, or any OpenAI `images.generate` model)
@@ -172,12 +188,12 @@ that is not in the research snapshot and was not read from such a page is writte
 _unconfirmed (2026-10-04)_ rather than estimated. Google prices are per 1000 images at 1K resolution
 and cover image output only; input tokens are billed separately and are not in these numbers.
 
-| Model                                               | Price per 1000 images at 1K                                                                                                                                                                                                                                                                                                           | Transparent background                                                                   | Limits (scope)                                                                                                                                                                 | Free image API tier                                                                                            | Status and shutdown                                                                                           | Source                                                                                                                                                                                                                                                                                                                                                                              |
-| --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `gemini-3.1-flash-lite-image` (Google, **default**) | Standard **$33.60** ($0.0336 per image, image output $30 per 1M output tokens); Batch **$16.80** ($0.0168, $15 per 1M). Input tokens are billed separately; their rate is unconfirmed (2026-10-04)                                                                                                                                    | No — white background only in the prompt, background removal would be a separate feature | Per project, not per API key; IPM applies to Nano Banana models, the numeric value depends on the project tier and is not published; Tier 1 requires an active billing account | No — pricing page shows Free Tier "Not available" for input and output                                         | Stable, **no announced shutdown date**                                                                        | [pricing](https://ai.google.dev/gemini-api/docs/pricing), [image generation](https://ai.google.dev/gemini-api/docs/image-generation), [rate limits](https://ai.google.dev/gemini-api/docs/rate-limits), [models](https://ai.google.dev/gemini-api/docs/models)                                                                                                                      |
-| `gemini-3.1-flash-image` (Google)                   | Standard **$67.00** at 1K ($0.067 per image; $0.045 at 0.5K, $0.101 at 2K, $0.151 at 4K; image output $60 per 1M); Batch **$34.00** at 1K ($0.034). Input tokens are billed separately; their rate is unconfirmed (2026-10-04)                                                                                                        | No, same as above                                                                        | Same per-project IPM scope; not published as a fixed number                                                                                                                    | No — Free Tier "Not available"                                                                                 | Stable, **no announced shutdown date**; Google recommends it as the `imagen-4.0-*` replacement                | [pricing](https://ai.google.dev/gemini-api/docs/pricing), [image generation](https://ai.google.dev/gemini-api/docs/image-generation), [rate limits](https://ai.google.dev/gemini-api/docs/rate-limits)                                                                                                                                                                              |
-| `gpt-image-2.5-flare` (OpenAI, **default**)         | No official per-image price. Token rates per 1M: image output **$30** (Batch $15), image input **$8** (text input **$5**); both input rates in Batch are unconfirmed (2026-10-04). The docs state that GPT Image 2 calculator output does not estimate GPT Image 2.5 consumption, so a per-image figure must be measured from `usage` | Yes — `background: 'transparent'` with PNG output                                        | Per organization and usage tier: IPM **5** (Tier 1), 20, 50, 150, 250; a paid purchase on Tier 1 is unconfirmed (2026-10-04)                                                   | No — the docs state the free tier is not supported and ask for a credit balance (research snapshot 2026-10-04) | Stable, **no announced shutdown date**; replacement recommended for the retired GPT Image 1 models            | [model page](https://developers.openai.com/api/docs/models/gpt-image-2.5-flare), [pricing](https://developers.openai.com/api/docs/pricing), [image generation guide](https://developers.openai.com/api/docs/guides/image-generation), [rate limits](https://developers.openai.com/api/docs/guides/rate-limits), [deprecations](https://developers.openai.com/api/docs/deprecations) |
-| `gpt-image-1.5` (OpenAI)                            | unconfirmed (2026-10-04) — the research snapshot records no price for this model                                                                                                                                                                                                                                                      | Yes, the same `background` parameter — unconfirmed (2026-10-04) for this model           | Same per-organization IPM scope — unconfirmed (2026-10-04) for this model                                                                                                      | No, as above — unconfirmed (2026-10-04) for this model                                                         | Deprecated 2026-06-02, **shutdown 2026-12-01**; replacement `gpt-image-2.5-sunburst` or `gpt-image-2.5-flare` | [deprecations](https://developers.openai.com/api/docs/deprecations), [pricing](https://developers.openai.com/api/docs/pricing)                                                                                                                                                                                                                                                      |
+| Model                                                  | Price per 1000 images at 1K                                                                                                                                                                                                                                                                                                           | Transparent background                                                                   | Limits (scope)                                                                                                                                                                 | Free image API tier                                                                                            | Status and shutdown                                                                                           | Source                                                                                                                                                                                                                                                                                                                                                                              |
+| ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `gemini-3.1-flash-lite-image` (Google, **unadmitted**) | Standard **$33.60** ($0.0336 per image, image output $30 per 1M output tokens); Batch **$16.80** ($0.0168, $15 per 1M). Input tokens are billed separately; their rate is unconfirmed (2026-10-04). Rejected fail-closed before dispatch because multi-image `maxOutputTokens` ceiling is unconfirmed                                 | No — white background only in the prompt, background removal would be a separate feature | Per project, not per API key; IPM applies to Nano Banana models, the numeric value depends on the project tier and is not published; Tier 1 requires an active billing account | No — pricing page shows Free Tier "Not available" for input and output                                         | Stable, **no announced shutdown date**                                                                        | [pricing](https://ai.google.dev/gemini-api/docs/pricing), [image generation](https://ai.google.dev/gemini-api/docs/image-generation), [rate limits](https://ai.google.dev/gemini-api/docs/rate-limits), [models](https://ai.google.dev/gemini-api/docs/models)                                                                                                                      |
+| `gemini-3.1-flash-image` (Google, **default**)         | Standard **$67.00** at 1K ($0.067 per image; $0.045 at 0.5K, $0.101 at 2K, $0.151 at 4K; image output $60 per 1M); Batch **$34.00** at 1K ($0.034). Input $0.50/1M, text/thinking $3.00/1M; `candidateCount: 1` and combined `maxOutputTokens: 32768` ceiling confirmed                                                               | No, same as above                                                                        | Same per-project IPM scope; not published as a fixed number                                                                                                                    | No — Free Tier "Not available"                                                                                 | Stable, **no announced shutdown date**; Google recommends it as the `imagen-4.0-*` replacement                | [pricing](https://ai.google.dev/gemini-api/docs/pricing), [image generation](https://ai.google.dev/gemini-api/docs/image-generation), [rate limits](https://ai.google.dev/gemini-api/docs/rate-limits), [billing bounds confirmation](https://discuss.ai.google.dev/t/gemini-3-1-flash-image-generatecontent-enforceable-billing-bounds-for-six-inline-images/187561)               |
+| `gpt-image-2.5-flare` (OpenAI, **default**)            | No official per-image price. Token rates per 1M: image output **$30** (Batch $15), image input **$8** (text input **$5**); both input rates in Batch are unconfirmed (2026-10-04). The docs state that GPT Image 2 calculator output does not estimate GPT Image 2.5 consumption, so a per-image figure must be measured from `usage` | Yes — `background: 'transparent'` with PNG output                                        | Per organization and usage tier: IPM **5** (Tier 1), 20, 50, 150, 250; a paid purchase on Tier 1 is unconfirmed (2026-10-04)                                                   | No — the docs state the free tier is not supported and ask for a credit balance (research snapshot 2026-10-04) | Stable, **no announced shutdown date**; replacement recommended for the retired GPT Image 1 models            | [model page](https://developers.openai.com/api/docs/models/gpt-image-2.5-flare), [pricing](https://developers.openai.com/api/docs/pricing), [image generation guide](https://developers.openai.com/api/docs/guides/image-generation), [rate limits](https://developers.openai.com/api/docs/guides/rate-limits), [deprecations](https://developers.openai.com/api/docs/deprecations) |
+| `gpt-image-1.5` (OpenAI)                               | unconfirmed (2026-10-04) — the research snapshot records no price for this model                                                                                                                                                                                                                                                      | Yes, the same `background` parameter — unconfirmed (2026-10-04) for this model           | Same per-organization IPM scope — unconfirmed (2026-10-04) for this model                                                                                                      | No, as above — unconfirmed (2026-10-04) for this model                                                         | Deprecated 2026-06-02, **shutdown 2026-12-01**; replacement `gpt-image-2.5-sunburst` or `gpt-image-2.5-flare` | [deprecations](https://developers.openai.com/api/docs/deprecations), [pricing](https://developers.openai.com/api/docs/pricing)                                                                                                                                                                                                                                                      |
 
 Retired for reference: the whole `imagen-4.0-*` family (including `imagen-4.0-generate-001` and
 `imagen-4.0-fast-generate-001`) was released 2025-06-24 and **shut down 2026-08-17**, with
@@ -238,7 +254,8 @@ Three different actions, not interchangeable:
    each of `AI_PROVIDER`, `GOOGLE_IMAGE_MODEL`, `IMAGEN_MODEL` and `OPENAI_IMAGE_MODEL` was present
    (no secrets). To roll back, restore exactly those values and redeploy.
 2. **Return to the default** — delete the override variable and redeploy. This is not a rollback: it
-   lands on the current defaults, `gemini-3.1-flash-lite-image` or `gpt-image-2.5-flare`.
+   lands on the current Google default, `gemini-3.1-flash-image` (`AI_PROVIDER=gpt-image` fails closed
+   before dispatch).
 3. **Roll back the code** — revert the squash commit and redeploy. That restores the previous
    `imagen-4.0-generate-001` default, which Google has already retired, so it does not promise a
    working generation path.
@@ -376,21 +393,22 @@ In addition to the per-user daily call counters, all paid HTTP AI routes and the
   `runMonthlyBudgetedTextAiCall` (`src/lib/text-ai-call.ts`) and `runImageAiCall`
   (`src/lib/image-ai-call.ts`) validate that the active configuration has an enforceable cost
   ceiling (`src/lib/ai-pricing.ts`, tied to verified Google models, UTF-8 byte input bounds of the
-  sent request, `maxOutputTokens = 4096` combined cap on `candidates + thoughts` for up to 3 text
-  attempts including `GOOGLE_TEXT_MODEL_FALLBACK`, and the applied `maxOutputTokens` cap priced at
-  `imageOutputUsdPerMillion` for Gemini `generateContent` image models / `numberOfImages: 1` for
-  Imagen `generateImages`). Unbounded configurations (`AI_PROVIDER=gpt-image` / `OPENAI_IMAGE_MODEL`) fail closed
-  before DB reservation or SDK construction with HTTP `503` (`api.aiQuota.unavailable`) on image
-  generation, while preserving bounded Google text functionality (including Stage 1 of
+  sent request, `candidateCount: 1` and `maxOutputTokens = 4096` combined cap on `candidates + thoughts`
+  for up to 3 text attempts including `GOOGLE_TEXT_MODEL_FALLBACK`, and `candidateCount: 1` with
+  `maxOutputTokens: 32768` priced at `imageOutputUsdPerMillion` for `gemini-3.1-flash-image` via
+  `models.generateContent`). Unproven/retired Google image models and OpenAI `gpt-image` configurations fail
+  closed before DB reservation or SDK construction (`EmojiImageGenerationError('configuration')` for
+  invalid/unproven Google models; `AiCostUnboundedError` / HTTP `503` `api.aiQuota.unavailable` on
+  OpenAI image generation, while preserving bounded Google text functionality including Stage 1 of
   `smart-create`). Execution adapters verify sent prompt bounds and model configuration match the
   active reservation before calling any SDK.
   After the provider settles, the reservation is reconciled against actual reported usage
-  (`usageMetadata` for Gemini `generateContent`) or conservative per-component/per-attempt bounds
-  when usage is missing or partial (including remaining `maxOutputTokens` priced at
-  `imageOutputUsdPerMillion` when `candidatesTokenCount` is omitted on Gemini image calls,
-  remaining combined output bound `max(0, MAX_TEXT_OUTPUT_TOKENS - thoughtsTokenCount)` when
-  `candidatesTokenCount` is omitted with known `thoughtsTokenCount` on text calls, UTF-8 byte
-  bounds for missing input, and residual `totalTokenCount` billing); pre-SDK failures and explicit
+  (`usageMetadata` for Gemini `generateContent`) or conservative upper-bound component allocation
+  compatible with known counters (never subtracting an unmeasured input upper-bound estimate from
+  `totalTokenCount`: when `totalTokenCount` is present, unattributed tokens above measured minimums
+  are allocated from highest-rate to lowest-rate missing components, and when `totalTokenCount` is
+  absent, missing `candidates`/`thoughts` use the remaining `maxOutputTokens` ceiling and missing
+  `prompt` uses UTF-8 byte upper bounds); pre-SDK failures and explicit
   rejections (`400`/`401`/`403`/`404`/`422`/`429`/`RESOURCE_EXHAUSTED`) record `$0`, while
   ambiguous upstream failures (`408`/`500`/`502`/`503`/`504`/`UNAVAILABLE`/`TIMEOUT`) are treated as
   potentially billed.

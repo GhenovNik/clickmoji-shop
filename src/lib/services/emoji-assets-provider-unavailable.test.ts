@@ -102,13 +102,13 @@ const PROVIDER_CASES: ProviderCase[] = [
     sdkMethod: 'generateContent',
   },
   {
-    label: 'Google generateImages via the IMAGEN_MODEL synonym',
+    label: 'Google generateContent via the IMAGEN_MODEL synonym',
     provider: 'gemini',
     apiKeyEnv: 'GOOGLE_GENAI_API_KEY',
     modelEnv: 'IMAGEN_MODEL',
     apiKey: SYNTHETIC_GOOGLE_KEY,
-    model: 'imagen-4.0-generate-001',
-    sdkMethod: 'generateImages',
+    model: 'gemini-3.1-flash-image',
+    sdkMethod: 'generateContent',
   },
   {
     label: 'OpenAI images.generate',

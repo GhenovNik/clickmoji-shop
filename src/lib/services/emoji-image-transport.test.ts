@@ -60,30 +60,32 @@ describe('real SDK image transport single-attempt boundary (no network)', () => 
       ).rejects.toThrow();
 
       expect(fetchMock).toHaveBeenCalledTimes(1);
+      const [, init] = fetchMock.mock.calls[0] as unknown as [unknown, RequestInit];
+      const body = JSON.parse(String(init.body));
+      expect(body.generationConfig).toMatchObject({
+        candidateCount: 1,
+        maxOutputTokens: 32_768,
+      });
     }
   );
 
-  it('Google generateImages (Imagen) adapter performs exactly one fetch on HTTP 500', async () => {
-    vi.stubEnv('GOOGLE_IMAGE_MODEL', 'imagen-4.0-generate-001');
-    const fetchMock = vi.fn(
-      async () =>
-        new Response(
-          JSON.stringify({ error: { code: 500, status: 'INTERNAL', message: 'fail' } }),
-          {
-            status: 500,
-            headers: { 'Content-Type': 'application/json' },
-          }
-        )
-    );
-    vi.stubGlobal('fetch', fetchMock);
+  it.each(['imagen-4.0-generate-001', 'gemini-3.1-flash-lite-image', 'gemini-3-pro-image'])(
+    'Google adapter performs zero fetches and fails closed for unproven/retired model %s',
+    async (model) => {
+      vi.stubEnv('GOOGLE_IMAGE_MODEL', model);
+      const fetchMock = vi.fn(async () => {
+        throw new Error('fetch must not be called for unproven/retired model');
+      });
+      vi.stubGlobal('fetch', fetchMock);
 
-    await expect(
-      generateWithGoogleImage({
-        productName: 'Milk',
-        apiKey: 'synthetic-google-key',
-      })
-    ).rejects.toThrow();
+      await expect(
+        generateWithGoogleImage({
+          productName: 'Milk',
+          apiKey: 'synthetic-google-key',
+        })
+      ).rejects.toThrow(/GOOGLE_IMAGE_MODEL/);
 
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-  });
+      expect(fetchMock).toHaveBeenCalledTimes(0);
+    }
+  );
 });

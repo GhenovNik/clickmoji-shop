@@ -60,6 +60,7 @@ async function generateAttempt(
         model,
         contents: prompt,
         config: {
+          candidateCount: 1,
           responseMimeType: 'application/json',
           maxOutputTokens: MAX_TEXT_OUTPUT_TOKENS,
           abortSignal: controller.signal,

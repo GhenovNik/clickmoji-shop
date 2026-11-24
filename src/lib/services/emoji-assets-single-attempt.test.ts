@@ -111,7 +111,7 @@ beforeEach(() => {
   sdk.imagesGenerateImpl = () => ({ data: [{ b64_json: TINY_PNG_BASE64 }] });
   setEnv({
     AI_PROVIDER: undefined,
-    IMAGEN_MODEL: 'imagen-4.0-fast-generate-001',
+    IMAGEN_MODEL: undefined,
     GOOGLE_IMAGE_MODEL: undefined,
     OPENAI_IMAGE_MODEL: undefined,
     GOOGLE_GENAI_API_KEY: SYNTHETIC_GOOGLE_KEY,
@@ -125,28 +125,33 @@ afterEach(() => {
 
 describe('AC-6 returned model id and unchanged metadata', () => {
   it('reports the default Gemini image model and unchanged metadata', async () => {
-    setEnv({ IMAGEN_MODEL: undefined });
-
     const result = await generateEmojiImage(ASSET_INPUT);
 
-    expect(result.model).toBe('gemini-3.1-flash-lite-image');
+    expect(result.model).toBe('gemini-3.1-flash-image');
     expectUnchangedMetadata(result, 'gemini');
   });
 
-  it('reports the deprecated IMAGEN_MODEL synonym and unchanged metadata', async () => {
+  it('reports the deprecated IMAGEN_MODEL synonym for proven gemini-3.1-flash-image and unchanged metadata', async () => {
+    setEnv({ IMAGEN_MODEL: 'gemini-3.1-flash-image' });
+
     const result = await generateEmojiImage(ASSET_INPUT);
 
-    expect(result.model).toBe('imagen-4.0-fast-generate-001');
+    expect(result.model).toBe('gemini-3.1-flash-image');
     expectUnchangedMetadata(result, 'gemini');
   });
 
-  it('reports the configured Google imagen model and unchanged metadata', async () => {
+  it('rejects retired imagen-4.0-* and unproven gemini-3.1-flash-lite-image before SDK call', async () => {
     setEnv({ GOOGLE_IMAGE_MODEL: 'imagen-4.0-generate-001' });
+    await expect(generateEmojiImage(ASSET_INPUT)).rejects.toThrow(/GOOGLE_IMAGE_MODEL/);
 
-    const result = await generateEmojiImage(ASSET_INPUT);
+    setEnv({ GOOGLE_IMAGE_MODEL: undefined, IMAGEN_MODEL: 'imagen-4.0-fast-generate-001' });
+    await expect(generateEmojiImage(ASSET_INPUT)).rejects.toThrow(/IMAGEN_MODEL/);
 
-    expect(result.model).toBe('imagen-4.0-generate-001');
-    expectUnchangedMetadata(result, 'gemini');
+    setEnv({ GOOGLE_IMAGE_MODEL: 'gemini-3.1-flash-lite-image', IMAGEN_MODEL: undefined });
+    await expect(generateEmojiImage(ASSET_INPUT)).rejects.toThrow(/GOOGLE_IMAGE_MODEL/);
+
+    expect(sdk.generateImagesCalls).toHaveLength(0);
+    expect(sdk.generateContentCalls).toHaveLength(0);
   });
 
   it('reports the configured Google gemini image model and unchanged metadata', async () => {
@@ -173,21 +178,20 @@ describe('AC-6 returned model id and unchanged metadata', () => {
   });
 
   it('keeps generateAndUploadEmojiAsset metadata for the deprecated synonym path', async () => {
+    setEnv({ IMAGEN_MODEL: 'gemini-3.1-flash-image' });
     const asset = await generateAndUploadEmojiAsset(ASSET_INPUT);
 
     expect(asset.imageUrl).toBe('https://utfs.io/f/synthetic.png');
-    expect(asset.model).toBe('imagen-4.0-fast-generate-001');
+    expect(asset.model).toBe('gemini-3.1-flash-image');
     expectUnchangedMetadata(asset, 'gemini');
     expect(sdk.uploadFilesCalls).toHaveLength(1);
   });
 
   it('keeps generateAndUploadEmojiAsset metadata for the default generateContent path', async () => {
-    setEnv({ IMAGEN_MODEL: undefined });
-
     const asset = await generateAndUploadEmojiAsset(ASSET_INPUT);
 
     expect(asset.imageUrl).toBe('https://utfs.io/f/synthetic.png');
-    expect(asset.model).toBe('gemini-3.1-flash-lite-image');
+    expect(asset.model).toBe('gemini-3.1-flash-image');
     expectUnchangedMetadata(asset, 'gemini');
     expect(sdk.uploadFilesCalls).toHaveLength(1);
   });
@@ -213,29 +217,23 @@ describe('AC-6 returned model id and unchanged metadata', () => {
 });
 
 describe('AC-8 exactly one adapter attempt per generation', () => {
-  it('performs a single generateImages attempt when the legacy SDK call rejects', async () => {
-    sdk.generateImagesImpl = () => {
-      throw new Error('provider unavailable');
-    };
+  it('performs zero generateImages attempts when legacy imagen-4.0-* model is configured', async () => {
+    setEnv({ IMAGEN_MODEL: 'imagen-4.0-fast-generate-001' });
 
-    await expect(generateAndUploadEmojiAsset(ASSET_INPUT)).rejects.toThrow('provider unavailable');
+    await expect(generateAndUploadEmojiAsset(ASSET_INPUT)).rejects.toThrow(/IMAGEN_MODEL/);
 
-    expect(sdk.generateImagesCalls).toHaveLength(1);
+    expect(sdk.generateImagesCalls).toHaveLength(0);
     expect(sdk.generateContentCalls).toHaveLength(0);
     expect(sdk.imagesGenerateCalls).toHaveLength(0);
     expect(sdk.uploadFilesCalls).toHaveLength(0);
   });
 
-  it('performs a single generateImages attempt when the configured imagen model call rejects', async () => {
+  it('performs zero generateImages attempts when GOOGLE_IMAGE_MODEL is retired imagen-4.0-generate-001', async () => {
     setEnv({ GOOGLE_IMAGE_MODEL: 'imagen-4.0-generate-001' });
-    sdk.generateImagesImpl = () => {
-      throw new Error('provider unavailable');
-    };
 
-    await expect(generateAndUploadEmojiAsset(ASSET_INPUT)).rejects.toThrow('provider unavailable');
+    await expect(generateAndUploadEmojiAsset(ASSET_INPUT)).rejects.toThrow(/GOOGLE_IMAGE_MODEL/);
 
-    expect(sdk.generateImagesCalls).toHaveLength(1);
-    expect(sdk.generateImagesCalls[0]?.model).toBe('imagen-4.0-generate-001');
+    expect(sdk.generateImagesCalls).toHaveLength(0);
     expect(sdk.generateContentCalls).toHaveLength(0);
     expect(sdk.imagesGenerateCalls).toHaveLength(0);
     expect(sdk.uploadFilesCalls).toHaveLength(0);
@@ -328,7 +326,7 @@ describe('AC-8 exactly one adapter attempt per generation', () => {
     await expect(generateAndUploadEmojiAsset(ASSET_INPUT)).rejects.toThrow('provider unavailable');
 
     expect(sdk.generateContentCalls).toHaveLength(1);
-    expect(sdk.generateContentCalls[0]?.model).toBe('gemini-3.1-flash-lite-image');
+    expect(sdk.generateContentCalls[0]?.model).toBe('gemini-3.1-flash-image');
     expect(sdk.generateImagesCalls).toHaveLength(0);
     expect(sdk.imagesGenerateCalls).toHaveLength(0);
     expect(sdk.uploadFilesCalls).toHaveLength(0);
@@ -367,7 +365,7 @@ describe('AC-8 exactly one adapter attempt per generation', () => {
     const asset = await generateAndUploadEmojiAsset(ASSET_INPUT);
 
     expect(sdk.generateContentCalls).toHaveLength(1);
-    expect(sdk.generateContentCalls[0]?.model).toBe('gemini-3.1-flash-lite-image');
+    expect(sdk.generateContentCalls[0]?.model).toBe('gemini-3.1-flash-image');
     expect(sdk.generateImagesCalls).toHaveLength(0);
     expect(sdk.uploadFilesCalls).toHaveLength(1);
     const bytes = Buffer.from(await sdk.uploadFilesCalls[0].arrayBuffer());

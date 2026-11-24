@@ -60,6 +60,7 @@ export async function runImageAiCall<T>(
         model: pricing.model,
         maxPromptTokens: pricing.maxPromptTokens,
         maxOutputTokens: pricing.maxOutputTokens,
+        candidateCount: pricing.candidateCount,
         size: pricing.size,
         quality: pricing.quality,
         imageSize: pricing.imageSize,

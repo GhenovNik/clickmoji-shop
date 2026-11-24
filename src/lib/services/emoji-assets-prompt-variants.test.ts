@@ -127,13 +127,13 @@ describe('AC-14 Google prompt variant', () => {
     expect(sdk.generateContentCalls[0]?.contents).toBe(GOOGLE_PROMPT_SNAPSHOT);
   });
 
-  it('keeps the previous template on the Imagen generateImages synonym path', async () => {
-    setEnv({ IMAGEN_MODEL: 'imagen-4.0-generate-001' });
+  it('keeps the previous template on the IMAGEN_MODEL synonym path with proven gemini-3.1-flash-image', async () => {
+    setEnv({ IMAGEN_MODEL: 'gemini-3.1-flash-image' });
 
     await generateEmojiImage(GENERATION_INPUT);
 
-    expect(sdk.generateImagesCalls).toHaveLength(1);
-    expect(sdk.generateImagesCalls[0]?.prompt).toBe(GOOGLE_PROMPT_SNAPSHOT);
+    expect(sdk.generateContentCalls).toHaveLength(1);
+    expect(sdk.generateContentCalls[0]?.contents).toBe(GOOGLE_PROMPT_SNAPSHOT);
   });
 
   it('reports promptVersion emoji-image-v1 and the previous cacheKey on the Gemini path', async () => {
@@ -143,13 +143,12 @@ describe('AC-14 Google prompt variant', () => {
     expect(result.cacheKey).toBe(GOOGLE_CACHE_KEY);
   });
 
-  it('reports promptVersion emoji-image-v1 and the previous cacheKey on the Imagen path', async () => {
+  it('rejects retired imagen-4.0-generate-001 before SDK dispatch', async () => {
     setEnv({ GOOGLE_IMAGE_MODEL: 'imagen-4.0-generate-001' });
 
-    const result = await generateEmojiImage(GENERATION_INPUT);
-
-    expect(result.promptVersion).toBe('emoji-image-v1');
-    expect(result.cacheKey).toBe(GOOGLE_CACHE_KEY);
+    await expect(generateEmojiImage(GENERATION_INPUT)).rejects.toThrow(/GOOGLE_IMAGE_MODEL/);
+    expect(sdk.generateImagesCalls).toHaveLength(0);
+    expect(sdk.generateContentCalls).toHaveLength(0);
   });
 });
 
