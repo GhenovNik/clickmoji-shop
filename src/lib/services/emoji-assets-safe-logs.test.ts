@@ -383,7 +383,7 @@ describe('Н-02 safe diagnostics outside image generation', () => {
     expect(logged).not.toContain(KEY_MARKER);
   });
 
-  it('logs a safe code for an unparsable request body in smart-create', async () => {
+  it('rejects malformed JSON without logging the request body in smart-create', async () => {
     const records = captureLoggers();
 
     const response = await smartCreate(
@@ -394,16 +394,15 @@ describe('Н-02 safe diagnostics outside image generation', () => {
       })
     );
 
-    expect(response.status).toBe(500);
-    expect(await response.json()).toEqual({ error: 'Could not create the product' });
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: 'Invalid request' });
     const logged = records.map((record) => record.text).join('\n');
-    expect(logged).toContain("'Error in smart product creation:' 'UNKNOWN'");
     expect(logged).not.toContain('SyntaxError');
     expect(logged).not.toContain(BODY_MARKER);
     expect(logged).not.toContain(KEY_MARKER);
   });
 
-  it('logs the class and message of an unparsable request body in the generate route', async () => {
+  it('rejects malformed JSON without logging the request body in the generate route', async () => {
     const records = captureLoggers();
 
     const response = await emojiGenerate(
@@ -414,11 +413,12 @@ describe('Н-02 safe diagnostics outside image generation', () => {
       })
     );
 
-    expect(response.status).toBe(500);
-    expect(await response.json()).toEqual({ error: 'Failed to generate emoji' });
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: 'Invalid request' });
     expect(doubles.sdkCalls).toHaveLength(0);
     const logged = records.map((record) => record.text).join('\n');
-    expect(logged).toContain('SyntaxError');
+    expect(logged).not.toContain('SyntaxError');
+    expect(logged).not.toContain(BODY_MARKER);
     expect(logged).not.toContain(KEY_MARKER);
   });
 });
