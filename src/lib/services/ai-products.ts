@@ -1,3 +1,4 @@
+import { AI_INPUT_LIMITS, AiInputTooLargeError } from '@/lib/ai-input-validation';
 import { generateGoogleText } from '@/lib/services/google-text-generation';
 
 export const AI_PRODUCTS_PROMPT_VERSION = 'ai-products-v3';
@@ -336,6 +337,12 @@ New product:
 [{ "nameRu": "Сметана", "nameEn": "Sour cream", "categoryName": "Dairy", "emoji": "🥛", "note": "20%" }]`;
 }
 
+function assertPromptWithinLimit(prompt: string) {
+  if (prompt.length > AI_INPUT_LIMITS.MAX_TEXT_PROMPT_CHARS) {
+    throw new AiInputTooLargeError('Text AI prompt exceeds maximum length');
+  }
+}
+
 export async function analyzeSmartProduct({
   apiKey,
   productName,
@@ -347,7 +354,14 @@ export async function analyzeSmartProduct({
   categoryId?: string;
   categories: ProductCategory[];
 }) {
+  if (productName.trim().length > AI_INPUT_LIMITS.MAX_PRODUCT_NAME_LENGTH) {
+    throw new AiInputTooLargeError('Smart product name exceeds maximum length');
+  }
+  if (categoryId && categoryId.length > AI_INPUT_LIMITS.MAX_CATEGORY_ID_LENGTH) {
+    throw new AiInputTooLargeError('Smart product categoryId exceeds maximum length');
+  }
   const prompt = buildSmartProductPrompt({ productName, categoryId, categories });
+  assertPromptWithinLimit(prompt);
   const { text: responseText, model } = await generateGoogleText({ apiKey, prompt });
   return {
     result: parseSmartProductResponse(responseText),
@@ -365,7 +379,22 @@ export async function processProductBatch({
   productNames: string[];
   categories: ProductCategory[];
 }) {
+  if (productNames.length > AI_INPUT_LIMITS.MAX_BULK_IMPORT_ITEMS) {
+    throw new AiInputTooLargeError('Bulk import product count exceeds maximum');
+  }
+  let totalChars = 0;
+  for (const name of productNames) {
+    const trimmed = name.trim();
+    if (trimmed.length > AI_INPUT_LIMITS.MAX_PRODUCT_NAME_LENGTH) {
+      throw new AiInputTooLargeError('Bulk import product name exceeds maximum length');
+    }
+    totalChars += trimmed.length;
+    if (totalChars > AI_INPUT_LIMITS.MAX_BULK_IMPORT_TOTAL_CHARS) {
+      throw new AiInputTooLargeError('Bulk import total text exceeds maximum length');
+    }
+  }
   const prompt = buildBulkProductsPrompt({ productNames, categories });
+  assertPromptWithinLimit(prompt);
   const { text: responseText, model } = await generateGoogleText({ apiKey, prompt });
   return {
     products: parseProcessedProductsResponse(responseText),
@@ -385,7 +414,11 @@ export async function parseShoppingListText({
   categories: ProductCategory[];
   catalog?: CatalogProductPromptEntry[];
 }) {
+  if (text.length > AI_INPUT_LIMITS.MAX_IMPORT_TEXT_CHARS) {
+    throw new AiInputTooLargeError('Shopping list text exceeds maximum length');
+  }
   const prompt = buildShoppingListPrompt({ text, categories, catalog });
+  assertPromptWithinLimit(prompt);
   const { text: responseText, model } = await generateGoogleText({ apiKey, prompt });
   return {
     ...parseShoppingListResponse(responseText),

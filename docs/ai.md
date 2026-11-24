@@ -351,6 +351,36 @@ Outcome of a reservation, by stage:
    the product is created with the Unicode emoji from the analysis (`customEmojiGenerated: false`),
    the same outcome as a failed image generation. It does not answer `503`.
 
+## Monthly monetary cap and input limits
+
+In addition to the per-user daily call counters, all paid HTTP AI routes share a persistent
+UTC-month monetary cap stored in PostgreSQL (`ai_monthly_budgets`, `src/lib/ai-budget.ts`):
+
+- **Configured cap (`AI_MONTHLY_BUDGET_USD`)**: unset, empty, or whitespace defaults to `$10.00`
+  (`10_000_000` micro-USD). `"0"` disables paid AI under the monthly cap (`503`). Any malformed
+  or negative value fails closed (`503`, logging `INVALID_MONTHLY_BUDGET` and the env name without
+  the raw value).
+- **Atomic pre-call reservation & reconciliation**: before contacting a provider, `runTextAiCall`
+  (`src/lib/text-ai-call.ts`) and `runImageAiCall` (`src/lib/image-ai-call.ts`) atomically reserve
+  a conservative micro-USD ceiling (`src/lib/ai-pricing.ts`, covering up to 3 text attempts
+  including `GOOGLE_TEXT_MODEL_FALLBACK` with `maxOutputTokens = 4096`, or 1 image attempt).
+  After the provider settles, the reservation is reconciled against actual reported usage
+  (`usageMetadata` for Gemini `generateContent`, `usage` for OpenAI `images.generate`) or a
+  conservative per-attempt estimate when usage is absent; pre-SDK failures and explicit provider
+  rejections (`400`/`401`/`403`/`404`/`429`/`503`) record `$0`.
+- **Fail-closed accounting**: if `ai_monthly_budgets` cannot be read or updated at reservation time,
+  the request fails closed with HTTP `503` and a localized AI-only unavailability message; non-AI
+  routes remain unaffected.
+- **Server-side input bounds before providers**:
+  - `POST /api/lists/import-text`: `text` <= 2000 chars (`400`); defense-in-depth prompt cap in
+    `src/lib/services/ai-products.ts`.
+  - `POST /api/products/smart-create`: body <= 8 KiB (`413`), `productName` <= 120 chars (`400`),
+    optional `categoryId` validated against `^[a-zA-Z0-9_-]{1,64}$` (`400`).
+  - `POST /api/products/bulk-import`: body <= 32 KiB (`413`), `productNames` <= 50 items, each
+    <= 120 chars, <= 2000 chars total (`400`).
+  - `POST /api/emoji/generate`: body <= 16 KiB (`413`), `productName` <= 120 chars (`400`),
+    optional `description` <= 500 chars (`400`).
+
 ## Cache strategy
 
 Emoji generation exposes a deterministic cache key:

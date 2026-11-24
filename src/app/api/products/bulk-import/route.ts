@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { apiText } from '@/lib/api-messages';
+import { AI_INPUT_LIMITS, readBoundedJsonBody } from '@/lib/ai-input-validation';
 import { localizedName } from '@/lib/catalog-name';
 import { prisma } from '@/lib/prisma';
 import { requireAdmin } from '@/lib/auth-guards';
@@ -16,14 +17,67 @@ export async function POST(request: Request) {
     if (guard instanceof Response) return guard;
     const { session } = guard;
 
-    const body = await request.json();
-    const { productNames } = body;
+    const locale = getRequestLocale(request);
+    const parsedBody = await readBoundedJsonBody({
+      request,
+      maxBytes: AI_INPUT_LIMITS.BULK_IMPORT_BODY_MAX_BYTES,
+      locale,
+      namespace: 'errors',
+    });
+    if (!parsedBody.ok) return parsedBody.response;
 
-    if (!productNames || !Array.isArray(productNames) || productNames.length === 0) {
+    const { productNames: rawProductNames } = parsedBody.body;
+
+    if (!rawProductNames || !Array.isArray(rawProductNames) || rawProductNames.length === 0) {
       return NextResponse.json(
         { error: await apiText(request, 'productNamesRequired') },
         { status: 400 }
       );
+    }
+
+    if (rawProductNames.length > AI_INPUT_LIMITS.MAX_BULK_IMPORT_ITEMS) {
+      return NextResponse.json(
+        {
+          error: await apiText(request, 'bulkImportTooManyItems', {
+            max: AI_INPUT_LIMITS.MAX_BULK_IMPORT_ITEMS,
+          }),
+        },
+        { status: 400 }
+      );
+    }
+
+    const productNames: string[] = [];
+    let totalChars = 0;
+    for (const item of rawProductNames) {
+      if (typeof item !== 'string' || item.trim().length === 0) {
+        return NextResponse.json(
+          { error: await apiText(request, 'productNamesRequired') },
+          { status: 400 }
+        );
+      }
+      const trimmed = item.trim();
+      if (trimmed.length > AI_INPUT_LIMITS.MAX_PRODUCT_NAME_LENGTH) {
+        return NextResponse.json(
+          {
+            error: await apiText(request, 'bulkImportNameTooLong', {
+              max: AI_INPUT_LIMITS.MAX_PRODUCT_NAME_LENGTH,
+            }),
+          },
+          { status: 400 }
+        );
+      }
+      totalChars += trimmed.length;
+      if (totalChars > AI_INPUT_LIMITS.MAX_BULK_IMPORT_TOTAL_CHARS) {
+        return NextResponse.json(
+          {
+            error: await apiText(request, 'bulkImportTextTooLong', {
+              max: AI_INPUT_LIMITS.MAX_BULK_IMPORT_TOTAL_CHARS,
+            }),
+          },
+          { status: 400 }
+        );
+      }
+      productNames.push(trimmed);
     }
 
     const userLimit = await checkRateLimit({

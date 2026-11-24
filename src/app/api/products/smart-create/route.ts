@@ -8,7 +8,12 @@ import {
   getServerTranslator,
   rateLimitResponse,
 } from '@/lib/auth-security';
-import { enforceAiQuota } from '@/lib/ai-quota';
+import {
+  AI_INPUT_LIMITS,
+  CATEGORY_ID_PATTERN,
+  readBoundedJsonBody,
+} from '@/lib/ai-input-validation';
+import { runImageAiCall } from '@/lib/image-ai-call';
 import { runTextAiCall } from '@/lib/text-ai-call';
 import { textAiErrorCode } from '@/lib/services/text-ai-errors';
 import { analyzeSmartProduct } from '@/lib/services/ai-products';
@@ -43,11 +48,33 @@ export async function POST(request: Request) {
       );
     }
 
-    const body = await request.json();
-    const { productName, categoryId } = body;
+    const parsedBody = await readBoundedJsonBody({
+      request,
+      maxBytes: AI_INPUT_LIMITS.SMART_CREATE_BODY_MAX_BYTES,
+      locale,
+      namespace: 'products',
+    });
+    if (!parsedBody.ok) return parsedBody.response;
 
-    if (!productName) {
+    const { productName: rawProductName, categoryId: rawCategoryId } = parsedBody.body;
+
+    if (typeof rawProductName !== 'string' || rawProductName.trim().length === 0) {
       return NextResponse.json({ error: t('api.products.nameRequired') }, { status: 400 });
+    }
+    const productName = rawProductName.trim();
+    if (productName.length > AI_INPUT_LIMITS.MAX_PRODUCT_NAME_LENGTH) {
+      return NextResponse.json(
+        { error: t('api.products.nameTooLong', { max: AI_INPUT_LIMITS.MAX_PRODUCT_NAME_LENGTH }) },
+        { status: 400 }
+      );
+    }
+
+    let categoryId: string | undefined;
+    if (rawCategoryId !== undefined && rawCategoryId !== null && rawCategoryId !== '') {
+      if (typeof rawCategoryId !== 'string' || !CATEGORY_ID_PATTERN.test(rawCategoryId.trim())) {
+        return NextResponse.json({ error: t('api.products.invalidCategoryId') }, { status: 400 });
+      }
+      categoryId = rawCategoryId.trim();
     }
 
     const userLimit = await checkRateLimit({
@@ -135,25 +162,29 @@ export async function POST(request: Request) {
     let isCustom = false;
     let finalEmoji = aiResult.emoji || '📦';
 
-    // The image is a second paid call with its own unit; without one the product keeps the
-    // Unicode emoji, like after a failed generation.
-    if (aiResult.needsCustomEmoji && !(await enforceAiQuota(dbUser, locale))) {
+    // The image is a second paid call with its own unit and monthly reconciliation; without quota
+    // or budget the product keeps the Unicode emoji, like after a failed generation.
+    if (aiResult.needsCustomEmoji) {
       try {
-        const emojiAsset = await generateAndUploadEmojiAsset({
-          productName: aiResult.nameRu,
-        });
-        customEmojiUrl = emojiAsset.imageUrl;
-        isCustom = true;
-        // Only catalogue pictures go to the library; a user's personal product stays private.
-        if (dbUser.role === 'ADMIN') {
-          await recordEmojiLibraryItem({
-            imageUrl: emojiAsset.imageUrl,
-            name: aiResult.nameRu,
-            nameEn: aiResult.nameEn,
-            source: 'generated',
-          });
+        const emojiResult = await runImageAiCall(dbUser, locale, () =>
+          generateAndUploadEmojiAsset({
+            productName: aiResult.nameRu,
+          })
+        );
+        if (!(emojiResult instanceof Response)) {
+          customEmojiUrl = emojiResult.imageUrl;
+          isCustom = true;
+          // Only catalogue pictures go to the library; a user's personal product stays private.
+          if (dbUser.role === 'ADMIN') {
+            await recordEmojiLibraryItem({
+              imageUrl: emojiResult.imageUrl,
+              name: aiResult.nameRu,
+              nameEn: aiResult.nameEn,
+              source: 'generated',
+            });
+          }
+          finalEmoji = aiResult.emoji || '🎨';
         }
-        finalEmoji = aiResult.emoji || '🎨';
       } catch (error) {
         // FR-10: the log carries allowlisted fields only, never the SDK message, body or cause.
         console.error('Error generating custom emoji:', summarizeEmojiGenerationFailure(error));

@@ -128,14 +128,14 @@ All endpoints are implemented as Next.js Route Handlers under `src/app/api`.
 ### `POST /api/products/bulk-import`
 
 - Auth: admin
-- Body: `productNames: string[]`
-- Notes: Gemini categorization + translation + emoji; skips duplicates; rate limited to 10 requests/hour per admin user and takes one unit of the admin daily AI budget before the analysis (`403` off, `429` used up, `503` unreadable; no provider call then); response includes `promptVersion` and `model`
+- Body: `productNames: string[]` (1..50 items, <= 120 chars each, <= 2000 chars total; payload <= 32 KiB, `400`/`413`)
+- Notes: Gemini categorization + translation + emoji; skips duplicates; rate limited to 10 requests/hour per admin user and takes one unit of the admin daily AI budget plus a monthly monetary reservation before the analysis (`403` off, `429` daily used up, `503` monthly cap reached or unreadable budget; no provider call then); response includes `promptVersion` and `model`
 
 ### `POST /api/products/smart-create`
 
 - Auth: signed in
-- Body: `productName`, `categoryId?`
-- Notes: Gemini analysis through the AI product service; rate limited to 20 requests/hour per user; the text analysis takes a unit of the daily AI budget first (`403` off, `429` used up, `503` unreadable; no provider call then); the custom image takes a second unit after the analysis, and if that one is refused for any reason the product is still created with its Unicode emoji (see `docs/ai.md`); non-admin users are limited by `User.createdProductsCount` and create user-scoped products, while admins create global products. If a custom image is needed, the route calls the emoji asset service directly and does not self-call `/api/emoji/generate` or `/api/emoji/upload`. Response includes `promptVersion` and `model`.
+- Body: `productName` (<= 120 chars), `categoryId?` (`^[a-zA-Z0-9_-]{1,64}$`); payload <= 8 KiB (`400`/`413`)
+- Notes: Gemini analysis through the AI product service; rate limited to 20 requests/hour per user; the text analysis takes a unit of the daily AI budget and monthly monetary reservation first (`403` off, `429` daily used up, `503` monthly cap reached or unreadable budget; no provider call then); the custom image takes a second unit and monthly reservation after the analysis, and if that one is refused for any reason the product is still created with its Unicode emoji (see `docs/ai.md`); non-admin users are limited by `User.createdProductsCount` and create user-scoped products, while admins create global products. If a custom image is needed, the route calls the emoji asset service directly and does not self-call `/api/emoji/generate` or `/api/emoji/upload`. Response includes `promptVersion` and `model`.
 
 ### `POST /api/products/move-category`
 
@@ -279,9 +279,9 @@ All endpoints are implemented as Next.js Route Handlers under `src/app/api`.
 ### `POST /api/emoji/generate`
 
 - Auth: admin
-- Body: `productName`
+- Body: `productName` (<= 120 chars), `description?` (<= 500 chars); payload <= 16 KiB (`400`/`413`)
 - Response: `{ base64, message, provider, model, promptVersion, cacheKey }`
-- Notes: provider selected by `AI_PROVIDER`; rate limited to 20 requests/hour per admin user and takes one unit of the admin daily AI budget before the provider call (`403` off, `429` used up, `503` unreadable; no provider call then)
+- Notes: provider selected by `AI_PROVIDER`; rate limited to 20 requests/hour per admin user and takes one unit of the admin daily AI budget plus a monthly monetary reservation before the provider call (`403` off, `429` daily used up, `503` monthly cap reached or unreadable budget; no provider call then)
 
 ### `POST /api/emoji/upload`
 

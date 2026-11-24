@@ -41,6 +41,10 @@ OPENAI_API_KEY="your-openai-api-key"
 
 # Deprecated synonym of GOOGLE_IMAGE_MODEL; read only when that variable is unset/empty/whitespace.
 # IMAGEN_MODEL="gemini-3.1-flash-image"
+
+# Shared monthly monetary cap across all users and instances (UTC month, USD).
+# Unset/empty/whitespace = $10.00 default. "0" or malformed = fail closed (503, AI only).
+# AI_MONTHLY_BUDGET_USD="10"
 ```
 
 ### Text AI overload and quota accounting (AGE-1540)

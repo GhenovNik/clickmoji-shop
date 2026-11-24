@@ -1,4 +1,5 @@
 import { GoogleGenAI } from '@google/genai';
+import { MAX_TEXT_OUTPUT_TOKENS, recordTextProviderAttempt } from '@/lib/ai-pricing';
 import {
   GoogleTextModelConfigurationError,
   resolveGoogleTextModel,
@@ -14,6 +15,19 @@ import {
 const MAX_ATTEMPTS = 3;
 const ATTEMPT_TIMEOUT_MS = 8_000;
 const TOTAL_BUDGET_MS = 30_000;
+
+const NON_BILLABLE_ERROR_CODES = new Set([
+  '400',
+  '401',
+  '403',
+  '404',
+  '408',
+  '422',
+  '429',
+  '503',
+  'UNAVAILABLE',
+  'RESOURCE_EXHAUSTED',
+]);
 
 async function generateAttempt(
   client: GoogleGenAI,
@@ -37,14 +51,33 @@ async function generateAttempt(
         contents: prompt,
         config: {
           responseMimeType: 'application/json',
+          maxOutputTokens: MAX_TEXT_OUTPUT_TOKENS,
           abortSignal: controller.signal,
           httpOptions: { timeout: ATTEMPT_TIMEOUT_MS, retryOptions: { attempts: 1 } },
         },
       }),
       timeout,
     ]);
+    recordTextProviderAttempt({
+      model,
+      promptChars: prompt.length,
+      outcome: 'ok',
+      usageMetadata: result.usageMetadata,
+    });
     if (!result.text) throw new Error('No response from AI');
     return result.text;
+  } catch (error) {
+    if (!(error instanceof Error && error.message === 'No response from AI')) {
+      const code = textAiErrorCode(error);
+      const outcome =
+        code === 'TIMEOUT' ? 'timeout' : NON_BILLABLE_ERROR_CODES.has(code) ? 'rejected' : 'error';
+      recordTextProviderAttempt({
+        model,
+        promptChars: prompt.length,
+        outcome,
+      });
+    }
+    throw error;
   } finally {
     clearTimeout(timer);
   }

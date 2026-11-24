@@ -1,6 +1,7 @@
 import { GoogleGenAI } from '@google/genai';
 import type { GenerateContentResponse } from '@google/genai';
 import OpenAI from 'openai';
+import { recordImageProviderAttempt } from '@/lib/ai-pricing';
 import {
   classifyProviderFailure,
   EmojiImageGenerationError,
@@ -117,16 +118,36 @@ async function callProviderSdk<T>(
   {
     provider,
     model,
+    promptChars,
   }: {
     provider: EmojiProvider;
     model: string;
+    promptChars: number;
   },
-  operation: () => Promise<T>
+  operation: () => Promise<T>,
+  extractUsage?: (result: T) => {
+    googleUsageMetadata?: GenerateContentResponse['usageMetadata'];
+    openaiUsage?: OpenAI.Images.ImagesResponse['usage'];
+  }
 ): Promise<T> {
   try {
-    return await operation();
+    const result = await operation();
+    recordImageProviderAttempt({
+      provider,
+      model,
+      promptChars,
+      outcome: 'ok',
+      ...extractUsage?.(result),
+    });
+    return result;
   } catch (error) {
     const reason = classifyProviderFailure(error);
+    recordImageProviderAttempt({
+      provider,
+      model,
+      promptChars,
+      outcome: reason ? 'rejected' : 'error',
+    });
     if (reason) {
       throw new EmojiProviderUnavailableError({ reason, provider, model });
     }
@@ -193,15 +214,17 @@ async function generateWithGoogleImages({
   const prompt = getEmojiGenerationPrompt(productName, description);
   const ai = clients.createGoogleClient({ apiKey });
 
-  const response = await callProviderSdk({ provider: 'gemini', model }, () =>
-    ai.models.generateImages({
-      model,
-      prompt,
-      config: {
-        numberOfImages: 1,
-        aspectRatio: '1:1',
-      },
-    })
+  const response = await callProviderSdk(
+    { provider: 'gemini', model, promptChars: prompt.length },
+    () =>
+      ai.models.generateImages({
+        model,
+        prompt,
+        config: {
+          numberOfImages: 1,
+          aspectRatio: '1:1',
+        },
+      })
   );
 
   if (!response?.generatedImages?.length) {
@@ -321,15 +344,18 @@ async function generateWithGoogleGenerateContent({
   const prompt = getEmojiGenerationPrompt(productName, description);
   const ai = clients.createGoogleClient({ apiKey });
 
-  const response = await callProviderSdk({ provider: 'gemini', model }, () =>
-    ai.models.generateContent({
-      model,
-      contents: prompt,
-      config: {
-        responseModalities: ['IMAGE'],
-        imageConfig: { aspectRatio: '1:1' },
-      },
-    })
+  const response = await callProviderSdk(
+    { provider: 'gemini', model, promptChars: prompt.length },
+    () =>
+      ai.models.generateContent({
+        model,
+        contents: prompt,
+        config: {
+          responseModalities: ['IMAGE'],
+          imageConfig: { aspectRatio: '1:1' },
+        },
+      }),
+    (res) => ({ googleUsageMetadata: res?.usageMetadata })
   );
 
   return {
@@ -373,14 +399,17 @@ export async function generateWithOpenAI(
   requireProviderApiKey({ apiKey, provider: 'gpt-image', model });
   const openai = clients.createOpenAIClient({ apiKey });
 
-  const result = await callProviderSdk({ provider: 'gpt-image', model }, () =>
-    openai.images.generate({
-      model: model as OpenAI.ImageModel,
-      prompt,
-      size: OPENAI_IMAGE_SIZE,
-      quality: OPENAI_IMAGE_QUALITY as 'medium',
-      background: OPENAI_IMAGE_BACKGROUND as 'transparent',
-    })
+  const result = await callProviderSdk(
+    { provider: 'gpt-image', model, promptChars: prompt.length },
+    () =>
+      openai.images.generate({
+        model: model as OpenAI.ImageModel,
+        prompt,
+        size: OPENAI_IMAGE_SIZE,
+        quality: OPENAI_IMAGE_QUALITY as 'medium',
+        background: OPENAI_IMAGE_BACKGROUND as 'transparent',
+      }),
+    (res) => ({ openaiUsage: res?.usage })
   );
 
   const imageBase64 = result.data?.[0]?.b64_json;
