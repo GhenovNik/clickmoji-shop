@@ -23,6 +23,7 @@ model User {
   histories        ListHistory[]
   createdProducts  Product[]         @relation("UserCreatedProducts")
   aiUsage          AiUsageCounter[]
+  funnelEvents     FunnelEvent[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -318,4 +319,30 @@ model VariantFavorite {
   @@unique([userId, variantId])
   @@index([userId])
   @@map("variant_favorites")
+}
+
+enum FunnelEventType {
+  VISIT
+  REGISTER
+  LOGIN
+  LIST_CREATE
+  ITEM_ADD
+  ITEM_PURCHASE
+}
+
+// Anonymous and authenticated product-funnel milestones for admin analytics.
+// Stores event type, timestamp, and opaque guest/user identifiers only.
+model FunnelEvent {
+  id        String          @id @default(cuid())
+  type      FunnelEventType
+  guestId   String?
+  userId    String?
+  user      User?           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime        @default(now())
+
+  @@index([createdAt])
+  @@index([type, createdAt])
+  @@index([userId, createdAt])
+  @@index([guestId, createdAt])
+  @@map("funnel_events")
 }
