@@ -163,11 +163,11 @@ writes stopped during the final switch so new writes are not lost. Restore to a 
 verify it, then change the site's production `DATABASE_URL` in Vercel and redeploy. Keep the old
 target until the operator approves its retirement. A failed check blocks the switch.
 
-Production copies are kept on the Mac mini and the Lenovo machine, never in GitHub. Until the
-scheduled encrypted copy job is live, the local `npm run db:backup` and `npm run db:restore` scripts
-above handle local development databases only; do not treat them as the production recovery
-procedure. Select a verified encrypted custom-format dump and its verification record, including
-table counts and latest migration.
+Production copies belong on the Mac mini and the Lenovo machine. The verified backup command is
+`npm run db:backup:verified` (`scripts/backup/cli.mjs`). Its operator configuration uses the read-only
+source `DATABASE_URL`, `BACKUP_DIR`, `BACKUP_AGE_RECIPIENT_FILE`, and `BACKUP_STATUS_FILE`. Use a
+separate shell for recovery. Select a verified `clickmoji-<UTC timestamp>.dump.age` from the backup
+directory and its verification record, including table counts and latest migration.
 
 #### Shell and prerequisites
 
@@ -177,13 +177,12 @@ table counts and latest migration.
 - Needed: Docker running on the operator machine; the Neon CLI (`neon`) authenticated by the operator
   for the Neon steps; a checkout of the reviewed release for the Prisma steps. Nothing is installed on
   the host by these steps; `age` runs inside the disposable container.
-- Use the reviewed image digest in `IMAGE`. The placeholder below fails on purpose until the backup
-  implementation supplies the reviewed digest.
+- Use the same official PostgreSQL image digest as the verified backup container.
 - Work only in a private terminal: no shell tracing (`set -x`), no session recording, no shared
   screens. Never write a connection URL or identity into a file, a log or a ticket.
 
 ```sh
-IMAGE='postgres:17-alpine@sha256:<REVIEWED_DIGEST>'
+IMAGE='postgres:17-alpine@sha256:f9cf3e1f0066f0eb0c48707d864f0ac5941e9ff454a072077d97a4d278d07d73'
 NEON_PROJECT_ID='<neon-project-id>'
 ```
 
