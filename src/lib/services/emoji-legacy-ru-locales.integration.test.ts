@@ -1,12 +1,16 @@
 // @vitest-environment node
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { PrismaClient } from '@prisma/client';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { createPrismaPgAdapter } from '../prisma-adapter';
-import { loadLegacyRussianTargets } from './emoji-legacy-ru-locales';
+import {
+  DEFAULT_CANDIDATES_PATH,
+  DEFAULT_MANIFEST_PATH,
+  loadLegacyRussianTargets,
+} from './emoji-legacy-ru-locales';
 
 // Run only through npm run test:legacy-locales-postgres: it creates and removes its own Docker DB.
 const url = process.env.INTEGRATION_DATABASE_URL;
@@ -193,6 +197,43 @@ describe.skipIf(!url)('legacy Russian image locales CLI on disposable PostgreSQL
 
     expect(res.status).toBe(1);
     expect(res.stderr).toContain('DATABASE_URL is not set in the environment');
+  });
+
+  it('rejects incomplete override manifests before writing to PostgreSQL even with valid DATABASE_URL', async () => {
+    await seedSyntheticLibrary();
+    const snapshotBefore = await db.emojiLibraryItem.findMany({ orderBy: { id: 'asc' } });
+
+    const dir = mkdtempSync(join(tmpdir(), 'legacy-ru-scope-'));
+    tempDirs.push(dir);
+    const manifest = JSON.parse(
+      readFileSync(resolve(REPO_ROOT, DEFAULT_MANIFEST_PATH), 'utf8')
+    ) as Array<{ kind?: string; cells: Array<{ supersededBy?: string }> }>;
+    for (let i = manifest.length - 1; i >= 0; i--) {
+      const batch = manifest[i]!;
+      if (batch.kind === 'text') continue;
+      const idx = batch.cells.findIndex((cell) => Boolean(cell.supersededBy));
+      if (idx !== -1) {
+        batch.cells.splice(idx, 1);
+        break;
+      }
+    }
+    const manifestPath = join(dir, 'manifest.json');
+    writeFileSync(manifestPath, JSON.stringify(manifest));
+
+    const res = runCli(
+      [
+        '--apply',
+        '--manifest',
+        manifestPath,
+        '--candidates',
+        resolve(REPO_ROOT, DEFAULT_CANDIDATES_PATH),
+      ],
+      { databaseUrl: url! }
+    );
+
+    expect(res.status).toBe(1);
+    expect(res.stderr).toContain('Target scope mismatch');
+    expect(await db.emojiLibraryItem.findMany({ orderBy: { id: 'asc' } })).toEqual(snapshotBefore);
   });
 
   it('supports dry-run, applies 11 null->ru with groupKey matching and unpaired preservation, and is idempotent on repeat --apply', async () => {

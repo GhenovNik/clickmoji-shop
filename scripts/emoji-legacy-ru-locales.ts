@@ -2,6 +2,8 @@ import { PrismaClient } from '@prisma/client';
 import { createPrismaPgAdapter } from '../src/lib/prisma-adapter';
 import {
   applyLegacyRussianLocales,
+  assertApprovedLegacyRussianTargets,
+  loadCanonicalLegacyRussianTargets,
   loadLegacyRussianTargets,
   parseCliArgs,
   planLegacyRussianLocales,
@@ -23,11 +25,19 @@ import {
 const USAGE = [
   'Usage: DATABASE_URL=... npx tsx scripts/emoji-legacy-ru-locales.ts [options]',
   '',
+  'Tag the 11 superseded legacy batch-NNN Russian library pictures with locale="ru"',
+  '(and shared English twin groupKey when present).',
+  '',
   'Options:',
   '  --apply              Apply updates inside a Serializable transaction (default: dry-run)',
   '  --manifest <path>    Override docs/emoji-batches/manifest.json',
   '  --candidates <path>  Override docs/emoji-batches/candidates.json',
   '  -h, --help           Show this help message',
+  '',
+  'Operational warning:',
+  '  After applying Я1, do NOT reimport superseded legacy batches through',
+  '  scripts/emoji-import.ts because emoji-import resets these tags (overwriting',
+  '  superseded legacy rows back to locale=null and their original batch groupKey).',
 ].join('\n');
 
 function printPlan(plan: LegacyRussianPlan, apply: boolean, appliedUpdates?: number) {
@@ -77,10 +87,12 @@ async function main() {
     return;
   }
 
+  const canonicalTargets = loadCanonicalLegacyRussianTargets();
   const targets = loadLegacyRussianTargets({
     manifestPath: options.manifestPath,
     candidatesPath: options.candidatesPath,
   });
+  assertApprovedLegacyRussianTargets(targets, canonicalTargets);
 
   if (!process.env.DATABASE_URL?.trim()) {
     throw new Error('DATABASE_URL is not set in the environment');

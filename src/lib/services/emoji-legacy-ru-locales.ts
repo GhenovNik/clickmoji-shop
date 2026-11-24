@@ -1,7 +1,11 @@
 import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type { PrismaClient } from '@prisma/client';
 import type { BatchKind, ManifestBatch } from './emoji-batch-import';
+
+const MODULE_DIR = dirname(fileURLToPath(import.meta.url));
+const REPO_ROOT = resolve(MODULE_DIR, '../../..');
 
 function cellRef(batch: string, cell: number) {
   return `${batch}#${cell}`;
@@ -13,6 +17,7 @@ function normalizeCatalogName(value: string) {
 
 export const DEFAULT_MANIFEST_PATH = 'docs/emoji-batches/manifest.json';
 export const DEFAULT_CANDIDATES_PATH = 'docs/emoji-batches/candidates.json';
+export const EXPECTED_LEGACY_TARGET_COUNT = 11;
 
 const UNIVERSAL_BATCH_RE = /^batch-\d+$/;
 const TEXT_BATCH_RE = /^text-\d+$/;
@@ -362,6 +367,66 @@ export function loadLegacyRussianTargets(paths?: {
   return targets;
 }
 
+// Loads the built-in repository manifest and candidates and enforces the exact
+// approved target count so override files and apply paths cannot drift in scope.
+export function loadCanonicalLegacyRussianTargets(paths?: {
+  manifestPath?: string;
+  candidatesPath?: string;
+}): LegacyRussianTarget[] {
+  const manifestPath = paths?.manifestPath ?? resolve(REPO_ROOT, DEFAULT_MANIFEST_PATH);
+  const candidatesPath = paths?.candidatesPath ?? resolve(REPO_ROOT, DEFAULT_CANDIDATES_PATH);
+  const targets = loadLegacyRussianTargets({ manifestPath, candidatesPath });
+
+  if (targets.length !== EXPECTED_LEGACY_TARGET_COUNT) {
+    throw new Error(
+      `Canonical repository manifest/candidates must define exactly ${EXPECTED_LEGACY_TARGET_COUNT} legacy Russian targets (found ${targets.length})`
+    );
+  }
+
+  return targets;
+}
+
+// Verifies that the supplied targets match the exact set of canonical sourceRefs
+// derived from the built-in repository manifest and candidates.
+export function assertApprovedLegacyRussianTargets(
+  targets: readonly LegacyRussianTarget[],
+  canonicalTargets: readonly LegacyRussianTarget[] = loadCanonicalLegacyRussianTargets()
+): void {
+  const canonicalRefs = new Set(canonicalTargets.map((target) => target.ref));
+  if (
+    canonicalTargets.length !== EXPECTED_LEGACY_TARGET_COUNT ||
+    canonicalRefs.size !== EXPECTED_LEGACY_TARGET_COUNT
+  ) {
+    throw new Error(
+      `Canonical target set must contain exactly ${EXPECTED_LEGACY_TARGET_COUNT} unique sourceRef(s)`
+    );
+  }
+
+  const targetRefs = new Set<string>();
+  for (const target of targets) {
+    if (targetRefs.has(target.ref)) {
+      throw new Error('Duplicate target cell references');
+    }
+    targetRefs.add(target.ref);
+  }
+
+  const missingRefs = [...canonicalRefs].filter((ref) => !targetRefs.has(ref));
+  const unexpectedRefs = [...targetRefs].filter((ref) => !canonicalRefs.has(ref));
+
+  if (
+    targets.length !== EXPECTED_LEGACY_TARGET_COUNT ||
+    missingRefs.length > 0 ||
+    unexpectedRefs.length > 0
+  ) {
+    const details: string[] = [];
+    if (missingRefs.length > 0) details.push(`missing: ${missingRefs.join(', ')}`);
+    if (unexpectedRefs.length > 0) details.push(`unexpected: ${unexpectedRefs.join(', ')}`);
+    throw new Error(
+      `Target scope mismatch: expected the ${EXPECTED_LEGACY_TARGET_COUNT} canonical sourceRef(s), got ${targets.length}${details.length > 0 ? ` (${details.join('; ')})` : ''}`
+    );
+  }
+}
+
 function nonEmpty(value: string | null | undefined): string | null {
   if (typeof value !== 'string') return null;
   const trimmed = value.trim();
@@ -376,10 +441,9 @@ export async function planLegacyRussianLocales(
     throw new Error('Targets list must not be empty');
   }
 
+  assertApprovedLegacyRussianTargets(targets);
+
   const refs = targets.map((target) => target.ref);
-  if (new Set(refs).size !== refs.length) {
-    throw new Error('Duplicate target cell references');
-  }
 
   const enRefs = refs.map((ref) => `${ref}:en`);
   const [totalLibraryCount, refRows] = await Promise.all([
@@ -583,6 +647,7 @@ export async function applyLegacyRussianLocalesInTx(
   tx: LibraryTxClient,
   targets: LegacyRussianTarget[]
 ): Promise<LegacyRussianApplyResult> {
+  assertApprovedLegacyRussianTargets(targets);
   const plan = await planLegacyRussianLocales(tx, targets);
   for (const op of plan.operations) {
     await tx.emojiLibraryItem.update({
@@ -607,6 +672,7 @@ export async function applyLegacyRussianLocales(
   prisma: Pick<PrismaClient, '$transaction'>,
   targets: LegacyRussianTarget[]
 ): Promise<LegacyRussianApplyResult> {
+  assertApprovedLegacyRussianTargets(targets);
   return prisma.$transaction((tx) => applyLegacyRussianLocalesInTx(tx, targets), {
     isolationLevel: 'Serializable',
     timeout: 30_000,

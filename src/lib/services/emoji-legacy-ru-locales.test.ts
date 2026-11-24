@@ -1,21 +1,33 @@
 // @vitest-environment node
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import type { PrismaClient } from '@prisma/client';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   applyLegacyRussianLocales,
   applyLegacyRussianLocalesInTx,
+  assertApprovedLegacyRussianTargets,
+  DEFAULT_CANDIDATES_PATH,
+  DEFAULT_MANIFEST_PATH,
+  EXPECTED_LEGACY_TARGET_COUNT,
+  loadCanonicalLegacyRussianTargets,
   loadLegacyRussianTargets,
   parseCliArgs,
   planLegacyRussianLocales,
   sanitizeDatabaseErrorMessage,
-  type LegacyRussianTarget,
   type LibraryDbReader,
   type LibraryRow,
   type LibraryTxClient,
 } from './emoji-legacy-ru-locales';
+
+const REPO_ROOT = process.cwd();
+const TSX_CLI = resolve(REPO_ROOT, 'node_modules/tsx/dist/cli.mjs');
+const CLI_PATH = resolve(REPO_ROOT, 'scripts/emoji-legacy-ru-locales.ts');
+const POSTGRES_RUNNER_PATH = resolve(REPO_ROOT, 'scripts/test-emoji-legacy-ru-locales-postgres.ts');
+const PINNED_POSTGRES_IMAGE =
+  'postgres@sha256:266d3c257594e195b309ae9d1805e54c788f1d7b375f56bf6c367aac6c917e7b';
 
 const tempDirs: string[] = [];
 afterEach(() => {
@@ -87,25 +99,139 @@ function makeFakeDb(initialRows: LibraryRow[]): {
   return { db, tx, prisma, rows, updateMock };
 }
 
-const TARGET_A: LegacyRussianTarget = {
-  ref: 'batch-001#3',
-  batch: 'batch-001',
-  cell: 3,
-  name: 'Миндальное масло',
-  nameEn: 'Almond butter',
-  category: 'Орехи и Сухофрукты',
-  supersededBy: 'text-001#1',
-};
+const CANONICAL_TARGETS = loadCanonicalLegacyRussianTargets();
+const TARGET_A = CANONICAL_TARGETS[0]!;
+const TARGET_B = CANONICAL_TARGETS[1]!;
 
-const TARGET_B: LegacyRussianTarget = {
-  ref: 'batch-005#3',
-  batch: 'batch-005',
-  cell: 3,
-  name: 'Кефир',
-  nameEn: 'Kefir',
-  category: 'Молочные продукты',
-  supersededBy: 'text-001#2',
-};
+function makeCanonicalRows(
+  overridesByRef: Record<string, Partial<LibraryRow> | null> = {},
+  extraRows: LibraryRow[] = []
+): LibraryRow[] {
+  const rows: LibraryRow[] = [];
+  for (let i = 0; i < CANONICAL_TARGETS.length; i++) {
+    const target = CANONICAL_TARGETS[i]!;
+    const override = overridesByRef[target.ref];
+    if (override === null) continue;
+    rows.push({
+      id: `ru-${i}`,
+      name: target.name,
+      nameEn: target.nameEn,
+      source: 'batch',
+      sourceRef: target.ref,
+      locale: 'ru',
+      groupKey: target.ref,
+      ...override,
+    });
+  }
+  return [...rows, ...extraRows];
+}
+
+function createScopeVariantFiles(mode: 'incomplete' | 'expanded' | 'substituted') {
+  const dir = createTempDir();
+  const manifest = JSON.parse(
+    readFileSync(resolve(REPO_ROOT, DEFAULT_MANIFEST_PATH), 'utf8')
+  ) as Array<{
+    batch: string;
+    kind?: string;
+    file?: string;
+    cells: Array<{
+      cell: number;
+      category: string;
+      name: string;
+      nameEn: string;
+      text?: boolean;
+      action?: string;
+      supersededBy?: string;
+    }>;
+  }>;
+  const candidates = JSON.parse(
+    readFileSync(resolve(REPO_ROOT, DEFAULT_CANDIDATES_PATH), 'utf8')
+  ) as {
+    redo: Array<Record<string, unknown>>;
+    categories: Array<{ category: string; products: Array<Record<string, unknown>> }>;
+  };
+
+  let removedRef: string | null = null;
+  let addedRef: string | null = null;
+
+  if (mode === 'incomplete' || mode === 'substituted') {
+    for (let b = manifest.length - 1; b >= 0 && !removedRef; b--) {
+      const batch = manifest[b]!;
+      if (batch.kind === 'text') continue;
+      const idx = batch.cells.findIndex((cell) => Boolean(cell.supersededBy));
+      if (idx !== -1) {
+        const [removed] = batch.cells.splice(idx, 1);
+        removedRef = `${batch.batch}#${removed!.cell}`;
+      }
+    }
+  }
+
+  if (mode === 'expanded' || mode === 'substituted') {
+    const category = candidates.categories[0]!.category;
+    const extraName = 'Тестовый продукт вне набора';
+    const extraNameEn = 'Out of scope test product';
+    addedRef = 'batch-999#1';
+    manifest.push(
+      {
+        batch: 'batch-999',
+        kind: 'universal',
+        file: 'batch-999.png',
+        cells: [
+          {
+            cell: 1,
+            category,
+            name: extraName,
+            nameEn: extraNameEn,
+            text: true,
+            action: 'create',
+            supersededBy: 'text-999#1',
+          },
+        ],
+      },
+      {
+        batch: 'text-999',
+        kind: 'text',
+        file: 'text-999.png',
+        cells: [
+          {
+            cell: 1,
+            category,
+            name: extraName,
+            nameEn: extraNameEn,
+            text: true,
+            action: 'create',
+          },
+        ],
+      }
+    );
+    candidates.categories[0]!.products.push({
+      name: extraName,
+      nameEn: extraNameEn,
+      text: true,
+    });
+  }
+
+  const manifestPath = join(dir, 'manifest.json');
+  const candidatesPath = join(dir, 'candidates.json');
+  writeFileSync(manifestPath, JSON.stringify(manifest));
+  writeFileSync(candidatesPath, JSON.stringify(candidates));
+  return { dir, manifestPath, candidatesPath, removedRef, addedRef };
+}
+
+function runShippedCli(args: string[], opts: { databaseUrl?: string; cwd?: string } = {}) {
+  const env = { ...process.env };
+  if (opts.databaseUrl === undefined) {
+    delete env.DATABASE_URL;
+  } else {
+    env.DATABASE_URL = opts.databaseUrl;
+  }
+  return spawnSync(process.execPath, [TSX_CLI, CLI_PATH, ...args], {
+    cwd: opts.cwd ?? REPO_ROOT,
+    env,
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+}
 
 describe('parseCliArgs', () => {
   it('defaults to dry-run and repository paths', () => {
@@ -280,92 +406,114 @@ describe('loadLegacyRussianTargets', () => {
       })
     ).toThrow('marked as text without supersededBy');
   });
+
+  it('enforces exact canonical count and rejects incomplete, expanded, and substituted sets', () => {
+    expect(CANONICAL_TARGETS).toHaveLength(EXPECTED_LEGACY_TARGET_COUNT);
+
+    const incomplete = createScopeVariantFiles('incomplete');
+    expect(() =>
+      loadCanonicalLegacyRussianTargets({
+        manifestPath: incomplete.manifestPath,
+        candidatesPath: incomplete.candidatesPath,
+      })
+    ).toThrow(`must define exactly ${EXPECTED_LEGACY_TARGET_COUNT}`);
+
+    const incompleteTargets = loadLegacyRussianTargets({
+      manifestPath: incomplete.manifestPath,
+      candidatesPath: incomplete.candidatesPath,
+    });
+    expect(incompleteTargets).toHaveLength(EXPECTED_LEGACY_TARGET_COUNT - 1);
+    expect(() => assertApprovedLegacyRussianTargets(incompleteTargets)).toThrow(
+      `Target scope mismatch: expected the ${EXPECTED_LEGACY_TARGET_COUNT} canonical sourceRef(s), got ${EXPECTED_LEGACY_TARGET_COUNT - 1} (missing: ${incomplete.removedRef})`
+    );
+
+    const expanded = createScopeVariantFiles('expanded');
+    const expandedTargets = loadLegacyRussianTargets({
+      manifestPath: expanded.manifestPath,
+      candidatesPath: expanded.candidatesPath,
+    });
+    expect(expandedTargets).toHaveLength(EXPECTED_LEGACY_TARGET_COUNT + 1);
+    expect(() => assertApprovedLegacyRussianTargets(expandedTargets)).toThrow(
+      `Target scope mismatch: expected the ${EXPECTED_LEGACY_TARGET_COUNT} canonical sourceRef(s), got ${EXPECTED_LEGACY_TARGET_COUNT + 1} (unexpected: ${expanded.addedRef})`
+    );
+
+    const substituted = createScopeVariantFiles('substituted');
+    const substitutedTargets = loadLegacyRussianTargets({
+      manifestPath: substituted.manifestPath,
+      candidatesPath: substituted.candidatesPath,
+    });
+    expect(substitutedTargets).toHaveLength(EXPECTED_LEGACY_TARGET_COUNT);
+    expect(() => assertApprovedLegacyRussianTargets(substitutedTargets)).toThrow(
+      `Target scope mismatch: expected the ${EXPECTED_LEGACY_TARGET_COUNT} canonical sourceRef(s), got ${EXPECTED_LEGACY_TARGET_COUNT} (missing: ${substituted.removedRef}; unexpected: ${substituted.addedRef})`
+    );
+
+    const duplicated = [...CANONICAL_TARGETS.slice(0, EXPECTED_LEGACY_TARGET_COUNT - 1), TARGET_A];
+    expect(() => assertApprovedLegacyRussianTargets(duplicated)).toThrow(
+      'Duplicate target cell references'
+    );
+  });
 });
 
 describe('planLegacyRussianLocales & applyLegacyRussianLocales', () => {
   it('updates only locale on unpaired rows (preserving existing or null groupKey)', async () => {
-    const { db, prisma, rows, updateMock } = makeFakeDb([
-      {
-        id: 'ru-1',
-        name: 'Миндальное масло',
-        nameEn: 'Almond butter',
-        source: 'batch',
-        sourceRef: 'batch-001#3',
-        locale: null,
-        groupKey: 'batch-001#3',
-      },
-      {
-        id: 'ru-2',
-        name: 'Кефир',
-        nameEn: 'Kefir',
-        source: 'batch',
-        sourceRef: 'batch-005#3',
-        locale: null,
-        groupKey: null,
-      },
-    ]);
+    const { db, prisma, rows, updateMock } = makeFakeDb(
+      makeCanonicalRows({
+        [TARGET_A.ref]: { id: 'ru-1', locale: null, groupKey: TARGET_A.ref },
+        [TARGET_B.ref]: { id: 'ru-2', locale: null, groupKey: null },
+      })
+    );
 
-    const dryPlan = await planLegacyRussianLocales(db, [TARGET_A, TARGET_B]);
+    const dryPlan = await planLegacyRussianLocales(db, CANONICAL_TARGETS);
     expect(updateMock).not.toHaveBeenCalled();
     expect(dryPlan.operations).toEqual([
-      { id: 'ru-1', sourceRef: 'batch-001#3', data: { locale: 'ru' } },
-      { id: 'ru-2', sourceRef: 'batch-005#3', data: { locale: 'ru' } },
+      { id: 'ru-1', sourceRef: TARGET_A.ref, data: { locale: 'ru' } },
+      { id: 'ru-2', sourceRef: TARGET_B.ref, data: { locale: 'ru' } },
     ]);
 
-    const applied = await applyLegacyRussianLocales(prisma, [TARGET_A, TARGET_B]);
+    const applied = await applyLegacyRussianLocales(prisma, CANONICAL_TARGETS);
     expect(applied.appliedUpdates).toBe(2);
-    expect(applied.totalLibraryCountAfter).toBe(2);
-    expect(rows).toEqual([
-      expect.objectContaining({ id: 'ru-1', locale: 'ru', groupKey: 'batch-001#3' }),
+    expect(applied.totalLibraryCountAfter).toBe(EXPECTED_LEGACY_TARGET_COUNT);
+    expect(rows.slice(0, 2)).toEqual([
+      expect.objectContaining({ id: 'ru-1', locale: 'ru', groupKey: TARGET_A.ref }),
       expect.objectContaining({ id: 'ru-2', locale: 'ru', groupKey: null }),
     ]);
 
-    const repeat = await applyLegacyRussianLocales(prisma, [TARGET_A, TARGET_B]);
+    const repeat = await applyLegacyRussianLocales(prisma, CANONICAL_TARGETS);
     expect(repeat.appliedUpdates).toBe(0);
     expect(repeat.plan.operations).toEqual([]);
   });
 
   it('shares the English twin groupKey when present and falls back to cell ref when missing', async () => {
-    const { prisma, rows } = makeFakeDb([
-      {
-        id: 'ru-a',
-        name: 'Миндальное масло',
-        nameEn: 'Almond butter',
-        source: 'batch',
-        sourceRef: 'batch-001#3',
-        locale: null,
-        groupKey: null,
-      },
-      {
-        id: 'en-a',
-        name: 'Миндальное масло',
-        nameEn: 'Almond butter',
-        source: 'batch',
-        sourceRef: 'batch-001#3:en',
-        locale: 'en',
-        groupKey: 'custom-en-group',
-      },
-      {
-        id: 'ru-b',
-        name: 'Кефир',
-        nameEn: 'Kefir',
-        source: 'batch',
-        sourceRef: 'batch-005#3',
-        locale: null,
-        groupKey: null,
-      },
-      {
-        id: 'en-b',
-        name: 'Кефир',
-        nameEn: 'Kefir',
-        source: 'batch',
-        sourceRef: 'batch-005#3:en',
-        locale: 'en',
-        groupKey: null,
-      },
-    ]);
+    const { prisma, rows } = makeFakeDb(
+      makeCanonicalRows(
+        {
+          [TARGET_A.ref]: { id: 'ru-a', locale: null, groupKey: null },
+          [TARGET_B.ref]: { id: 'ru-b', locale: null, groupKey: null },
+        },
+        [
+          {
+            id: 'en-a',
+            name: TARGET_A.name,
+            nameEn: TARGET_A.nameEn,
+            source: 'batch',
+            sourceRef: `${TARGET_A.ref}:en`,
+            locale: 'en',
+            groupKey: 'custom-en-group',
+          },
+          {
+            id: 'en-b',
+            name: TARGET_B.name,
+            nameEn: TARGET_B.nameEn,
+            source: 'batch',
+            sourceRef: `${TARGET_B.ref}:en`,
+            locale: 'en',
+            groupKey: null,
+          },
+        ]
+      )
+    );
 
-    const first = await applyLegacyRussianLocales(prisma, [TARGET_A, TARGET_B]);
+    const first = await applyLegacyRussianLocales(prisma, CANONICAL_TARGETS);
     expect(first.appliedUpdates).toBe(3);
     expect(rows.find((r) => r.id === 'ru-a')).toMatchObject({
       locale: 'ru',
@@ -377,40 +525,38 @@ describe('planLegacyRussianLocales & applyLegacyRussianLocales', () => {
     });
     expect(rows.find((r) => r.id === 'ru-b')).toMatchObject({
       locale: 'ru',
-      groupKey: 'batch-005#3',
+      groupKey: TARGET_B.ref,
     });
     expect(rows.find((r) => r.id === 'en-b')).toMatchObject({
       locale: 'en',
-      groupKey: 'batch-005#3',
+      groupKey: TARGET_B.ref,
     });
 
-    const second = await applyLegacyRussianLocales(prisma, [TARGET_A, TARGET_B]);
+    const second = await applyLegacyRussianLocales(prisma, CANONICAL_TARGETS);
     expect(second.appliedUpdates).toBe(0);
   });
 
   it('locates an English twin sharing groupKey even when its sourceRef is null', async () => {
-    const { prisma, rows } = makeFakeDb([
-      {
-        id: 'ru-b',
-        name: 'Кефир',
-        nameEn: 'Kefir',
-        source: 'batch',
-        sourceRef: 'batch-005#3',
-        locale: null,
-        groupKey: 'legacy-group-b',
-      },
-      {
-        id: 'en-b',
-        name: 'Кефир',
-        nameEn: 'Kefir',
-        source: 'upload',
-        sourceRef: null,
-        locale: 'en',
-        groupKey: 'legacy-group-b',
-      },
-    ]);
+    const { prisma, rows } = makeFakeDb(
+      makeCanonicalRows(
+        {
+          [TARGET_B.ref]: { id: 'ru-b', locale: null, groupKey: 'legacy-group-b' },
+        },
+        [
+          {
+            id: 'en-b',
+            name: TARGET_B.name,
+            nameEn: TARGET_B.nameEn,
+            source: 'upload',
+            sourceRef: null,
+            locale: 'en',
+            groupKey: 'legacy-group-b',
+          },
+        ]
+      )
+    );
 
-    const res = await applyLegacyRussianLocales(prisma, [TARGET_B]);
+    const res = await applyLegacyRussianLocales(prisma, CANONICAL_TARGETS);
     expect(res.appliedUpdates).toBe(1);
     expect(rows.find((r) => r.id === 'ru-b')).toMatchObject({
       locale: 'ru',
@@ -422,124 +568,125 @@ describe('planLegacyRussianLocales & applyLegacyRussianLocales', () => {
     });
   });
 
+  it('guards plan and apply entrypoints against scope drift before touching the database', async () => {
+    const fake = makeFakeDb(makeCanonicalRows());
+
+    for (const mode of ['incomplete', 'expanded', 'substituted'] as const) {
+      const variant = createScopeVariantFiles(mode);
+      const drifted = loadLegacyRussianTargets({
+        manifestPath: variant.manifestPath,
+        candidatesPath: variant.candidatesPath,
+      });
+
+      await expect(planLegacyRussianLocales(fake.db, drifted)).rejects.toThrow(
+        'Target scope mismatch'
+      );
+      await expect(applyLegacyRussianLocales(fake.prisma, drifted)).rejects.toThrow(
+        'Target scope mismatch'
+      );
+      await expect(applyLegacyRussianLocalesInTx(fake.tx, drifted)).rejects.toThrow(
+        'Target scope mismatch'
+      );
+    }
+
+    expect(fake.updateMock).not.toHaveBeenCalled();
+    expect(fake.prisma.$transaction).not.toHaveBeenCalled();
+  });
+
   it('fails closed on missing target rows, unexpected locales, ambiguous twins, and groupKey collisions', async () => {
-    const missing = makeFakeDb([]);
-    await expect(planLegacyRussianLocales(missing.db, [TARGET_A])).rejects.toThrow(
-      'Missing library item(s) for sourceRef: batch-001#3'
+    const missing = makeFakeDb(makeCanonicalRows({ [TARGET_A.ref]: null }));
+    await expect(planLegacyRussianLocales(missing.db, CANONICAL_TARGETS)).rejects.toThrow(
+      `Missing library item(s) for sourceRef: ${TARGET_A.ref}`
     );
 
-    const wrongRuLocale = makeFakeDb([
-      {
-        id: 'ru-1',
-        name: 'Миндальное масло',
-        nameEn: 'Almond butter',
-        source: 'batch',
-        sourceRef: 'batch-001#3',
-        locale: 'en',
-        groupKey: 'batch-001#3',
-      },
-    ]);
-    await expect(planLegacyRussianLocales(wrongRuLocale.db, [TARGET_A])).rejects.toThrow(
-      'Unexpected locale "en" for batch-001#3'
+    const wrongRuLocale = makeFakeDb(
+      makeCanonicalRows({
+        [TARGET_A.ref]: { id: 'ru-1', locale: 'en', groupKey: TARGET_A.ref },
+      })
+    );
+    await expect(planLegacyRussianLocales(wrongRuLocale.db, CANONICAL_TARGETS)).rejects.toThrow(
+      `Unexpected locale "en" for ${TARGET_A.ref}`
     );
 
-    const ambiguousTwins = makeFakeDb([
-      {
-        id: 'ru-1',
-        name: 'Миндальное масло',
-        nameEn: 'Almond butter',
-        source: 'batch',
-        sourceRef: 'batch-001#3',
-        locale: null,
-        groupKey: 'g-1',
-      },
-      {
-        id: 'en-ref',
-        name: 'Миндальное масло',
-        nameEn: 'Almond butter',
-        source: 'batch',
-        sourceRef: 'batch-001#3:en',
-        locale: 'en',
-        groupKey: 'batch-001#3',
-      },
-      {
-        id: 'en-group',
-        name: 'Миндальное масло',
-        nameEn: 'Almond butter',
-        source: 'upload',
-        sourceRef: null,
-        locale: 'en',
-        groupKey: 'g-1',
-      },
-    ]);
-    await expect(planLegacyRussianLocales(ambiguousTwins.db, [TARGET_A])).rejects.toThrow(
-      'Ambiguous English versions for batch-001#3'
+    const ambiguousTwins = makeFakeDb(
+      makeCanonicalRows(
+        {
+          [TARGET_A.ref]: { id: 'ru-1', locale: null, groupKey: 'g-1' },
+        },
+        [
+          {
+            id: 'en-ref',
+            name: TARGET_A.name,
+            nameEn: TARGET_A.nameEn,
+            source: 'batch',
+            sourceRef: `${TARGET_A.ref}:en`,
+            locale: 'en',
+            groupKey: TARGET_A.ref,
+          },
+          {
+            id: 'en-group',
+            name: TARGET_A.name,
+            nameEn: TARGET_A.nameEn,
+            source: 'upload',
+            sourceRef: null,
+            locale: 'en',
+            groupKey: 'g-1',
+          },
+        ]
+      )
+    );
+    await expect(planLegacyRussianLocales(ambiguousTwins.db, CANONICAL_TARGETS)).rejects.toThrow(
+      `Ambiguous English versions for ${TARGET_A.ref}`
     );
 
-    const groupCollision = makeFakeDb([
-      {
-        id: 'ru-1',
-        name: 'Миндальное масло',
-        nameEn: 'Almond butter',
-        source: 'batch',
-        sourceRef: 'batch-001#3',
-        locale: null,
-        groupKey: null,
-      },
-      {
-        id: 'en-1',
-        name: 'Миндальное масло',
-        nameEn: 'Almond butter',
-        source: 'batch',
-        sourceRef: 'batch-001#3:en',
-        locale: 'en',
-        groupKey: null,
-      },
-      {
-        id: 'stranger',
-        name: 'Other',
-        nameEn: 'Other',
-        source: 'upload',
-        sourceRef: null,
-        locale: null,
-        groupKey: 'batch-001#3',
-      },
-    ]);
-    await expect(planLegacyRussianLocales(groupCollision.db, [TARGET_A])).rejects.toThrow(
+    const groupCollision = makeFakeDb(
+      makeCanonicalRows(
+        {
+          [TARGET_A.ref]: { id: 'ru-1', locale: null, groupKey: null },
+        },
+        [
+          {
+            id: 'en-1',
+            name: TARGET_A.name,
+            nameEn: TARGET_A.nameEn,
+            source: 'batch',
+            sourceRef: `${TARGET_A.ref}:en`,
+            locale: 'en',
+            groupKey: null,
+          },
+          {
+            id: 'stranger',
+            name: 'Other',
+            nameEn: 'Other',
+            source: 'upload',
+            sourceRef: null,
+            locale: null,
+            groupKey: TARGET_A.ref,
+          },
+        ]
+      )
+    );
+    await expect(planLegacyRussianLocales(groupCollision.db, CANONICAL_TARGETS)).rejects.toThrow(
       'already used by another library item'
     );
   });
 
   it('propagates mid-transaction write failures cleanly inside applyLegacyRussianLocalesInTx', async () => {
-    const { tx, updateMock } = makeFakeDb([
-      {
-        id: 'ru-1',
-        name: 'Миндальное масло',
-        nameEn: 'Almond butter',
-        source: 'batch',
-        sourceRef: 'batch-001#3',
-        locale: null,
-        groupKey: 'batch-001#3',
-      },
-      {
-        id: 'ru-2',
-        name: 'Кефир',
-        nameEn: 'Kefir',
-        source: 'batch',
-        sourceRef: 'batch-005#3',
-        locale: null,
-        groupKey: 'batch-005#3',
-      },
-    ]);
+    const { tx, updateMock } = makeFakeDb(
+      makeCanonicalRows({
+        [TARGET_A.ref]: { id: 'ru-1', locale: null, groupKey: TARGET_A.ref },
+        [TARGET_B.ref]: { id: 'ru-2', locale: null, groupKey: TARGET_B.ref },
+      })
+    );
     updateMock.mockResolvedValueOnce({}).mockRejectedValueOnce(new Error('write conflict'));
 
-    await expect(applyLegacyRussianLocalesInTx(tx, [TARGET_A, TARGET_B])).rejects.toThrow(
+    await expect(applyLegacyRussianLocalesInTx(tx, CANONICAL_TARGETS)).rejects.toThrow(
       'write conflict'
     );
   });
 });
 
-describe('CLI entrypoint safety', () => {
+describe('CLI entrypoint safety & offline postgres runner', () => {
   it('never imports dotenv in the CLI script', () => {
     const source = readFileSync('scripts/emoji-legacy-ru-locales.ts', 'utf8');
     expect(source).not.toMatch(/dotenv/);
@@ -551,5 +698,127 @@ describe('CLI entrypoint safety', () => {
         'Failed connecting to postgresql://user:secret@127.0.0.1:5432/db'
       )
     ).toBe('Failed connecting to [redacted-database-url]');
+  });
+
+  it('documents the emoji-import operational prohibition in --help output without requiring DATABASE_URL', () => {
+    const res = runShippedCli(['--help']);
+    expect(res.status, res.stderr).toBe(0);
+    expect(res.stdout).toContain('Operational warning:');
+    expect(res.stdout).toContain('do NOT reimport superseded legacy batches');
+    expect(res.stdout).toContain('scripts/emoji-import.ts');
+    expect(res.stdout).toContain('resets these tags');
+  });
+
+  it('rejects incomplete, expanded, and substituted override sets in the shipped CLI before checking DATABASE_URL', () => {
+    for (const mode of ['incomplete', 'expanded', 'substituted'] as const) {
+      const variant = createScopeVariantFiles(mode);
+      const res = runShippedCli([
+        '--apply',
+        '--manifest',
+        variant.manifestPath,
+        '--candidates',
+        variant.candidatesPath,
+      ]);
+      expect(res.status).toBe(1);
+      expect(res.stderr).toContain('Target scope mismatch');
+      expect(res.stderr).not.toContain('DATABASE_URL is not set');
+    }
+  });
+
+  it('enforces pre-staged pinned image offline without pull and preserves primary diagnostics on cleanup failure', () => {
+    const setupFakeDocker = (scriptBody: string) => {
+      const dir = createTempDir();
+      const binDir = join(dir, 'bin');
+      const logFile = join(dir, 'docker.log');
+      mkdirSync(binDir, { recursive: true });
+      const fakeDocker = join(binDir, 'docker');
+      writeFileSync(fakeDocker, scriptBody);
+      chmodSync(fakeDocker, 0o755);
+      return { binDir, logFile };
+    };
+
+    const runPostgresRunner = (binDir: string, logFile: string) =>
+      spawnSync(process.execPath, [TSX_CLI, POSTGRES_RUNNER_PATH], {
+        cwd: REPO_ROOT,
+        env: {
+          ...process.env,
+          PATH: `${binDir}:${process.env.PATH ?? ''}`,
+          DOCKER_LOG_FILE: logFile,
+        },
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+
+    // 1. Prerequisite image inspect fails -> exits without pull, run, or rm
+    const missingImage = setupFakeDocker(`#!/bin/sh
+printf '%s\\n' "$*" >> "$DOCKER_LOG_FILE"
+if [ "$1" = "image" ] && [ "$2" = "inspect" ]; then
+  echo "Error response from daemon: No such image: $5" >&2
+  exit 1
+fi
+exit 0
+`);
+    const missingRes = runPostgresRunner(missingImage.binDir, missingImage.logFile);
+    expect(missingRes.status).toBe(1);
+    expect(missingRes.stderr).toContain('Offline PostgreSQL prerequisite failed');
+    expect(missingRes.stderr).toContain('No such image');
+    const missingCalls = readFileSync(missingImage.logFile, 'utf8').trim().split('\n');
+    expect(missingCalls).toHaveLength(1);
+    expect(missingCalls[0]).toContain(`image inspect --format {{.Id}} ${PINNED_POSTGRES_IMAGE}`);
+    expect(missingCalls.join('\n')).not.toContain('pull');
+    expect(missingCalls.join('\n')).not.toContain('run ');
+    expect(missingCalls.join('\n')).not.toContain('rm ');
+
+    // 2. docker run --pull=never fails even if inspect passed -> primary run error preserved
+    const runFail = setupFakeDocker(`#!/bin/sh
+printf '%s\\n' "$*" >> "$DOCKER_LOG_FILE"
+if [ "$1" = "image" ] && [ "$2" = "inspect" ]; then
+  echo "sha256:266d3c257594e195b309ae9d1805e54c788f1d7b375f56bf6c367aac6c917e7b"
+  exit 0
+fi
+if [ "$1" = "run" ]; then
+  echo "pull access denied with --pull=never" >&2
+  exit 125
+fi
+if [ "$1" = "rm" ]; then
+  echo "cleanup should not mask run failure" >&2
+  exit 1
+fi
+exit 0
+`);
+    const runFailRes = runPostgresRunner(runFail.binDir, runFail.logFile);
+    expect(runFailRes.status).toBe(1);
+    expect(runFailRes.stderr).toContain('pull access denied with --pull=never');
+    expect(runFailRes.stderr).not.toContain('cleanup should not mask run failure');
+    const runFailCalls = readFileSync(runFail.logFile, 'utf8').trim().split('\n');
+    expect(runFailCalls[1]).toContain('--pull=never');
+    expect(runFailCalls[1]).toContain(PINNED_POSTGRES_IMAGE);
+    expect(runFailCalls[1]).not.toContain('postgres:17-alpine');
+
+    // 3. Container starts, primary failure occurs at port check, and rm --force also fails ->
+    // primary diagnostic is preserved and not masked by cleanup failure
+    const cleanupFail = setupFakeDocker(`#!/bin/sh
+printf '%s\\n' "$*" >> "$DOCKER_LOG_FILE"
+if [ "$1" = "image" ] && [ "$2" = "inspect" ]; then
+  echo "sha256:266d3c257594e195b309ae9d1805e54c788f1d7b375f56bf6c367aac6c917e7b"
+  exit 0
+fi
+if [ "$1" = "run" ] || [ "$1" = "exec" ]; then
+  exit 0
+fi
+if [ "$1" = "port" ]; then
+  echo "0.0.0.0:5432"
+  exit 0
+fi
+if [ "$1" = "rm" ]; then
+  echo "simulated cleanup failure" >&2
+  exit 1
+fi
+exit 0
+`);
+    const cleanupFailRes = runPostgresRunner(cleanupFail.binDir, cleanupFail.logFile);
+    expect(cleanupFailRes.status).toBe(1);
+    expect(cleanupFailRes.stderr).toContain('Expected a loopback-only Docker port');
+    expect(cleanupFailRes.stderr).toContain('simulated cleanup failure');
   });
 });
