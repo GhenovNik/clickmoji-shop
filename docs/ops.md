@@ -146,13 +146,13 @@ models (e.g. `gemini-3.1-flash-lite-image`, `imagen-4.0-*`) also fail closed bef
 - Create and apply local migrations: `npx prisma migrate dev`
 - Deploy migrations (prod): `npx prisma migrate deploy`
 - Seed data: `npx prisma db seed`
-- Backup DB (to `backups/*.dump`): `npm run db:backup`
-- Restore DB (latest backup): `npm run db:restore`
-- Restore DB (specific file): `npm run db:restore -- clickmoji-YYYYMMDD-HHMMSS.dump`
+- Backup **local development** DB (plaintext, to the gitignored `backups/*.dump`; local only, never production): `npm run db:backup`
+- Restore **local development** DB from the latest local backup (local only): `npm run db:restore`
+- Restore **local development** DB from a specific local file (local only): `npm run db:restore -- clickmoji-YYYYMMDD-HHMMSS.dump`
 - Both run `pg_dump` / `pg_restore` in the `postgres:17-alpine` image: production is PostgreSQL 17.11
   and a `pg_dump` 16 client refuses a 17 server.
 - Production backups must be encrypted, access-controlled, monitored, and restore-tested.
-- Do not use ordinary GitHub Actions artifacts as the long-term production backup store.
+- Do not store production database copies in GitHub in any form: not as Actions artifacts (short-term ones included), releases, caches or repository files, even encrypted. The earlier allowance for short-term ordinary artifacts is withdrawn; GitHub takes no part in copying. Existing production copies there are removed under task A, not kept as a fallback.
 - Before a production migration, create and verify a fresh backup, run `prisma migrate deploy` with
   a direct/unpooled database URL, and confirm `prisma migrate status` afterwards.
 
@@ -163,61 +163,120 @@ writes stopped during the final switch so new writes are not lost. Restore to a 
 verify it, then change the site's production `DATABASE_URL` in Vercel and redeploy. Keep the old
 target until the operator approves its retirement. A failed check blocks the switch.
 
-Production copies belong on the Mac mini and replicated Lenovo storage, not GitHub artifacts.
-The scheduled encrypted backup implementation is pending; do not treat the local `db:backup` and
-`db:restore` scripts above as the production recovery procedure. Select a verified encrypted
-custom-format dump and its verification record, including table counts and latest migration.
+Production copies are kept on the Mac mini and the Lenovo machine, never in GitHub. Until the
+scheduled encrypted copy job is live, the local `npm run db:backup` and `npm run db:restore` scripts
+above handle local development databases only; do not treat them as the production recovery
+procedure. Select a verified encrypted custom-format dump and its verification record, including
+table counts and latest migration.
 
-1. **Recent incident:** In the Neon console select the production project and source branch,
-   create a new branch using point-in-time restore at a timestamp before the incident (within
-   the available restore window). Select its database and obtain its direct connection URL.
-   The branch contains the historical source data. Proceed to verification below.
-2. **Older incident:** Select the verified encrypted copy for the desired date. Create a new Neon
-   branch and a new database within it. A Neon branch inherits its parent's data: a new branch
-   alone is not empty. Use the newly created empty database, never the inherited database, and
-   obtain its direct URL. Verify it is empty before running the restore below.
-3. **Neon unavailable:** Provision a separate PostgreSQL 17 instance and fresh empty database at
-   another provider, with TLS and a direct URL. Verify emptiness and restore the selected copy.
+#### Shell and prerequisites
+
+- Commands are written for **zsh or bash** (zsh is the default on the operator's Mac). Hidden input
+  uses `printf` followed by `read -rs NAME`, which works in both; do not use the zsh-only
+  `read -rs 'NAME?prompt'` form.
+- Needed: Docker running on the operator machine; the Neon CLI (`neon`) authenticated by the operator
+  for the Neon steps; a checkout of the reviewed release for the Prisma steps. Nothing is installed on
+  the host by these steps; `age` runs inside the disposable container.
+- Use the reviewed image digest in `IMAGE`. The placeholder below fails on purpose until the backup
+  implementation supplies the reviewed digest.
+- Work only in a private terminal: no shell tracing (`set -x`), no session recording, no shared
+  screens. Never write a connection URL or identity into a file, a log or a ticket.
+
+```sh
+IMAGE='postgres:17-alpine@sha256:<REVIEWED_DIGEST>'
+NEON_PROJECT_ID='<neon-project-id>'
+```
+
+#### Create the target
+
+Each option creates a **new** target, never the production database. Confirm the Neon project and the
+target branch in the Neon console before continuing.
+
+1. **Recent incident (point-in-time branch).** Use a time before the incident, inside Neon's restore
+   window for the plan. Confirm the production branch is the project's default first
+   (`neon branches list --project-id "$NEON_PROJECT_ID"`). The branch is a copy of production at that
+   time and already contains data, so it skips the emptiness check; go to _Verification and switch_.
+
+   ```sh
+   RECOVERY_TIME='<RFC 3339 time before the incident, e.g. 2026-11-24T10:00:00Z>'
+   RECOVERY_BRANCH='recovery-<incident-id>'
+   neon branches create --project-id "$NEON_PROJECT_ID" --name "$RECOVERY_BRANCH" --parent "$RECOVERY_TIME"
+   TARGET_URL=$(neon connection-string "$RECOVERY_BRANCH" --project-id "$NEON_PROJECT_ID" --database-name '<database-name>' --role-name '<role-name>')
+   export TARGET_URL
+   ```
+
+   The connection string is captured into a variable and not printed. Omitting `--pooled` returns the
+   direct URL.
+
+2. **Older incident (encrypted copy).** A Neon branch inherits its parent's databases, so create a new
+   database inside the new branch and use only that database. Verify it is empty (below) before any
+   restore.
+
+   ```sh
+   RESTORE_BRANCH='restore-<incident-id>'
+   RESTORE_DB='<new-database-name>'
+   neon branches create --project-id "$NEON_PROJECT_ID" --name "$RESTORE_BRANCH"
+   neon databases create --project-id "$NEON_PROJECT_ID" --branch "$RESTORE_BRANCH" --name "$RESTORE_DB" --owner-name '<owner-role>'
+   TARGET_URL=$(neon connection-string "$RESTORE_BRANCH" --project-id "$NEON_PROJECT_ID" --database-name "$RESTORE_DB" --role-name '<owner-role>')
+   export TARGET_URL
+   ```
+
+3. **Neon unavailable.** Provision PostgreSQL 17 with a fresh empty database and TLS at another
+   provider (the provider's own steps; not covered here). Enter its direct URL without echo:
+
+   ```sh
+   printf 'Direct URL of NEW empty database (not echoed): '
+   read -rs TARGET_URL
+   echo
+   export TARGET_URL
+   ```
 
 #### Container and key preparation
 
-Use Docker on a trusted operator machine. Substitute the reviewed `postgres:17-alpine` image
-digest from the backup implementation once available; the placeholder deliberately fails until
-then. The image installs `age` inside the disposable container. No host age installation is needed.
-To create a new age identity for future backups, run the following in a private terminal. The
-private key appears on screen: record it directly in the password manager and on paper, and give
-only the public recipient to the backup configuration. Do not redirect output, record the terminal,
-share the private key or use a newly generated key to decrypt an existing backup.
+The age identity is created once, by the operator, on a trusted machine. Its private key is printed to
+the terminal only; do not redirect the output and do not save it as a file. Record it directly in the
+password manager and on paper, and give only the `age1...` public recipient to the backup
+configuration. Do not share the private key, record the terminal, or use a newly generated key to
+decrypt an existing backup.
 
 ```sh
-docker run --rm -it postgres:17-alpine@sha256:<REVIEWED_DIGEST> sh -c 'apk add --no-cache age >/dev/null && age-keygen'
+docker run --rm "$IMAGE" sh -c 'apk add --no-cache age >/dev/null && age-keygen'
+```
+
+`age-keygen` writes the private key to standard output and the `Public key:` line to standard error;
+both appear on screen. The `sh -c` argument contains no single quotes, so it can be copied as shown.
+
+#### Empty-target check (before any restore)
+
+Run it against the target created above. Expected result: `(0 rows)`. Any row, or a failed connection,
+stops the procedure. Independently confirm that the provider, project, branch and database are the
+intended new target. The SQL is passed by a quoted heredoc, so `$` and quotes reach psql unchanged.
+
+```sh
+docker run --rm -i -e TARGET_URL "$IMAGE" sh -c 'psql "$TARGET_URL" -v ON_ERROR_STOP=1 -f -' <<'SQL'
+SELECT n.nspname AS schema_name, c.relname AS object_name, c.relkind
+FROM pg_class c
+JOIN pg_namespace n ON n.oid = c.relnamespace
+WHERE n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
+  AND c.relkind IN ('r', 'p', 'v', 'm', 'f', 'S');
+SQL
 ```
 
 #### Restore the encrypted copy
 
-Set the placeholders locally in a private terminal. Use an absolute path to the selected `.age`
-file. The URL must identify the new empty database, never the production database. Avoid shell
-tracing, session recording and shared terminals. The URL is passed in the container environment
-and is visible to privileged Docker administrators while it runs.
+Set the placeholders in the private terminal. `BACKUP_DIR` must be an absolute path. The directory is
+mounted read-only. `TARGET_URL` must be the new empty database from the previous step, never the
+production database. The URL reaches the container through `-e TARGET_URL` (a name, not a value), so it
+does not appear in the `docker run` arguments; it is still visible to privileged Docker administrators
+while the container runs.
 
 ```sh
-IMAGE='postgres:17-alpine@sha256:<REVIEWED_DIGEST>'
 BACKUP_DIR='<absolute-directory-containing-encrypted-copy>'
 BACKUP_FILE='<selected-copy>.dump.age'
-read -rs 'TARGET_URL?Direct URL of NEW empty database: '; echo
-export TARGET_URL BACKUP_FILE
-docker run --rm -i -e TARGET_URL "$IMAGE" sh -c   'psql "$TARGET_URL" -v ON_ERROR_STOP=1 -c "SELECT schemaname, tablename FROM pg_tables WHERE schemaname NOT IN ('pg_catalog', 'information_schema');"'
-```
-
-Stop if any application tables appear, or if the connection fails; independently confirm the
-provider, project, branch and database are the intended new target. Then paste the existing
-single-line `AGE-SECRET-KEY-...` identity when prompted; it is not echoed or saved as a key file.
-The encrypted file is mounted read-only. The pipeline runs inside the container with `pipefail`
-and `pg_restore --exit-on-error`, so either decryption or restore failure stops the procedure.
-A partial restore must be discarded and retried in another fresh empty database.
-
-```sh
-read -rs 'AGE_IDENTITY?Age private identity: '; echo
+export BACKUP_DIR BACKUP_FILE
+printf 'Age private identity (not echoed): '
+read -rs AGE_IDENTITY
+echo
 printf '%s\n' "$AGE_IDENTITY" | docker run --rm -i -e TARGET_URL \
   -v "$BACKUP_DIR:/backup:ro" -e BACKUP_FILE "$IMAGE" sh -c '
     set -eu
@@ -230,42 +289,124 @@ unset AGE_IDENTITY
 printf 'Restore exit: %s\n' "$RESTORE_STATUS"
 ```
 
-Proceed only on exit 0. No plaintext dump is written by this procedure; protect terminal and Docker
-access, and do not paste secrets into logs or tickets. `unset` does not erase shell memory; close the
-terminal after the operation. Clean up any plaintext or temporary files created outside this procedure.
+Proceed only on `Restore exit: 0`. The identity is passed on stdin and is never written to a key file;
+no plaintext dump is written by this procedure. `unset` does not erase shell memory, so close the
+terminal afterwards. A restore that stops partway must be discarded and retried in another fresh empty
+database; do not repair it in place. Clean up any plaintext or temporary files created outside this
+procedure.
+
+`set -o pipefail` inside the container's `sh` requires a shell that supports it (the Alpine image's
+`sh` is BusyBox); this is verified by the Docker acceptance run, not assumed here.
 
 #### Verification and switch
 
-Use the direct target URL for the following read-only checks. Generic checks also work with a
-synthetic custom-format dump: compare its expected tables and row counts to the restored data.
+Run the read-only checks against the target. The row counts are generated by `\gexec`, so the table
+list does not need to be typed.
 
 ```sh
-docker run --rm -i -e TARGET_URL "$IMAGE" sh -c 'psql "$TARGET_URL" -v ON_ERROR_STOP=1 -c "SELECT current_database(), version();" -c "SELECT schemaname, tablename FROM pg_tables WHERE schemaname NOT IN ('pg_catalog', 'information_schema') ORDER BY 1,2;"'
+docker run --rm -i -e TARGET_URL "$IMAGE" sh -c 'psql "$TARGET_URL" -v ON_ERROR_STOP=1 -f -' <<'SQL'
+SELECT current_database() AS database_name, version();
+
+SELECT c.relname AS table_name
+FROM pg_class c
+JOIN pg_namespace n ON n.oid = c.relnamespace
+WHERE n.nspname = 'public' AND c.relkind = 'r'
+ORDER BY c.relname;
+
+SELECT format('SELECT %L AS table_name, count(*) AS row_count FROM public.%I', c.relname, c.relname)
+FROM pg_class c
+JOIN pg_namespace n ON n.oid = c.relnamespace
+WHERE n.nspname = 'public' AND c.relkind = 'r'
+ORDER BY c.relname \gexec
+
+SELECT migration_name, finished_at, rolled_back_at
+FROM _prisma_migrations
+WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL
+ORDER BY finished_at DESC
+LIMIT 1;
+SQL
 ```
 
-For Clickmoji, compare table names and counts with the selected backup's verification record;
-inspect representative users, lists and products without exposing personal data. Check the latest
-successful `_prisma_migrations` entry against that record and the intended release. From the checked
-out release with dependencies installed, run `DATABASE_URL="$TARGET_URL" npx prisma migrate status`.
-This repository's `prisma.config.ts` reads `DATABASE_URL` and migrations from `prisma/migrations`;
-ensure it points to the target, since an unset value falls back to localhost. Investigate any mismatch
-or nonzero status before switching; do not blindly deploy migrations or seed restored data. Check the
-application against the target in an isolated preview, including sign-in and reading a test list.
+Compare the output with the selected copy's verification record:
 
-For a real incident only, after all checks pass, set production `DATABASE_URL` in Vercel to the
-verified target's appropriate pooled URL with TLS and redeploy. Verify the deployed site and logs;
-record the selected backup/time, target, checks and switch time without credentials. If validation
-fails, keep the original site setting and investigate. Unset `TARGET_URL`, remove temporary targets
-and files when no longer needed, and retain the selected encrypted backup according to policy.
+- the table list and every row count must match the record exactly (a missing table, or a count that
+  fell by more than a fifth, blocks the switch);
+- the latest successful migration name must match the record. Expected for the release being
+  deployed, from the release checkout:
+
+  ```sh
+  ls -1 prisma/migrations | grep -v '^migration_lock.toml$' | sort | tail -1
+  ```
+
+  If the restored migration is older than the release, stop and decide as an operator; do not run
+  `migrate deploy` against restored data without that decision.
+
+Then confirm the Prisma view of the target, using the release checkout with dependencies installed.
+`prisma.config.ts` reads `DATABASE_URL` and falls back to a localhost URL when it is unset, so the
+variable must be set explicitly:
+
+```sh
+DATABASE_URL="$TARGET_URL" npx prisma migrate status
+```
+
+Investigate any mismatch or nonzero status before switching. Inspect representative users, lists and
+products without exposing personal data, and test sign-in and reading a test list against the target in
+an isolated preview. Do not seed restored data.
+
+**Switch (real incident only, after every check passes):**
+
+1. Stop writes by the operator's agreed method and note the time. Keep writes stopped until step 5.
+2. Store the current production `DATABASE_URL` value in the password manager (the value, not in a
+   file or a ticket), so the old target can be restored in one step if the switch fails.
+3. Get the pooled URL for the verified target (Neon: add `--pooled`; use the target's database and role
+   names as above):
+
+   ```sh
+   CUTOVER_URL=$(neon connection-string "$RESTORE_BRANCH" --project-id "$NEON_PROJECT_ID" --database-name "$RESTORE_DB" --role-name '<owner-role>' --pooled)
+   ```
+
+   For the point-in-time branch, use `"$RECOVERY_BRANCH"` and its database instead. For another
+   provider, use that provider's pooled URL with TLS.
+
+4. Replace the Vercel production variable from the release checkout. Between `rm` and `add` the
+   production site has no `DATABASE_URL`, so run both commands in one go and do not change the order:
+
+   ```sh
+   vercel env rm DATABASE_URL --environment production --yes
+   printf '%s' "$CUTOVER_URL" | vercel env add DATABASE_URL --environment production
+   vercel deploy --prod
+   ```
+
+   The Vercel dashboard (Project → Settings → Environment Variables) can do the same edit; use it if
+   the CLI is unavailable. Vercel's `env add` reads the value from stdin, so it is never placed on the
+   command line.
+
+5. Verify the deployed site: sign-in, reading a test list, and the runtime error view in Vercel. Only
+   then resume writes.
+6. Record the selected backup or time, the target name (not its URL), the checks that passed, and the
+   switch time, without credentials.
+
+If any step fails, keep the old setting: re-add the value saved in step 2 with the same two Vercel
+commands and redeploy, then investigate. Finally unset the variables and remove temporary targets and
+files when they are no longer needed:
+
+```sh
+unset TARGET_URL CUTOVER_URL RECOVERY_TIME RESTORE_DB
+```
+
+Retain the selected encrypted backup according to policy.
 
 #### Recovery drill
 
-Quarterly and before the first users, use the latest verified encrypted backup and the same restore
-command above into a fresh empty disposable database. Verify the key, restore exit and generic and
-Clickmoji-specific checks, record the outcome and clean up the disposable database. Never change site
-settings during a drill. For a synthetic drill, encrypt a known custom-format test dump to the same
-recipient, restore it with the identical command, and compare its expected tables and counts; the
-Clickmoji migration and application checks apply only to an actual Clickmoji backup.
+Quarterly and before the first users, use the latest verified encrypted copy and the same commands
+above (_Create the target_ step 2, empty-target check, restore, verification) against a fresh empty
+disposable database. Verify the key, the restore exit status, the generic and the Clickmoji-specific
+checks, record the outcome and delete the disposable database. Never change site settings during a
+drill.
+
+For a synthetic drill, encrypt a known custom-format test dump to the same recipient and restore it
+with the identical commands, then compare its expected tables and counts. The Clickmoji migration and
+application checks apply only to an actual Clickmoji copy.
 
 ### Duplicate variant repair (AGE-1536 / AGE-1545)
 
