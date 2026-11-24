@@ -10,7 +10,7 @@ import {
 } from '../src/lib/services/emoji-legacy-ru-locales';
 
 // Sets locale="ru" (and aligns groupKey with any existing English twin) on the legacy batch-NNN
-// library pictures marked as redrawn in text batches ("перерисовывается в text-...") in
+// library pictures marked as redrawn in text batches in
 // docs/emoji-batches/manifest.json and candidates.json.
 //
 // Usage:

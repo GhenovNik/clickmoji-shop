@@ -255,7 +255,7 @@ function parseManifest(raw: unknown): ManifestBatch[] {
   });
 }
 
-// Selects the legacy batch-NNN cells marked as superseded by a text batch ("перерисовывается в text-...")
+// Selects the legacy batch-NNN cells marked as superseded by a text batch
 // and cross-checks them against both manifest text batches and candidates.json.
 export function loadLegacyRussianTargets(paths?: {
   manifestPath?: string;
