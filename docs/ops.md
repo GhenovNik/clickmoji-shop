@@ -92,10 +92,14 @@ independent evidence of the original reservation and whether the UPDATE committe
 
 ### Image model switch (Vercel)
 
-`GOOGLE_IMAGE_MODEL` and `OPENAI_IMAGE_MODEL` are optional. While both are absent (or empty or
-whitespace) production uses the defaults chosen on 2026-10-04: Google
-`gemini-3.1-flash-lite-image` through `models.generateContent`, OpenAI `gpt-image-2.5-flare`
-through `images.generate` with `size 1024x1024`, `quality medium` and `background transparent`.
+`GOOGLE_IMAGE_MODEL` and `OPENAI_IMAGE_MODEL` are optional. While `AI_PROVIDER` is unset (or
+anything other than `"gpt-image"`) production uses Google `gemini-3.1-flash-lite-image` through
+`models.generateContent`. Setting `AI_PROVIDER="gpt-image"` (with any `OPENAI_IMAGE_MODEL`, such
+as `gpt-image-2.5-flare`, `gpt-image-2.5-sunburst`, `gpt-image-2`, or `gpt-image-1.5`) is rejected
+fail-closed **before** reserving budget or calling OpenAI because OpenAI `images.generate` lacks a
+documented fixed per-image price or enforceable output-token ceiling; `POST /api/emoji/generate`
+returns `503` (`api.aiQuota.unavailable`) and `POST /api/products/smart-create` falls back to the
+Unicode emoji while preserving bounded Gemini text analysis.
 
 - Before any change, write down the current values and whether each of `AI_PROVIDER`,
   `GOOGLE_IMAGE_MODEL`, `IMAGEN_MODEL` and `OPENAI_IMAGE_MODEL` is present (no secrets).

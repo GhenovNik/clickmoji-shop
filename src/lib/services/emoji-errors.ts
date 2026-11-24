@@ -155,6 +155,31 @@ export class EmojiImageGenerationError extends Error {
   }
 }
 
+/**
+ * Thrown when an active AI configuration has no provable pre-dispatch cost upper bound (e.g.
+ * OpenAI GPT Image models via `images.generate`, which lack both a fixed per-image fee and an
+ * enforceable hard output-token ceiling). Callers fail closed before contacting any provider.
+ */
+export class AiCostUnboundedError extends EmojiImageGenerationError {
+  readonly provider: EmojiProvider;
+  readonly env: string;
+
+  constructor({
+    provider,
+    env,
+    message,
+  }: {
+    provider: EmojiProvider;
+    env: string;
+    message: string;
+  }) {
+    super('configuration', message);
+    this.name = 'AiCostUnboundedError';
+    this.provider = provider;
+    this.env = env;
+  }
+}
+
 export type EmojiGenerationLogRecord = {
   errorClass: string;
   reason?: EmojiProviderUnavailableReason;
@@ -176,6 +201,13 @@ export function summarizeEmojiGenerationFailure(error: unknown): EmojiGeneration
       reason: error.reason,
       provider: error.provider,
       model: error.model,
+    };
+  }
+
+  if (error instanceof AiCostUnboundedError) {
+    return {
+      errorClass: 'unbounded_configuration',
+      provider: error.provider,
     };
   }
 

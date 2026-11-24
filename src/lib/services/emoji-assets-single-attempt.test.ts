@@ -158,22 +158,18 @@ describe('AC-6 returned model id and unchanged metadata', () => {
     expectUnchangedMetadata(result, 'gemini');
   });
 
-  it('reports the default OpenAI model and transparent-variant metadata', async () => {
+  it('fails closed before SDK call on the default OpenAI model', async () => {
     setEnv({ AI_PROVIDER: 'gpt-image', IMAGEN_MODEL: undefined });
 
-    const result = await generateEmojiImage(ASSET_INPUT);
-
-    expect(result.model).toBe('gpt-image-2.5-flare');
-    expectUnchangedMetadata(result, 'gpt-image');
+    await expect(generateEmojiImage(ASSET_INPUT)).rejects.toThrow(/OPENAI_IMAGE_MODEL/);
+    expect(sdk.imagesGenerateCalls).toHaveLength(0);
   });
 
-  it('reports the configured OpenAI model and transparent-variant metadata', async () => {
+  it('fails closed before SDK call on a configured OpenAI model', async () => {
     setEnv({ AI_PROVIDER: 'gpt-image', OPENAI_IMAGE_MODEL: 'gpt-image-2' });
 
-    const result = await generateEmojiImage(ASSET_INPUT);
-
-    expect(result.model).toBe('gpt-image-2');
-    expectUnchangedMetadata(result, 'gpt-image');
+    await expect(generateEmojiImage(ASSET_INPUT)).rejects.toThrow(/OPENAI_IMAGE_MODEL/);
+    expect(sdk.imagesGenerateCalls).toHaveLength(0);
   });
 
   it('keeps generateAndUploadEmojiAsset metadata for the deprecated synonym path', async () => {
@@ -207,15 +203,12 @@ describe('AC-6 returned model id and unchanged metadata', () => {
     expect(sdk.uploadFilesCalls).toHaveLength(1);
   });
 
-  it('keeps generateAndUploadEmojiAsset metadata for the OpenAI path', async () => {
+  it('fails closed in generateAndUploadEmojiAsset before OpenAI SDK or upload', async () => {
     setEnv({ AI_PROVIDER: 'gpt-image', OPENAI_IMAGE_MODEL: 'gpt-image-2' });
 
-    const asset = await generateAndUploadEmojiAsset(ASSET_INPUT);
-
-    expect(asset.imageUrl).toBe('https://utfs.io/f/synthetic.png');
-    expect(asset.model).toBe('gpt-image-2');
-    expectUnchangedMetadata(asset, 'gpt-image');
-    expect(sdk.uploadFilesCalls).toHaveLength(1);
+    await expect(generateAndUploadEmojiAsset(ASSET_INPUT)).rejects.toThrow(/OPENAI_IMAGE_MODEL/);
+    expect(sdk.imagesGenerateCalls).toHaveLength(0);
+    expect(sdk.uploadFilesCalls).toHaveLength(0);
   });
 });
 
@@ -287,29 +280,27 @@ describe('AC-8 exactly one adapter attempt per generation', () => {
     expect(sdk.uploadFilesCalls).toHaveLength(0);
   });
 
-  it('performs a single images.generate attempt when the OpenAI call rejects', async () => {
+  it('performs zero images.generate attempts and fails closed on OpenAI when configured', async () => {
     setEnv({ AI_PROVIDER: 'gpt-image', OPENAI_IMAGE_MODEL: 'gpt-image-2' });
     sdk.imagesGenerateImpl = () => {
       throw new Error('provider unavailable');
     };
 
-    await expect(generateAndUploadEmojiAsset(ASSET_INPUT)).rejects.toThrow('provider unavailable');
+    await expect(generateAndUploadEmojiAsset(ASSET_INPUT)).rejects.toThrow(/OPENAI_IMAGE_MODEL/);
 
-    expect(sdk.imagesGenerateCalls).toHaveLength(1);
+    expect(sdk.imagesGenerateCalls).toHaveLength(0);
     expect(sdk.generateImagesCalls).toHaveLength(0);
     expect(sdk.generateContentCalls).toHaveLength(0);
     expect(sdk.uploadFilesCalls).toHaveLength(0);
   });
 
-  it('performs a single images.generate attempt when the OpenAI response has no image data', async () => {
+  it('performs zero images.generate attempts on default OpenAI config', async () => {
     setEnv({ AI_PROVIDER: 'gpt-image' });
     sdk.imagesGenerateImpl = () => ({ data: [] });
 
-    await expect(generateAndUploadEmojiAsset(ASSET_INPUT)).rejects.toThrow(
-      'No image data from GPT Image'
-    );
+    await expect(generateAndUploadEmojiAsset(ASSET_INPUT)).rejects.toThrow(/OPENAI_IMAGE_MODEL/);
 
-    expect(sdk.imagesGenerateCalls).toHaveLength(1);
+    expect(sdk.imagesGenerateCalls).toHaveLength(0);
     expect(sdk.generateImagesCalls).toHaveLength(0);
     expect(sdk.generateContentCalls).toHaveLength(0);
     expect(sdk.uploadFilesCalls).toHaveLength(0);
@@ -356,16 +347,15 @@ describe('AC-8 exactly one adapter attempt per generation', () => {
     expect(sdk.uploadFilesCalls).toHaveLength(0);
   });
 
-  it('performs a single images.generate attempt for the default model when the call rejects', async () => {
+  it('performs zero images.generate attempts for the default OpenAI model', async () => {
     setEnv({ AI_PROVIDER: 'gpt-image', IMAGEN_MODEL: undefined });
     sdk.imagesGenerateImpl = () => {
       throw new Error('provider unavailable');
     };
 
-    await expect(generateAndUploadEmojiAsset(ASSET_INPUT)).rejects.toThrow('provider unavailable');
+    await expect(generateAndUploadEmojiAsset(ASSET_INPUT)).rejects.toThrow(/OPENAI_IMAGE_MODEL/);
 
-    expect(sdk.imagesGenerateCalls).toHaveLength(1);
-    expect(sdk.imagesGenerateCalls[0]?.model).toBe('gpt-image-2.5-flare');
+    expect(sdk.imagesGenerateCalls).toHaveLength(0);
     expect(sdk.generateImagesCalls).toHaveLength(0);
     expect(sdk.generateContentCalls).toHaveLength(0);
     expect(sdk.uploadFilesCalls).toHaveLength(0);

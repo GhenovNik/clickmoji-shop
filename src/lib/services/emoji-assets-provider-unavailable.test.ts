@@ -75,7 +75,8 @@ vi.mock('uploadthing/server', () => ({
 
 const { generateEmojiImage, generateAndUploadEmojiAsset } =
   await import('@/lib/services/emoji-assets');
-const { EmojiProviderUnavailableError } = await import('@/lib/services/emoji-errors');
+const { AiCostUnboundedError, classifyProviderFailure, EmojiProviderUnavailableError } =
+  await import('@/lib/services/emoji-errors');
 
 const envSnapshot = snapshotEnv();
 const MARKER = 'synthetic-sdk-body-marker-347';
@@ -378,8 +379,15 @@ afterEach(() => {
   restoreEnv(envSnapshot);
 });
 
+const BOUNDED_PROVIDER_CASES = PROVIDER_CASES.filter(
+  (providerCase) => providerCase.provider === 'gemini'
+);
+const OPENAI_PROVIDER_CASE = PROVIDER_CASES.find(
+  (providerCase) => providerCase.provider === 'gpt-image'
+)!;
+
 describe('AC-15 a missing provider key never reaches an SDK client', () => {
-  for (const providerCase of PROVIDER_CASES) {
+  for (const providerCase of BOUNDED_PROVIDER_CASES) {
     for (const keyState of MISSING_KEY_STATES) {
       it(`reports missing-key without clients, calls or uploads on ${providerCase.label} with a ${keyState.label} key`, async () => {
         useProviderCase(providerCase);
@@ -406,7 +414,7 @@ describe('AC-15 a missing provider key never reaches an SDK client', () => {
     }
   }
 
-  for (const providerCase of PROVIDER_CASES) {
+  for (const providerCase of BOUNDED_PROVIDER_CASES) {
     it(`counts one client, one SDK call and one upload on ${providerCase.label} with a valid synthetic key`, async () => {
       useProviderCase(providerCase);
 
@@ -422,10 +430,27 @@ describe('AC-15 a missing provider key never reaches an SDK client', () => {
       expect(counters.uploads).toHaveLength(1);
     });
   }
+
+  it('fails closed before key check, client creation, or upload for unbounded OpenAI provider', async () => {
+    useProviderCase(OPENAI_PROVIDER_CASE);
+    setEnv({ OPENAI_API_KEY: undefined });
+
+    await expect(
+      generateAndUploadEmojiAsset({
+        productName: 'Milk',
+        provider: 'gpt-image',
+        clients: workingClientFactory(OPENAI_PROVIDER_CASE),
+      })
+    ).rejects.toBeInstanceOf(AiCostUnboundedError);
+
+    expect(counters.constructedClients).toHaveLength(0);
+    expect(counters.sdkCalls).toHaveLength(0);
+    expect(counters.uploads).toHaveLength(0);
+  });
 });
 
 describe('AC-15 provider quota and auth failures are typed', () => {
-  for (const providerCase of PROVIDER_CASES) {
+  for (const providerCase of BOUNDED_PROVIDER_CASES) {
     for (const failureCase of FAILURE_CASES.filter(
       (candidate) => candidate.appliesTo === providerCase.provider
     )) {
@@ -468,6 +493,14 @@ describe('AC-15 provider quota and auth failures are typed', () => {
         expect(counters.uploads).toHaveLength(0);
       });
     }
+  }
+
+  for (const failureCase of FAILURE_CASES.filter(
+    (candidate) => candidate.appliesTo === 'gpt-image'
+  )) {
+    it(`classifies ${failureCase.label} as ${failureCase.expectedReason ?? 'unclassified'}`, () => {
+      expect(classifyProviderFailure(failureCase.build())).toBe(failureCase.expectedReason);
+    });
   }
 });
 

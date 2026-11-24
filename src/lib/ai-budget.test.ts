@@ -125,6 +125,7 @@ const {
   IMAGE_PROMPT_FRAMING_TOKEN_OVERHEAD,
   MAX_TEXT_OUTPUT_TOKENS,
   TEXT_PROMPT_FRAMING_TOKEN_OVERHEAD,
+  UNBOUNDED_OPENAI_IMAGE_MODELS,
   calculateImageAttemptCostMicroUsd,
   calculateTextAttemptCostMicroUsd,
   calculateTextOperationCostMicroUsd,
@@ -135,6 +136,7 @@ const {
   estimateTextCallCeilingMicroUsd,
   promptTokenUpperBound,
 } = await import('@/lib/ai-pricing');
+const { AiCostUnboundedError } = await import('@/lib/services/emoji-errors');
 const { runMonthlyBudgetedTextAiCall, runTextAiCall, MonthlyBudgetBlockedError } =
   await import('@/lib/text-ai-call');
 const { runImageAiCall } = await import('@/lib/image-ai-call');
@@ -438,8 +440,43 @@ describe('cost calculation & provider reconciliation', () => {
     expect(cleanMissing).toBe(expectedMissing);
     expect(corrupted).toBe(cleanMissing);
 
-    // Partial usage: candidatesTokenCount missing on 'ok', thoughts + tool + residual totalTokenCount present
-    const partial = calculateTextAttemptCostMicroUsd({
+    // Partial usage: candidatesTokenCount missing on 'ok' with known thoughtsTokenCount uses the
+    // remaining combined output bound (max(0, 4096 - 300) = 3796, total 4096), never exceeding reserved ceiling.
+    const partialWithoutTotal = calculateTextAttemptCostMicroUsd({
+      model: 'gemini-3.8-flash',
+      promptChars: prompt.length,
+      promptBytes,
+      outcome: 'ok',
+      usageMetadata: {
+        promptTokenCount: 50,
+        toolUsePromptTokenCount: 25,
+        thoughtsTokenCount: 300,
+      },
+    });
+    // input = 50 + 25 = 75; baseOutput = 300 + (4096 - 300) = 4096 (bounded by MAX_TEXT_OUTPUT_TOKENS)
+    expect(partialWithoutTotal).toBe(BigInt(Math.ceil(75 * 1.5) + Math.ceil(4096 * 7.5)));
+    expect(partialWithoutTotal).toBeLessThanOrEqual(
+      estimateTextAttemptCeilingMicroUsd(
+        'gemini-3.8-flash',
+        promptBytes + TEXT_PROMPT_FRAMING_TOKEN_OVERHEAD
+      )
+    );
+
+    // If reported thoughts ever exceed MAX_TEXT_OUTPUT_TOKENS, remaining combined bound clamps to 0.
+    const thoughtsExceedingMax = calculateTextAttemptCostMicroUsd({
+      model: 'gemini-3.8-flash',
+      promptChars: prompt.length,
+      promptBytes,
+      outcome: 'ok',
+      usageMetadata: {
+        promptTokenCount: 50,
+        thoughtsTokenCount: 5000,
+      },
+    });
+    expect(thoughtsExceedingMax).toBe(BigInt(Math.ceil(50 * 1.5) + Math.ceil(5000 * 7.5)));
+
+    // When totalTokenCount is also present and exceeds input + 4096, residual accounts for the excess.
+    const partialWithResidual = calculateTextAttemptCostMicroUsd({
       model: 'gemini-3.8-flash',
       promptChars: prompt.length,
       promptBytes,
@@ -451,53 +488,88 @@ describe('cost calculation & provider reconciliation', () => {
         totalTokenCount: 5000,
       },
     });
-    // input = 50 + 25 = 75; baseOutput = 4096 + 300 = 4396; accounted = 4471; residual = 529 -> output = 4925
-    expect(partial).toBe(BigInt(Math.ceil(75 * 1.5) + Math.ceil(4925 * 7.5)));
+    // input = 75; baseOutput = 4096; accounted = 4171; residual = 829 -> output = 4925
+    expect(partialWithResidual).toBe(BigInt(Math.ceil(75 * 1.5) + Math.ceil(4925 * 7.5)));
 
-    // OpenAI missing usage matches exact ceiling tied to promptBytes
-    const openAiMissingUsage = calculateImageAttemptCostMicroUsd({
-      provider: 'gpt-image',
-      model: 'gpt-image-2.5-flare',
-      promptChars: 300,
-      promptBytes: 300,
-      size: '1024x1024',
-      quality: 'medium',
+    // Gemini image generateContent reserves image output + maxThoughtTokens independently, so missing
+    // candidatesTokenCount with known thoughtsTokenCount stays within the reserved ceiling.
+    const imageMissingCandidatesWithThoughts = calculateImageAttemptCostMicroUsd({
+      provider: 'gemini',
+      model: 'gemini-3.1-flash-lite-image',
+      promptChars: prompt.length,
+      promptBytes,
+      imageSize: '1K',
+      aspectRatio: '1:1',
       outputCount: 1,
       outcome: 'ok',
-    });
-    expect(openAiMissingUsage).toBe(
-      estimateImageCallCeilingMicroUsd({
-        provider: 'gpt-image',
-        model: 'gpt-image-2.5-flare',
-        size: '1024x1024',
-        quality: 'medium',
-        outputCount: 1,
-        maxPromptTokens: 300 + IMAGE_PROMPT_FRAMING_TOKEN_OVERHEAD,
-      })
-    );
-
-    // gpt-image-1.5 uses $32/1M image output rate (not $30/1M)
-    const gpt15WithUsage = calculateImageAttemptCostMicroUsd({
-      provider: 'gpt-image',
-      model: 'gpt-image-1.5',
-      promptChars: 300,
-      promptBytes: 300,
-      outcome: 'ok',
-      openaiUsage: {
-        input_tokens: 100,
-        output_tokens: 1000,
-        input_tokens_details: { text_tokens: 100, image_tokens: 0 },
-        output_tokens_details: { text_tokens: 0, image_tokens: 1000 },
+      googleUsageMetadata: {
+        promptTokenCount: 60,
+        thoughtsTokenCount: 500,
       },
     });
-    // 100 * 5 + 1000 * 32 = 500 + 32_000 = 32_500 micro-USD
-    expect(gpt15WithUsage).toBe(BigInt(32_500));
+    expect(imageMissingCandidatesWithThoughts).toBe(
+      BigInt(Math.ceil(60 * 0.25) + Math.ceil(1120 * 30) + Math.ceil(500 * 1.5))
+    );
+    expect(imageMissingCandidatesWithThoughts).toBeLessThanOrEqual(
+      estimateImageCallCeilingMicroUsd({
+        provider: 'gemini',
+        model: 'gemini-3.1-flash-lite-image',
+        imageSize: '1K',
+        aspectRatio: '1:1',
+        outputCount: 1,
+        maxPromptTokens: promptBytes + IMAGE_PROMPT_FRAMING_TOKEN_OVERHEAD,
+      })
+    );
   });
 
-  it('releases full reservation ($0 spent) when image provider rejects with 429 or missing key', async () => {
-    vi.stubEnv(AI_MONTHLY_BUDGET_USD_ENV, '0.20');
+  it('fails closed before DB reservation or SDK call for all unbounded OpenAI image configurations', async () => {
+    vi.stubEnv(AI_MONTHLY_BUDGET_USD_ENV, '10.00');
     vi.stubEnv('AI_PROVIDER', 'gpt-image');
-    delete process.env.OPENAI_API_KEY;
+
+    for (const model of [undefined, ...UNBOUNDED_OPENAI_IMAGE_MODELS]) {
+      if (model === undefined) {
+        delete process.env.OPENAI_IMAGE_MODEL;
+      } else {
+        vi.stubEnv('OPENAI_IMAGE_MODEL', model);
+      }
+
+      const ruRes = await runImageAiCall({ id: 'admin-1', role: 'ADMIN' }, 'ru', () =>
+        generateEmojiImage({ productName: 'Milk' })
+      );
+      expect(ruRes).toBeInstanceOf(Response);
+      expect((ruRes as Response).status).toBe(503);
+      expect(await (ruRes as Response).json()).toEqual({
+        error: 'AI временно недоступен. Попробуйте позже.',
+      });
+
+      const enRes = await runImageAiCall({ id: 'admin-1', role: 'ADMIN' }, 'en', () =>
+        generateEmojiImage({ productName: 'Milk' })
+      );
+      expect(enRes).toBeInstanceOf(Response);
+      expect((enRes as Response).status).toBe(503);
+      expect(await (enRes as Response).json()).toEqual({
+        error: 'AI is temporarily unavailable. Please try again later.',
+      });
+
+      expect(() =>
+        estimateImageCallCeilingMicroUsd({
+          provider: 'gpt-image',
+          model: model ?? 'gpt-image-2.5-flare',
+        })
+      ).toThrow(AiCostUnboundedError);
+    }
+
+    expect(dbState.monthlyCalls).toHaveLength(0);
+    expect(dbState.rows.size).toBe(0);
+    expect(dbState.sdkImageCalls).toHaveLength(0);
+    const logged = JSON.stringify(vi.mocked(console.error).mock.calls);
+    expect(logged).toContain('unbounded_configuration');
+    expect(logged).not.toContain('gpt-image-2.5-sunburst');
+  });
+
+  it('releases full reservation ($0 spent) when Gemini image provider rejects with missing key', async () => {
+    vi.stubEnv(AI_MONTHLY_BUDGET_USD_ENV, '0.20');
+    delete process.env.GOOGLE_GENAI_API_KEY;
 
     await expect(
       runImageAiCall({ id: 'admin-1', role: 'ADMIN' }, 'en', () =>
@@ -643,7 +715,7 @@ describe('cost calculation & provider reconciliation', () => {
         size: 'auto',
         quality: 'medium',
       })
-    ).toThrow(/Unsupported image size/);
+    ).toThrow(AiCostUnboundedError);
 
     expect(() =>
       estimateImageCallCeilingMicroUsd({
@@ -652,7 +724,7 @@ describe('cost calculation & provider reconciliation', () => {
         size: '1024x1024',
         quality: 'ultra',
       })
-    ).toThrow(/Unsupported image quality/);
+    ).toThrow(AiCostUnboundedError);
 
     expect(() =>
       estimateImageCallCeilingMicroUsd({
@@ -670,7 +742,7 @@ describe('cost calculation & provider reconciliation', () => {
       })
     ).toThrow(/Invalid image output count/);
 
-    // Verify Imagen & Gemini & OpenAI scaling with dimensions / quality / outputCount
+    // Verify Imagen & Gemini scaling with dimensions / outputCount
     expect(
       estimateImageCallCeilingMicroUsd({
         provider: 'gemini',
@@ -695,20 +767,16 @@ describe('cost calculation & provider reconciliation', () => {
     );
     expect(
       estimateImageCallCeilingMicroUsd({
-        provider: 'gpt-image',
-        model: 'gpt-image-2.5-flare',
-        size: '1024x1536',
-        quality: 'high',
-        outputCount: 2,
+        provider: 'gemini',
+        model: 'gemini-3.1-flash-image',
+        imageSize: '1K',
         maxPromptTokens: 100,
       })
     ).toBeGreaterThan(
       estimateImageCallCeilingMicroUsd({
-        provider: 'gpt-image',
-        model: 'gpt-image-2.5-flare',
-        size: '1024x1024',
-        quality: 'medium',
-        outputCount: 1,
+        provider: 'gemini',
+        model: 'gemini-3.1-flash-lite-image',
+        imageSize: '1K',
         maxPromptTokens: 100,
       })
     );

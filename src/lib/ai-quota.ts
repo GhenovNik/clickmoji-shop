@@ -13,6 +13,7 @@ import {
   estimateTextCallCeilingMicroUsd,
 } from '@/lib/ai-pricing';
 import { getActiveAiQuotaContext } from '@/lib/ai-quota-context';
+import { AiCostUnboundedError } from '@/lib/services/emoji-errors';
 
 // Daily budget of paid AI calls per user, kept in PostgreSQL so that every server instance
 // shares it, plus a shared persistent monthly monetary cap across all users and instances.
@@ -117,9 +118,24 @@ export async function enforceAiQuota(
   }
 
   const ctx = getActiveAiQuotaContext();
-  const ceilingMicroUsd =
-    ctx?.ceilingMicroUsd ??
-    (ctx?.kind === 'text' ? estimateTextCallCeilingMicroUsd() : estimateImageCallCeilingMicroUsd());
+  let ceilingMicroUsd: bigint;
+  try {
+    ceilingMicroUsd =
+      ctx?.ceilingMicroUsd ??
+      (ctx?.kind === 'text'
+        ? estimateTextCallCeilingMicroUsd()
+        : estimateImageCallCeilingMicroUsd());
+  } catch (error) {
+    if (error instanceof AiCostUnboundedError) {
+      console.error('AI quota check rejected unbounded configuration:', {
+        errorClass: 'unbounded_configuration',
+        provider: error.provider,
+        env: error.env,
+      });
+      return NextResponse.json({ error: t('api.aiQuota.unavailable') }, { status: 503 });
+    }
+    throw error;
+  }
 
   let monthlyDecision: Awaited<ReturnType<typeof reserveMonthlyAiBudget>>;
   try {

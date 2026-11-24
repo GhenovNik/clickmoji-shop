@@ -473,6 +473,43 @@ describe('monthly AI budget across all HTTP AI entry points', () => {
     expect(doubles.textCalls).toHaveLength(1);
     expect(doubles.googleImageCalls).toHaveLength(0);
   });
+
+  it('fails closed on unbounded OpenAI image provider before reserving budget or calling OpenAI, while preserving bounded smart-create text', async () => {
+    process.env.AI_PROVIDER = 'gpt-image';
+    process.env.OPENAI_IMAGE_MODEL = 'gpt-image-2.5-flare';
+
+    const ruImgRes = await emojiGenerateRoute.POST(
+      jsonReq('http://localhost/api/emoji/generate', { productName: 'Milk' }, 'ru')
+    );
+    expect(ruImgRes.status).toBe(503);
+    expect(await ruImgRes.json()).toEqual({ error: 'AI временно недоступен. Попробуйте позже.' });
+
+    const enImgRes = await emojiGenerateRoute.POST(
+      jsonReq('http://localhost/api/emoji/generate', { productName: 'Milk' }, 'en')
+    );
+    expect(enImgRes.status).toBe(503);
+    expect(await enImgRes.json()).toEqual({
+      error: 'AI is temporarily unavailable. Please try again later.',
+    });
+
+    expect(doubles.openaiImageCalls).toHaveLength(0);
+    expect(doubles.uploadCalls).toBe(0);
+    expect(doubles.monthlyRows.size).toBe(0);
+    expect(doubles.dailyCounts.size).toBe(0);
+
+    // smart-create Stage 1 (bounded Gemini text) remains operational; Stage 2 (unbounded gpt-image) is skipped.
+    const smartRes = await smartCreateRoute.POST(
+      jsonReq('http://localhost/api/products/smart-create', { productName: 'Тархун' }, 'en')
+    );
+    expect(smartRes.status).toBe(200);
+    expect(await smartRes.json()).toMatchObject({
+      customEmojiGenerated: false,
+      needsCustomEmoji: true,
+    });
+    expect(doubles.textCalls).toHaveLength(1);
+    expect(doubles.openaiImageCalls).toHaveLength(0);
+    expect(doubles.uploadCalls).toBe(0);
+  });
 });
 
 describe('server-side input bounds before providers (400/413)', () => {

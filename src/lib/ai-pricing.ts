@@ -1,6 +1,10 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { AI_INPUT_LIMITS } from '@/lib/ai-input-validation';
-import { EmojiImageGenerationError, type EmojiProvider } from '@/lib/services/emoji-errors';
+import {
+  AiCostUnboundedError,
+  EmojiImageGenerationError,
+  type EmojiProvider,
+} from '@/lib/services/emoji-errors';
 import {
   DEFAULT_GOOGLE_TEXT_MODEL,
   resolveGoogleTextModel,
@@ -20,8 +24,6 @@ export const DEFAULT_IMAGE_PROMPT_TOKEN_BOUND =
 
 const DEFAULT_GOOGLE_IMAGE_MODEL = 'gemini-3.1-flash-lite-image';
 const DEFAULT_OPENAI_IMAGE_MODEL = 'gpt-image-2.5-flare';
-const DEFAULT_OPENAI_IMAGE_SIZE = '1024x1024';
-const DEFAULT_OPENAI_IMAGE_QUALITY = 'medium';
 const DEFAULT_GOOGLE_ASPECT_RATIO = '1:1';
 const DEFAULT_OUTPUT_COUNT = 1;
 
@@ -68,27 +70,18 @@ type GoogleGenerateImagesSpec = {
   maxOutputCount: number;
 };
 
-type OpenAIImageSpec = {
-  provider: 'gpt-image';
-  adapter: 'images.generate';
-  textInputUsdPerMillion: number;
-  imageInputUsdPerMillion: number;
-  textOutputUsdPerMillion: number;
-  imageOutputUsdPerMillion: number;
-  sizeAreaFactor: Record<string, number>;
-  qualityOutputTokenBound: Record<string, number>;
-  maxOutputCount: number;
-};
-
-export type SupportedImageModelSpec =
-  GoogleGenerateContentImageSpec | GoogleGenerateImagesSpec | OpenAIImageSpec;
+export type SupportedImageModelSpec = GoogleGenerateContentImageSpec | GoogleGenerateImagesSpec;
 
 /**
  * Official image model pricing and request bounds registry.
  * Sources: https://ai.google.dev/gemini-api/docs/pricing and
- * https://developers.openai.com/api/docs/pricing (plus docs/ai.md).
+ * https://ai.google.dev/gemini-api/docs/models (plus docs/ai.md).
  * Models or parameter combinations outside this table have unknown cost bounds and are rejected
  * before budget reservation or SDK construction.
+ *
+ * Note: OpenAI GPT Image models via `images.generate` (`gpt-image-2.5-flare`,
+ * `gpt-image-2.5-sunburst`, `gpt-image-2`, `gpt-image-1.5`) have no documented fixed per-image
+ * price or enforceable output-token ceiling and therefore fail closed before dispatch.
  */
 const SUPPORTED_IMAGE_MODEL_SPECS: Record<string, SupportedImageModelSpec> = {
   'gemini-3.1-flash-lite-image': {
@@ -100,7 +93,8 @@ const SUPPORTED_IMAGE_MODEL_SPECS: Record<string, SupportedImageModelSpec> = {
     imageSizeTokens: { '1K': 1_120 },
     defaultImageSize: '1K',
     supportedAspectRatios: ['1:1'],
-    maxThoughtTokens: 32_768,
+    // Official model output token limit (https://ai.google.dev/gemini-api/docs/models/gemini-3.1-flash-lite-image).
+    maxThoughtTokens: 4_096,
     maxOutputCount: 1,
   },
   'gemini-3.1-flash-image': {
@@ -124,7 +118,8 @@ const SUPPORTED_IMAGE_MODEL_SPECS: Record<string, SupportedImageModelSpec> = {
     imageSizeTokens: { '1K': 1_290 },
     defaultImageSize: '1K',
     supportedAspectRatios: ['1:1'],
-    maxThoughtTokens: 8_192,
+    // Thinking is not supported on gemini-2.5-flash-image; 32,768 is the documented output limit.
+    maxThoughtTokens: 32_768,
     maxOutputCount: 1,
   },
   'gemini-2.5-flash-image-preview': {
@@ -136,7 +131,7 @@ const SUPPORTED_IMAGE_MODEL_SPECS: Record<string, SupportedImageModelSpec> = {
     imageSizeTokens: { '1K': 1_290 },
     defaultImageSize: '1K',
     supportedAspectRatios: ['1:1'],
-    maxThoughtTokens: 8_192,
+    maxThoughtTokens: 32_768,
     maxOutputCount: 1,
   },
   'gemini-3-pro-image': {
@@ -172,51 +167,14 @@ const SUPPORTED_IMAGE_MODEL_SPECS: Record<string, SupportedImageModelSpec> = {
     supportedAspectRatios: ['1:1', '3:4', '4:3', '9:16', '16:9'],
     maxOutputCount: 4,
   },
-  'gpt-image-2.5-flare': {
-    provider: 'gpt-image',
-    adapter: 'images.generate',
-    textInputUsdPerMillion: 5,
-    imageInputUsdPerMillion: 8,
-    textOutputUsdPerMillion: 10,
-    imageOutputUsdPerMillion: 30,
-    sizeAreaFactor: { '1024x1024': 1, '1024x1536': 1.5, '1536x1024': 1.5 },
-    qualityOutputTokenBound: { low: 1_000, medium: 4_000, high: 8_000, xhigh: 12_000, max: 20_000 },
-    maxOutputCount: 10,
-  },
-  'gpt-image-2.5-sunburst': {
-    provider: 'gpt-image',
-    adapter: 'images.generate',
-    textInputUsdPerMillion: 5,
-    imageInputUsdPerMillion: 8,
-    textOutputUsdPerMillion: 10,
-    imageOutputUsdPerMillion: 30,
-    sizeAreaFactor: { '1024x1024': 1, '1024x1536': 1.5, '1536x1024': 1.5 },
-    qualityOutputTokenBound: { low: 1_000, medium: 4_000, high: 8_000, xhigh: 12_000, max: 20_000 },
-    maxOutputCount: 10,
-  },
-  'gpt-image-2': {
-    provider: 'gpt-image',
-    adapter: 'images.generate',
-    textInputUsdPerMillion: 5,
-    imageInputUsdPerMillion: 8,
-    textOutputUsdPerMillion: 10,
-    imageOutputUsdPerMillion: 30,
-    sizeAreaFactor: { '1024x1024': 1, '1024x1536': 1.5, '1536x1024': 1.5 },
-    qualityOutputTokenBound: { low: 1_000, medium: 4_000, high: 8_000 },
-    maxOutputCount: 10,
-  },
-  'gpt-image-1.5': {
-    provider: 'gpt-image',
-    adapter: 'images.generate',
-    textInputUsdPerMillion: 5,
-    imageInputUsdPerMillion: 8,
-    textOutputUsdPerMillion: 10,
-    imageOutputUsdPerMillion: 32,
-    sizeAreaFactor: { '1024x1024': 1, '1024x1536': 1.5, '1536x1024': 1.5 },
-    qualityOutputTokenBound: { low: 1_000, medium: 4_000, high: 8_000 },
-    maxOutputCount: 10,
-  },
 };
+
+export const UNBOUNDED_OPENAI_IMAGE_MODELS = Object.freeze([
+  'gpt-image-2.5-flare',
+  'gpt-image-2.5-sunburst',
+  'gpt-image-2',
+  'gpt-image-1.5',
+] as const);
 
 export const SUPPORTED_GOOGLE_IMAGE_MODELS = Object.freeze(
   Object.entries(SUPPORTED_IMAGE_MODEL_SPECS)
@@ -224,11 +182,7 @@ export const SUPPORTED_GOOGLE_IMAGE_MODELS = Object.freeze(
     .map(([model]) => model)
 );
 
-export const SUPPORTED_OPENAI_IMAGE_MODELS = Object.freeze(
-  Object.entries(SUPPORTED_IMAGE_MODEL_SPECS)
-    .filter(([, spec]) => spec.provider === 'gpt-image')
-    .map(([model]) => model)
-);
+export const SUPPORTED_OPENAI_IMAGE_MODELS = Object.freeze([] as const);
 
 export type GoogleUsageMetadataLike = {
   promptTokenCount?: unknown;
@@ -520,13 +474,16 @@ export function calculateTextAttemptCostMicroUsd(attempt: RecordedTextAttempt): 
     promptTokens ?? attemptInputTokenUpperBound(attempt, TEXT_PROMPT_FRAMING_TOKEN_OVERHEAD);
   const inputTokens = effectivePromptTokens + (toolTokens ?? 0);
 
-  // `maxOutputTokens` (4096) caps candidates + thoughts combined when candidatesTokenCount is present;
-  // when candidatesTokenCount is missing (partial usage, ok without usage, timeout, ambiguous error),
-  // assume the full MAX_TEXT_OUTPUT_TOKENS (plus any reported thoughts if thoughts exceeded it).
+  // `maxOutputTokens` (4096) is documented as a combined hard ceiling on candidates + thoughts
+  // (https://ai.google.dev/gemini-api/docs/thinking). When candidatesTokenCount is missing and
+  // thoughtsTokenCount is known, use only the remaining combined output bound for candidates so a
+  // single attempt never reconciles above the reserved MAX_TEXT_OUTPUT_TOKENS ceiling.
+  const knownThoughtsTokens = thoughtsTokens ?? 0;
+  const remainingCombinedOutputTokens = Math.max(0, MAX_TEXT_OUTPUT_TOKENS - knownThoughtsTokens);
   const baseOutputTokens =
     candidatesTokens !== undefined
-      ? candidatesTokens + (thoughtsTokens ?? 0)
-      : MAX_TEXT_OUTPUT_TOKENS + (thoughtsTokens ?? 0);
+      ? candidatesTokens + knownThoughtsTokens
+      : knownThoughtsTokens + remainingCombinedOutputTokens;
 
   const accountedTokens = inputTokens + baseOutputTokens;
   const residualTokens =
@@ -640,15 +597,24 @@ export function resolveImagePricingConfig(options?: {
         }
       : activeImageModelSelection();
 
+  if (active.provider === 'gpt-image') {
+    const isKnownUnboundedModel = (UNBOUNDED_OPENAI_IMAGE_MODELS as readonly string[]).includes(
+      active.model
+    );
+    throw new AiCostUnboundedError({
+      provider: 'gpt-image',
+      env: active.env,
+      message: isKnownUnboundedModel
+        ? `Unbounded cost configuration for ${active.env} value "${active.model}": OpenAI images.generate provides no fixed per-image price or enforceable output-token ceiling`
+        : `Invalid ${active.env} value "${active.model}": OpenAI images.generate has no verified fixed price or enforceable output-token ceiling`,
+    });
+  }
+
   const spec = SUPPORTED_IMAGE_MODEL_SPECS[active.model];
   if (!spec || spec.provider !== active.provider) {
-    const allowed =
-      active.provider === 'gpt-image'
-        ? SUPPORTED_OPENAI_IMAGE_MODELS
-        : SUPPORTED_GOOGLE_IMAGE_MODELS;
     throw new EmojiImageGenerationError(
       'configuration',
-      `Invalid ${active.env} value "${active.model}": expected a supported ${active.provider} image model with verified pricing (${allowed.join(', ')})`
+      `Invalid ${active.env} value "${active.model}": expected a supported ${active.provider} image model with verified pricing (${SUPPORTED_GOOGLE_IMAGE_MODELS.join(', ')})`
     );
   }
 
@@ -665,38 +631,6 @@ export function resolveImagePricingConfig(options?: {
       'configuration',
       `Invalid maxPromptTokens for model "${active.model}"`
     );
-  }
-
-  if (spec.adapter === 'images.generate') {
-    const size = options?.size ?? DEFAULT_OPENAI_IMAGE_SIZE;
-    const quality = options?.quality ?? DEFAULT_OPENAI_IMAGE_QUALITY;
-    const areaFactor = spec.sizeAreaFactor[size];
-    if (areaFactor === undefined) {
-      throw new EmojiImageGenerationError(
-        'configuration',
-        `Unsupported image size "${size}" for model "${active.model}"`
-      );
-    }
-    const baseOutputTokens = spec.qualityOutputTokenBound[quality];
-    if (baseOutputTokens === undefined) {
-      throw new EmojiImageGenerationError(
-        'configuration',
-        `Unsupported image quality "${quality}" for model "${active.model}"`
-      );
-    }
-    const maxOutputTokens = Math.ceil(baseOutputTokens * areaFactor) * outputCount;
-    const ceilingMicroUsd =
-      usdPerMillionToMicroUsd(maxPromptTokens, spec.textInputUsdPerMillion) +
-      usdPerMillionToMicroUsd(maxOutputTokens, spec.imageOutputUsdPerMillion);
-    return {
-      ...active,
-      spec,
-      size,
-      quality,
-      outputCount,
-      maxPromptTokens,
-      ceilingMicroUsd,
-    };
   }
 
   if (spec.adapter === 'generateImages') {
@@ -775,81 +709,6 @@ export function calculateImageAttemptCostMicroUsd(attempt: RecordedImageAttempt)
     outputCount: attempt.outputCount,
     maxPromptTokens: attemptInputTokenUpperBound(attempt, IMAGE_PROMPT_FRAMING_TOKEN_OVERHEAD),
   });
-
-  if (config.spec.adapter === 'images.generate') {
-    const spec = config.spec;
-    const usage = attempt.openaiUsage;
-    const inputTokens =
-      usage && typeof usage === 'object' ? safeNonNegativeInt(usage.input_tokens) : undefined;
-    const outputTokens =
-      usage && typeof usage === 'object' ? safeNonNegativeInt(usage.output_tokens) : undefined;
-    const totalTokens =
-      usage && typeof usage === 'object' ? safeNonNegativeInt(usage.total_tokens) : undefined;
-
-    if (attempt.outcome === 'rejected') {
-      const anyPositive =
-        (inputTokens ?? 0) > 0 || (outputTokens ?? 0) > 0 || (totalTokens ?? 0) > 0;
-      if (!anyPositive) return ZERO_MICRO_USD;
-    }
-
-    const fallbackInputTokens = attemptInputTokenUpperBound(
-      attempt,
-      IMAGE_PROMPT_FRAMING_TOKEN_OVERHEAD
-    );
-    const areaFactor = spec.sizeAreaFactor[config.size ?? DEFAULT_OPENAI_IMAGE_SIZE] ?? 1;
-    const baseQualityBound =
-      spec.qualityOutputTokenBound[config.quality ?? DEFAULT_OPENAI_IMAGE_QUALITY] ?? 4_000;
-    const fallbackOutputTokens = Math.ceil(baseQualityBound * areaFactor) * config.outputCount;
-
-    let inputCost: bigint;
-    let effectiveInputTokens: number;
-    if (inputTokens !== undefined && usage && typeof usage === 'object') {
-      effectiveInputTokens = inputTokens;
-      const textIn = safeNonNegativeInt(usage.input_tokens_details?.text_tokens);
-      const imageIn = safeNonNegativeInt(usage.input_tokens_details?.image_tokens);
-      if (textIn !== undefined || imageIn !== undefined) {
-        const knownText = textIn ?? 0;
-        const knownImage = imageIn ?? 0;
-        const remainder = Math.max(0, inputTokens - knownText - knownImage);
-        inputCost =
-          usdPerMillionToMicroUsd(knownText, spec.textInputUsdPerMillion) +
-          usdPerMillionToMicroUsd(knownImage + remainder, spec.imageInputUsdPerMillion);
-      } else {
-        inputCost = usdPerMillionToMicroUsd(inputTokens, spec.imageInputUsdPerMillion);
-      }
-    } else {
-      effectiveInputTokens = fallbackInputTokens;
-      inputCost = usdPerMillionToMicroUsd(fallbackInputTokens, spec.textInputUsdPerMillion);
-    }
-
-    let outputCost: bigint;
-    let effectiveOutputTokens: number;
-    if (outputTokens !== undefined && usage && typeof usage === 'object') {
-      effectiveOutputTokens = outputTokens;
-      const textOut = safeNonNegativeInt(usage.output_tokens_details?.text_tokens);
-      const imageOut = safeNonNegativeInt(usage.output_tokens_details?.image_tokens);
-      if (textOut !== undefined || imageOut !== undefined) {
-        const knownText = textOut ?? 0;
-        const knownImage = imageOut ?? 0;
-        const remainder = Math.max(0, outputTokens - knownText - knownImage);
-        outputCost =
-          usdPerMillionToMicroUsd(knownText, spec.textOutputUsdPerMillion) +
-          usdPerMillionToMicroUsd(knownImage + remainder, spec.imageOutputUsdPerMillion);
-      } else {
-        outputCost = usdPerMillionToMicroUsd(outputTokens, spec.imageOutputUsdPerMillion);
-      }
-    } else {
-      effectiveOutputTokens = fallbackOutputTokens;
-      outputCost = usdPerMillionToMicroUsd(fallbackOutputTokens, spec.imageOutputUsdPerMillion);
-    }
-
-    const accounted = effectiveInputTokens + effectiveOutputTokens;
-    const residual =
-      totalTokens !== undefined && totalTokens > accounted ? totalTokens - accounted : 0;
-    const residualCost = usdPerMillionToMicroUsd(residual, spec.imageOutputUsdPerMillion);
-
-    return inputCost + outputCost + residualCost;
-  }
 
   if (config.spec.adapter === 'generateImages') {
     if (attempt.outcome === 'rejected') {

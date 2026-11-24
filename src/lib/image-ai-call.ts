@@ -1,3 +1,4 @@
+import { NextResponse } from 'next/server';
 import type { Locale } from '@/i18n/config';
 import { enforceAiQuota } from '@/lib/ai-quota';
 import { getActiveAiQuotaContext, runWithAiQuotaContext } from '@/lib/ai-quota-context';
@@ -5,8 +6,11 @@ import { reconcileMonthlyAiBudget } from '@/lib/ai-budget';
 import {
   calculateImageOperationCostMicroUsd,
   resolveImagePricingConfig,
+  type ResolvedImagePricingConfig,
   runWithAiUsageRecorder,
 } from '@/lib/ai-pricing';
+import { getServerTranslator } from '@/lib/auth-security';
+import { AiCostUnboundedError } from '@/lib/services/emoji-errors';
 
 export type ImageAiCallOptions = {
   prompt?: string;
@@ -27,10 +31,25 @@ export async function runImageAiCall<T>(
 ): Promise<T | Response> {
   const reservationUser = { id: user.id, role: user.role };
   const now = new Date();
-  const pricing = resolveImagePricingConfig({
-    prompt: options?.prompt,
-    maxPromptTokens: options?.maxPromptTokens,
-  });
+  let pricing: ResolvedImagePricingConfig;
+  try {
+    pricing = resolveImagePricingConfig({
+      prompt: options?.prompt,
+      maxPromptTokens: options?.maxPromptTokens,
+    });
+  } catch (error) {
+    if (error instanceof AiCostUnboundedError) {
+      // Never log raw configured model values or keys; surface localized 503 AI unavailability.
+      console.error('Image AI configuration rejected before dispatch:', {
+        errorClass: 'unbounded_configuration',
+        provider: error.provider,
+        env: error.env,
+      });
+      const t = getServerTranslator(locale);
+      return NextResponse.json({ error: t('api.aiQuota.unavailable') }, { status: 503 });
+    }
+    throw error;
+  }
 
   const { promise } = runWithAiQuotaContext(
     {

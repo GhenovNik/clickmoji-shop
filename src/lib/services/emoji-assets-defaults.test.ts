@@ -58,13 +58,12 @@ vi.mock('openai', () => ({
 }));
 
 const { generateEmojiImage } = await import('./emoji-assets');
-const { EmojiProviderUnavailableError } = await import('./emoji-errors');
+const { AiCostUnboundedError } = await import('./emoji-errors');
 
 const PRODUCT = 'Milk';
 const DESCRIPTION = 'cold carton';
 const GENERATION_INPUT = { productName: PRODUCT, description: DESCRIPTION };
 const GEMINI_PROMPT = getEmojiGenerationPrompt(PRODUCT, DESCRIPTION);
-const OPENAI_PROMPT = getEmojiGenerationPrompt(PRODUCT, DESCRIPTION, 'emoji-image-v1-transparent');
 
 const envSnapshot = snapshotEnv();
 
@@ -114,14 +113,6 @@ const EXPECTED_GEMINI_CONTENT_CALL = {
   config: { responseModalities: ['IMAGE'], imageConfig: { aspectRatio: '1:1' } },
 };
 
-const EXPECTED_OPENAI_CALL = {
-  model: 'gpt-image-2.5-flare',
-  prompt: OPENAI_PROMPT,
-  size: '1024x1024',
-  quality: 'medium',
-  background: 'transparent',
-};
-
 beforeEach(() => {
   sdk.constructorCalls.length = 0;
   sdk.generateImagesCalls.length = 0;
@@ -147,7 +138,7 @@ afterEach(() => {
 });
 
 describe('AC-1 provider branch selection stays as before', () => {
-  for (const providerCase of [...GEMINI_BRANCH_PROVIDERS, ...OPENAI_BRANCH_PROVIDERS]) {
+  for (const providerCase of GEMINI_BRANCH_PROVIDERS) {
     it(`reports provider ${providerCase.expectedProvider} for ${providerCase.label}`, async () => {
       setEnv({ AI_PROVIDER: providerCase.aiProvider });
 
@@ -157,15 +148,27 @@ describe('AC-1 provider branch selection stays as before', () => {
         provider: providerCase.explicitProvider,
       });
 
-      expect(result.provider).toBe(providerCase.expectedProvider);
-      if (providerCase.expectedProvider === 'gemini') {
-        expect(sdk.generateImagesCalls.length + sdk.generateContentCalls.length).toBe(1);
-        expect(sdk.imagesGenerateCalls).toHaveLength(0);
-      } else {
-        expect(sdk.imagesGenerateCalls).toHaveLength(1);
-        expect(sdk.generateImagesCalls).toHaveLength(0);
-        expect(sdk.generateContentCalls).toHaveLength(0);
-      }
+      expect(result.provider).toBe('gemini');
+      expect(sdk.generateImagesCalls.length + sdk.generateContentCalls.length).toBe(1);
+      expect(sdk.imagesGenerateCalls).toHaveLength(0);
+    });
+  }
+
+  for (const providerCase of OPENAI_BRANCH_PROVIDERS) {
+    it(`fails closed before SDK construction for ${providerCase.label}`, async () => {
+      setEnv({ AI_PROVIDER: providerCase.aiProvider });
+
+      await expect(
+        generateEmojiImage({
+          productName: PRODUCT,
+          description: DESCRIPTION,
+          provider: providerCase.explicitProvider,
+        })
+      ).rejects.toBeInstanceOf(AiCostUnboundedError);
+      expect(sdk.constructorCalls).toHaveLength(0);
+      expect(sdk.imagesGenerateCalls).toHaveLength(0);
+      expect(sdk.generateImagesCalls).toHaveLength(0);
+      expect(sdk.generateContentCalls).toHaveLength(0);
     });
   }
 
@@ -182,20 +185,12 @@ describe('AC-1 provider branch selection stays as before', () => {
     expect(sdk.constructorCalls).toHaveLength(0);
   });
 
-  it('requires only the OpenAI key on the gpt-image branch', async () => {
+  it('rejects unbounded OpenAI branch before checking OPENAI_API_KEY or constructing SDK', async () => {
     setEnv({ AI_PROVIDER: 'gpt-image', OPENAI_API_KEY: undefined });
 
-    await expect(generateEmojiImage(GENERATION_INPUT)).rejects.toBeInstanceOf(
-      EmojiProviderUnavailableError
-    );
-    await expect(generateEmojiImage(GENERATION_INPUT)).rejects.toMatchObject({
-      name: 'EmojiProviderUnavailableError',
-      code: 'image_provider_unavailable',
-      reason: 'missing-key',
-      provider: 'gpt-image',
-      model: 'gpt-image-2.5-flare',
-    });
+    await expect(generateEmojiImage(GENERATION_INPUT)).rejects.toBeInstanceOf(AiCostUnboundedError);
     expect(sdk.constructorCalls).toHaveLength(0);
+    expect(sdk.imagesGenerateCalls).toHaveLength(0);
   });
 
   // The provider value is compared exactly, as before the migration: a model id is trimmed, the
@@ -240,28 +235,27 @@ describe('AC-1 default Google model is Gemini 3.1 Flash Lite Image', () => {
   }
 });
 
-describe('AC-1 default OpenAI model is GPT Image 2.5 Flare with a transparent background', () => {
+describe('AC-1 OpenAI branch fails closed without a guaranteed cost ceiling', () => {
   for (const providerCase of OPENAI_BRANCH_PROVIDERS) {
     for (const envCase of UNSET_MODEL_ENV) {
-      it(`calls images.generate with the FR-1 parameters for ${providerCase.label} and ${envCase.label} OPENAI_IMAGE_MODEL`, async () => {
+      it(`rejects ${providerCase.label} and ${envCase.label} OPENAI_IMAGE_MODEL before SDK construction`, async () => {
         setEnv({
           AI_PROVIDER: providerCase.aiProvider,
           OPENAI_IMAGE_MODEL: envCase.value,
         });
 
-        const result = await generateEmojiImage({
-          productName: PRODUCT,
-          description: DESCRIPTION,
-          provider: providerCase.explicitProvider,
-        });
+        await expect(
+          generateEmojiImage({
+            productName: PRODUCT,
+            description: DESCRIPTION,
+            provider: providerCase.explicitProvider,
+          })
+        ).rejects.toBeInstanceOf(AiCostUnboundedError);
 
-        expect(sdk.imagesGenerateCalls).toHaveLength(1);
-        expect(sdk.imagesGenerateCalls[0]).toEqual(EXPECTED_OPENAI_CALL);
+        expect(sdk.constructorCalls).toHaveLength(0);
+        expect(sdk.imagesGenerateCalls).toHaveLength(0);
         expect(sdk.generateImagesCalls).toHaveLength(0);
         expect(sdk.generateContentCalls).toHaveLength(0);
-        expect(result.model).toBe('gpt-image-2.5-flare');
-        expect(result.provider).toBe('gpt-image');
-        expect(result.imageBuffer.equals(TINY_PNG_BYTES)).toBe(true);
       });
     }
   }
@@ -337,20 +331,19 @@ describe('AC-2 Google model env resolution', () => {
     expect(sdk.generateContentCalls).toHaveLength(0);
   });
 
-  it('ignores invalid Google model env while the OpenAI provider is active', async () => {
+  it('ignores invalid Google model env while the OpenAI provider is active and still fails closed on OpenAI', async () => {
     setEnv({
       AI_PROVIDER: 'gpt-image',
       GOOGLE_IMAGE_MODEL: 'gemini-image',
       IMAGEN_MODEL: 'foo',
     });
 
-    const result = await generateEmojiImage(GENERATION_INPUT);
+    await expect(generateEmojiImage(GENERATION_INPUT)).rejects.toThrow(/OPENAI_IMAGE_MODEL/);
 
-    expect(sdk.imagesGenerateCalls).toHaveLength(1);
-    expect(sdk.imagesGenerateCalls[0]).toEqual(EXPECTED_OPENAI_CALL);
+    expect(sdk.constructorCalls).toHaveLength(0);
+    expect(sdk.imagesGenerateCalls).toHaveLength(0);
     expect(sdk.generateImagesCalls).toHaveLength(0);
     expect(sdk.generateContentCalls).toHaveLength(0);
-    expect(result.provider).toBe('gpt-image');
   });
 
   it('ignores an invalid OPENAI_IMAGE_MODEL while the Google provider is active', async () => {
@@ -375,21 +368,16 @@ describe('AC-2 Google model env resolution', () => {
 });
 
 describe('AC-2 OpenAI model env resolution', () => {
-  it('uses the trimmed OPENAI_IMAGE_MODEL with the FR-1 request parameters', async () => {
+  it('rejects trimmed OPENAI_IMAGE_MODEL without guaranteed cost bounds before SDK construction', async () => {
     setEnv({ AI_PROVIDER: 'gpt-image', OPENAI_IMAGE_MODEL: ' gpt-image-1.5 ' });
 
-    const result = await generateEmojiImage(GENERATION_INPUT);
+    const generation = generateEmojiImage(GENERATION_INPUT);
 
-    expect(sdk.imagesGenerateCalls).toHaveLength(1);
-    expect(sdk.imagesGenerateCalls[0]).toEqual({
-      model: 'gpt-image-1.5',
-      prompt: OPENAI_PROMPT,
-      size: '1024x1024',
-      quality: 'medium',
-      background: 'transparent',
-    });
-    expect(result.model).toBe('gpt-image-1.5');
-    expect(result.provider).toBe('gpt-image');
+    await expect(generation).rejects.toBeInstanceOf(AiCostUnboundedError);
+    await expect(generation).rejects.toThrow(/OPENAI_IMAGE_MODEL/);
+    await expect(generation).rejects.toThrow(/value "gpt-image-1\.5"/);
+    expect(sdk.constructorCalls).toHaveLength(0);
+    expect(sdk.imagesGenerateCalls).toHaveLength(0);
   });
 
   for (const rejected of [

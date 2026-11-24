@@ -44,6 +44,12 @@ vi.mock('openai', () => ({
 }));
 
 const { generateEmojiImage } = await import('./emoji-assets');
+const { AiCostUnboundedError } = await import('./emoji-errors');
+const {
+  EMOJI_GENERATION_TRANSPARENT_PROMPT_VERSION,
+  getEmojiGenerationCacheKey,
+  getEmojiGenerationPrompt,
+} = await import('@/lib/prompts/emoji-generation');
 
 const PRODUCT = 'Milk';
 const DESCRIPTION = 'cold carton';
@@ -148,64 +154,57 @@ describe('AC-14 Google prompt variant', () => {
 });
 
 describe('AC-14 OpenAI prompt variant for a transparent background', () => {
-  it('asks for generous transparent padding and no background colour or fill', async () => {
-    setEnv({ AI_PROVIDER: 'gpt-image' });
-
-    await generateEmojiImage(GENERATION_INPUT);
-
-    expect(sdk.imagesGenerateCalls).toHaveLength(1);
-    expect(sdk.imagesGenerateCalls[0]?.prompt).toContain(
-      'generous transparent padding, no background colour or fill'
+  it('asks for generous transparent padding and no background colour or fill', () => {
+    const prompt = getEmojiGenerationPrompt(
+      PRODUCT,
+      DESCRIPTION,
+      EMOJI_GENERATION_TRANSPARENT_PROMPT_VERSION
     );
+    expect(prompt).toContain('generous transparent padding, no background colour or fill');
   });
 
-  it('asks for isolation on a fully transparent background', async () => {
-    setEnv({ AI_PROVIDER: 'gpt-image' });
-
-    await generateEmojiImage(GENERATION_INPUT);
-
-    expect(sdk.imagesGenerateCalls[0]?.prompt).toContain(
-      'isolated on a fully transparent background'
+  it('asks for isolation on a fully transparent background', () => {
+    const prompt = getEmojiGenerationPrompt(
+      PRODUCT,
+      DESCRIPTION,
+      EMOJI_GENERATION_TRANSPARENT_PROMPT_VERSION
     );
+    expect(prompt).toContain('isolated on a fully transparent background');
   });
 
-  it('drops both white-field lines of the Google template', async () => {
-    setEnv({ AI_PROVIDER: 'gpt-image' });
-
-    await generateEmojiImage(GENERATION_INPUT);
-
-    const prompt = String(sdk.imagesGenerateCalls[0]?.prompt);
+  it('drops both white-field lines of the Google template', () => {
+    const prompt = getEmojiGenerationPrompt(
+      PRODUCT,
+      DESCRIPTION,
+      EMOJI_GENERATION_TRANSPARENT_PROMPT_VERSION
+    );
     expect(prompt).not.toMatch(/white padding/i);
     expect(prompt).not.toMatch(/white background/i);
     expect(prompt).not.toContain('#FFFFFF');
   });
 
-  it('keeps every other style requirement of the Google template', async () => {
-    setEnv({ AI_PROVIDER: 'gpt-image' });
-
-    await generateEmojiImage(GENERATION_INPUT);
-
-    const prompt = String(sdk.imagesGenerateCalls[0]?.prompt);
+  it('keeps every other style requirement of the Google template', () => {
+    const prompt = getEmojiGenerationPrompt(
+      PRODUCT,
+      DESCRIPTION,
+      EMOJI_GENERATION_TRANSPARENT_PROMPT_VERSION
+    );
     for (const line of SHARED_PROMPT_LINES) {
       expect(prompt).toContain(line);
     }
   });
 
-  it('reports promptVersion emoji-image-v1-transparent and a cacheKey built with it', async () => {
+  it('builds cacheKey with emoji-image-v1-transparent and fails closed before OpenAI dispatch', async () => {
+    expect(
+      getEmojiGenerationCacheKey(PRODUCT, DESCRIPTION, EMOJI_GENERATION_TRANSPARENT_PROMPT_VERSION)
+    ).toBe(OPENAI_CACHE_KEY);
+
     setEnv({ AI_PROVIDER: 'gpt-image' });
+    await expect(generateEmojiImage(GENERATION_INPUT)).rejects.toBeInstanceOf(AiCostUnboundedError);
+    expect(sdk.imagesGenerateCalls).toHaveLength(0);
 
-    const result = await generateEmojiImage(GENERATION_INPUT);
-
-    expect(result.promptVersion).toBe('emoji-image-v1-transparent');
-    expect(result.cacheKey).toBe(OPENAI_CACHE_KEY);
-  });
-
-  it('reports promptVersion emoji-image-v1-transparent for a configured OpenAI model too', async () => {
     setEnv({ AI_PROVIDER: 'gpt-image', OPENAI_IMAGE_MODEL: 'gpt-image-1.5' });
-
-    const result = await generateEmojiImage(GENERATION_INPUT);
-
-    expect(result.promptVersion).toBe('emoji-image-v1-transparent');
-    expect(result.cacheKey).toBe(OPENAI_CACHE_KEY);
+    await expect(generateEmojiImage(GENERATION_INPUT)).rejects.toBeInstanceOf(AiCostUnboundedError);
+    expect(sdk.imagesGenerateCalls).toHaveLength(0);
   });
 });

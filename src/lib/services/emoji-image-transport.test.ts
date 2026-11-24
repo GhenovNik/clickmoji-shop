@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { AiCostUnboundedError } from './emoji-errors';
 import { generateWithGoogleImage, generateWithOpenAI } from './emoji-image-adapters';
 
 const PRIVATE_PROMPT = 'synthetic-private-prompt-do-not-log';
@@ -18,18 +19,13 @@ afterEach(() => {
 });
 
 describe('real SDK image transport single-attempt boundary (no network)', () => {
-  it.each([500, 429, 408, 503])(
-    'OpenAI images.generate performs exactly one fetch on HTTP %i (maxRetries: 0)',
-    async (status) => {
-      const fetchMock = vi.fn(
-        async () =>
-          new Response(
-            JSON.stringify({
-              error: { message: 'synthetic upstream failure', code: 'server_error' },
-            }),
-            { status, headers: { 'Content-Type': 'application/json' } }
-          )
-      );
+  it.each(['gpt-image-2.5-flare', 'gpt-image-2.5-sunburst', 'gpt-image-2', 'gpt-image-1.5'])(
+    'OpenAI images.generate performs zero fetches and fails closed for unbounded model %s',
+    async (model) => {
+      vi.stubEnv('OPENAI_IMAGE_MODEL', model);
+      const fetchMock = vi.fn(async () => {
+        throw new Error('fetch must not be called for unbounded OpenAI model');
+      });
       vi.stubGlobal('fetch', fetchMock);
 
       await expect(
@@ -38,27 +34,11 @@ describe('real SDK image transport single-attempt boundary (no network)', () => 
           description: PRIVATE_PROMPT,
           apiKey: 'synthetic-openai-key',
         })
-      ).rejects.toThrow();
+      ).rejects.toBeInstanceOf(AiCostUnboundedError);
 
-      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(fetchMock).toHaveBeenCalledTimes(0);
     }
   );
-
-  it('OpenAI images.generate performs exactly one fetch on network connection error', async () => {
-    const fetchMock = vi.fn(async () => {
-      throw new TypeError('fetch failed', { cause: { code: 'UND_ERR_CONNECT_TIMEOUT' } });
-    });
-    vi.stubGlobal('fetch', fetchMock);
-
-    await expect(
-      generateWithOpenAI({
-        productName: 'Milk',
-        apiKey: 'synthetic-openai-key',
-      })
-    ).rejects.toThrow();
-
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-  });
 
   it.each([500, 429, 503])(
     'Google generateContent image adapter performs exactly one fetch on HTTP %i',

@@ -75,14 +75,20 @@ imageConfig: { aspectRatio: '1:1' } } })`
   unsupported dimensions/quality/output count) → configuration error naming `GOOGLE_IMAGE_MODEL` or
   `IMAGEN_MODEL` before budget reservation or SDK construction
 
-`AI_PROVIDER=gpt-image` validates the id against `SUPPORTED_OPENAI_IMAGE_MODELS`
-(`gpt-image-2.5-flare`, `gpt-image-2.5-sunburst`, `gpt-image-2`, `gpt-image-1.5`) and then calls
-`images.generate({ model, prompt, size: '1024x1024', quality: 'medium', background:
-'transparent' })` with `maxRetries: 0`, reading `data[0].b64_json`.
+`AI_PROVIDER=gpt-image` (with `OPENAI_IMAGE_MODEL` unset/`gpt-image-2.5-flare`,
+`gpt-image-2.5-sunburst`, `gpt-image-2`, `gpt-image-1.5`, or any OpenAI `images.generate` model)
+currently has **no verifiable fixed per-image price or enforceable hard output-token ceiling**:
+OpenAI's `images.generate` API exposes no `max_output_tokens` cap, GPT Image 2.5 token usage is
+not bounded by the GPT Image 2 calculator, `gpt-image-2` scales reasoning tokens by quality without
+a documented hard maximum, and `gpt-image-1.5` emits uncapped internal reasoning `text_tokens` on
+top of approximate per-image estimates (and shuts down 2026-12-01). Accordingly, `AI_PROVIDER=gpt-image`
+fails closed **before** reserving budget or constructing the OpenAI SDK (`AiCostUnboundedError` in
+direct service calls; HTTP `503` localized `api.aiQuota.unavailable` in `POST /api/emoji/generate`,
+and Unicode-emoji fallback on Stage 2 of `POST /api/products/smart-create` while keeping bounded
+Stage 1 text).
 
-Only models with verified official pricing and request bounds are allowed so reservation ceilings
-and reconciliation rates stay aligned before any provider call. For OpenAI the model must support
-`images.generate` and return a base64 PNG.
+Only models with verified official pricing and enforceable request bounds are dispatched so
+reservation ceilings and reconciliation rates stay aligned before any provider call.
 
 ### Adapter error classes
 
@@ -368,16 +374,21 @@ In addition to the per-user daily call counters, all paid HTTP AI routes and the
   the raw value).
 - **Atomic pre-call reservation & reconciliation**: before contacting a provider, `runTextAiCall` /
   `runMonthlyBudgetedTextAiCall` (`src/lib/text-ai-call.ts`) and `runImageAiCall`
-  (`src/lib/image-ai-call.ts`) atomically reserve a conservative micro-USD ceiling
-  (`src/lib/ai-pricing.ts`, tied to supported models, UTF-8 byte input bounds of the sent request,
-  `maxOutputTokens = 4096` for up to 3 text attempts including `GOOGLE_TEXT_MODEL_FALLBACK`, or 1
-  image attempt with `maxRetries: 0` on OpenAI). Execution adapters verify sent prompt bounds and
-  model configuration match the active reservation before calling any SDK.
+  (`src/lib/image-ai-call.ts`) validate that the active configuration has an enforceable cost
+  ceiling (`src/lib/ai-pricing.ts`, tied to verified Google models, UTF-8 byte input bounds of the
+  sent request, `maxOutputTokens = 4096` combined cap on `candidates + thoughts` for up to 3 text
+  attempts including `GOOGLE_TEXT_MODEL_FALLBACK`, and documented output limits on Google image
+  models). Unbounded configurations (`AI_PROVIDER=gpt-image` / `OPENAI_IMAGE_MODEL`) fail closed
+  before DB reservation or SDK construction with HTTP `503` (`api.aiQuota.unavailable`) on image
+  generation, while preserving bounded Google text functionality (including Stage 1 of
+  `smart-create`). Execution adapters verify sent prompt bounds and model configuration match the
+  active reservation before calling any SDK.
   After the provider settles, the reservation is reconciled against actual reported usage
-  (`usageMetadata` for Gemini `generateContent`, `usage` for OpenAI `images.generate`) or
-  conservative per-component/per-attempt bounds when usage is missing or partial (including
-  `MAX_TEXT_OUTPUT_TOKENS` for missing text output, UTF-8 byte bounds for missing input, and residual
-  `totalTokenCount` billing); pre-SDK failures and explicit rejections
+  (`usageMetadata` for Gemini `generateContent`) or conservative per-component/per-attempt bounds
+  when usage is missing or partial (including remaining combined output bound
+  `max(0, MAX_TEXT_OUTPUT_TOKENS - thoughtsTokenCount)` when `candidatesTokenCount` is omitted with
+  known `thoughtsTokenCount`, UTF-8 byte bounds for missing input, and residual `totalTokenCount`
+  billing); pre-SDK failures and explicit rejections
   (`400`/`401`/`403`/`404`/`422`/`429`/`RESOURCE_EXHAUSTED`) record `$0`, while ambiguous upstream
   failures (`408`/`500`/`502`/`503`/`504`/`UNAVAILABLE`/`TIMEOUT`) are treated as potentially billed.
 - **Fail-closed accounting**: if `ai_monthly_budgets` cannot be read or updated at reservation time,
