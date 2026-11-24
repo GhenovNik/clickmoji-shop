@@ -209,7 +209,7 @@ Terms used below:
   an encrypted copy into a PostgreSQL 17 target at another provider needs no Neon CLI, no Neon account and no reachable
   old source.
 - The Neon flags in this section were written against the CLI reference. Before each run, check them with
-  `neon branches create --help`, `neon branches delete --help` and `neon connection-string --help` on the operator's
+  `neon branches create --help` and `neon connection-string --help` on the operator's
   version, and stop if a flag is missing.
 - Use the same PostgreSQL image digest as the one below for every container.
 - Every `docker run` below passes `--log-driver none`. Without it the daemon keeps container stdout and stderr,
@@ -493,7 +493,7 @@ in its console before continuing.
    PROD_BRANCH_ID=$(branch_check pre "$BRANCHES_BEFORE") && echo "production branch confirmed"
    ```
 
-   Create the branch only if the check above printed the id. Then read the project back. A branch is identified as
+   Create the branch only if the check above printed `production branch confirmed`. Then read the project back. A branch is identified as
    this run's only when the create command itself succeeded; a branch with the same name created by someone else
    cannot then be mistaken for it, because the name is unique in the project:
 
@@ -505,9 +505,7 @@ in its console before continuing.
      # Nothing is identified and nothing is deleted. Look at the list for $RECOVERY_BRANCH by hand and record it.
      echo "stop: create failed (status $CREATE_STATUS); the branch list must be checked by hand"
    elif ! RECOVERY_BRANCH_ID=$(branch_check post "$BRANCHES_BEFORE" "$RECOVERY_DIR/branches-after.json"); then
-     # Deletes only the branch the post-check identified: exactly one new branch with the recovery name, created after
-     # the "before" list, and only after a successful create. An empty id means nothing was identified: nothing is deleted.
-     [ -n "$RECOVERY_BRANCH_ID" ] && neon branches delete "$RECOVERY_BRANCH_ID" --project-id "$NEON_PROJECT_ID"
+     unset RECOVERY_BRANCH_ID
      echo 'stop: the recovery branch failed its read-back (reason above); record it in the ticket'
    fi
    ```
@@ -932,9 +930,8 @@ from production's: stop, and the cutover is held.
   scoped to **Production only**. If it also covers Preview or Development, stop: updating the entry changes every
   environment that it covers. Split the entry in the dashboard first; that is an operator action.
 - Run the CLI from the linked release checkout and confirm `.vercel/project.json` names the Clickmoji production project.
-- Selector: `vercel env update` takes only the variable name as a positional argument. The environment is the
-  `--environment production` option, which needs Vercel CLI 64.6.0 or newer (`vercel --version`). An older CLI, or a
-  command without the option must stop; a positional `production` is not a documented form and is not used.
+- Use the documented positional Production selector, `vercel env update DATABASE_URL production --yes`. Confirm
+  that the installed CLI supports `vercel env update --help` before starting the switch.
 - Boundary: the command changes only the Production entry of `DATABASE_URL`. The dashboard scope check above is what
   guarantees that no Preview or Development entry is covered, so it is repeated before the switch.
 
@@ -973,7 +970,7 @@ reason. This procedure has no route around the hold; any other action is a separ
    so rollback follows the exposed path in _Rollback_. If the update or the deployment fails, keep writes stopped.
 
    ```sh
-   printf '%s' "$CUTOVER_URL" | vercel env update DATABASE_URL --environment production --yes &&
+   printf '%s' "$CUTOVER_URL" | vercel env update DATABASE_URL production --yes &&
      vercel deploy --prod
    ```
 
@@ -1031,7 +1028,7 @@ Required steps:
    printf 'Old production URL (not echoed): '
    read -rs OLD_URL
    echo
-   printf '%s' "$OLD_URL" | vercel env update DATABASE_URL --environment production --yes &&
+   printf '%s' "$OLD_URL" | vercel env update DATABASE_URL production --yes &&
      vercel deploy --prod
    unset OLD_URL
    ```
