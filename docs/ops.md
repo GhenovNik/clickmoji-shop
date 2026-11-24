@@ -391,10 +391,10 @@ mismatch blocks the recovery.
    recorded before the migration ran, or a verified copy taken before it), never from the current production state.
    Example rows (replace them with the incident's own):
 
-   | id | read-only check on the target | expected | evidence for the expected value |
-   |----|-------------------------------|----------|---------------------------------|
-   | E1 | `SELECT count(*) FROM public."<table>" WHERE "<column>" = '<value>'` | `<n>` | count in the ticket, taken before `<migration>` ran |
-   | E2 | `SELECT count(*) FROM public."<table>"` | `<n>` | count in the ticket, taken before `<migration>` ran |
+   | id  | read-only check on the target                                        | expected | evidence for the expected value                     |
+   | --- | -------------------------------------------------------------------- | -------- | --------------------------------------------------- |
+   | E1  | `SELECT count(*) FROM public."<table>" WHERE "<column>" = '<value>'` | `<n>`    | count in the ticket, taken before `<migration>` ran |
+   | E2  | `SELECT count(*) FROM public."<table>"`                              | `<n>`    | count in the ticket, taken before `<migration>` ran |
 
    A check passes only when the output equals the expected value exactly. Any failed check, or a missing expectation,
    stops the recovery.
@@ -593,6 +593,7 @@ Pass only when **all** of these hold, all run on the branch:
    ```
 
    A difference means the branch does not hold the compatible release's schema: stop and decide.
+
 3. the latest migration equals `EXPECTED_MIGRATION` (`pg_run "$IMAGE" psql -X -q -A -t -c "$MIGRATION_SQL"`);
 4. every `EXPECTATIONS` check passes;
 5. `prisma migrate status` reports the compatible release's migrations as applied, run from `COMPAT_DIR` with its
@@ -867,6 +868,7 @@ The old database is reopened only after it has been verified usable. Two cases:
 
   Only when all of these hold, reopen the old database: restore writers in the reverse order of the fence, and record
   the time. If any check differs, keep writers stopped and decide. A difference means a writer got past the fence.
+
 - **Writes have reached the target.** There is no blind rollback. Writes made on the target must first be reconciled into
   the old database, using the same comparison in the opposite direction and the same decision process, before the old
   database is verified and reopened. Rolling back without that loses them.
