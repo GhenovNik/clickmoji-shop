@@ -45,6 +45,7 @@ vi.mock('next-auth/jwt', () => ({
 }));
 
 vi.mock('next-intl/server', () => ({
+  getLocale: async () => 'ru',
   getTranslations: async () => {
     const t = (key: string) => key;
     t.rich = (key: string) => key;
