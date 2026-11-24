@@ -201,13 +201,16 @@ Terms used below:
 
 - Commands are written for **zsh or bash**. Hidden input uses `printf` followed by `read -rs NAME`, which works in
   both; do not use the zsh-only `read -rs 'NAME?prompt'` form.
-- Needed: Docker running on the operator machine; the Neon CLI (`neon`, version 4.9.0 or newer, `neon --version`)
-  authenticated by the operator; Node.js 24; and a clean checkout of the compatible release (see _Write the
-  expectations_). Nothing is installed on the host by these steps; `age` and PostgreSQL clients run inside the
-  disposable containers.
+- Needed: Docker running on the operator machine; Node.js 24; and a clean checkout of the compatible release (see
+  _Write the expectations_). Nothing is installed on the host by these steps; `age` and PostgreSQL clients run inside
+  the disposable containers.
+- The Neon CLI (`neon`, version 4.9.0 or newer, `neon --version`), authenticated by the operator, is needed only for
+  the Neon steps: point-in-time branches, Neon encrypted-copy branches and the Neon cutover URL. Restoring and verifying
+  an encrypted copy into a PostgreSQL 17 target at another provider needs no Neon CLI, no Neon account and no reachable
+  old source.
 - The Neon flags in this section were written against the CLI reference. Before each run, check them with
-  `neon branches create --help` and `neon connection-string --help` on the operator's version, and stop if a flag is
-  missing.
+  `neon branches create --help`, `neon branches delete --help` and `neon connection-string --help` on the operator's
+  version, and stop if a flag is missing.
 - Use the same PostgreSQL image digest as the one below for every container.
 - Every `docker run` below passes `--log-driver none`. Without it the daemon keeps container stdout and stderr,
   including the printed age identity, in its own log outside this terminal.
@@ -216,6 +219,11 @@ Terms used below:
   environment.
   The only connection-related argument is the database name in `pg_restore --dbname "$PGDATABASE"`, which is not a
   secret.
+- **Password boundary.** libpq reads `PGPASSWORD` from the environment, as its documentation describes. This procedure
+  keeps it out of argv, out of the Docker daemon log (`--log-driver none`) and out of every file. It does not keep it
+  out of the environment: the value is visible to processes of the same user, and while a container runs, to anyone
+  who can inspect that container (`docker inspect` shows its environment) or who has access to the Docker daemon. The
+  trust boundary is therefore the operator's own terminal and Docker host, not the command line.
 - Connection URLs are entered with a hidden prompt or captured from a command's output into a shell variable. They are
   never typed into a command, a file, a log or a ticket.
 - Work only in a private terminal: no shell tracing (`set -x`), no session recording, no shared screens.
@@ -324,6 +332,11 @@ ORDER BY 1;"
 # count TRUNCATE, so it is a sanity check; the comparison in _Post-point changes_ is the real evidence.
 WRITE_COUNTER_SQL="SELECT coalesce(sum(n_tup_ins + n_tup_upd + n_tup_del), 0) AS write_counter FROM pg_stat_user_tables;"
 
+# Content digest source: one UNION ALL of per-table row hashes (table|md5 of each row as text), generated from the
+# catalogue and executed with \gexec. Sort with LC_ALL=C and hash to get DIGEST: a single field changed in any row
+# changes it. This, not the counters above, is the evidence used for rollback.
+ROWHASH_SQL="SELECT string_agg(format('SELECT %L AS table_name, md5(x::text) AS row_md5 FROM %I.%I AS x', n.nspname || '.' || c.relname, n.nspname, c.relname), ' UNION ALL ' ORDER BY n.nspname, c.relname) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE c.relkind IN ('r', 'p') AND n.nspname NOT IN ('pg_catalog', 'information_schema') AND n.nspname NOT LIKE 'pg_toast%' AND n.nspname NOT LIKE 'pg_temp%' \gexec"
+
 # Effective privileges of one role on every user relation, including inherited grants, PUBLIC and role membership.
 # Run it from stdin (psql -f -) with -v role=...: psql does not substitute :'role' inside -c strings.
 GRANTS_SQL="SELECT n.nspname || '.' || c.relname || E'\t' || c.relkind::text || E'\t' || p.priv
@@ -401,40 +414,121 @@ mismatch blocks the recovery.
 
 #### Create the target
 
-Each option creates a **new** target, never the production database. Confirm the Neon project and the target branch
-in the Neon console before continuing.
+Each option creates a **new** target, never the production database. Confirm the target provider, project and database
+in its console before continuing.
 
-1. **Point-in-time branch.** Use a time before the incident, inside Neon's restore window for the plan.
+1. **Point-in-time branch (Neon only).** Use a time before the incident, inside Neon's restore window for the plan.
+   The Neon CLI takes the RFC 3339 time as its own `--parent` value; it does not accept a `branch@time` string, which
+   it would look up as a branch name. The parent is the project's default branch, so the procedure first confirms
+   that `$PROD_BRANCH` is that default branch, and the read-back checks the parent's id, not its name.
+
+   The check is a self-contained shell function. It reads only the two branch-list files it is given, never a
+   connection, and prints the branch id on stdout. Define it first:
+
+   ```sh
+   branch_check() {
+     BC_MODE=$1 BC_BEFORE=$2 BC_AFTER=${3:-} BC_RECOVERY_BRANCH=$RECOVERY_BRANCH BC_PROD_BRANCH=$PROD_BRANCH \
+     BC_PROD_BRANCH_ID=${PROD_BRANCH_ID:-} BC_RECOVERY_TIME=$RECOVERY_TIME \
+       node --input-type=module <<'BRANCH_JS'
+   import { readFileSync } from 'node:fs';
+
+   const env = process.env;
+   const fail = (why) => {
+     console.error(`branch check failed: ${why}`);
+     process.exit(1);
+   };
+   const load = (path) => {
+     const value = JSON.parse(readFileSync(path, 'utf8'));
+     const list = Array.isArray(value) ? value : value.branches;
+     if (!Array.isArray(list)) fail('unexpected branch list format');
+     return list;
+   };
+   // Canonical instant: UTC whole seconds plus the fraction without trailing zeros. Equal instants give equal
+   // strings whatever their text form; different instants never do.
+   const instant = (text) => {
+     const m = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d+))?(Z|[+-]\d{2}:\d{2})$/.exec(String(text));
+     if (!m) fail('timestamp is not RFC 3339 with a UTC offset');
+     const sign = m[3][0] === '-' ? -1 : 1;
+     const offsetSeconds =
+       m[3] === 'Z' ? 0 : sign * (Number(m[3].slice(1, 3)) * 3600 + Number(m[3].slice(4, 6)) * 60);
+     const fraction = (m[2] ?? '').replace(/0+$/, '');
+     return `${Date.parse(`${m[1]}Z`) / 1000 - offsetSeconds}.${fraction}`;
+   };
+
+   if (env.BC_MODE === 'pre') {
+     const list = load(env.BC_BEFORE);
+     if (list.some((b) => b.name === env.BC_RECOVERY_BRANCH)) fail('recovery branch name already exists');
+     const defaults = list.filter((b) => b.default === true);
+     if (defaults.length !== 1 || defaults[0].name !== env.BC_PROD_BRANCH) {
+       fail('default branch is not the confirmed production branch');
+     }
+     console.log(defaults[0].id);
+   } else if (env.BC_MODE === 'post') {
+     const known = new Set(load(env.BC_BEFORE).map((b) => b.id));
+     const created = load(env.BC_AFTER).filter((b) => b.name === env.BC_RECOVERY_BRANCH && !known.has(b.id));
+     if (created.length !== 1) fail('expected exactly one new branch with the recovery name; none identified');
+     const [branch] = created;
+     // The id is printed before any verdict: from here on the branch is identified, even if a check fails.
+     console.log(branch.id);
+     const problems = [];
+     if (branch.parent_id !== env.BC_PROD_BRANCH_ID) problems.push('parent_id is not the production branch');
+     if (instant(branch.parent_timestamp) !== instant(env.BC_RECOVERY_TIME)) {
+       problems.push('parent_timestamp is not RECOVERY_TIME');
+     }
+     if (problems.length > 0) fail(problems.join('; '));
+   } else {
+     fail('mode must be pre or post');
+   }
+   BRANCH_JS
+   }
+   ```
 
    ```sh
    RECOVERY_TIME='<RFC 3339 UTC time before the bad change, e.g. 2026-11-24T10:00:00Z>'
    RECOVERY_BRANCH='recovery-<incident-id>'
-   neon branches list --project-id "$NEON_PROJECT_ID" --output json
+   RECOVERY_DIR=$(mktemp -d "$HOME/recovery-branch-XXXXXX") && chmod 700 "$RECOVERY_DIR"
+   BRANCHES_BEFORE="$RECOVERY_DIR/branches-before.json"
+   neon branches list --project-id "$NEON_PROJECT_ID" --output json > "$BRANCHES_BEFORE"
+   # Prints the confirmed production branch id, or fails. Fails too if RECOVERY_BRANCH already exists.
+   PROD_BRANCH_ID=$(branch_check pre "$BRANCHES_BEFORE") && echo "production branch confirmed"
    ```
 
-   From that list, confirm that `$PROD_BRANCH` is the project's default branch and note its id. Then create the branch
-   from production at the recovery time, and read it back:
+   Create the branch only if the check above printed the id. Then read the project back. A branch is identified as
+   this run's only when the create command itself succeeded; a branch with the same name created by someone else
+   cannot then be mistaken for it, because the name is unique in the project:
 
    ```sh
-   neon branches create --project-id "$NEON_PROJECT_ID" --name "$RECOVERY_BRANCH" --parent "$PROD_BRANCH@$RECOVERY_TIME" --no-secrets
-   neon branches list --project-id "$NEON_PROJECT_ID" --output json
+   CREATE_STATUS=0
+   neon branches create --project-id "$NEON_PROJECT_ID" --name "$RECOVERY_BRANCH" --parent "$RECOVERY_TIME" --no-secrets || CREATE_STATUS=$?
+   neon branches list --project-id "$NEON_PROJECT_ID" --output json > "$RECOVERY_DIR/branches-after.json"
+   if [ "$CREATE_STATUS" -ne 0 ]; then
+     # Nothing is identified and nothing is deleted. Look at the list for $RECOVERY_BRANCH by hand and record it.
+     echo "stop: create failed (status $CREATE_STATUS); the branch list must be checked by hand"
+   elif ! RECOVERY_BRANCH_ID=$(branch_check post "$BRANCHES_BEFORE" "$RECOVERY_DIR/branches-after.json"); then
+     # Deletes only the branch the post-check identified: exactly one new branch with the recovery name, created after
+     # the "before" list, and only after a successful create. An empty id means nothing was identified: nothing is deleted.
+     [ -n "$RECOVERY_BRANCH_ID" ] && neon branches delete "$RECOVERY_BRANCH_ID" --project-id "$NEON_PROJECT_ID"
+     echo 'stop: the recovery branch failed its read-back (reason above); record it in the ticket'
+   fi
    ```
 
-   The read-back must show, for `$RECOVERY_BRANCH`: `parent_id` equal to the id of `$PROD_BRANCH`, and the parent
-   timestamp equal to `RECOVERY_TIME`. If either differs, or the field is missing, delete only `$RECOVERY_BRANCH`
-   (the branch this procedure created), record the reason, and stop. Record the parent id and timestamp in the ticket.
-   Then capture the direct owner URL into a variable (not printed):
+   The post-check passes only when there is exactly one new branch named `$RECOVERY_BRANCH`, its `parent_id` equals
+   `PROD_BRANCH_ID`, and its `parent_timestamp` is the same instant as `RECOVERY_TIME`. Instants are compared as UTC
+   instants, not as text, so `Z`, `+00:00`, a different offset for the same instant, or trailing zeros in the fraction
+   all match, while any difference in the instant does not. The printed id is the branch's id; record the parent id
+   and timestamp in the ticket. Then capture the direct owner URL into a variable (not printed):
 
    ```sh
-   TARGET_URL=$(neon connection-string "$RECOVERY_BRANCH" --project-id "$NEON_PROJECT_ID" --database-name '<database-name>' --role-name '<owner-role>')
+   TARGET_URL=$(neon connection-string "$RECOVERY_BRANCH_ID" --project-id "$NEON_PROJECT_ID" --database-name '<database-name>' --role-name '<owner-role>')
    load_libpq_env "$TARGET_URL"
    ```
 
    `--no-secrets` keeps the connection string out of the create command's output. The direct URL (no `--pooled`) is
    the restore role's.
 
-2. **Encrypted copy.** A Neon branch inherits its parent's databases, so create a new database inside a new branch
-   and use only that database. It must be verified empty (below) before any restore.
+2. **Encrypted copy (Neon branch; for another provider use step 3).** A Neon branch inherits its parent's databases,
+   so create a new database inside a new branch and use only that database. It must be verified empty (below) before
+   any restore.
 
    ```sh
    RESTORE_BRANCH='restore-<incident-id>'
@@ -445,8 +539,9 @@ in the Neon console before continuing.
    load_libpq_env "$TARGET_URL"
    ```
 
-3. **Neon unavailable.** Provision PostgreSQL 17 with a fresh empty database and TLS at another provider (the
-   provider's own steps are not covered here). Enter its direct URL without echo:
+3. **Another provider, or Neon unavailable.** Provision PostgreSQL 17 with a fresh empty database and TLS at any provider
+   (the provider's own steps are not covered here). Nothing in the restore, the empty-target check or the verification
+   of an encrypted copy needs Neon or the old source. Enter the direct URL without echo:
 
    ```sh
    printf 'Direct URL of the NEW empty database (not echoed): '
@@ -454,6 +549,9 @@ in the Neon console before continuing.
    echo
    load_libpq_env "$TARGET_URL"
    ```
+
+   A target created here is cut over with a runtime-role URL from the same provider, entered by hidden prompt (see
+   _Switch_).
 
 `load_libpq_env` stops with an error for a URL it cannot represent exactly. Treat that as a blocker, not as a reason to
 edit the URL by hand. `TARGET_URL` stays a shell variable and is removed when the procedure ends.
@@ -576,6 +674,11 @@ Pass only when **all** of these hold, all run on the restored target:
 If the record's `verify` is `suspicious`, or the record's migration differs from `EXPECTED_MIGRATION`, stop and decide
 as an operator. Do not run `prisma migrate deploy` against restored data.
 
+**Restore-ready** is the separate result of this section, recorded in the ticket with the copy's name, `RP_CREATED_AT`
+and the five outcomes. It means the target holds the copy as recorded and nothing more. It needs no Neon CLI, no Neon
+branch, no reachable old source and no fence, and it does not authorize a switch. The switch has its own preconditions
+in _Switch_.
+
 #### Verify the point-in-time branch
 
 A branch has no record and no counts to compare exactly, and production today is not the reference (it may already
@@ -684,11 +787,13 @@ WRITE_BASELINE=$(prod_ro pg_run -i "$IMAGE" sh -c 'psql -X -q -A -t -v ON_ERROR_
 SEQUENCE_BASELINE=$(prod_ro pg_run -i "$IMAGE" sh -c 'psql -X -q -A -t -v ON_ERROR_STOP=1 -f -' <<< "$SEQUENCE_SQL")
 PRE_STOP_COUNTS=$(prod_ro pg_run "$IMAGE" psql -X -q -A -t -v ON_ERROR_STOP=1 -c "$COUNTS_SQL")
 PRE_STOP_IDENTITY_SHA=$(prod_ro pg_run "$IMAGE" psql -X -q -A -t -v ON_ERROR_STOP=1 -c "$IDENTITY_SQL" | shasum -a 256 | cut -d' ' -f1)
-printf 'FROZEN_AT=%s write_baseline=%s identity=%s\n' "$FROZEN_AT" "$WRITE_BASELINE" "$PRE_STOP_IDENTITY_SHA"
+PRE_STOP_DIGEST=$(prod_ro pg_run -i "$IMAGE" sh -c 'psql -X -q -A -t -v ON_ERROR_STOP=1 -f -' <<< "$ROWHASH_SQL" | LC_ALL=C sort | shasum -a 256 | cut -d' ' -f1)
+printf 'FROZEN_AT=%s write_baseline=%s identity=%s digest=%s\n' "$FROZEN_AT" "$WRITE_BASELINE" "$PRE_STOP_IDENTITY_SHA" "$PRE_STOP_DIGEST"
 ```
 
-Record `FROZEN_AT`, `WRITE_BASELINE`, `SEQUENCE_BASELINE`, `PRE_STOP_COUNTS` and `PRE_STOP_IDENTITY_SHA` in the ticket.
-They are the old database's state for the rollback check.
+Record `FROZEN_AT`, `WRITE_BASELINE`, `SEQUENCE_BASELINE`, `PRE_STOP_COUNTS`, `PRE_STOP_IDENTITY_SHA` and `PRE_STOP_DIGEST`
+in the ticket. They are the old database's state for the rollback check. `PRE_STOP_DIGEST` is the one that counts: the
+counters are kept for the record and are never proof that nothing was written.
 
 Limits, stated in the ticket: the fence is operator-enforced. The checks prove that no session exists and that the
 write counters are stable; they do not prove that a writer holding no session cannot act later. That is why writers are
@@ -721,8 +826,6 @@ pg_run "$IMAGE" psql -X -q -A -t -v ON_ERROR_STOP=1 -c "$IDENTITY_SQL" > "$DIFF_
 echo 'schema differs:'
 LC_ALL=C comm -3 <(LC_ALL=C sort "$DIFF_DIR/identity-prod.txt") <(LC_ALL=C sort "$DIFF_DIR/identity-target.txt") \
   | sed 's/^\t//' | cut -f1 | LC_ALL=C sort -u
-# One UNION ALL of per-table row hashes, generated from the catalogue and executed with \gexec.
-ROWHASH_SQL="SELECT string_agg(format('SELECT %L AS table_name, md5(x::text) AS row_md5 FROM %I.%I AS x', n.nspname || '.' || c.relname, n.nspname, c.relname), ' UNION ALL ' ORDER BY n.nspname, c.relname) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE c.relkind IN ('r', 'p') AND n.nspname NOT IN ('pg_catalog', 'information_schema') AND n.nspname NOT LIKE 'pg_toast%' AND n.nspname NOT LIKE 'pg_temp%' \gexec"
 prod_ro pg_run -i "$IMAGE" sh -c 'psql -X -q -A -t -v ON_ERROR_STOP=1 -f -' <<< "$ROWHASH_SQL" > "$DIFF_DIR/prod.txt"
 load_libpq_env "$TARGET_URL"
 pg_run -i "$IMAGE" sh -c 'psql -X -q -A -t -v ON_ERROR_STOP=1 -f -' <<< "$ROWHASH_SQL" > "$DIFF_DIR/target.txt"
@@ -781,12 +884,28 @@ diff "$DIFF_DIR/grants-prod.txt" "$DIFF_DIR/grants-target.txt" && echo "grants: 
 test -z "$(pg_run -i -e RUNTIME_ROLE "$IMAGE" sh -c "$ROLE_PSQL" <<< "$OWNERSHIP_SQL")" && echo "ownership: none"
 ```
 
-Then build the runtime URL and check that it reaches the target as the runtime role. Its attributes must be `f` for
-`rolsuper`, `rolcreaterole`, `rolcreatedb`, `rolbypassrls` and `can_create_in_public`:
+Then obtain the runtime URL and check that it reaches the target as the runtime role. Its attributes must be `f` for
+`rolsuper`, `rolcreaterole`, `rolcreatedb`, `rolbypassrls` and `can_create_in_public`.
+
+On Neon the URL comes from the CLI:
 
 ```sh
 CUTOVER_URL=$(neon connection-string "$RESTORE_BRANCH" --project-id "$NEON_PROJECT_ID" --database-name "$RESTORE_DB" --role-name '<runtime-role>' --pooled)
-# For a point-in-time branch use "$RECOVERY_BRANCH" and its database instead.
+# For a point-in-time branch use "$RECOVERY_BRANCH_ID" and its database instead.
+```
+
+Outside Neon, the runtime-role URL comes from the target's provider and is entered by hidden prompt, never typed into a
+command or a file:
+
+```sh
+printf 'Runtime-role URL of the target (not echoed): '
+read -rs CUTOVER_URL
+echo
+```
+
+Then, for either source:
+
+```sh
 load_libpq_env "$CUTOVER_URL"
 pg_run -i "$IMAGE" sh -c 'psql -X -q -A -t -v ON_ERROR_STOP=1 -f -' <<'SQL'
 SELECT current_database(), current_user, rolsuper, rolcreaterole, rolcreatedb, rolbypassrls,
@@ -797,38 +916,64 @@ SQL
 
 Expected: `<database>|<runtime-role>|f|f|f|f|f`. Anything else stops the switch.
 
+Migrate status through the runtime URL is read-only and must show the compatible release's migrations as applied, with
+`EXPECTED_MIGRATION` as the latest and no pending or failed migration:
+
+```sh
+( cd "$COMPAT_DIR" && DATABASE_URL="$CUTOVER_URL" npx prisma migrate status )
+```
+
+Never run `prisma migrate deploy` with this URL. If the runtime role cannot read the migration table, its grants differ
+from production's: stop, and the cutover is held.
+
 #### Vercel production-only setting
 
 - In the Vercel dashboard (Project Settings → Environment Variables), confirm that the existing `DATABASE_URL` entry is
   scoped to **Production only**. If it also covers Preview or Development, stop: updating the entry changes every
   environment that it covers. Split the entry in the dashboard first; that is an operator action.
 - Run the CLI from the linked release checkout and confirm `.vercel/project.json` names the Clickmoji production project.
+- Selector: `vercel env update` takes only the variable name as a positional argument. The environment is the
+  `--environment production` option, which needs Vercel CLI 64.6.0 or newer (`vercel --version`). An older CLI, or a
+  command without the option must stop; a positional `production` is not a documented form and is not used.
+- Boundary: the command changes only the Production entry of `DATABASE_URL`. The dashboard scope check above is what
+  guarantees that no Preview or Development entry is covered, so it is repeated before the switch.
 
 #### Switch (real incident only, after every check and decision above)
 
-Preconditions, all recorded in the ticket: the target passed its verification (copy or branch), the fence passed on the
-run that defines `FROZEN_AT`, the counters above are recorded, the post-point decision is written, and the runtime-role
-checks passed.
+Preconditions, all recorded in the ticket:
 
-1. Record `TARGET_BASELINE` **before** any Vercel change, while the target has no writer: its write counter, its
-   sequence positions and its counts, all read as the owner role. Confirm in the same session, with a role that can see
-   all sessions, that the target has no client session other than the operator's (the sessions query from _Fence
-   production_ with `datname` of the target):
+- **restore-ready** for the target (its copy or branch verification passed);
+- **old source reachable and fenced**: the fence passed on the run that defines `FROZEN_AT`, and the `prod_ro` reads of
+  the post-point comparison succeed. Without them the fence and the post-point changes cannot be established;
+- the post-point decision is written (reconcile or accept loss), and the sequence check printed nothing;
+- the runtime identity and the migrate status passed on `CUTOVER_URL`.
+
+**Cutover is held** while any precondition is missing, in particular while the old source cannot be read or fenced. Then
+nothing changes in Vercel, the target stays restore-ready, and the hold is recorded in the ticket with its time and
+reason. This procedure has no route around the hold; any other action is a separate operator decision outside this text.
+
+1. Record `TARGET_BASELINE` **before** any Vercel change, while the target has no writer. The content digest is the
+   baseline that decides a rollback; the counters are recorded for the record only. All are read as the owner role.
+   Confirm in the same session, with a role that can see all sessions, that the target has no client session other than
+   the operator's (the sessions query from _Fence production_ with `datname` of the target):
 
    ```sh
    load_libpq_env "$TARGET_URL"
+   TARGET_BASELINE_DIGEST=$(pg_run -i "$IMAGE" sh -c 'psql -X -q -A -t -v ON_ERROR_STOP=1 -f -' <<< "$ROWHASH_SQL" | LC_ALL=C sort | shasum -a 256 | cut -d' ' -f1)
    TARGET_BASELINE_WRITES=$(pg_run "$IMAGE" psql -X -q -A -t -v ON_ERROR_STOP=1 -c "$WRITE_COUNTER_SQL")
    TARGET_BASELINE_SEQUENCES=$(pg_run "$IMAGE" psql -X -q -A -t -v ON_ERROR_STOP=1 -c "$SEQUENCE_SQL")
    TARGET_BASELINE_COUNTS=$(pg_run "$IMAGE" psql -X -q -A -t -v ON_ERROR_STOP=1 -c "$COUNTS_SQL")
+   printf 'TARGET_BASELINE_DIGEST=%s\n' "$TARGET_BASELINE_DIGEST"
    ```
 
 2. Store the current production `DATABASE_URL` value in the password manager (the value, not in a file or a ticket), so the
    old target can be restored in one step.
 3. Update the existing Vercel production variable from the linked release checkout. The value comes from stdin, never from
-   argv. If the update or the deployment fails, keep writes stopped and go to _Rollback_.
+   argv. **From this command on the target counts as exposed, whatever the result of the update or of the deployment**,
+   so rollback follows the exposed path in _Rollback_. If the update or the deployment fails, keep writes stopped.
 
    ```sh
-   printf '%s' "$CUTOVER_URL" | vercel env update DATABASE_URL production --yes &&
+   printf '%s' "$CUTOVER_URL" | vercel env update DATABASE_URL --environment production --yes &&
      vercel deploy --prod
    ```
 
@@ -842,36 +987,56 @@ checks passed.
 
 #### Rollback
 
-The old database is reopened only after it has been verified usable. Two cases:
+Rollback is decided by the content of the target, never by its statistics. `WRITE_COUNTER_SQL`, the sequence positions
+and `count(*)` can all stay equal after a write: a single-field `UPDATE` of an existing row changes no count and no
+sequence, and the statistics behind the write counter are published with a delay. The content digest changes when the
+content of any row changes, so it is the evidence. It cannot see a write that was made and undone before the check, which
+is why the path is chosen by **exposure**, recorded in the ticket before anything is changed.
 
-- **No write has reached the target.** Check the target as the owner role: `WRITE_COUNTER_SQL`, `SEQUENCE_SQL` and
-  `COUNTS_SQL` equal `TARGET_BASELINE_WRITES`, `TARGET_BASELINE_SEQUENCES` and `TARGET_BASELINE_COUNTS`. If they match,
-  put the saved URL back in the Production variable and redeploy:
+**Before exposure** (no `vercel env update` has been run). Production still uses the old URL, so nothing is restored in
+Vercel. The simplest safe rollback is to abandon the switch and reopen the old database only after all of these hold:
+
+- the target's digest equals `TARGET_BASELINE_DIGEST`, as the owner role (nothing reached the target):
 
   ```sh
-  printf 'Old production URL (not echoed): '
-  read -rs OLD_URL
-  echo
-  printf '%s' "$OLD_URL" | vercel env update DATABASE_URL production --yes &&
-    vercel deploy --prod
-  unset OLD_URL
+  load_libpq_env "$TARGET_URL"
+  [ "$(pg_run -i "$IMAGE" sh -c 'psql -X -q -A -t -v ON_ERROR_STOP=1 -f -' <<< "$ROWHASH_SQL" | LC_ALL=C sort | shasum -a 256 | cut -d' ' -f1)" = "$TARGET_BASELINE_DIGEST" ] && echo "target digest: unchanged"
   ```
 
-  Then **verify the old database independently** before lifting its fence. Use a fresh session, not the one used for the
-  switch, and have a second operator read the outputs. All must hold:
+- the old database's digest equals `PRE_STOP_DIGEST`, its identity SHA-256 equals `PRE_STOP_IDENTITY_SHA`, and it has no
+  session other than the operator's and the verifier's; the digest is read through `prod_ro` as in _Fence production_;
+- the runtime role connects to the old database and returns the row of the runtime-role check.
 
-  - the write counter equals `WRITE_BASELINE`, the sequence positions equal `SEQUENCE_BASELINE`, and the counts equal
-    `PRE_STOP_COUNTS`;
-  - the identity's SHA-256 equals `PRE_STOP_IDENTITY_SHA`;
-  - the runtime role connects and returns the row from the runtime-role check above;
-  - no session other than the operator's and the verifier's is present.
+Then restore writers in the reverse order of the fence and record the time. Any difference means a write may have reached
+the target or got past the fence: the path is then ambiguous, and the exposed path applies.
 
-  Only when all of these hold, reopen the old database: restore writers in the reverse order of the fence, and record
-  the time. If any check differs, keep writers stopped and decide. A difference means a writer got past the fence.
+**Exposed or ambiguous** (once `vercel env update` has been run, whatever its result, or once any check above differs).
+There is **no automatic rollback** on this path: restoring the old URL would silently drop what was written to the target.
+Required steps:
 
-- **Writes have reached the target.** There is no blind rollback. Writes made on the target must first be reconciled into
-  the old database, using the same comparison in the opposite direction and the same decision process, before the old
-  database is verified and reopened. Rolling back without that loses them.
+1. **Fence the target again.** Stop the writers of every deployment that holds the target URL by the methods of
+   _Fence production_ step 1, and confirm that no deployment still serves requests or runs scheduled work with it.
+   Terminate target sessions other than the operator's (`pg_terminate_backend` rolls back their open transactions only),
+   then run the session and write-role checks twice, two minutes apart, as in _Fence production_ step 2.
+2. **Compare the two databases** with _Post-point changes_ in the opposite direction: the target is now the source of the
+   changes and the old database the destination. Write the decision (reconcile or accept loss) in the ticket, as for the
+   switch. Reconciliation applies the target's rows to the old database as the owner role.
+3. **Verify the old database independently**, from a fresh session with a second operator reading the outputs. Its
+   `ROWHASH` digest must equal the target's digest (after reconciliation), its identity SHA-256 must equal
+   `PRE_STOP_IDENTITY_SHA`, its sessions must be only the operator's and the verifier's, and the runtime role must return
+   its row.
+4. Only then put the old URL back and redeploy, and reopen writers in the reverse order of the fence:
+
+   ```sh
+   printf 'Old production URL (not echoed): '
+   read -rs OLD_URL
+   echo
+   printf '%s' "$OLD_URL" | vercel env update DATABASE_URL --environment production --yes &&
+     vercel deploy --prod
+   unset OLD_URL
+   ```
+
+   The target stays fenced and is kept for the ticket.
 
 Do not mark or delete the old target while a rollback is still possible. If any step fails, keep the old setting and
 investigate before any further change. Finally, unset the variables and remove temporary targets and files when they
@@ -880,7 +1045,7 @@ are no longer needed:
 ```sh
 unset TARGET_URL CUTOVER_URL PROD_READONLY_URL OLD_URL RECOVERY_TIME RESTORE_DB AGE_IDENTITY
 unset PGHOST PGPORT PGDATABASE PGUSER PGPASSWORD PGSSLMODE PGCHANNELBINDING PGOPTIONS
-rm -rf "$DIFF_DIR" "$EXP_DIR"
+rm -rf "$DIFF_DIR" "$EXP_DIR" "$RECOVERY_DIR"
 ```
 
 Retain the selected encrypted copy, and the ticket's records, according to policy.
@@ -888,7 +1053,7 @@ Retain the selected encrypted copy, and the ticket's records, according to polic
 #### Recovery drill and cutover dry run
 
 Quarterly and before the first users, use the latest verified encrypted copy and the commands above (_Create the target_
-step 2, the empty-target check, the restore, _Verify the encrypted copy_, and the runtime-role check) against a fresh empty
+step 2, or step 3 outside Neon, then the empty-target check, the restore, _Verify the encrypted copy_, and the runtime-role check) against a fresh empty
 disposable database. Record the outcome and delete the disposable database. Never change site settings during a drill.
 
 Before the first real switch, run the cutover dry run on a disposable target with a synthetic production copy: the
@@ -905,6 +1070,18 @@ The synthetic drill must show these outcomes:
   version) and exactly two `only in target` (the updated row's old version and the deleted row). A count of zero or any
   other number fails the drill.
 - a table whose column was dropped in the synthetic production is listed as `schema differs`.
+- **Single-field update control:** on the synthetic target, one field of one existing row is updated, with no insert or
+  delete. `COUNTS_SQL` and `SEQUENCE_SQL` stay equal to their baseline, and the `ROWHASH` digest no longer equals
+  `TARGET_BASELINE_DIGEST`. The drill fails if the digest does not change. This is the control that shows the counters
+  are not rollback evidence.
+- the rollback path chosen after a switch attempt is the exposed path: the drill checks that it refuses automatic
+  rollback, and that the pre-exposure check fails when the target digest differs from its baseline.
+- a restore-ready result is reached on a target at another provider with no Neon CLI or Neon branch in the session.
+- with the old source made unreachable (or its reads refused), the switch is held: no `vercel env update` runs, the target
+  stays restore-ready, and the hold is recorded.
+- a point-in-time branch whose read-back shows another parent, or another instant for `parent_timestamp`, is refused, and
+  its id is the only one deleted. The same instant written in another form (for example `+00:00` or extra zeros in the
+  fraction) passes.
 
 The Clickmoji migration and application checks apply only to an actual Clickmoji copy.
 
