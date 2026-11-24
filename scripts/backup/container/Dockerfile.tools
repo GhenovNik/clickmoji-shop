@@ -1,0 +1,7 @@
+# Dump, restore, describe and encrypt all run from this image. The base is pinned by
+# digest; the value must equal POSTGRES_BASE_DIGEST in scripts/backup/constants.mjs
+# (checked by scripts/backup/test/pins.test.mjs).
+FROM postgres:17-alpine@sha256:f9cf3e1f0066f0eb0c48707d864f0ac5941e9ff454a072077d97a4d278d07d73
+
+# age comes from the Alpine repository inside the image, never from the host.
+RUN apk add --no-cache age
