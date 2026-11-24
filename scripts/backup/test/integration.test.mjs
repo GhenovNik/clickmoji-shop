@@ -45,7 +45,7 @@ INSERT INTO "Bulk" (payload) SELECT repeat(md5(g::text), 8) FROM generate_series
 // Containers this tool starts are named clickmoji-backup-<step>-<hex>. The source container of
 // this test is clickmoji-backup-itest-<hex> and is deliberately not matched.
 const TOOL_STEPS = '(dump|verify|encrypt|cleanup)';
-const toolContainers = (step = TOOL_STEPS) =>
+const namedToolContainers = (step = TOOL_STEPS) =>
   docker(['ps', '-a', '--filter', `name=^clickmoji-backup-${step}-`, '--format', '{{.Names}}'])
     .stdout.split('\n')
     .filter(Boolean);
@@ -84,6 +84,19 @@ describe(
   { skip: !dockerUp && 'set CLICKMOJI_BACKUP_INTEGRATION=1 and start Docker' },
   () => {
     const sandbox = makeSandbox();
+    // Scope observation and emergency cleanup to this suite's bind mounts.
+    const sandboxComponent = '/' + path.basename(sandbox.root) + '/';
+    const toolContainers = (step) =>
+      namedToolContainers(step).filter((name) => {
+        const mounts = docker([
+          'inspect',
+          '--format',
+          '{{range .Mounts}}{{println .Source}}{{end}}',
+          name,
+        ]);
+        return mounts.status === 0 && mounts.stdout.includes(sandboxComponent);
+      });
+
     // Whatever a test did, the source container and the sandbox are gone when the suite ends.
     after(() => {
       docker(['rm', '-f', container]);
