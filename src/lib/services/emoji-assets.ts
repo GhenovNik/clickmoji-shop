@@ -1,4 +1,5 @@
 import { UTApi } from 'uploadthing/server';
+import { AI_INPUT_LIMITS, AiInputTooLargeError } from '@/lib/ai-input-validation';
 import {
   generateWithGoogleImage,
   generateWithOpenAI,
@@ -38,6 +39,12 @@ export async function generateEmojiImage({
   provider: providerInput = process.env.AI_PROVIDER,
   clients,
 }: GenerateEmojiImageOptions) {
+  if (productName.trim().length > AI_INPUT_LIMITS.MAX_PRODUCT_NAME_LENGTH) {
+    throw new AiInputTooLargeError('Emoji generation productName exceeds maximum length');
+  }
+  if (description && description.trim().length > AI_INPUT_LIMITS.MAX_EMOJI_DESCRIPTION_LENGTH) {
+    throw new AiInputTooLargeError('Emoji generation description exceeds maximum length');
+  }
   const provider = getProvider(providerInput);
 
   // FR-9: a missing key is reported by the adapter, before any SDK client is created.

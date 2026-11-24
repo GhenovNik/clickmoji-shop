@@ -90,40 +90,36 @@ afterEach(() => {
   restoreEnv(envSnapshot);
 });
 
-const ACCEPTED_MODELS: Array<{ model: string; adapter: 'generateImages' | 'generateContent' }> = [
-  { model: 'imagen-4.0-generate-001', adapter: 'generateImages' },
-  { model: 'imagen-4.0-fast-generate-001', adapter: 'generateImages' },
-  { model: 'imagen-5.0-generate-preview', adapter: 'generateImages' },
+const ACCEPTED_MODELS: Array<{ model: string; adapter: 'generateContent' }> = [
   { model: 'gemini-3.1-flash-image', adapter: 'generateContent' },
-  { model: 'gemini-3.1-flash-lite-image', adapter: 'generateContent' },
-  { model: 'gemini-2.5-flash-image-preview', adapter: 'generateContent' },
-  { model: 'gemini-3-pro-image', adapter: 'generateContent' },
   { model: 'gemini-3.1-flash-image\n', adapter: 'generateContent' },
 ];
 
-describe('AC-3 Google adapter selection by model id grammar', () => {
+describe('AC-3 Google adapter selection by supported priced models', () => {
   for (const accepted of ACCEPTED_MODELS) {
     it(`routes ${JSON.stringify(accepted.model)} to ${accepted.adapter}`, async () => {
       const result = await generateWithGoogleModel(accepted.model);
       const expectedModel = accepted.model.trim();
 
       expect(sdk.constructorCalls).toEqual([{ apiKey: SYNTHETIC_GOOGLE_KEY }]);
-      if (accepted.adapter === 'generateImages') {
-        expect(sdk.generateImagesCalls).toHaveLength(1);
-        expect(sdk.generateImagesCalls[0]?.model).toBe(expectedModel);
-        expect(sdk.generateContentCalls).toHaveLength(0);
-      } else {
-        expect(sdk.generateContentCalls).toHaveLength(1);
-        expect(sdk.generateContentCalls[0]?.model).toBe(expectedModel);
-        expect(sdk.generateImagesCalls).toHaveLength(0);
-      }
+      expect(sdk.generateContentCalls).toHaveLength(1);
+      expect(sdk.generateContentCalls[0]?.model).toBe(expectedModel);
+      expect(sdk.generateImagesCalls).toHaveLength(0);
       expect(result.model).toBe(expectedModel);
     });
   }
 
-  // An id of another grammar is rejected too, so the Imagen branch is covered by negatives of its
-  // own: a case flag, a missing end anchor or a missing start anchor would accept one of them.
+  // Unproven / retired / unpriced / unknown-bound model IDs must be rejected before SDK construction.
   const REJECTED_MODELS = [
+    'gemini-3.1-flash-lite-image',
+    'gemini-2.5-flash-image',
+    'gemini-2.5-flash-image-preview',
+    'gemini-3-pro-image',
+    'imagen-4.0-generate-001',
+    'imagen-4.0-fast-generate-001',
+    'imagen-4.0-ultra-generate-001',
+    'imagen-5.0-generate-preview',
+    'gemini-99-unknown-image',
     'gemini-image',
     'gemini-imagen',
     'gemini-3.1-flash-noimage',
@@ -170,7 +166,12 @@ describe('AC-4 generateContent request shape and image part selection', () => {
     expect(sdk.generateContentCalls[0]).toEqual({
       model: 'gemini-3.1-flash-image',
       contents: getEmojiGenerationPrompt(PRODUCT, DESCRIPTION),
-      config: { responseModalities: ['IMAGE'], imageConfig: { aspectRatio: '1:1' } },
+      config: {
+        candidateCount: 1,
+        responseModalities: ['IMAGE'],
+        maxOutputTokens: 32_768,
+        imageConfig: { aspectRatio: '1:1' },
+      },
     });
   });
 

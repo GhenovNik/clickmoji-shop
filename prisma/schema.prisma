@@ -64,6 +64,16 @@ model AiUsageCounter {
   @@map("ai_usage_counters")
 }
 
+// Shared monthly monetary AI spend across all users and instances (src/lib/ai-budget.ts).
+model AiMonthlyBudget {
+  monthStart       DateTime @id
+  reservedMicroUsd BigInt   @default(0)
+  spentMicroUsd    BigInt   @default(0)
+  updatedAt        DateTime @default(now())
+
+  @@map("ai_monthly_budgets")
+}
+
 enum UserRole {
   USER
   ADMIN

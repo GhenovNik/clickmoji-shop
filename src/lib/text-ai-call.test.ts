@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const state = vi.hoisted(() => ({
   counters: new Map<string, number>(),
+  monthly: { reserved: BigInt(0), spent: BigInt(0) },
   reserve: vi.fn(),
   refund: vi.fn(),
 }));
@@ -19,12 +20,31 @@ const key = (userId: unknown, date: unknown) => `${userId}:${(date as Date).toIS
 beforeEach(() => {
   vi.resetAllMocks();
   state.counters.clear();
+  state.monthly = { reserved: BigInt(0), spent: BigInt(0) };
   process.env.AI_DAILY_CALLS_PER_USER = '30';
+  process.env.AI_MONTHLY_BUDGET_USD = '100';
   vi.spyOn(console, 'error').mockImplementation(() => undefined);
-  state.reserve.mockImplementation(async (_strings, userId, windowStart, limit) => {
+  state.reserve.mockImplementation(async (strings: TemplateStringsArray, ...args: unknown[]) => {
+    const sql = strings.join('?');
+    if (sql.includes('INSERT INTO ai_monthly_budgets')) {
+      const ceiling = BigInt(args[1] as bigint | number);
+      const limit = BigInt(args[args.length - 1] as bigint | number);
+      if (state.monthly.spent + state.monthly.reserved + ceiling > limit) return [];
+      state.monthly.reserved += ceiling;
+      return [{ reservedMicroUsd: state.monthly.reserved, spentMicroUsd: state.monthly.spent }];
+    }
+    if (sql.includes('UPDATE ai_monthly_budgets')) {
+      const ceiling = BigInt(args[0] as bigint | number);
+      const actual = BigInt(args[1] as bigint | number);
+      state.monthly.reserved =
+        state.monthly.reserved > ceiling ? state.monthly.reserved - ceiling : BigInt(0);
+      state.monthly.spent += actual;
+      return [{ reservedMicroUsd: state.monthly.reserved, spentMicroUsd: state.monthly.spent }];
+    }
+    const [userId, windowStart, limit] = args;
     const id = key(userId, windowStart);
     const count = state.counters.get(id) ?? 0;
-    if (count >= limit) return [];
+    if (count >= Number(limit)) return [];
     state.counters.set(id, count + 1);
     return [{ count: count + 1 }];
   });
@@ -44,6 +64,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.useRealTimers();
   delete process.env.AI_DAILY_CALLS_PER_USER;
+  delete process.env.AI_MONTHLY_BUDGET_USD;
 });
 
 describe('private text reservation compensation', () => {
@@ -104,7 +125,18 @@ describe('private text reservation compensation', () => {
     release();
     const results = await Promise.all(operations);
     expect(results.filter((value) => value instanceof Response)).toHaveLength(10);
-    expect(state.reserve).toHaveBeenCalledTimes(20);
+    const dailyReserveCalls = state.reserve.mock.calls.filter(([strings]) =>
+      (strings as TemplateStringsArray).join('?').includes('ai_usage_counters')
+    );
+    const monthlyReserveCalls = state.reserve.mock.calls.filter(([strings]) =>
+      (strings as TemplateStringsArray).join('?').includes('INSERT INTO ai_monthly_budgets')
+    );
+    const monthlyReconcileCalls = state.reserve.mock.calls.filter(([strings]) =>
+      (strings as TemplateStringsArray).join('?').includes('UPDATE ai_monthly_budgets')
+    );
+    expect(dailyReserveCalls).toHaveLength(20);
+    expect(monthlyReserveCalls).toHaveLength(20);
+    expect(monthlyReconcileCalls).toHaveLength(20);
     expect(state.refund).toHaveBeenCalledTimes(10);
     expect([...state.counters.values()]).toEqual([10]);
   });
@@ -125,6 +157,30 @@ describe('private text reservation compensation', () => {
       );
     }
   );
+
+  it('does not count daily exhaustion twice in reserve mock assertions', async () => {
+    state.reserve.mockImplementation(async (strings: TemplateStringsArray, ...args: unknown[]) => {
+      const sql = strings.join('?');
+      if (sql.includes('INSERT INTO ai_monthly_budgets')) {
+        const ceiling = BigInt(args[1] as bigint | number);
+        state.monthly.reserved += ceiling;
+        return [{ reservedMicroUsd: state.monthly.reserved, spentMicroUsd: state.monthly.spent }];
+      }
+      if (sql.includes('UPDATE ai_monthly_budgets')) {
+        const ceiling = BigInt(args[0] as bigint | number);
+        state.monthly.reserved =
+          state.monthly.reserved > ceiling ? state.monthly.reserved - ceiling : BigInt(0);
+        return [{ reservedMicroUsd: state.monthly.reserved, spentMicroUsd: state.monthly.spent }];
+      }
+      return [];
+    });
+    const operation = vi.fn();
+    const result = await runTextAiCall(user, 'en', operation);
+    expect((result as Response).status).toBe(429);
+    expect(operation).not.toHaveBeenCalled();
+    expect(state.monthly.reserved).toBe(BigInt(0));
+    expect(state.monthly.spent).toBe(BigInt(0));
+  });
 
   it('does not blindly retry an ambiguous compensation DB failure', async () => {
     state.refund.mockRejectedValue(new Error('private connection detail'));

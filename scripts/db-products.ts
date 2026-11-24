@@ -2,6 +2,7 @@ import { PrismaClient } from '@prisma/client';
 import { readFileSync } from 'fs';
 import { join } from 'path';
 import { createPrismaPgAdapter } from '../src/lib/prisma-adapter';
+import { runMonthlyBudgetedTextAiCall } from '../src/lib/text-ai-call';
 import { generateGoogleText } from '../src/lib/services/google-text-generation';
 import { textAiErrorCode } from '../src/lib/services/text-ai-errors';
 
@@ -228,7 +229,13 @@ Respond ONLY with valid JSON array in this exact format:
 
   console.log('🤖 Processing products with Gemini AI...\n');
 
-  const { text: responseText } = await generateGoogleText({ apiKey, prompt });
+  const { text: responseText } = await runMonthlyBudgetedTextAiCall(
+    { prompt, db: prisma },
+    async () => {
+      const generated = await generateGoogleText({ apiKey, prompt });
+      return generated;
+    }
+  );
 
   let jsonStr = responseText.trim();
   if (jsonStr.startsWith('```json')) {

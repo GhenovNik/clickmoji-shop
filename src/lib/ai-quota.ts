@@ -2,14 +2,28 @@ import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { getServerTranslator } from '@/lib/auth-security';
 import type { Locale } from '@/i18n/config';
+import {
+  AI_MONTHLY_BUDGET_USD_ENV,
+  parseMonthlyBudgetMicroUsd,
+  reconcileMonthlyAiBudget,
+  reserveMonthlyAiBudget,
+} from '@/lib/ai-budget';
+import {
+  estimateImageCallCeilingMicroUsd,
+  estimateTextCallCeilingMicroUsd,
+} from '@/lib/ai-pricing';
+import { getActiveAiQuotaContext } from '@/lib/ai-quota-context';
+import { AiCostUnboundedError } from '@/lib/services/emoji-errors';
 
 // Daily budget of paid AI calls per user, kept in PostgreSQL so that every server instance
-// shares it. The hourly `checkRateLimit` limits stay in front of it; without Upstash they are
+// shares it, plus a shared persistent monthly monetary cap across all users and instances.
+// The hourly `checkRateLimit` limits stay in front of it; without Upstash they are
 // counted per instance and reset on a cold start, so on their own they do not bound spend.
 //
 // A text unit is one successful logical operation (including retries/fallback and parsing);
-// text-ai-call compensates failed operations. Images keep one unit per paid attempt. The window is
-// the UTC calendar day. Routes that take units:
+// text-ai-call compensates failed operations. Images keep one unit per paid attempt. The daily
+// window is the UTC calendar day; the monthly monetary window is the UTC calendar month.
+// Routes that take units:
 // - POST /api/lists/import-text: 1 (text analysis)
 // - POST /api/products/smart-create: 1 (text analysis) + 1 (custom image, only when needed)
 // - POST /api/emoji/generate (admin): 1 (image)
@@ -76,11 +90,10 @@ export async function reserveAiCall({
 
 /**
  * Route helper: null when the paid call may proceed, otherwise the response to return instead of
- * making it: 403 when paid AI is off for the role, 429 when today's budget is used up, 503 when the
- * budget cannot be checked (database error, migration not applied). A route that has already made
- * a paid call may treat a non-null result as "skip the optional next call" instead (smart-create's
- * image), see docs/ai.md. The error text is in `locale`; callers that do not pass one yet keep
- * the Russian text they always got.
+ * making it: 403 when paid AI is off for the role, 429 when today's call budget is used up,
+ * 503 when the shared monthly monetary cap is exhausted, misconfigured, or cannot be checked
+ * (database error, migration not applied). A route that has already made a paid call may treat a
+ * non-null result as "skip the optional next call" instead (smart-create's image), see docs/ai.md.
  */
 export async function enforceAiQuota(
   user: { id: string; role: Role },
@@ -88,23 +101,110 @@ export async function enforceAiQuota(
   now = new Date()
 ): Promise<Response | null> {
   const t = getServerTranslator(locale);
+
+  // Fail closed on invalid monthly budget configuration before checking or mutating counters.
+  const parsedBudget = parseMonthlyBudgetMicroUsd();
+  if (!parsedBudget.ok) {
+    console.error('Monthly AI budget configuration rejected:', {
+      code: parsedBudget.code,
+      env: AI_MONTHLY_BUDGET_USD_ENV,
+    });
+    return NextResponse.json({ error: t('api.aiQuota.unavailable') }, { status: 503 });
+  }
+
+  const dailyLimit = aiDailyLimit(user.role);
+  if (dailyLimit === 0) {
+    return NextResponse.json({ error: t('api.aiQuota.disabled') }, { status: 403 });
+  }
+
+  const ctx = getActiveAiQuotaContext();
+  let ceilingMicroUsd: bigint;
+  try {
+    ceilingMicroUsd =
+      ctx?.ceilingMicroUsd ??
+      (ctx?.kind === 'text'
+        ? estimateTextCallCeilingMicroUsd()
+        : estimateImageCallCeilingMicroUsd());
+  } catch (error) {
+    if (error instanceof AiCostUnboundedError) {
+      console.error('AI quota check rejected unbounded configuration:', {
+        errorClass: 'unbounded_configuration',
+        provider: error.provider,
+        env: error.env,
+      });
+      return NextResponse.json({ error: t('api.aiQuota.unavailable') }, { status: 503 });
+    }
+    throw error;
+  }
+
+  let monthlyDecision: Awaited<ReturnType<typeof reserveMonthlyAiBudget>>;
+  try {
+    monthlyDecision = await reserveMonthlyAiBudget({ ceilingMicroUsd, now });
+  } catch {
+    console.error(
+      'AI quota check failed, refusing the paid call:',
+      'monthly_budget_reservation_failed'
+    );
+    return NextResponse.json({ error: t('api.aiQuota.unavailable') }, { status: 503 });
+  }
+
+  if (!monthlyDecision.allowed) {
+    if (monthlyDecision.reason === 'invalid_config') {
+      return NextResponse.json({ error: t('api.aiQuota.unavailable') }, { status: 503 });
+    }
+    const retryAfter = Math.max(Math.ceil((monthlyDecision.resetAt - Date.now()) / 1000), 1);
+    return NextResponse.json(
+      { error: t('api.aiQuota.monthlyUnavailable') },
+      { status: 503, headers: { 'Retry-After': String(retryAfter) } }
+    );
+  }
+
   let decision: AiQuotaDecision;
   try {
     decision = await reserveAiCall({ userId: user.id, role: user.role, now });
   } catch {
+    try {
+      await reconcileMonthlyAiBudget({
+        monthStart: monthlyDecision.monthStart,
+        ceilingMicroUsd,
+        actualMicroUsd: BigInt(0),
+      });
+    } catch {
+      console.error(
+        'AI quota check failed, refusing the paid call:',
+        'monthly_budget_reconciliation_failed'
+      );
+    }
     console.error('AI quota check failed, refusing the paid call:', 'quota_reservation_failed');
     return NextResponse.json({ error: t('api.aiQuota.unavailable') }, { status: 503 });
   }
 
-  if (decision.allowed) return null;
-
-  if (decision.limit === 0) {
-    return NextResponse.json({ error: t('api.aiQuota.disabled') }, { status: 403 });
+  if (!decision.allowed) {
+    try {
+      await reconcileMonthlyAiBudget({
+        monthStart: monthlyDecision.monthStart,
+        ceilingMicroUsd,
+        actualMicroUsd: BigInt(0),
+      });
+    } catch {
+      return NextResponse.json({ error: t('api.aiQuota.unavailable') }, { status: 503 });
+    }
+    if (decision.limit === 0) {
+      return NextResponse.json({ error: t('api.aiQuota.disabled') }, { status: 403 });
+    }
+    const retryAfter = Math.max(Math.ceil((decision.resetAt - Date.now()) / 1000), 1);
+    return NextResponse.json(
+      { error: t('api.aiQuota.exhausted') },
+      { status: 429, headers: { 'Retry-After': String(retryAfter) } }
+    );
   }
 
-  const retryAfter = Math.max(Math.ceil((decision.resetAt - Date.now()) / 1000), 1);
-  return NextResponse.json(
-    { error: t('api.aiQuota.exhausted') },
-    { status: 429, headers: { 'Retry-After': String(retryAfter) } }
-  );
+  if (ctx) {
+    ctx.monthlyReservation = {
+      monthStart: monthlyDecision.monthStart,
+      ceilingMicroUsd,
+    };
+  }
+
+  return null;
 }

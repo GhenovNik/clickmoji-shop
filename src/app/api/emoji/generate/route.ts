@@ -1,8 +1,14 @@
 import { NextResponse } from 'next/server';
 import { apiText } from '@/lib/api-messages';
+import {
+  AI_INPUT_LIMITS,
+  AiInputTooLargeError,
+  readBoundedJsonBody,
+} from '@/lib/ai-input-validation';
+import { estimateEmojiPromptTokens } from '@/lib/ai-pricing';
 import { requireAdmin } from '@/lib/auth-guards';
 import { checkRateLimit, getRequestLocale, rateLimitResponse } from '@/lib/auth-security';
-import { enforceAiQuota } from '@/lib/ai-quota';
+import { runImageAiCall } from '@/lib/image-ai-call';
 import { generateEmojiImage, uploadEmojiImage } from '@/lib/services/emoji-assets';
 import { recordEmojiLibraryItem } from '@/lib/services/emoji-library';
 import {
@@ -18,11 +24,74 @@ export async function POST(request: Request) {
     if (guard instanceof Response) return guard;
     const { session } = guard;
 
-    const { productName, description, name, nameEn } = await request.json();
+    const locale = getRequestLocale(request);
+    const parsedBody = await readBoundedJsonBody({
+      request,
+      maxBytes: AI_INPUT_LIMITS.EMOJI_GENERATE_BODY_MAX_BYTES,
+      locale,
+      namespace: 'errors',
+    });
+    if (!parsedBody.ok) return parsedBody.response;
 
-    if (!productName) {
+    const {
+      productName: rawProductName,
+      description: rawDescription,
+      name,
+      nameEn,
+    } = parsedBody.body;
+
+    if (typeof rawProductName !== 'string' || rawProductName.trim().length === 0) {
       return NextResponse.json(
         { error: await apiText(request, 'productNameRequired') },
+        { status: 400 }
+      );
+    }
+    const productName = rawProductName.trim();
+    if (productName.length > AI_INPUT_LIMITS.MAX_PRODUCT_NAME_LENGTH) {
+      return NextResponse.json(
+        {
+          error: await apiText(request, 'productNameTooLong', {
+            max: AI_INPUT_LIMITS.MAX_PRODUCT_NAME_LENGTH,
+          }),
+        },
+        { status: 400 }
+      );
+    }
+
+    let description: string | undefined;
+    if (rawDescription !== undefined && rawDescription !== null && rawDescription !== '') {
+      if (typeof rawDescription !== 'string') {
+        return NextResponse.json(
+          { error: await apiText(request, 'invalidEmojiDescription') },
+          { status: 400 }
+        );
+      }
+      const trimmedDescription = rawDescription.trim();
+      if (trimmedDescription.length > AI_INPUT_LIMITS.MAX_EMOJI_DESCRIPTION_LENGTH) {
+        return NextResponse.json(
+          {
+            error: await apiText(request, 'emojiDescriptionTooLong', {
+              max: AI_INPUT_LIMITS.MAX_EMOJI_DESCRIPTION_LENGTH,
+            }),
+          },
+          { status: 400 }
+        );
+      }
+      if (trimmedDescription.length > 0) {
+        description = trimmedDescription;
+      }
+    }
+
+    if (
+      (name !== undefined &&
+        name !== null &&
+        (typeof name !== 'string' || name.length > AI_INPUT_LIMITS.MAX_PRODUCT_NAME_LENGTH)) ||
+      (nameEn !== undefined &&
+        nameEn !== null &&
+        (typeof nameEn !== 'string' || nameEn.length > AI_INPUT_LIMITS.MAX_PRODUCT_NAME_LENGTH))
+    ) {
+      return NextResponse.json(
+        { error: await apiText(request, 'invalidRequest') },
         { status: 400 }
       );
     }
@@ -33,20 +102,29 @@ export async function POST(request: Request) {
       windowMs: 60 * 60 * 1000,
     });
     if (!userLimit.allowed) {
-      return rateLimitResponse(userLimit.resetAt, getRequestLocale(request));
+      return rateLimitResponse(userLimit.resetAt, locale);
     }
-
-    // One unit of the administrator's daily AI budget for the image.
-    const quotaResponse = await enforceAiQuota(session.user, getRequestLocale(request));
-    if (quotaResponse) return quotaResponse;
 
     // Image generation is the only provider call of this route, so it is the only place where a
     // provider error can appear: FR-10 logging is applied here, and the catch below therefore only
     // ever sees a failure of the request itself.
     let generated: Awaited<ReturnType<typeof generateEmojiImage>>;
     try {
-      generated = await generateEmojiImage({ productName, description });
+      const generation = await runImageAiCall(
+        session.user,
+        locale,
+        () => generateEmojiImage({ productName, description }),
+        { maxPromptTokens: estimateEmojiPromptTokens(productName, description) }
+      );
+      if (generation instanceof Response) return generation;
+      generated = generation;
     } catch (error) {
+      if (error instanceof AiInputTooLargeError) {
+        return NextResponse.json(
+          { error: await apiText(request, 'payloadTooLarge') },
+          { status: 413 }
+        );
+      }
       // FR-10: the log carries allowlisted fields only, never the SDK message, body or cause.
       console.error('Error generating AI emoji:', summarizeEmojiGenerationFailure(error));
       if (error instanceof EmojiProviderUnavailableError) {

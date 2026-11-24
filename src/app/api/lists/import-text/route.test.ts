@@ -393,4 +393,39 @@ describe('import messages follow the request language', () => {
       body: { error: 'The text is too long: at most 2000 characters' },
     });
   });
+
+  it('rejects invalid JSON (400), invalid listId (400), and oversized payload (413) in the request language without calling AI', async () => {
+    const badJsonMarker = 'secret-import-body-snippet';
+    const invalidJsonRes = await POST(
+      new Request('http://localhost/api/lists/import-text', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', cookie: 'NEXT_LOCALE=ru' },
+        body: `{"text":"Молоко", "bad": "${badJsonMarker}`,
+      })
+    );
+    expect(invalidJsonRes.status).toBe(400);
+    expect(await invalidJsonRes.json()).toEqual({ error: 'Некорректный запрос' });
+    expect(JSON.stringify(vi.mocked(console.error).mock.calls)).not.toContain(badJsonMarker);
+
+    const invalidListIdRes = await POST(
+      new Request('http://localhost/api/lists/import-text', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', cookie: 'NEXT_LOCALE=en' },
+        body: JSON.stringify({ text: 'Milk', listId: 'bad list id!' }),
+      })
+    );
+    expect(invalidListIdRes.status).toBe(400);
+    expect(await invalidListIdRes.json()).toEqual({ error: 'Invalid request' });
+
+    const oversizedRes = await POST(
+      new Request('http://localhost/api/lists/import-text', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', cookie: 'NEXT_LOCALE=en' },
+        body: JSON.stringify({ text: 'Milk', listId: 'list-b', extra: 'x'.repeat(20_000) }),
+      })
+    );
+    expect(oversizedRes.status).toBe(413);
+    expect(await oversizedRes.json()).toEqual({ error: 'Request payload is too large' });
+    expect(state.prompts).toEqual([]);
+  });
 });

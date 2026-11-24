@@ -13,7 +13,13 @@ const doubles = vi.hoisted(() => ({
   analyzeSmartProduct: vi.fn(),
   generateAndUploadEmojiAsset: vi.fn(),
   createProduct: vi.fn(),
-  budget: { used: 0, fail: false, failAfter: Infinity },
+  budget: {
+    used: 0,
+    fail: false,
+    failAfter: Infinity,
+    monthlyReserved: BigInt(0),
+    monthlySpent: BigInt(0),
+  },
 }));
 
 vi.mock('@/lib/auth-guards', () => ({
@@ -45,9 +51,47 @@ vi.mock('@/lib/services/emoji-library', () => ({
 
 vi.mock('@/lib/prisma', () => ({
   prisma: {
-    // INSERT ... ON CONFLICT DO UPDATE ... WHERE count < limit RETURNING count
+    // INSERT ... ON CONFLICT DO UPDATE ... WHERE ... RETURNING ...
     $queryRaw: async (strings: TemplateStringsArray, ...values: unknown[]) => {
-      if (!strings.join('?').includes('ai_usage_counters')) throw new Error('unexpected SQL');
+      const sql = strings.join('?');
+      if (sql.includes('ai_monthly_budgets')) {
+        if (doubles.budget.fail) {
+          throw new Error('relation "ai_monthly_budgets" does not exist');
+        }
+        if (sql.includes('INSERT INTO ai_monthly_budgets')) {
+          if (doubles.budget.fail || doubles.budget.used >= doubles.budget.failAfter) {
+            throw new Error('relation "ai_monthly_budgets" does not exist');
+          }
+          const ceiling = BigInt(values[1] as bigint | number);
+          const limit = BigInt(values[values.length - 1] as bigint | number);
+          if (doubles.budget.monthlySpent + doubles.budget.monthlyReserved + ceiling > limit) {
+            return [];
+          }
+          doubles.budget.monthlyReserved += ceiling;
+          return [
+            {
+              reservedMicroUsd: doubles.budget.monthlyReserved,
+              spentMicroUsd: doubles.budget.monthlySpent,
+            },
+          ];
+        }
+        if (sql.includes('UPDATE ai_monthly_budgets')) {
+          const ceiling = BigInt(values[0] as bigint | number);
+          const actual = BigInt(values[1] as bigint | number);
+          doubles.budget.monthlyReserved =
+            doubles.budget.monthlyReserved > ceiling
+              ? doubles.budget.monthlyReserved - ceiling
+              : BigInt(0);
+          doubles.budget.monthlySpent += actual;
+          return [
+            {
+              reservedMicroUsd: doubles.budget.monthlyReserved,
+              spentMicroUsd: doubles.budget.monthlySpent,
+            },
+          ];
+        }
+      }
+      if (!sql.includes('ai_usage_counters')) throw new Error('unexpected SQL');
       if (doubles.budget.fail || doubles.budget.used >= doubles.budget.failAfter) {
         throw new Error('relation "ai_usage_counters" does not exist');
       }
@@ -111,8 +155,11 @@ beforeEach(() => {
   vi.spyOn(console, 'error').mockImplementation(() => undefined);
   delete process.env.AI_DAILY_CALLS_PER_USER;
   delete process.env.AI_DAILY_CALLS_PER_ADMIN;
+  delete process.env.AI_MONTHLY_BUDGET_USD;
   process.env.GOOGLE_GENAI_API_KEY = 'synthetic-google-genai-key-for-tests';
   doubles.budget.used = 0;
+  doubles.budget.monthlyReserved = BigInt(0);
+  doubles.budget.monthlySpent = BigInt(0);
   doubles.budget.fail = false;
   doubles.budget.failAfter = Infinity;
   doubles.requireUser.mockResolvedValue({ session: { user: { id: 'user-b', role: 'USER' } } });
