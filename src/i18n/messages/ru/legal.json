@@ -5,7 +5,7 @@
     "separator": "·"
   },
   "footer": {
-    "brand": "Clickmoji Shop"
+    "brand": "ClickMoji"
   },
   "stub": {
     "badge": "Текст готовится",
@@ -14,10 +14,10 @@
   },
   "terms": {
     "title": "Условия использования",
-    "subtitle": "Clickmoji Shop"
+    "subtitle": "ClickMoji"
   },
   "privacy": {
     "title": "Политика конфиденциальности",
-    "subtitle": "Clickmoji Shop"
+    "subtitle": "ClickMoji"
   }
 }

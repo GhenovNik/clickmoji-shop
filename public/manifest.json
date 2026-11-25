@@ -1,6 +1,6 @@
 {
-  "name": "Clickmoji Shop",
-  "short_name": "Clickmoji",
+  "name": "ClickMoji",
+  "short_name": "ClickMoji",
   "description": "Emoji-first shopping list with smart product selection",
   "start_url": "/",
   "scope": "/",

@@ -180,8 +180,8 @@ describe('static PWA icons', () => {
   });
 
   it('AC-4/F-8: manifest name, short_name, start_url and display are unchanged', () => {
-    expect(manifest.name).toBe('Clickmoji Shop');
-    expect(manifest.short_name).toBe('Clickmoji');
+    expect(manifest.name).toBe('ClickMoji');
+    expect(manifest.short_name).toBe('ClickMoji');
     expect(manifest.start_url).toBe('/');
     expect(manifest.display).toBe('standalone');
   });
