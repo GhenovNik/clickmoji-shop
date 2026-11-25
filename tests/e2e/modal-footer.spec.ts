@@ -59,7 +59,9 @@ for (const height of [667, 812]) {
 
     test.beforeEach(async ({ baseURL, page }) => {
       // In particular, never send the test-only admin JWT to a deployed application.
-      expect(new URL(baseURL!).origin).toBe('http://localhost:3000');
+      const target = new URL(baseURL!);
+      expect(target.protocol).toBe('http:');
+      expect(target.hostname).toBe('localhost');
       const errors: string[] = [];
       browserErrors.set(page, errors);
       page.on('pageerror', (error) => errors.push(error.message));

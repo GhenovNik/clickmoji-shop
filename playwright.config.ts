@@ -7,6 +7,11 @@ import {
 } from './tests/e2e/fixtures/modal-footer-db-config';
 
 const chromiumChannel = process.env.PLAYWRIGHT_CHROMIUM_CHANNEL;
+const port = Number(process.env.PLAYWRIGHT_PORT ?? 3000);
+if (!Number.isInteger(port) || port < 1 || port > 65535) {
+  throw new Error('PLAYWRIGHT_PORT must be a valid TCP port');
+}
+const baseURL = `http://localhost:${port}`;
 // Validated at config load, before any server or database connection. Only the loopback
 // fixture database is accepted; a set but unsafe value stops the run here.
 const modalFooterDatabase = modalFooterDatabaseUrl(process.env[MODAL_FOOTER_DB_ENV]);
@@ -20,7 +25,7 @@ export default defineConfig({
   workers: process.env.CI ? 1 : undefined,
   reporter: 'html',
   use: {
-    baseURL: 'http://localhost:3000',
+    baseURL,
     trace: 'on-first-retry',
     // The specs assert the Russian UI; English is covered in tests/e2e/language.spec.ts.
     locale: 'ru-RU',
@@ -52,12 +57,14 @@ export default defineConfig({
     // The fixture database is the validated loopback one or, when unset, a closed port.
     env: {
       AUTH_SECRET: MODAL_FOOTER_AUTH_SECRET,
+      AUTH_URL: baseURL,
+      NEXTAUTH_URL: baseURL,
       NEXTAUTH_SECRET: MODAL_FOOTER_AUTH_SECRET,
       DATABASE_URL: modalFooterDatabase ?? MODAL_FOOTER_UNREACHABLE_DATABASE_URL,
     },
     command:
-      'npm run build && PLAYWRIGHT_AUTH_BYPASS=1 PLAYWRIGHT_AUTH_BYPASS_TOKEN=e2e-auth-bypass npm run start',
-    url: 'http://localhost:3000',
+      `npm run build && PLAYWRIGHT_AUTH_BYPASS=1 PLAYWRIGHT_AUTH_BYPASS_TOKEN=e2e-auth-bypass npm run start -- --hostname localhost --port ${port}`,
+    url: baseURL,
     reuseExistingServer: !process.env.CI,
   },
 });
