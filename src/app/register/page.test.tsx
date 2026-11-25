@@ -4,9 +4,18 @@ import { renderWithIntl } from '@/test/intl';
 import RegisterPage from './page';
 
 const router = vi.hoisted(() => ({ push: vi.fn(), refresh: vi.fn() }));
-const auth = vi.hoisted(() => ({ signIn: vi.fn() }));
+const auth = vi.hoisted(() => ({
+  signIn: vi.fn(),
+  session: null as null | { user: { isGuest: boolean } },
+}));
 vi.mock('next/navigation', () => ({ useRouter: () => router }));
-vi.mock('next-auth/react', () => ({ signIn: auth.signIn }));
+vi.mock('next-auth/react', () => ({
+  signIn: auth.signIn,
+  useSession: () => ({
+    data: auth.session,
+    status: auth.session ? 'authenticated' : 'unauthenticated',
+  }),
+}));
 
 function submit(password: string, confirmPassword = password) {
   fireEvent.change(document.getElementById('email')!, { target: { value: 'user@example.com' } });
@@ -28,6 +37,7 @@ beforeEach(() => {
   router.push.mockReset();
   router.refresh.mockReset();
   auth.signIn.mockReset();
+  auth.session = null;
   window.localStorage.clear();
   window.sessionStorage.clear();
 });
@@ -43,6 +53,21 @@ describe('RegisterPage', () => {
     expect(screen.getByRole('heading', { name: /Регистрация/ })).toBeTruthy();
     expect(screen.getByLabelText('Электронная почта')).toBeTruthy();
     expect(screen.getByPlaceholderText('Минимум 8 символов')).toBeTruthy();
+  });
+
+  it('explains list retention to a guest, in both locales', () => {
+    auth.session = { user: { isGuest: true } };
+    const { unmount } = renderWithIntl(<RegisterPage />);
+    expect(screen.getByText(/Ваши списки, покупки и избранное сохранятся/)).toBeTruthy();
+    unmount();
+
+    renderWithIntl(<RegisterPage />, { locale: 'en' });
+    expect(screen.getByText(/Your lists, purchases and favorites will be kept/)).toBeTruthy();
+  });
+
+  it('shows no guest notice to a signed-out visitor', () => {
+    renderWithIntl(<RegisterPage />);
+    expect(screen.queryByText(/сохранятся/)).toBeNull();
   });
 
   it('renders the form and the password rules in English', async () => {

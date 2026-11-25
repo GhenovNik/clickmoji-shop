@@ -11,8 +11,9 @@ can build lists, add products, purchase, and read history, without registering.
    row. A valid existing session is reused instead of creating another guest.
 3. Lists, items, purchases, history and restore use the normal authenticated routes. Their
    ownership checks are unchanged, so a guest sees and changes only its own data.
-4. Regular registration is `POST /api/auth/register`, unchanged. It ignores the guest cookie and
-   creates a separate account; it never modifies or adopts the guest (see below).
+4. Registration is `POST /api/auth/register`. With a live guest session it promotes that guest in
+   place, keeping the same `User.id` and its data (see "Guest to account promotion" below). Without
+   one it creates an ordinary account as before.
 
 ## Decisions
 
@@ -53,21 +54,75 @@ can build lists, add products, purchase, and read history, without registering.
   guest remains. A guest created before this change has no such row; it becomes a replacement
   only after it has a chain row of its own.
 
-## Not in this change: guest to regular account
+## Guest to account promotion (AGE-1667)
 
-Registration does not convert a guest. `POST /api/auth/register` ignores the guest session
-cookie: it creates a new `User` row with starter lists, exactly as before, and never updates
-the guest row. The guest keeps its placeholder email, `isGuest = true`, lists and purchases.
-A duplicate email returns `400 userExists`, and a guest email is refused with `400 invalidEmail`.
+Registration with a live guest session promotes that guest **in place**. `POST /api/auth/register`
+resolves the request's NextAuth session cookie (signature verified, row checked in the database):
 
-A later change may convert a guest in place, keeping the same `User.id`. That change is out of
-scope here and needs its own design. It must update the existing row (`where { id, isGuest: true }`)
-to set the real email, password hash and name, and `isGuest = false`. It must not create a second
-row, copy or merge lists, or re-run starter lists. A guest cookie must never be used to change
-another account.
+- **Live guest** (`isGuest = true`, fresh token): the same `User` row is updated in one conditional
+  write, `where { id, isGuest: true }`, which sets the real email, password hash, name and
+  `emailVerified`, and `isGuest = false`. Lists, items, purchases, history and favorites keep their
+  owner. No second row is created, no starter lists are re-created and no accounts are merged.
+- **Guest token whose row is already an account** (a retry, a second tab, a stale cookie): refused
+  with `400 userExists`, whatever email is sent. One browser never opens a second account.
+- **No session, or a guest row cleanup has removed**: the request is anonymous and creates an
+  ordinary account, exactly as for any visitor.
 
-A later conversion would show in analytics as `users.isGuest` changing from `true` to `false` on
-the same id, with no second `REGISTER` written.
+The promotion path, step by step:
+
+1. Cleanup protection: `guestLastActiveAt` is refreshed (`recordGuestActivity`) before anything slow.
+   Cleanup re-checks that field in its own delete, so a guest whose registration has begun is kept.
+   A row that is already gone returns `401 guestSessionExpired`.
+2. The email must not belong to another account (`400 userExists`).
+3. The password is hashed. When verification is required, the verification email is sent.
+   If sending fails, `503 verificationEmailFailed` is returned and nothing has changed. The guest
+   is not deleted.
+4. One transaction promotes the row (conditional `updateMany`) and writes the funnel event. A
+   conditional update that matches no row means a concurrent request won (`already-registered`)
+   or the row is gone (`expired`). A unique-email violation means another account holds the email.
+5. The response sets a fresh ordinary session cookie for the same `User.id`, with `isGuest: false`.
+
+### Old guest sessions are invalid
+
+The promotion does not change `sessionIssuedAt` or `createdAt`, so the issuance check alone would
+accept an old guest token for the same id. The NextAuth `jwt` callback therefore compares the
+token's stored `isGuest` claim with the row on every refresh and rejects a token that says guest
+while the row is an account (`Guest session superseded by account`). The same check runs for
+every browser that still holds the old cookie. `requireUser` reads `isGuest` from the row, so
+after promotion the ordinary AI and email behaviour applies with no extra switch.
+
+### Funnel
+
+Promotion writes one `REGISTER` on the guest's chain, with the same `User.id` and the signed
+funnel `guestId`, inside the promotion transaction and under the chain lock. The funnel
+enum is unchanged, so no migration is needed. The anonymous cookie is used only for this
+analytics attribution; it never authenticates or recovers an account.
+
+## Decisions (AGE-1667)
+
+- **No account merging.** A promotion never merges a guest with an existing account. An email that
+  belongs to another account is refused, and the guest keeps its lists and stays a guest.
+- **In-place update, not a copy.** The guest row keeps its `id` and all owned data. A new row
+  would orphan purchases and favorites and would split the funnel person.
+- **Retries and races resolve to one account.** The conditional update
+  (`where { id, isGuest: true }`) and the unique email decide the winner. Losers get
+  `userExists` or `guestSessionExpired`, never a second account.
+- **Refusal for a promoted stale token, not anonymous registration.** Only a guest that cleanup
+  removed counts as "no session". A row that is an account makes the token a refused retry.
+- **Verification email before commit.** Sending first means a failed email leaves the guest
+  untouched, so no delete is needed. This path never deletes a row. The ordinary-registration
+  error path deletes only the row it created in that request.
+- **The promoted session is minted even when verification is required.** The new session replaces
+  the guest session so the guest's lists stay reachable. Sign-in with a password still requires
+  verification (`EmailNotVerified`). Open question for the operator: should an unverified
+  promoted account keep an authenticated session until it verifies?
+- **Analytics identity.** After promotion, events of this `User` are keyed by `User.id` in the
+  report, so the guest's pre-promotion steps join that person. A second guest of the same browser
+  started after promotion can add a `REGISTER` row on the chain. The report counts each chain once
+  per stage, so counts are unchanged. An explicit conversion marker would need a funnel enum
+  value and a migration, which this change does not add.
+- **Copy.** Registration shows a retention notice to guests, in RU and EN. The account CTA and
+  hiding the technical guest email belong to the account UI work (PR #167).
 
 ## Inactive guest cleanup
 

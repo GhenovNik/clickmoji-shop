@@ -8,7 +8,7 @@ import {
   PASSWORD_MIN_LENGTH,
 } from '@/lib/validation/password';
 import { useRouter } from 'next/navigation';
-import { signIn } from 'next-auth/react';
+import { signIn, useSession } from 'next-auth/react';
 import Link from 'next/link';
 import { Eye, EyeOff } from 'lucide-react';
 import LegalLinks from '@/components/LegalLinks';
@@ -16,6 +16,8 @@ import LegalLinks from '@/components/LegalLinks';
 export default function RegisterPage() {
   const t = useTranslations('auth');
   const router = useRouter();
+  const { data: session } = useSession();
+  const isGuest = Boolean(session?.user?.isGuest);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
@@ -89,6 +91,11 @@ export default function RegisterPage() {
           <div className="text-center mb-8">
             <h1 className="text-3xl font-bold text-gray-900">🛒 {t('register.title')}</h1>
             <p className="text-gray-600 mt-2">{t('register.subtitle')}</p>
+            {isGuest && (
+              <p className="mt-4 rounded-lg bg-blue-50 px-4 py-3 text-left text-sm text-blue-900">
+                {t('register.guestNotice')}
+              </p>
+            )}
           </div>
 
           <form onSubmit={handleSubmit} className="space-y-4">

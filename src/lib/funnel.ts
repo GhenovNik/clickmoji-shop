@@ -311,3 +311,25 @@ export async function recordFunnelEvent(input: RecordFunnelEventInput): Promise<
 
   return recorded;
 }
+
+/**
+ * Records the single promotion event of a guest that became an account in place (AGE-1667). It
+ * runs inside the promotion transaction, under the chain lock, so it is committed with the row
+ * update or not at all. The event is a REGISTER on the guest's own chain and User.id: the account
+ * is the same row, so no second person is created. Callers must write it at most once per
+ * promotion; the promotion's conditional update guarantees that.
+ */
+export async function recordGuestPromotionEvent(
+  tx: Prisma.TransactionClient,
+  { userId, guestId }: { userId: string; guestId: string }
+): Promise<void> {
+  await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${guestMilestoneLockKey(guestId)}, 0))`;
+  await tx.funnelEvent.create({
+    data: {
+      type: 'REGISTER',
+      userId,
+      guestId,
+      createdAt: await nextChainCreatedAt(tx, guestId),
+    },
+  });
+}

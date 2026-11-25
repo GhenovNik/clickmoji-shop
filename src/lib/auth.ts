@@ -199,6 +199,13 @@ export const authOptions: NextAuthOptions = {
         throw new Error('Session user no longer valid');
       }
 
+      // A guest token minted before the row was promoted in place (AGE-1667) keeps the same id and
+      // passes the issuance check, so the stored isGuest claim is compared with the row here.
+      // Checked before the claim is overwritten below.
+      if (token.isGuest === true && !dbUser.isGuest) {
+        throw new Error('Guest session superseded by account');
+      }
+
       token.role = dbUser.role;
       token.email = dbUser.email;
       token.isGuest = dbUser.isGuest;

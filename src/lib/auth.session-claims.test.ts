@@ -205,3 +205,46 @@ describe('stale and incomplete tokens are rejected on refresh', () => {
     expect(doubles.findUniqueUser.mock.calls.every(([arg]) => !('email' in arg.where))).toBe(true);
   });
 });
+
+describe('a guest token does not survive its in-place promotion (AGE-1667)', () => {
+  const guestToken = () => ({
+    id: USER_ID,
+    sub: USER_ID,
+    role: 'USER',
+    email: 'guest_x@guest.clickmoji.invalid',
+    isGuest: true,
+    sessionIssuedAt: ISSUED_AT,
+  });
+
+  it('rejects a pre-upgrade guest token once the same row is an account', async () => {
+    doubles.findUniqueUser.mockResolvedValue(dbRow({ isGuest: false }));
+
+    await expect(runJwt({ token: guestToken() })).rejects.toThrow(
+      'Guest session superseded by account'
+    );
+  });
+
+  it('still refreshes a guest token while the row is a guest', async () => {
+    doubles.findUniqueUser.mockResolvedValue(dbRow({ isGuest: true }));
+
+    const token = await runJwt({ token: guestToken() });
+
+    expect(token.isGuest).toBe(true);
+  });
+
+  it('accepts the ordinary session minted by the promotion for the same id', async () => {
+    doubles.findUniqueUser.mockResolvedValue(dbRow({ isGuest: false }));
+
+    const token = await runJwt({
+      token: {
+        id: USER_ID,
+        sub: USER_ID,
+        role: 'USER',
+        isGuest: false,
+        sessionIssuedAt: ISSUED_AT,
+      },
+    });
+
+    expect(token).toMatchObject({ id: USER_ID, isGuest: false });
+  });
+});
