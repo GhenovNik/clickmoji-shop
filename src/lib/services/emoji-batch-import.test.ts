@@ -19,9 +19,11 @@ import {
   findBatchFiles,
   libraryTags,
   normalizeCatalogName,
+  parseReplacementAuthorization,
   planProduct,
   sliceSheet,
   type CellPlan,
+  type ManifestBatch,
   type ManifestCell,
 } from './emoji-batch-import';
 
@@ -2108,5 +2110,330 @@ describe('prompt visual references', () => {
       );
       expect(matches, matches.join('\n')).toEqual([]);
     }
+  });
+});
+
+describe('replacing a category picture (AGE-1667 C6)', () => {
+  const OLD = 'https://old.example.test/drinks-old.webp';
+  const NEW = 'https://new.example.test/drinks-new.webp';
+  const MANUAL = 'https://manual.example.test/hand-edit.webp';
+  const DRINKS: ManifestCell = {
+    cell: 1,
+    category: 'Напитки',
+    name: 'Напитки',
+    nameEn: 'Beverages',
+    action: 'replace',
+    target: 'category',
+    hint: 'exactly three most recognizable drinks together in one composition',
+  };
+  const planFor = (overrides: Partial<CellPlan> = {}): CellPlan => ({
+    ref: 'queue-011#1',
+    batch: 'queue-011',
+    batchKind: 'universal',
+    cell: DRINKS,
+    images: { ru: Buffer.from('ru') },
+    stored: {},
+    product: { kind: 'category', categoryId: 'c-drinks', categoryName: 'Напитки' },
+    replacement: { expectedImageUrl: OLD },
+    ...overrides,
+  });
+  // Category reads come in order: the pre-upload check, then the read after a failed write.
+  function prismaWith(categoryReads: unknown[], updateCount = 1, library: unknown = null) {
+    return {
+      emojiLibraryItem: {
+        findUnique: vi.fn().mockResolvedValue(library),
+        create: vi.fn().mockResolvedValue({}),
+        upsert: vi.fn().mockResolvedValue({}),
+        updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+      },
+      category: {
+        findUnique: vi.fn(async () => categoryReads.shift() ?? null),
+        updateMany: vi.fn().mockResolvedValue({ count: updateCount }),
+        update: vi.fn(),
+      },
+    };
+  }
+
+  it('refuses a replacement without its authorised old URL before any upload', async () => {
+    const prisma = prismaWith([{ imageUrl: OLD, isCustom: true }]);
+    const upload = vi.fn().mockResolvedValue(NEW);
+    await expect(
+      applyCell(prisma as unknown as PrismaClient, planFor({ replacement: undefined }), upload)
+    ).rejects.toThrow('needs its authorised old URL (--replace-auth)');
+    expect(upload).not.toHaveBeenCalled();
+    expect(prisma.emojiLibraryItem.create).not.toHaveBeenCalled();
+    expect(prisma.category.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('swaps the picture with one write conditional on the authorised old URL', async () => {
+    const prisma = prismaWith([{ imageUrl: OLD, isCustom: true }]);
+    const upload = vi.fn().mockResolvedValue(NEW);
+    const result = await applyCell(prisma as unknown as PrismaClient, planFor(), upload);
+
+    expect(result).toMatchObject({ product: 'category', changed: true, uploaded: 1 });
+    expect(prisma.category.updateMany).toHaveBeenCalledWith({
+      where: { id: 'c-drinks', imageUrl: OLD },
+      data: { isCustom: true, imageUrl: NEW },
+    });
+  });
+
+  it('leaves a manual edit alone and uploads nothing when the old URL no longer matches', async () => {
+    const prisma = prismaWith([{ imageUrl: MANUAL, isCustom: true }]);
+    const upload = vi.fn().mockResolvedValue(NEW);
+    const result = await applyCell(prisma as unknown as PrismaClient, planFor(), upload);
+
+    expect(result.product).toBe('conflict');
+    expect(result.conflict).toContain('не содержит ожидаемую старую картинку');
+    expect(upload).not.toHaveBeenCalled();
+    expect(prisma.category.updateMany).not.toHaveBeenCalled();
+  });
+
+  // The library record a previous run wrote for this cell: its picture is the new URL.
+  const LIBRARY = {
+    id: 'lib-1',
+    sourceRef: 'queue-011#1',
+    name: 'Напитки',
+    nameEn: 'Beverages',
+    tags: ['напитки', 'queue:category'],
+    imageUrl: NEW,
+    source: 'batch',
+    locale: null,
+    groupKey: 'queue-011#1',
+  };
+
+  it('resumes a run that stopped after the library write, with no second upload', async () => {
+    const prisma = prismaWith([{ imageUrl: OLD, isCustom: true }], 1, LIBRARY);
+    const upload = vi.fn().mockResolvedValue(NEW);
+    const result = await applyCell(prisma as unknown as PrismaClient, planFor(), upload);
+
+    expect(result).toMatchObject({ product: 'category', changed: true, uploaded: 0 });
+    expect(upload).not.toHaveBeenCalled();
+    expect(prisma.category.updateMany).toHaveBeenCalledWith({
+      where: { id: 'c-drinks', imageUrl: OLD },
+      data: { isCustom: true, imageUrl: NEW },
+    });
+  });
+
+  it('recognises a run that finished between the reads instead of refusing it', async () => {
+    const prisma = prismaWith(
+      [
+        { imageUrl: NEW, isCustom: true },
+        { imageUrl: NEW, isCustom: true },
+      ],
+      0
+    );
+    // The first read of the library record sees nothing; the concurrent run's record is there after.
+    prisma.emojiLibraryItem.findUnique = vi
+      .fn()
+      .mockResolvedValueOnce(null)
+      .mockResolvedValue(LIBRARY);
+    const upload = vi.fn().mockResolvedValue('https://unused.example.test/x.webp');
+    const result = await applyCell(prisma as unknown as PrismaClient, planFor(), upload);
+
+    expect(result).toMatchObject({ product: 'category', changed: false, uploaded: 0 });
+    expect(upload).not.toHaveBeenCalled();
+  });
+
+  it('reports a replay as unchanged once the category already holds the new URL', async () => {
+    const prisma = prismaWith(
+      [
+        { imageUrl: NEW, isCustom: true },
+        { imageUrl: NEW, isCustom: true },
+      ],
+      0,
+      LIBRARY
+    );
+    const upload = vi.fn().mockResolvedValue(NEW);
+    const result = await applyCell(
+      prisma as unknown as PrismaClient,
+      planFor({ replacement: { expectedImageUrl: OLD } }),
+      upload
+    );
+
+    expect(result).toMatchObject({ product: 'category', changed: false, uploaded: 0 });
+    expect(result.conflict).toBeUndefined();
+    expect(upload).not.toHaveBeenCalled();
+  });
+
+  it('conflicts, and keeps the concurrent value, when a write lands between the read and the update', async () => {
+    const prisma = prismaWith(
+      [
+        { imageUrl: OLD, isCustom: true },
+        { imageUrl: MANUAL, isCustom: true },
+      ],
+      0
+    );
+    // The other writer changes the category while this run is uploading.
+    const upload = vi.fn(async () => NEW);
+    const result = await applyCell(prisma as unknown as PrismaClient, planFor(), upload);
+
+    expect(result.product).toBe('conflict');
+    expect(result.conflict).toContain('изменилась после проверки');
+    expect(prisma.category.updateMany).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps a replacement that another run wrote with the same picture as one success', async () => {
+    const prisma = prismaWith(
+      [
+        { imageUrl: OLD, isCustom: true },
+        { imageUrl: NEW, isCustom: false },
+      ],
+      0
+    );
+    const result = await applyCell(
+      prisma as unknown as PrismaClient,
+      planFor(),
+      vi.fn().mockResolvedValue(NEW)
+    );
+    // A new URL without the custom flag is not the applied state: it is refused, not overwritten.
+    expect(result.product).toBe('conflict');
+  });
+
+  it('never replaces a category picture for an ambiguous or missing category', async () => {
+    const prisma = prismaWith([{ imageUrl: OLD, isCustom: true }]);
+    const upload = vi.fn().mockResolvedValue(NEW);
+    const result = await applyCell(
+      prisma as unknown as PrismaClient,
+      planFor({ product: { kind: 'not-found', reason: 'нет категории «Напитки»' } }),
+      upload
+    );
+    expect(result.product).toBe('not-found');
+    expect(prisma.category.updateMany).not.toHaveBeenCalled();
+  });
+});
+
+describe('the replacement authorisation file (AGE-1667 C6)', () => {
+  const manifest: ManifestBatch[] = [
+    {
+      batch: 'queue-010',
+      file: 'queue-010.png',
+      cells: [
+        {
+          cell: 1,
+          category: 'Овощи',
+          name: 'Овощи',
+          nameEn: 'Vegetables',
+          action: 'update-image',
+          target: 'category',
+        },
+      ],
+    },
+    {
+      batch: 'queue-011',
+      file: 'queue-011.png',
+      cells: [
+        {
+          cell: 1,
+          category: 'Напитки',
+          name: 'Напитки',
+          nameEn: 'Beverages',
+          action: 'replace',
+          target: 'category',
+        },
+        {
+          cell: 2,
+          category: 'Рыба и морепродукты',
+          name: 'Рыба и морепродукты',
+          nameEn: 'Fish & Seafood',
+          action: 'replace',
+          target: 'category',
+        },
+      ],
+    },
+  ];
+  const selected = [manifest[1]];
+  const entry = (category: string, expectedImageUrl = 'https://cdn.example.test/old.webp') => ({
+    category,
+    expectedImageUrl,
+  });
+  const file = (...replacements: unknown[]) => ({ replacements });
+
+  it('accepts one exact entry per selected replacement', () => {
+    const map = parseReplacementAuthorization(
+      file(entry('Напитки'), entry('Рыба и морепродукты')),
+      manifest,
+      selected
+    );
+    expect([...map.keys()]).toEqual(['напитки', 'рыба и морепродукты']);
+    expect(map.get('напитки')).toEqual({ expectedImageUrl: 'https://cdn.example.test/old.webp' });
+  });
+
+  it('refuses a missing replacement before anything is read', () => {
+    expect(() => parseReplacementAuthorization(file(entry('Напитки')), manifest, selected)).toThrow(
+      'нет записей для замены: рыба и морепродукты'
+    );
+  });
+
+  it('refuses an unknown, duplicate or non-replacement category', () => {
+    expect(() =>
+      parseReplacementAuthorization(file(entry('Напитки'), entry('Молоко')), manifest, selected)
+    ).toThrow('не заменяемая категория');
+    expect(() =>
+      parseReplacementAuthorization(
+        file(entry('Напитки'), entry('напитки'), entry('Рыба и морепродукты')),
+        manifest,
+        selected
+      )
+    ).toThrow('указана дважды');
+    expect(() =>
+      parseReplacementAuthorization(
+        file(entry('Напитки'), entry('Рыба и морепродукты'), entry('Овощи')),
+        manifest,
+        selected
+      )
+    ).toThrow('не заменяемая категория');
+  });
+
+  it('refuses a URL that is not an absolute https address, and extra or missing fields', () => {
+    expect(() =>
+      parseReplacementAuthorization(
+        file(entry('Напитки', 'http://cdn.example.test/a.webp'), entry('Рыба и морепродукты')),
+        manifest,
+        selected
+      )
+    ).toThrow('нужен абсолютный https-адрес');
+    expect(() =>
+      parseReplacementAuthorization(
+        file(entry('Напитки', 'not a url'), entry('Рыба и морепродукты')),
+        manifest,
+        selected
+      )
+    ).toThrow('URL не разобран');
+    expect(() =>
+      parseReplacementAuthorization(
+        file(
+          { category: 'Напитки', expectedImageUrl: 'https://cdn.example.test/a.webp', note: 'x' },
+          entry('Рыба и морепродукты')
+        ),
+        manifest,
+        selected
+      )
+    ).toThrow('ровно поля');
+    expect(() =>
+      parseReplacementAuthorization(
+        file({ category: 'Напитки' }, entry('Рыба и морепродукты')),
+        manifest,
+        selected
+      )
+    ).toThrow('ровно поля');
+  });
+
+  it('refuses a malformed top level', () => {
+    expect(() => parseReplacementAuthorization([], manifest, selected)).toThrow('ожидается объект');
+    expect(() => parseReplacementAuthorization({ replacements: {} }, manifest, selected)).toThrow(
+      'должно быть массивом'
+    );
+    expect(() =>
+      parseReplacementAuthorization({ replacements: [], extra: 1 }, manifest, selected)
+    ).toThrow('неизвестное поле');
+  });
+
+  it('accepts entries for replacements outside the selected batches', () => {
+    const map = parseReplacementAuthorization(
+      file(entry('Напитки'), entry('Рыба и морепродукты')),
+      manifest,
+      []
+    );
+    expect(map.size).toBe(2);
   });
 });

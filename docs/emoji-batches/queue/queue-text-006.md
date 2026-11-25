@@ -4,12 +4,12 @@
 2. **В том же чате** → промпт «Английская версия» → сохранить как `queue-text-006-en.png`.
    Рисунки остаются те же, меняются только надписи.
 
-| Ячейка | Цель                | English    | Каталог           | Тип   |
-| ------ | ------------------- | ---------- | ----------------- | ----- |
-| 1      | Корм для кошек      | Cat Food   | Корм для животных | товар |
-| 2      | Корм для собак      | Dog Food   | Корм для животных | товар |
-| 3      | Лакомства для кошек | Cat Treats | Корм для животных | товар |
-| 4      | Лакомства для собак | Dog Treats | Корм для животных | товар |
+| Ячейка | Цель                | English    | Каталог           | Тип   | Действие       |
+| ------ | ------------------- | ---------- | ----------------- | ----- | -------------- |
+| 1      | Корм для кошек      | Cat Food   | Корм для животных | товар | новая картинка |
+| 2      | Корм для собак      | Dog Food   | Корм для животных | товар | новая картинка |
+| 3      | Лакомства для кошек | Cat Treats | Корм для животных | товар | новая картинка |
+| 4      | Лакомства для собак | Dog Treats | Корм для животных | товар | новая картинка |
 
 ## Русская версия
 
@@ -17,7 +17,7 @@
 Create ONE square image: a 3×3 grid of separate product emoji on a pure white background (#FFFFFF).
 
 Style: One object viewed from the front at a slight angle, filling 70–80% of the cell; simplified smooth forms, 3–5 saturated colors, soft upper-left light and one soft highlight. No texture, pores, fibres, grains or photographic reflections; no outlines or background shadows. Labels are flat, single-color, with up to two large words. Recognizable at 32px.
-Category cells: Compose two or three items of the same group with the same lighting and simplification.
+Category cells: Compose exactly three of the most recognizable items of the same group, in one single composition, with the same lighting and simplification as the other cells.
 NOT photorealistic, NOT a cartoon sticker: no thick dark outlines. NO shadows or drop shadows. NO grid lines, cell borders, frames or dividers. NO captions under the icons.
 Every icon is centered in its own cell with generous white space around it; no icon touches or crosses its cell edge.
 Only cells 1–4 hold an icon. Every other cell stays completely empty white: do not repeat, copy or add any icon there.

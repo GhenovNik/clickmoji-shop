@@ -15,6 +15,11 @@ import { normalizeEmojiImage } from '@/lib/services/emoji-image-normalize';
 // decided by the winner), and its catalogue write only happens while the record still has no picture,
 // or, for an English picture added later to this cell's own Russian one, while its English slot is
 // empty. Historical cells (no `target`) keep the old rules.
+//
+// A replace cell (AGE-1667 C6, action "replace", categories only) swaps a category picture that is
+// already there. The operator authorises the exact URL it expects to find (--replace-auth, kept out
+// of the repository). The catalogue write is one conditional update on that URL: it applies when the
+// category still holds it, reports "already applied" when it holds the new one, and conflicts otherwise.
 
 // What a cell's picture is for. Historical batches (no `target`) mean a product.
 export type ManifestTarget = 'product' | 'variant' | 'category';
@@ -28,13 +33,16 @@ export type ManifestCell = {
   text?: boolean;
   // Enclosed white regions were checked to be gaps between parts of the object.
   gaps?: boolean;
-  action: 'create' | 'update-image';
+  action: 'create' | 'update-image' | 'replace';
   // The product's picture now comes from this text-batch cell; this one stays in the library.
   supersededBy?: string;
   target?: ManifestTarget;
   // Variant only: the name of its catalogue product. The variant is looked up under that product.
   parent?: string;
 };
+
+// The picture a replace cell expects to find on its category, given by the operator at apply time.
+export type ReplacementAuthorization = { expectedImageUrl: string };
 
 // universal: one text-free picture for every language; text: a Russian and an English sheet.
 export type BatchKind = 'universal' | 'text';
@@ -79,6 +87,8 @@ export type CellPlan = {
   images: CellImages;
   stored: { ru?: string; en?: string };
   product: ProductPlan;
+  // Set for a replace cell whose category is found: the authorised old URL.
+  replacement?: ReplacementAuthorization;
 };
 
 const IMAGE_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.webp'];
@@ -171,6 +181,80 @@ export async function readBatchImages(
       en: enSource ? await normalizeEmojiImage(enSource, options) : undefined,
     });
   }
+  return result;
+}
+
+// Keys: the normalized category name of each replace cell in the manifest.
+export const REPLACE_AUTH_FIELDS = ['category', 'expectedImageUrl'] as const;
+
+// Validates the operator's replacement authorisation before anything is read or uploaded. The file
+// is { "replacements": [{ "category": "<catalogue category name>", "expectedImageUrl": "https://…" }] }
+// and must name exactly the replace cells of the selected batches: a missing one is refused, an
+// unknown or duplicate one is refused, and a URL that is not an absolute https URL is refused.
+// Returns the authorised URL per normalized category name.
+export function parseReplacementAuthorization(
+  json: unknown,
+  manifest: ManifestBatch[],
+  selected: ManifestBatch[]
+): Map<string, ReplacementAuthorization> {
+  const fail = (reason: string): never => {
+    throw new Error(`--replace-auth: ${reason}`);
+  };
+  const replaceNames = (batches: ManifestBatch[]) =>
+    batches.flatMap((batch) =>
+      batch.cells.filter((cell) => cell.action === 'replace').map((cell) => cell.name)
+    );
+  const known = new Set(replaceNames(manifest).map(normalizeCatalogName));
+  const required = new Set(replaceNames(selected).map(normalizeCatalogName));
+
+  if (typeof json !== 'object' || json === null || Array.isArray(json)) {
+    fail('ожидается объект { "replacements": [...] }');
+  }
+  const top = json as Record<string, unknown>;
+  if (Object.keys(top).some((key) => key !== 'replacements')) {
+    fail(
+      `неизвестное поле в корне: ${Object.keys(top)
+        .filter((k) => k !== 'replacements')
+        .join(', ')}`
+    );
+  }
+  if (!Array.isArray(top.replacements)) fail('поле "replacements" должно быть массивом');
+
+  const result = new Map<string, ReplacementAuthorization>();
+  for (const entry of top.replacements as unknown[]) {
+    if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) {
+      fail('каждая запись — объект с полями "category" и "expectedImageUrl"');
+    }
+    const fields = entry as Record<string, unknown>;
+    const keys = Object.keys(fields);
+    if (
+      keys.length !== REPLACE_AUTH_FIELDS.length ||
+      !REPLACE_AUTH_FIELDS.every((k) => keys.includes(k))
+    ) {
+      fail(
+        `запись должна иметь ровно поля "category" и "expectedImageUrl" (есть: ${keys.join(', ')})`
+      );
+    }
+    const { category, expectedImageUrl } = fields;
+    if (typeof category !== 'string' || category.trim() === '') fail('пустое название категории');
+    if (typeof expectedImageUrl !== 'string') fail(`«${category}»: URL должен быть строкой`);
+    const key = normalizeCatalogName(category as string);
+    if (!known.has(key)) fail(`«${category}» не заменяемая категория (replace в манифесте нет)`);
+    if (result.has(key)) fail(`«${category}» указана дважды`);
+    let url: URL;
+    try {
+      url = new URL(expectedImageUrl as string);
+    } catch {
+      fail(`«${category}»: URL не разобран`);
+      throw new Error('unreachable');
+    }
+    if (url.protocol !== 'https:' || /\s/.test(expectedImageUrl as string)) {
+      fail(`«${category}»: нужен абсолютный https-адрес без пробелов`);
+    }
+    result.set(key, { expectedImageUrl: expectedImageUrl as string });
+  }
+  const missing = [...required].filter((key) => !result.has(key));
+  if (missing.length > 0) fail(`нет записей для замены: ${missing.join(', ')}`);
   return result;
 }
 
@@ -505,10 +589,20 @@ export async function applyCell(
   if (textBatch && plan.product.kind === 'category') {
     throw new Error(`${ref}: a category picture must be text-free`);
   }
+  // A replacement is refused before any read or upload when its old URL was not authorised.
+  const replacing = cell.action === 'replace' && plan.product.kind === 'category';
+  if (cell.action === 'replace' && !queue) {
+    throw new Error(`${ref}: only a queue cell can replace a picture`);
+  }
+  if (replacing && plan.replacement === undefined) {
+    throw new Error(
+      `${ref}: replacing the picture of «${cell.name}» needs its authorised old URL (--replace-auth)`
+    );
+  }
 
   // Every library read comes before the first upload, so a failed read has nothing to clean up.
   const enRef = `${ref}:en`;
-  const ruCurrent = await prisma.emojiLibraryItem.findUnique({ where: { sourceRef: ref } });
+  let ruCurrent = await prisma.emojiLibraryItem.findUnique({ where: { sourceRef: ref } });
   const enCurrent =
     textBatch && images.en
       ? await prisma.emojiLibraryItem.findUnique({ where: { sourceRef: enRef } })
@@ -523,6 +617,40 @@ export async function applyCell(
         changed: false,
         product: 'conflict',
         conflict: `картинка ${ref} записана для другой цели («${row.name}»)`,
+      };
+    }
+  }
+
+  // A replacement reads the category before the first upload: only the authorised old URL, or the
+  // URL this cell's library record already holds (a previous run that stopped before the catalogue
+  // write), may be replaced. Anything else is a manual or concurrent edit and is left alone.
+  if (replacing && plan.product.kind === 'category') {
+    const current = await prisma.category.findUnique({
+      where: { id: plan.product.categoryId },
+      select: { imageUrl: true },
+    });
+    const expected = plan.replacement!.expectedImageUrl;
+    let accepted =
+      current !== null &&
+      (current.imageUrl === expected || current.imageUrl === (ruCurrent?.imageUrl ?? null));
+    if (current !== null && !accepted) {
+      // A run that finished between the two reads above wrote this cell's library record and the
+      // category: its record is the one this run reuses, so the replay is recognised, not refused.
+      const fresh = await prisma.emojiLibraryItem.findUnique({ where: { sourceRef: ref } });
+      if (fresh !== null && fresh.imageUrl === current.imageUrl && ownsLibraryItem(fresh, cell)) {
+        ruCurrent = fresh;
+        accepted = true;
+      }
+    }
+    if (!accepted) {
+      return {
+        ref,
+        name: cell.name,
+        uploaded: 0,
+        changed: false,
+        product: 'conflict',
+        productName: plan.product.categoryName,
+        conflict: `категория «${plan.product.categoryName}» не содержит ожидаемую старую картинку (изменена вручную или другой пачкой) — замена не записана`,
       };
     }
   }
@@ -732,6 +860,46 @@ export async function applyCell(
         where: { id: categoryId },
         select: { imageUrl: true, isCustom: true },
       });
+    if (replacing) {
+      // One conditional write on the authorised old URL. Missing it means the category changed
+      // after the read: the new URL already there (a run that raced this one) is the same outcome;
+      // anything else is a conflict and nothing is overwritten.
+      const { count } = await prisma.category.updateMany({
+        where: { id: categoryId, imageUrl: plan.replacement!.expectedImageUrl },
+        data,
+      });
+      if (count === 1) {
+        changed = true;
+        return {
+          ref,
+          name: cell.name,
+          uploaded,
+          changed,
+          product: 'category',
+          productName: categoryName,
+        };
+      }
+      const after = await readCategory();
+      if (after !== null && after.imageUrl === imageUrl && after.isCustom) {
+        return {
+          ref,
+          name: cell.name,
+          uploaded,
+          changed,
+          product: 'category',
+          productName: categoryName,
+        };
+      }
+      return {
+        ref,
+        name: cell.name,
+        uploaded,
+        changed,
+        product: 'conflict',
+        productName: categoryName,
+        conflict: `картинка категории «${categoryName}» изменилась после проверки — замена не записана`,
+      };
+    }
     const current = await readCategory();
     if (queue) {
       const write = await writeQueuePicture(

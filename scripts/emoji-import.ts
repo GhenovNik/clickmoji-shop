@@ -8,7 +8,9 @@ import {
   cellRef,
   findBatchFiles,
   loadCatalogIndex,
+  normalizeCatalogName,
   ownsLibraryItem,
+  parseReplacementAuthorization,
   planProduct,
   readBatchImages,
   storedPictures,
@@ -19,12 +21,14 @@ import {
   type StoredPicture,
 } from '../src/lib/services/emoji-batch-import';
 
-// Imports the operator's emoji sheets (AGE-1465 item 2, AGE-1667 queue).
+// Imports the operator's emoji sheets (AGE-1465 item 2, AGE-1667 queue, AGE-1667 C6 replacements).
 //   npx tsx scripts/emoji-import.ts [--dir <folder>] [--batch 001,002,text-001,queue-001] [--out <folder>]
 //   DATABASE_URL=... npx tsx scripts/emoji-import.ts ...            preview against the catalogue
 //   DATABASE_URL=... UPLOADTHING_TOKEN=... npx tsx scripts/emoji-import.ts --apply ...
+//   ... --replace-auth <file.json>   the old URLs of the replaced categories (required for --apply)
 // Without --apply nothing is written: the normalized pictures and preview.html go to --out.
-// DATABASE_URL is read from the environment only, never from .env.
+// DATABASE_URL is read from the environment only, never from .env. The replacement file is never
+// committed: it lists the picture URL the operator saw on each replaced category, see the README.
 
 const MANIFESTS = ['docs/emoji-batches/manifest.json', 'docs/emoji-batches/queue-manifest.json'];
 
@@ -79,6 +83,11 @@ ${summary.map((line) => `<p>${escapeHtml(line)}</p>`).join('\n')}
 // What a cell will do, in words for the preview. Without a catalogue there is nothing to check.
 function describeAction(cell: ManifestCell, product: ProductPlan | null) {
   if (cell.supersededBy) return `только в библиотеку: картинка товара — из ${cell.supersededBy}`;
+  if (cell.action === 'replace') {
+    if (!product) return `замена картинки категории «${cell.name}» (каталог не проверялся)`;
+    if (product.kind === 'category')
+      return `замена картинки категории «${product.categoryName}»: записывается, только если категория всё ещё содержит старую картинку из --replace-auth; иначе конфликт, ничего не перезаписывается`;
+  }
   if (!product) {
     if (cell.target === 'variant')
       return `привязать к варианту «${cell.name}» (каталог не проверялся)`;
@@ -139,6 +148,14 @@ function summarize(targets: { cell: ManifestCell; product: ProductPlan | null }[
   return lines;
 }
 
+// Replacement targets among the selected batches: each needs its authorised old URL to apply.
+function replaceCount(batches: ManifestBatch[]) {
+  return batches.reduce(
+    (n, batch) => n + batch.cells.filter((c) => c.action === 'replace').length,
+    0
+  );
+}
+
 function argumentBatches(value: string) {
   return value
     .split(',')
@@ -159,6 +176,24 @@ async function main() {
     (path) => JSON.parse(readFileSync(path, 'utf8')) as ManifestBatch[]
   );
   const batches = manifest.filter((batch) => !only || only.includes(batch.batch));
+
+  // Checked before any file is read or uploaded: a replacement without an exact authorisation stops here.
+  const authPath = argument('--replace-auth');
+  let authorization: ReturnType<typeof parseReplacementAuthorization> | undefined;
+  if (authPath) {
+    const file = resolve(expandHome(authPath));
+    let json: unknown;
+    try {
+      json = JSON.parse(readFileSync(file, 'utf8'));
+    } catch (error) {
+      throw new Error(`--replace-auth: ${file} не читается как JSON: ${(error as Error).message}`);
+    }
+    authorization = parseReplacementAuthorization(json, manifest, batches);
+  } else if (apply && replaceCount(batches) > 0) {
+    throw new Error(
+      `--apply: ${replaceCount(batches)} замен(ы) картинок категорий требуют --replace-auth <файл> с прежним URL каждой категории (см. docs/emoji-batches/README.md)`
+    );
+  }
   const prisma = process.env.DATABASE_URL
     ? new PrismaClient({ adapter: createPrismaPgAdapter() })
     : null;
@@ -197,6 +232,10 @@ async function main() {
       if (enFile && picture.en) writeFileSync(join(out, enFile), picture.en);
 
       const product = index ? planProduct(cell, index) : null;
+      const replacement =
+        cell.action === 'replace' && authorization
+          ? authorization.get(normalizeCatalogName(cell.name))
+          : undefined;
       // A queue cell whose library record belongs to another target is refused at apply time.
       const owner = stored.get(ref);
       const clash = cell.target !== undefined && owner && !ownsLibraryItem(owner, cell);
@@ -221,6 +260,7 @@ async function main() {
           images: picture,
           stored: { ru: owner?.imageUrl, en: stored.get(`${ref}:en`)?.imageUrl },
           product,
+          replacement,
         });
       }
     }
@@ -229,6 +269,12 @@ async function main() {
   const summary = index
     ? summarize(targets)
     : [`Целей: ${targets.length}; каталог не проверялся (нет DATABASE_URL).`];
+  const replaces = replaceCount(batches);
+  if (replaces > 0) {
+    summary.push(
+      `Замен картинок категорий: ${replaces}; ${authorization ? 'старые URL проверены по --replace-auth' : 'без --replace-auth запись невозможна'}.`
+    );
+  }
   writeFileSync(join(out, 'preview.html'), previewHtml(rows, missing, summary));
   console.log(`Preview: ${join(out, 'preview.html')} (${rows.length} cells)`);
   for (const line of summary) console.log(line);

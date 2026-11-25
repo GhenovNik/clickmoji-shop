@@ -676,7 +676,7 @@
         "category": "Овощи",
         "name": "Овощи",
         "nameEn": "Vegetables",
-        "hint": "two or three typical vegetables together",
+        "hint": "exactly three most recognizable vegetables together in one composition",
         "action": "update-image"
       },
       {
@@ -685,7 +685,7 @@
         "category": "Фрукты",
         "name": "Фрукты",
         "nameEn": "Fruits",
-        "hint": "two or three typical fruits together",
+        "hint": "exactly three most recognizable fruits together in one composition",
         "action": "update-image"
       },
       {
@@ -694,7 +694,7 @@
         "category": "Молочные продукты",
         "name": "Молочные продукты",
         "nameEn": "Dairy",
-        "hint": "two or three dairy items together",
+        "hint": "exactly three most recognizable dairy items together in one composition",
         "action": "update-image"
       },
       {
@@ -703,7 +703,7 @@
         "category": "Хлеб и выпечка",
         "name": "Хлеб и выпечка",
         "nameEn": "Bread & Bakery",
-        "hint": "two or three bakery items together",
+        "hint": "exactly three most recognizable bakery items together in one composition",
         "action": "update-image"
       },
       {
@@ -712,7 +712,7 @@
         "category": "Мясо и мясные продукты",
         "name": "Мясо и мясные продукты",
         "nameEn": "Meat",
-        "hint": "two or three cuts or pieces of meat together",
+        "hint": "exactly three most recognizable cuts or pieces of meat together in one composition",
         "action": "update-image"
       }
     ]
@@ -728,7 +728,7 @@
         "category": "Консервы и готовая еда",
         "name": "Консервы и готовая еда",
         "nameEn": "Canned & Ready Food",
-        "hint": "two or three ready-to-eat dishes or cans together",
+        "hint": "exactly three most recognizable ready-to-eat dishes or cans together in one composition",
         "action": "update-image"
       },
       {
@@ -737,7 +737,7 @@
         "category": "Бытовая химия",
         "name": "Бытовая химия",
         "nameEn": "Household Chemicals",
-        "hint": "two or three household cleaning items together",
+        "hint": "exactly three most recognizable household cleaning items together in one composition",
         "action": "update-image"
       },
       {
@@ -746,7 +746,7 @@
         "category": "Товары для дома",
         "name": "Товары для дома",
         "nameEn": "Home Goods",
-        "hint": "two or three household items together",
+        "hint": "exactly three most recognizable household items together in one composition",
         "action": "update-image"
       },
       {
@@ -755,7 +755,7 @@
         "category": "Аптека",
         "name": "Аптека",
         "nameEn": "Pharmacy",
-        "hint": "two or three pharmacy items together",
+        "hint": "exactly three most recognizable pharmacy items together in one composition",
         "action": "update-image"
       },
       {
@@ -764,7 +764,7 @@
         "category": "Косметика",
         "name": "Косметика",
         "nameEn": "Cosmetics",
-        "hint": "two or three cosmetic items together",
+        "hint": "exactly three most recognizable cosmetic items together in one composition",
         "action": "update-image"
       },
       {
@@ -773,7 +773,7 @@
         "category": "Сладости",
         "name": "Сладости",
         "nameEn": "Sweets",
-        "hint": "two or three sweets together",
+        "hint": "exactly three most recognizable sweets together in one composition",
         "action": "update-image"
       },
       {
@@ -782,7 +782,7 @@
         "category": "Замороженные продукты",
         "name": "Замороженные продукты",
         "nameEn": "Frozen",
-        "hint": "two or three frozen foods together",
+        "hint": "exactly three most recognizable frozen foods together in one composition",
         "action": "update-image"
       },
       {
@@ -791,7 +791,7 @@
         "category": "Детское питание",
         "name": "Детское питание",
         "nameEn": "Baby Food",
-        "hint": "two or three baby food items together",
+        "hint": "exactly three most recognizable baby food items together in one composition",
         "action": "update-image"
       },
       {
@@ -800,8 +800,60 @@
         "category": "Корм для животных",
         "name": "Корм для животных",
         "nameEn": "Pet Food",
-        "hint": "two or three pet food items together",
+        "hint": "exactly three most recognizable pet food items together in one composition",
         "action": "update-image"
+      }
+    ]
+  },
+  {
+    "batch": "queue-011",
+    "kind": "universal",
+    "file": "queue-011.png",
+    "cells": [
+      {
+        "cell": 1,
+        "target": "category",
+        "category": "Напитки",
+        "name": "Напитки",
+        "nameEn": "Beverages",
+        "hint": "exactly three most recognizable drinks together in one composition",
+        "action": "replace"
+      },
+      {
+        "cell": 2,
+        "target": "category",
+        "category": "Крупы и макароны",
+        "name": "Крупы и макароны",
+        "nameEn": "Grains & Pasta",
+        "hint": "exactly three most recognizable grains or pasta together in one composition",
+        "action": "replace"
+      },
+      {
+        "cell": 3,
+        "target": "category",
+        "category": "Орехи и Сухофрукты",
+        "name": "Орехи и Сухофрукты",
+        "nameEn": "Nuts & Dried Fruits",
+        "hint": "exactly three most recognizable nuts or dried fruits together in one composition",
+        "action": "replace"
+      },
+      {
+        "cell": 4,
+        "target": "category",
+        "category": "Масла и соусы",
+        "name": "Масла и соусы",
+        "nameEn": "Oils & Sauces",
+        "hint": "exactly three most recognizable oils or sauces together in one composition",
+        "action": "replace"
+      },
+      {
+        "cell": 5,
+        "target": "category",
+        "category": "Рыба и морепродукты",
+        "name": "Рыба и морепродукты",
+        "nameEn": "Fish & Seafood",
+        "hint": "exactly three most recognizable fish or seafood together in one composition",
+        "action": "replace"
       }
     ]
   },

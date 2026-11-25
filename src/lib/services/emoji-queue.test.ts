@@ -5,8 +5,8 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { findBatchFiles } from './emoji-batch-import';
 import {
+  catalogueTargets,
   main,
-  openTargets,
   planQueueBatches,
   validateQueue,
   type QueueItem,
@@ -22,21 +22,48 @@ const snapshot = JSON.parse(readFileSync(join(DOCS, 'catalog-snapshot-2026-11-25
 const candidates = JSON.parse(readFileSync(join(DOCS, 'queue-candidates.json'), 'utf8'))
   .items as QueueItem[];
 
-describe('queue of the 139 open catalogue records', () => {
-  it('matches the snapshot exactly: 123 products, 2 variants, 14 categories', () => {
+describe('queue of the 144 catalogue targets (AGE-1667 C6)', () => {
+  it('matches the snapshot exactly: 123 products, 2 variants, 19 categories', () => {
     expect(() => validateQueue(candidates, snapshot)).not.toThrow();
     const count = (target: string) => candidates.filter((item) => item.target === target).length;
     expect(count('product')).toBe(123);
     expect(count('variant')).toBe(2);
-    expect(count('category')).toBe(14);
-    expect(openTargets(snapshot)).toHaveLength(139);
+    expect(count('category')).toBe(19);
+    expect(catalogueTargets(snapshot)).toHaveLength(144);
+    expect(candidates).toHaveLength(144);
+  });
+
+  it('replaces exactly the five snapshot categories that already have a picture', () => {
+    const replaced = candidates.filter((item) => item.action === 'replace');
+    expect(replaced.map((item) => item.name)).toEqual([
+      'Напитки',
+      'Крупы и макароны',
+      'Орехи и Сухофрукты',
+      'Масла и соусы',
+      'Рыба и морепродукты',
+    ]);
+    expect(replaced.every((item) => item.target === 'category')).toBe(true);
+    expect(candidates.filter((item) => item.action === 'update-image')).toHaveLength(139);
+  });
+
+  it('asks every category cell for exactly three most recognizable items', () => {
+    const categories = candidates.filter((item) => item.target === 'category');
+    expect(categories.every((item) => item.hint?.startsWith('exactly three '))).toBe(true);
+  });
+
+  it('keeps the 139 earlier targets first and appends the five replacements (queue-011)', () => {
+    const batches = planQueueBatches(candidates);
+    expect(batches.filter((b) => b.kind === 'universal')).toHaveLength(11);
+    const last = batches.find((b) => b.id === 'queue-011')!;
+    expect(last.items.map((item) => item.action)).toEqual(Array(5).fill('replace'));
+    expect(batches.filter((b) => b.kind === 'text')).toHaveLength(6);
   });
 
   it('splits 49 labelled products into text batches and the rest into text-free batches', () => {
     const batches = planQueueBatches(candidates);
     const universal = batches.filter((b) => b.kind === 'universal');
     const text = batches.filter((b) => b.kind === 'text');
-    expect(universal).toHaveLength(10);
+    expect(universal).toHaveLength(11);
     expect(text).toHaveLength(6);
     expect(text.flatMap((b) => b.items)).toHaveLength(49);
     expect(text.flatMap((b) => b.items).every((item) => item.target === 'product')).toBe(true);
@@ -47,7 +74,7 @@ describe('queue of the 139 open catalogue records', () => {
     const batches = planQueueBatches(candidates);
     expect(batches.every((b) => b.items.length <= 9)).toBe(true);
     const names = batches.flatMap((b) => b.items.map((item) => `${item.target}:${item.name}`));
-    expect(new Set(names).size).toBe(139);
+    expect(new Set(names).size).toBe(144);
   });
 
   it('uses batch ids that do not prefix each other on disk', () => {
@@ -92,7 +119,7 @@ describe('queue validation', () => {
   it('refuses a record that already has a picture in the snapshot', () => {
     const withPicture = { ...product, name: 'Артишок', nameEn: 'Artichoke', category: 'Овощи' };
     expect(() => validateQueue([...candidates, withPicture], snapshot)).toThrow(
-      'not an open catalogue record: product «Артишок»'
+      'not a catalogue target: product «Артишок»'
     );
   });
 
@@ -107,6 +134,33 @@ describe('queue validation', () => {
       item === product ? { ...item, nameEn: 'Wrong' } : item
     );
     expect(() => validateQueue(wrong, snapshot)).toThrow('nameEn differs');
+  });
+
+  it('refuses a replacement for a category that has no picture, and a missing replacement', () => {
+    const replaced = candidates.find((item) => item.action === 'replace')!;
+    const asUpdate = candidates.map((item) =>
+      item === replaced ? { ...item, action: 'update-image' as const } : item
+    );
+    expect(() => validateQueue(asUpdate, snapshot)).toThrow(
+      `action differs from the snapshot: category «${replaced.name}» is replace, not update-image`
+    );
+    const emptyCategory = candidates.find(
+      (item) => item.target === 'category' && item.action === 'update-image'
+    )!;
+    const asReplace = candidates.map((item) =>
+      item === emptyCategory ? { ...item, action: 'replace' as const } : item
+    );
+    expect(() => validateQueue(asReplace, snapshot)).toThrow(
+      `category «${emptyCategory.name}» is update-image, not replace`
+    );
+  });
+
+  it('refuses a category whose prompt does not ask for exactly three items', () => {
+    const category = candidates.find((item) => item.target === 'category')!;
+    const loose = candidates.map((item) =>
+      item === category ? { ...item, hint: 'two or three items together' } : item
+    );
+    expect(() => validateQueue(loose, snapshot)).toThrow('must ask for exactly three items');
   });
 
   it('refuses a category with text on it', () => {

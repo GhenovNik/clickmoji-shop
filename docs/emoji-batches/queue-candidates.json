@@ -5,200 +5,233 @@
       "target": "product",
       "category": "Овощи",
       "name": "Авокадо",
-      "nameEn": "Avocado"
+      "nameEn": "Avocado",
+      "action": "update-image"
     },
     {
       "target": "product",
       "category": "Овощи",
       "name": "Баклажан",
-      "nameEn": "Eggplant"
+      "nameEn": "Eggplant",
+      "action": "update-image"
     },
     {
       "target": "product",
       "category": "Овощи",
       "name": "Болгарский перец",
-      "nameEn": "Bell Pepper"
+      "nameEn": "Bell Pepper",
+      "action": "update-image"
     },
     {
       "target": "product",
       "category": "Овощи",
       "name": "Брокколи",
-      "nameEn": "Broccoli"
+      "nameEn": "Broccoli",
+      "action": "update-image"
     },
     {
       "target": "product",
       "category": "Овощи",
       "name": "Горох",
-      "nameEn": "Peas"
+      "nameEn": "Peas",
+      "action": "update-image"
     },
     {
       "target": "product",
       "category": "Овощи",
       "name": "Грибы",
-      "nameEn": "Mushrooms"
+      "nameEn": "Mushrooms",
+      "action": "update-image"
     },
     {
       "target": "product",
       "category": "Овощи",
       "name": "Капуста",
-      "nameEn": "Cabbage"
+      "nameEn": "Cabbage",
+      "action": "update-image"
     },
     {
       "target": "product",
       "category": "Овощи",
       "name": "Картофель",
-      "nameEn": "Potato"
+      "nameEn": "Potato",
+      "action": "update-image"
     },
     {
       "target": "product",
       "category": "Овощи",
       "name": "Кукуруза",
-      "nameEn": "Corn"
+      "nameEn": "Corn",
+      "action": "update-image"
     },
     {
       "target": "product",
       "category": "Овощи",
       "name": "Лук",
-      "nameEn": "Onion"
+      "nameEn": "Onion",
+      "action": "update-image"
     },
     {
       "target": "product",
       "category": "Овощи",
       "name": "Морковь",
-      "nameEn": "Carrot"
+      "nameEn": "Carrot",
+      "action": "update-image"
     },
     {
       "target": "product",
       "category": "Овощи",
       "name": "Огурец",
-      "nameEn": "Cucumber"
+      "nameEn": "Cucumber",
+      "action": "update-image"
     },
     {
       "target": "product",
       "category": "Овощи",
       "name": "Перец чили",
-      "nameEn": "Chili Pepper"
+      "nameEn": "Chili Pepper",
+      "action": "update-image"
     },
     {
       "target": "product",
       "category": "Овощи",
       "name": "Помидор",
-      "nameEn": "Tomato"
+      "nameEn": "Tomato",
+      "action": "update-image"
     },
     {
       "target": "product",
       "category": "Овощи",
       "name": "Чеснок",
-      "nameEn": "Garlic"
+      "nameEn": "Garlic",
+      "action": "update-image"
     },
     {
       "target": "product",
       "category": "Фрукты",
       "name": "Абрикос",
-      "nameEn": "Apricot"
+      "nameEn": "Apricot",
+      "action": "update-image"
     },
     {
       "target": "product",
       "category": "Фрукты",
       "name": "Ананас",
-      "nameEn": "Pineapple"
+      "nameEn": "Pineapple",
+      "action": "update-image"
     },
     {
       "target": "product",
       "category": "Фрукты",
       "name": "Апельсин",
-      "nameEn": "Orange"
+      "nameEn": "Orange",
+      "action": "update-image"
     },
     {
       "target": "product",
       "category": "Фрукты",
       "name": "Арбуз",
-      "nameEn": "Watermelon"
+      "nameEn": "Watermelon",
+      "action": "update-image"
     },
     {
       "target": "product",
       "category": "Фрукты",
       "name": "Банан",
-      "nameEn": "Banana"
+      "nameEn": "Banana",
+      "action": "update-image"
     },
     {
       "target": "product",
       "category": "Фрукты",
       "name": "Виноград",
-      "nameEn": "Grapes"
+      "nameEn": "Grapes",
+      "action": "update-image"
     },
     {
       "target": "product",
       "category": "Фрукты",
       "name": "Вишня",
-      "nameEn": "Cherry"
+      "nameEn": "Cherry",
+      "action": "update-image"
     },
     {
       "target": "product",
       "category": "Фрукты",
       "name": "Груша",
-      "nameEn": "Pear"
+      "nameEn": "Pear",
+      "action": "update-image"
     },
     {
       "target": "product",
       "category": "Фрукты",
       "name": "Киви",
-      "nameEn": "Kiwi"
+      "nameEn": "Kiwi",
+      "action": "update-image"
     },
     {
       "target": "product",
       "category": "Фрукты",
       "name": "Клубника",
-      "nameEn": "Strawberry"
+      "nameEn": "Strawberry",
+      "action": "update-image"
     },
     {
       "target": "product",
       "category": "Фрукты",
       "name": "Лимон",
-      "nameEn": "Lemon"
+      "nameEn": "Lemon",
+      "action": "update-image"
     },
     {
       "target": "product",
       "category": "Фрукты",
       "name": "Манго",
-      "nameEn": "Mango"
+      "nameEn": "Mango",
+      "action": "update-image"
     },
     {
       "target": "product",
       "category": "Фрукты",
       "name": "Мандарин",
-      "nameEn": "Mandarin"
+      "nameEn": "Mandarin",
+      "action": "update-image"
     },
     {
       "target": "product",
       "category": "Фрукты",
       "name": "Персик",
-      "nameEn": "Peach"
+      "nameEn": "Peach",
+      "action": "update-image"
     },
     {
       "target": "product",
       "category": "Фрукты",
       "name": "Черника",
-      "nameEn": "Blueberry"
+      "nameEn": "Blueberry",
+      "action": "update-image"
     },
     {
       "target": "product",
       "category": "Фрукты",
       "name": "Яблоко",
-      "nameEn": "Apple"
+      "nameEn": "Apple",
+      "action": "update-image"
     },
     {
       "target": "variant",
       "category": "Фрукты",
       "parent": "Яблоко",
       "name": "Яблоко Ханикрисп",
-      "nameEn": "Honeycrisp apple"
+      "nameEn": "Honeycrisp apple",
+      "action": "update-image"
     },
     {
       "target": "product",
       "category": "Молочные продукты",
       "name": "Масло сливочное",
       "nameEn": "Butter",
+      "action": "update-image",
       "text": true
     },
     {
@@ -206,6 +239,7 @@
       "category": "Молочные продукты",
       "name": "Молоко",
       "nameEn": "Milk",
+      "action": "update-image",
       "text": true
     },
     {
@@ -213,6 +247,7 @@
       "category": "Молочные продукты",
       "name": "Мороженое",
       "nameEn": "Ice Cream",
+      "action": "update-image",
       "text": true
     },
     {
@@ -220,143 +255,166 @@
       "category": "Молочные продукты",
       "name": "Сыр",
       "nameEn": "Cheese",
+      "action": "update-image",
       "text": true
     },
     {
       "target": "product",
       "category": "Молочные продукты",
       "name": "Яйца",
-      "nameEn": "Eggs"
+      "nameEn": "Eggs",
+      "action": "update-image"
     },
     {
       "target": "product",
       "category": "Хлеб и выпечка",
       "name": "Багет",
-      "nameEn": "Baguette"
+      "nameEn": "Baguette",
+      "action": "update-image"
     },
     {
       "target": "product",
       "category": "Хлеб и выпечка",
       "name": "Блины",
-      "nameEn": "Pancakes"
+      "nameEn": "Pancakes",
+      "action": "update-image"
     },
     {
       "target": "product",
       "category": "Хлеб и выпечка",
       "name": "Бублик",
-      "nameEn": "Bagel"
+      "nameEn": "Bagel",
+      "action": "update-image"
     },
     {
       "target": "product",
       "category": "Хлеб и выпечка",
       "name": "Вафли",
       "nameEn": "Waffles",
+      "action": "update-image",
       "text": true
     },
     {
       "target": "product",
       "category": "Хлеб и выпечка",
       "name": "Кекс",
-      "nameEn": "Cupcake"
+      "nameEn": "Cupcake",
+      "action": "update-image"
     },
     {
       "target": "product",
       "category": "Хлеб и выпечка",
       "name": "Крендель",
-      "nameEn": "Pretzel"
+      "nameEn": "Pretzel",
+      "action": "update-image"
     },
     {
       "target": "product",
       "category": "Хлеб и выпечка",
       "name": "Круассан",
-      "nameEn": "Croissant"
+      "nameEn": "Croissant",
+      "action": "update-image"
     },
     {
       "target": "product",
       "category": "Хлеб и выпечка",
       "name": "Печенье",
       "nameEn": "Cookies",
+      "action": "update-image",
       "text": true
     },
     {
       "target": "product",
       "category": "Хлеб и выпечка",
       "name": "Торт",
-      "nameEn": "Cake"
+      "nameEn": "Cake",
+      "action": "update-image"
     },
     {
       "target": "product",
       "category": "Хлеб и выпечка",
       "name": "Хлеб",
-      "nameEn": "Bread"
+      "nameEn": "Bread",
+      "action": "update-image"
     },
     {
       "target": "variant",
       "category": "Хлеб и выпечка",
       "parent": "Хлеб",
       "name": "Хлеб белый",
-      "nameEn": "White bread"
+      "nameEn": "White bread",
+      "action": "update-image"
     },
     {
       "target": "product",
       "category": "Мясо и мясные продукты",
       "name": "Бекон",
       "nameEn": "Bacon",
+      "action": "update-image",
       "text": true
     },
     {
       "target": "product",
       "category": "Мясо и мясные продукты",
       "name": "Говядина",
-      "nameEn": "Beef"
+      "nameEn": "Beef",
+      "action": "update-image"
     },
     {
       "target": "product",
       "category": "Мясо и мясные продукты",
       "name": "Курица",
-      "nameEn": "Chicken"
+      "nameEn": "Chicken",
+      "action": "update-image"
     },
     {
       "target": "product",
       "category": "Мясо и мясные продукты",
       "name": "Мясо на кости",
-      "nameEn": "Meat on Bone"
+      "nameEn": "Meat on Bone",
+      "action": "update-image"
     },
     {
       "target": "product",
       "category": "Мясо и мясные продукты",
       "name": "Мясо осла",
-      "nameEn": "Donkey meat"
+      "nameEn": "Donkey meat",
+      "action": "update-image"
     },
     {
       "target": "product",
       "category": "Мясо и мясные продукты",
       "name": "Свинина",
-      "nameEn": "Pork"
+      "nameEn": "Pork",
+      "action": "update-image"
     },
     {
       "target": "product",
       "category": "Мясо и мясные продукты",
       "name": "Стейк",
-      "nameEn": "Steak"
+      "nameEn": "Steak",
+      "action": "update-image"
     },
     {
       "target": "product",
       "category": "Консервы и готовая еда",
       "name": "Бургер",
-      "nameEn": "Burger"
+      "nameEn": "Burger",
+      "action": "update-image"
     },
     {
       "target": "product",
       "category": "Консервы и готовая еда",
       "name": "Буррито",
-      "nameEn": "Burrito"
+      "nameEn": "Burrito",
+      "action": "update-image"
     },
     {
       "target": "product",
       "category": "Консервы и готовая еда",
       "name": "Консервы",
       "nameEn": "Canned Food",
+      "action": "update-image",
       "text": true
     },
     {
@@ -364,6 +422,7 @@
       "category": "Консервы и готовая еда",
       "name": "Лапша",
       "nameEn": "Noodles",
+      "action": "update-image",
       "text": true
     },
     {
@@ -371,19 +430,22 @@
       "category": "Консервы и готовая еда",
       "name": "Паста",
       "nameEn": "Pasta",
+      "action": "update-image",
       "text": true
     },
     {
       "target": "product",
       "category": "Консервы и готовая еда",
       "name": "Пицца",
-      "nameEn": "Pizza"
+      "nameEn": "Pizza",
+      "action": "update-image"
     },
     {
       "target": "product",
       "category": "Консервы и готовая еда",
       "name": "Салат готовый",
       "nameEn": "Ready Salad",
+      "action": "update-image",
       "text": true
     },
     {
@@ -391,25 +453,29 @@
       "category": "Консервы и готовая еда",
       "name": "Суп",
       "nameEn": "Soup",
+      "action": "update-image",
       "text": true
     },
     {
       "target": "product",
       "category": "Консервы и готовая еда",
       "name": "Тако",
-      "nameEn": "Taco"
+      "nameEn": "Taco",
+      "action": "update-image"
     },
     {
       "target": "product",
       "category": "Консервы и готовая еда",
       "name": "Шаурма",
-      "nameEn": "Shawarma"
+      "nameEn": "Shawarma",
+      "action": "update-image"
     },
     {
       "target": "product",
       "category": "Напитки",
       "name": "Вино",
       "nameEn": "Wine",
+      "action": "update-image",
       "text": true
     },
     {
@@ -417,6 +483,7 @@
       "category": "Напитки",
       "name": "Виски",
       "nameEn": "Whiskey",
+      "action": "update-image",
       "text": true
     },
     {
@@ -424,6 +491,7 @@
       "category": "Напитки",
       "name": "Вода",
       "nameEn": "Water",
+      "action": "update-image",
       "text": true
     },
     {
@@ -431,19 +499,22 @@
       "category": "Напитки",
       "name": "Клюквенный сок",
       "nameEn": "Cranberry juice",
+      "action": "update-image",
       "text": true
     },
     {
       "target": "product",
       "category": "Напитки",
       "name": "Коктейль",
-      "nameEn": "Cocktail"
+      "nameEn": "Cocktail",
+      "action": "update-image"
     },
     {
       "target": "product",
       "category": "Напитки",
       "name": "Кофе",
       "nameEn": "Coffee",
+      "action": "update-image",
       "text": true
     },
     {
@@ -451,6 +522,7 @@
       "category": "Напитки",
       "name": "Пиво",
       "nameEn": "Beer",
+      "action": "update-image",
       "text": true
     },
     {
@@ -458,6 +530,7 @@
       "category": "Напитки",
       "name": "Сок",
       "nameEn": "Juice",
+      "action": "update-image",
       "text": true
     },
     {
@@ -465,6 +538,7 @@
       "category": "Напитки",
       "name": "Чай",
       "nameEn": "Tea",
+      "action": "update-image",
       "text": true
     },
     {
@@ -472,6 +546,7 @@
       "category": "Напитки",
       "name": "Шампанское",
       "nameEn": "Champagne",
+      "action": "update-image",
       "text": true
     },
     {
@@ -479,37 +554,43 @@
       "category": "Напитки",
       "name": "Яблочный сок",
       "nameEn": "Apple juice",
+      "action": "update-image",
       "text": true
     },
     {
       "target": "product",
       "category": "Бытовая химия",
       "name": "Ведро",
-      "nameEn": "Bucket"
+      "nameEn": "Bucket",
+      "action": "update-image"
     },
     {
       "target": "product",
       "category": "Бытовая химия",
       "name": "Веник",
-      "nameEn": "Broom"
+      "nameEn": "Broom",
+      "action": "update-image"
     },
     {
       "target": "product",
       "category": "Бытовая химия",
       "name": "Губка",
-      "nameEn": "Sponge"
+      "nameEn": "Sponge",
+      "action": "update-image"
     },
     {
       "target": "product",
       "category": "Бытовая химия",
       "name": "Корзина для белья",
-      "nameEn": "Laundry Basket"
+      "nameEn": "Laundry Basket",
+      "action": "update-image"
     },
     {
       "target": "product",
       "category": "Бытовая химия",
       "name": "Моющее средство",
       "nameEn": "Detergent",
+      "action": "update-image",
       "text": true
     },
     {
@@ -517,6 +598,7 @@
       "category": "Бытовая химия",
       "name": "Мыло",
       "nameEn": "Soap",
+      "action": "update-image",
       "text": true
     },
     {
@@ -524,6 +606,7 @@
       "category": "Бытовая химия",
       "name": "Пена для ванны",
       "nameEn": "Bubble Bath",
+      "action": "update-image",
       "text": true
     },
     {
@@ -531,6 +614,7 @@
       "category": "Бытовая химия",
       "name": "Туалетная бумага",
       "nameEn": "Toilet Paper",
+      "action": "update-image",
       "text": true
     },
     {
@@ -538,6 +622,7 @@
       "category": "Бытовая химия",
       "name": "Чистящее средство",
       "nameEn": "Cleaning Agent",
+      "action": "update-image",
       "text": true
     },
     {
@@ -545,61 +630,71 @@
       "category": "Товары для дома",
       "name": "Батарейки",
       "nameEn": "Batteries",
+      "action": "update-image",
       "text": true
     },
     {
       "target": "product",
       "category": "Товары для дома",
       "name": "Бритва",
-      "nameEn": "Razor"
+      "nameEn": "Razor",
+      "action": "update-image"
     },
     {
       "target": "product",
       "category": "Товары для дома",
       "name": "Игрушка",
-      "nameEn": "Toy"
+      "nameEn": "Toy",
+      "action": "update-image"
     },
     {
       "target": "product",
       "category": "Товары для дома",
       "name": "Коробка",
-      "nameEn": "Box"
+      "nameEn": "Box",
+      "action": "update-image"
     },
     {
       "target": "product",
       "category": "Товары для дома",
       "name": "Лампочка",
-      "nameEn": "Light Bulb"
+      "nameEn": "Light Bulb",
+      "action": "update-image"
     },
     {
       "target": "product",
       "category": "Товары для дома",
       "name": "Подарочная упаковка",
-      "nameEn": "Gift Wrap"
+      "nameEn": "Gift Wrap",
+      "action": "update-image"
     },
     {
       "target": "product",
       "category": "Товары для дома",
       "name": "Растение",
-      "nameEn": "Plant"
+      "nameEn": "Plant",
+      "action": "update-image"
     },
     {
       "target": "product",
       "category": "Товары для дома",
       "name": "Свечи",
-      "nameEn": "Candles"
+      "nameEn": "Candles",
+      "action": "update-image"
     },
     {
       "target": "product",
       "category": "Аптека",
       "name": "Зубная щетка",
-      "nameEn": "Toothbrush"
+      "nameEn": "Toothbrush",
+      "action": "update-image"
     },
     {
       "target": "product",
       "category": "Аптека",
       "name": "Крем",
       "nameEn": "Cream",
+      "action": "update-image",
       "text": true
     },
     {
@@ -607,6 +702,7 @@
       "category": "Аптека",
       "name": "Пластырь",
       "nameEn": "Bandage",
+      "action": "update-image",
       "text": true
     },
     {
@@ -614,25 +710,29 @@
       "category": "Аптека",
       "name": "Таблетки",
       "nameEn": "Pills",
+      "action": "update-image",
       "text": true
     },
     {
       "target": "product",
       "category": "Аптека",
       "name": "Термометр",
-      "nameEn": "Thermometer"
+      "nameEn": "Thermometer",
+      "action": "update-image"
     },
     {
       "target": "product",
       "category": "Аптека",
       "name": "Шприц",
-      "nameEn": "Syringe"
+      "nameEn": "Syringe",
+      "action": "update-image"
     },
     {
       "target": "product",
       "category": "Крупы и макароны",
       "name": "Паста ангельские волосы",
       "nameEn": "Angel hair pasta",
+      "action": "update-image",
       "text": true
     },
     {
@@ -640,6 +740,7 @@
       "category": "Крупы и макароны",
       "name": "Перловка",
       "nameEn": "Pearl Barley",
+      "action": "update-image",
       "text": true
     },
     {
@@ -647,6 +748,7 @@
       "category": "Крупы и макароны",
       "name": "Пшено",
       "nameEn": "Millet",
+      "action": "update-image",
       "text": true
     },
     {
@@ -654,6 +756,7 @@
       "category": "Крупы и макароны",
       "name": "Рис",
       "nameEn": "Rice",
+      "action": "update-image",
       "text": true
     },
     {
@@ -661,6 +764,7 @@
       "category": "Крупы и макароны",
       "name": "Спагетти",
       "nameEn": "Spaghetti",
+      "action": "update-image",
       "text": true
     },
     {
@@ -668,6 +772,7 @@
       "category": "Орехи и Сухофрукты",
       "name": "Арахис",
       "nameEn": "Peanuts",
+      "action": "update-image",
       "text": true
     },
     {
@@ -675,6 +780,7 @@
       "category": "Орехи и Сухофрукты",
       "name": "Кешью",
       "nameEn": "Cashews",
+      "action": "update-image",
       "text": true
     },
     {
@@ -682,6 +788,7 @@
       "category": "Орехи и Сухофрукты",
       "name": "Курага",
       "nameEn": "Dried Apricots",
+      "action": "update-image",
       "text": true
     },
     {
@@ -689,6 +796,7 @@
       "category": "Замороженные продукты",
       "name": "Вареники",
       "nameEn": "Vareniki",
+      "action": "update-image",
       "text": true
     },
     {
@@ -696,6 +804,7 @@
       "category": "Замороженные продукты",
       "name": "Пельмени",
       "nameEn": "Dumplings",
+      "action": "update-image",
       "text": true
     },
     {
@@ -703,61 +812,71 @@
       "category": "Замороженные продукты",
       "name": "Пицца замороженная",
       "nameEn": "Frozen Pizza",
+      "action": "update-image",
       "text": true
     },
     {
       "target": "product",
       "category": "Рыба и морепродукты",
       "name": "Кальмар",
-      "nameEn": "Squid"
+      "nameEn": "Squid",
+      "action": "update-image"
     },
     {
       "target": "product",
       "category": "Рыба и морепродукты",
       "name": "Карп",
-      "nameEn": "Carp"
+      "nameEn": "Carp",
+      "action": "update-image"
     },
     {
       "target": "product",
       "category": "Рыба и морепродукты",
       "name": "Краб",
-      "nameEn": "Crab"
+      "nameEn": "Crab",
+      "action": "update-image"
     },
     {
       "target": "product",
       "category": "Рыба и морепродукты",
       "name": "Креветки",
-      "nameEn": "Shrimp"
+      "nameEn": "Shrimp",
+      "action": "update-image"
     },
     {
       "target": "product",
       "category": "Рыба и морепродукты",
       "name": "Лобстер",
-      "nameEn": "Lobster"
+      "nameEn": "Lobster",
+      "action": "update-image"
     },
     {
       "target": "product",
       "category": "Рыба и морепродукты",
       "name": "Мидии",
-      "nameEn": "Mussels"
+      "nameEn": "Mussels",
+      "action": "update-image"
     },
     {
       "target": "product",
       "category": "Рыба и морепродукты",
       "name": "Осьминог",
-      "nameEn": "Octopus"
+      "nameEn": "Octopus",
+      "action": "update-image"
     },
     {
       "target": "product",
       "category": "Рыба и морепродукты",
       "name": "Рыба",
-      "nameEn": "Fish"
+      "nameEn": "Fish",
+      "action": "update-image"
     },
     {
       "target": "product",
       "category": "Детское питание",
       "name": "Детская каша",
       "nameEn": "Baby Cereal",
+      "action": "update-image",
       "text": true
     },
     {
@@ -765,6 +884,7 @@
       "category": "Детское питание",
       "name": "Детская смесь",
       "nameEn": "Baby Formula",
+      "action": "update-image",
       "text": true
     },
     {
@@ -772,6 +892,7 @@
       "category": "Детское питание",
       "name": "Детское печенье",
       "nameEn": "Baby Cookies",
+      "action": "update-image",
       "text": true
     },
     {
@@ -779,6 +900,7 @@
       "category": "Корм для животных",
       "name": "Корм для кошек",
       "nameEn": "Cat Food",
+      "action": "update-image",
       "text": true
     },
     {
@@ -786,6 +908,7 @@
       "category": "Корм для животных",
       "name": "Корм для собак",
       "nameEn": "Dog Food",
+      "action": "update-image",
       "text": true
     },
     {
@@ -793,6 +916,7 @@
       "category": "Корм для животных",
       "name": "Лакомства для кошек",
       "nameEn": "Cat Treats",
+      "action": "update-image",
       "text": true
     },
     {
@@ -800,6 +924,7 @@
       "category": "Корм для животных",
       "name": "Лакомства для собак",
       "nameEn": "Dog Treats",
+      "action": "update-image",
       "text": true
     },
     {
@@ -807,98 +932,152 @@
       "category": "Овощи",
       "name": "Овощи",
       "nameEn": "Vegetables",
-      "hint": "two or three typical vegetables together"
+      "action": "update-image",
+      "hint": "exactly three most recognizable vegetables together in one composition"
     },
     {
       "target": "category",
       "category": "Фрукты",
       "name": "Фрукты",
       "nameEn": "Fruits",
-      "hint": "two or three typical fruits together"
+      "action": "update-image",
+      "hint": "exactly three most recognizable fruits together in one composition"
     },
     {
       "target": "category",
       "category": "Молочные продукты",
       "name": "Молочные продукты",
       "nameEn": "Dairy",
-      "hint": "two or three dairy items together"
+      "action": "update-image",
+      "hint": "exactly three most recognizable dairy items together in one composition"
     },
     {
       "target": "category",
       "category": "Хлеб и выпечка",
       "name": "Хлеб и выпечка",
       "nameEn": "Bread & Bakery",
-      "hint": "two or three bakery items together"
+      "action": "update-image",
+      "hint": "exactly three most recognizable bakery items together in one composition"
     },
     {
       "target": "category",
       "category": "Мясо и мясные продукты",
       "name": "Мясо и мясные продукты",
       "nameEn": "Meat",
-      "hint": "two or three cuts or pieces of meat together"
+      "action": "update-image",
+      "hint": "exactly three most recognizable cuts or pieces of meat together in one composition"
     },
     {
       "target": "category",
       "category": "Консервы и готовая еда",
       "name": "Консервы и готовая еда",
       "nameEn": "Canned & Ready Food",
-      "hint": "two or three ready-to-eat dishes or cans together"
+      "action": "update-image",
+      "hint": "exactly three most recognizable ready-to-eat dishes or cans together in one composition"
     },
     {
       "target": "category",
       "category": "Бытовая химия",
       "name": "Бытовая химия",
       "nameEn": "Household Chemicals",
-      "hint": "two or three household cleaning items together"
+      "action": "update-image",
+      "hint": "exactly three most recognizable household cleaning items together in one composition"
     },
     {
       "target": "category",
       "category": "Товары для дома",
       "name": "Товары для дома",
       "nameEn": "Home Goods",
-      "hint": "two or three household items together"
+      "action": "update-image",
+      "hint": "exactly three most recognizable household items together in one composition"
     },
     {
       "target": "category",
       "category": "Аптека",
       "name": "Аптека",
       "nameEn": "Pharmacy",
-      "hint": "two or three pharmacy items together"
+      "action": "update-image",
+      "hint": "exactly three most recognizable pharmacy items together in one composition"
     },
     {
       "target": "category",
       "category": "Косметика",
       "name": "Косметика",
       "nameEn": "Cosmetics",
-      "hint": "two or three cosmetic items together"
+      "action": "update-image",
+      "hint": "exactly three most recognizable cosmetic items together in one composition"
     },
     {
       "target": "category",
       "category": "Сладости",
       "name": "Сладости",
       "nameEn": "Sweets",
-      "hint": "two or three sweets together"
+      "action": "update-image",
+      "hint": "exactly three most recognizable sweets together in one composition"
     },
     {
       "target": "category",
       "category": "Замороженные продукты",
       "name": "Замороженные продукты",
       "nameEn": "Frozen",
-      "hint": "two or three frozen foods together"
+      "action": "update-image",
+      "hint": "exactly three most recognizable frozen foods together in one composition"
     },
     {
       "target": "category",
       "category": "Детское питание",
       "name": "Детское питание",
       "nameEn": "Baby Food",
-      "hint": "two or three baby food items together"
+      "action": "update-image",
+      "hint": "exactly three most recognizable baby food items together in one composition"
     },
     {
       "target": "category",
       "category": "Корм для животных",
       "name": "Корм для животных",
       "nameEn": "Pet Food",
-      "hint": "two or three pet food items together"
+      "action": "update-image",
+      "hint": "exactly three most recognizable pet food items together in one composition"
+    },
+    {
+      "target": "category",
+      "category": "Напитки",
+      "name": "Напитки",
+      "nameEn": "Beverages",
+      "action": "replace",
+      "hint": "exactly three most recognizable drinks together in one composition"
+    },
+    {
+      "target": "category",
+      "category": "Крупы и макароны",
+      "name": "Крупы и макароны",
+      "nameEn": "Grains & Pasta",
+      "action": "replace",
+      "hint": "exactly three most recognizable grains or pasta together in one composition"
+    },
+    {
+      "target": "category",
+      "category": "Орехи и Сухофрукты",
+      "name": "Орехи и Сухофрукты",
+      "nameEn": "Nuts & Dried Fruits",
+      "action": "replace",
+      "hint": "exactly three most recognizable nuts or dried fruits together in one composition"
+    },
+    {
+      "target": "category",
+      "category": "Масла и соусы",
+      "name": "Масла и соусы",
+      "nameEn": "Oils & Sauces",
+      "action": "replace",
+      "hint": "exactly three most recognizable oils or sauces together in one composition"
+    },
+    {
+      "target": "category",
+      "category": "Рыба и морепродукты",
+      "name": "Рыба и морепродукты",
+      "nameEn": "Fish & Seafood",
+      "action": "replace",
+      "hint": "exactly three most recognizable fish or seafood together in one composition"
     }
   ]
 }

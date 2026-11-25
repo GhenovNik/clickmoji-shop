@@ -2,6 +2,7 @@ import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { format, resolveConfig } from 'prettier';
 import {
+  CATEGORY_RULE_EXACTLY_THREE,
   chunk,
   englishFollowUpPrompt,
   normalizeName,
@@ -10,8 +11,9 @@ import {
   type Candidate,
 } from './emoji-batches';
 
-// Builds the queue for the 139 catalogue records that have no picture yet (AGE-1667): 123
-// products, 2 product variants and 14 categories, all taken from the catalogue snapshot.
+// Builds the queue for the 144 catalogue targets (AGE-1667 C6): 123 products and 2 product variants
+// that have no picture yet, all 19 categories, and the 5 categories that already have one, which
+// are replaced (action "replace"). Everything is taken from the catalogue snapshot.
 // Input: docs/emoji-batches/queue-candidates.json, checked against the snapshot. Output:
 // docs/emoji-batches/queue/*.md (prompts) and docs/emoji-batches/queue-manifest.json (cells).
 // Usage: npx tsx scripts/emoji-queue.ts
@@ -34,6 +36,9 @@ export type QueueItem = {
   hint?: string;
   // Packaging with a label: drawn in a text batch, once in Russian and once in English.
   text?: boolean;
+  // update-image: the record has no picture and gets one. replace: the record has a picture that
+  // the import swaps for this one, only when the operator authorises the old URL (categories only).
+  action: 'update-image' | 'replace';
 };
 
 type Snapshot = {
@@ -56,8 +61,10 @@ export type PlannedQueueBatch = {
   items: QueueItem[];
 };
 
-// Every catalogue record without a picture, in snapshot order: a product, then its variants.
-export function openTargets(snapshot: Snapshot): QueueItem[] {
+// Every catalogue target in snapshot order: a product, then its variants, then the categories.
+// Products and variants without a picture are update-image; so are categories without one. A
+// category that already has a picture is the only record with action replace.
+export function catalogueTargets(snapshot: Snapshot): QueueItem[] {
   const items: QueueItem[] = [];
   for (const category of snapshot.categories) {
     for (const product of category.products) {
@@ -67,6 +74,7 @@ export function openTargets(snapshot: Snapshot): QueueItem[] {
           category: category.name,
           name: product.name,
           nameEn: product.nameEn,
+          action: 'update-image',
         });
       }
       for (const variant of product.variants ?? []) {
@@ -77,20 +85,20 @@ export function openTargets(snapshot: Snapshot): QueueItem[] {
             parent: product.name,
             name: variant.name,
             nameEn: variant.nameEn,
+            action: 'update-image',
           });
         }
       }
     }
   }
   for (const category of snapshot.categories) {
-    if (!category.hasImage) {
-      items.push({
-        target: 'category',
-        category: category.name,
-        name: category.name,
-        nameEn: category.nameEn,
-      });
-    }
+    items.push({
+      target: 'category',
+      category: category.name,
+      name: category.name,
+      nameEn: category.nameEn,
+      action: category.hasImage ? 'replace' : 'update-image',
+    });
   }
   return items;
 }
@@ -104,11 +112,12 @@ function targetKey(item: Pick<QueueItem, 'target' | 'category' | 'name' | 'paren
   ].join('|');
 }
 
-// The queue must match the snapshot exactly: every open record once, nothing else, and the
-// fields that locate each record agree with the snapshot.
+// The queue must match the snapshot exactly: every catalogue target once, nothing else, the fields
+// that locate each record agree with the snapshot, and the action agrees with the picture the
+// snapshot shows (replace exactly for the categories that have one).
 export function validateQueue(items: QueueItem[], snapshot: Snapshot) {
   const problems: string[] = [];
-  const expected = openTargets(snapshot);
+  const expected = catalogueTargets(snapshot);
   const expectedByKey = new Map(expected.map((item) => [targetKey(item), item]));
   const seen = new Set<string>();
 
@@ -118,14 +127,22 @@ export function validateQueue(items: QueueItem[], snapshot: Snapshot) {
     seen.add(key);
     const match = expectedByKey.get(key);
     if (!match) {
-      problems.push(`not an open catalogue record: ${item.target} «${item.name}»`);
+      problems.push(`not a catalogue target: ${item.target} «${item.name}»`);
       continue;
     }
     if (match.nameEn !== item.nameEn) {
       problems.push(`nameEn differs from the snapshot: «${item.name}» → «${match.nameEn}»`);
     }
+    if (item.action !== match.action) {
+      problems.push(
+        `action differs from the snapshot: ${item.target} «${item.name}» is ${match.action}, not ${item.action}`
+      );
+    }
     if (item.target === 'category' && item.text) {
       problems.push(`category «${item.name}» cannot carry text`);
+    }
+    if (item.target === 'category' && !item.hint?.startsWith('exactly three ')) {
+      problems.push(`category «${item.name}» must ask for exactly three items`);
     }
   }
   for (const item of expected) {
@@ -163,8 +180,7 @@ const KIND_LABEL: Record<QueueTarget, string> = {
   category: 'категория',
 };
 
-// The prompts are the ones of the historical batches: one cell per record, the category cell
-// shows two or three items of its group.
+// One cell per target. A category cell shows exactly three items of its group (CATEGORY_RULE_EXACTLY_THREE).
 function asCandidate(item: QueueItem): Candidate {
   return {
     category: item.category,
@@ -172,19 +188,24 @@ function asCandidate(item: QueueItem): Candidate {
     nameEn: item.nameEn,
     hint: item.hint,
     text: item.text,
-    action: 'update-image',
+    action: item.action,
   };
 }
+
+const ACTION_LABEL: Record<QueueItem['action'], string> = {
+  'update-image': 'новая картинка',
+  replace: 'замена картинки (старый URL в --replace-auth)',
+};
 
 function table(items: QueueItem[]) {
   const rows = items.map(
     (item, i) =>
       `| ${i + 1} | ${item.name} | ${item.nameEn} | ${item.category} | ${KIND_LABEL[item.target]}${
         item.parent ? ` (${item.parent})` : ''
-      } |`
+      } | ${ACTION_LABEL[item.action]} |`
   );
-  return `| Ячейка | Цель | English | Каталог | Тип |
-|---|---|---|---|---|
+  return `| Ячейка | Цель | English | Каталог | Тип | Действие |
+|---|---|---|---|---|---|
 ${rows.join('\n')}`;
 }
 
@@ -206,7 +227,7 @@ ${table(items)}
 ## Русская версия
 
 \`\`\`text
-${textPrompt(candidates)}
+${textPrompt(candidates, CATEGORY_RULE_EXACTLY_THREE)}
 \`\`\`
 
 ## Английская версия (в том же чате)
@@ -226,7 +247,7 @@ ${table(items)}
 ## Промпт
 
 \`\`\`text
-${universalPrompt(candidates)}
+${universalPrompt(candidates, CATEGORY_RULE_EXACTLY_THREE)}
 \`\`\`
 `;
 }
@@ -246,7 +267,7 @@ function manifestEntry(batch: PlannedQueueBatch) {
       ...(item.parent && { parent: item.parent }),
       ...(item.hint && { hint: item.hint }),
       ...(item.text && { text: true }),
-      action: 'update-image',
+      action: item.action,
     })),
   };
 }
@@ -285,8 +306,9 @@ export async function main(dir = DIR, formatMarkdown = format) {
     )}\n`
   );
   const universal = batches.filter((b) => b.kind === 'universal').length;
+  const replace = file.items.filter((item) => item.action === 'replace').length;
   console.log(
-    `${file.items.length} targets in ${universal} text-free and ${batches.length - universal} text batches`
+    `${file.items.length} targets (${replace} replace) in ${universal} text-free and ${batches.length - universal} text batches`
   );
 }
 
