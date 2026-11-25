@@ -146,8 +146,8 @@ const MODEL_ACCESS: Record<BackfillModel, ModelAccess> = {
             id: true,
             productImageUrl: true,
             productImageUrlEn: true,
-            productImageTextLocale: true,
-            productLocalizedImages: true,
+            imageTextLocale: true,
+            localizedImages: true,
           },
           orderBy: { id: 'asc' },
         })
@@ -155,18 +155,18 @@ const MODEL_ACCESS: Record<BackfillModel, ModelAccess> = {
         id: row.id,
         main: row.productImageUrl,
         en: row.productImageUrlEn,
-        textLocale: row.productImageTextLocale,
-        localized: row.productLocalizedImages,
+        textLocale: row.imageTextLocale,
+        localized: row.localizedImages,
       })),
     write: (db, write) =>
       db.listHistoryItem.update({
         where: { id: write.id },
         data: {
           ...(write.imageTextLocale !== undefined && {
-            productImageTextLocale: write.imageTextLocale,
+            imageTextLocale: write.imageTextLocale,
           }),
           ...(write.localizedImages !== undefined && {
-            productLocalizedImages: localizedToJsonField(write.localizedImages),
+            localizedImages: localizedToJsonField(write.localizedImages),
           }),
         },
       }),

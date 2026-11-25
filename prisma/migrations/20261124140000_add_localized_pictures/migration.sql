@@ -9,5 +9,5 @@ ALTER TABLE "product_variants" ADD COLUMN "imageTextLocale" TEXT,
 ADD COLUMN "localizedImages" JSONB;
 
 -- AlterTable
-ALTER TABLE "list_history_items" ADD COLUMN "productImageTextLocale" TEXT,
-ADD COLUMN "productLocalizedImages" JSONB;
+ALTER TABLE "list_history_items" ADD COLUMN "imageTextLocale" TEXT,
+ADD COLUMN "localizedImages" JSONB;

@@ -201,11 +201,11 @@ describe.skipIf(!url)('localized picture backfill on disposable PostgreSQL', () 
 
     const h = Object.fromEntries(after.history.map((r) => [r.id, r]));
     expect(h.hi1).toMatchObject({
-      productImageTextLocale: 'ru',
-      productLocalizedImages: { en: 'https://en.test/h1.webp' },
+      imageTextLocale: 'ru',
+      localizedImages: { en: 'https://en.test/h1.webp' },
     });
-    expect(h.hi2).toMatchObject({ productImageTextLocale: null, productLocalizedImages: null });
-    expect(h.hi3).toMatchObject({ productImageTextLocale: null, productLocalizedImages: null });
+    expect(h.hi2).toMatchObject({ imageTextLocale: null, localizedImages: null });
+    expect(h.hi3).toMatchObject({ imageTextLocale: null, localizedImages: null });
 
     // Legacy columns are untouched.
     for (const [old, now] of [
@@ -228,7 +228,7 @@ describe.skipIf(!url)('localized picture backfill on disposable PostgreSQL', () 
     }
     for (const r of after.history) {
       if (r.productImageUrlEn !== null)
-        expect((r.productLocalizedImages as Record<string, string>).en).toBe(r.productImageUrlEn);
+        expect((r.localizedImages as Record<string, string>).en).toBe(r.productImageUrlEn);
     }
   });
 

@@ -245,8 +245,8 @@ model ListHistoryItem {
   productImageUrl   String?
   productImageUrlEn String?
   // Snapshot of the Product picture metadata taken with the history row (same prefix as productImageUrl).
-  productImageTextLocale String?
-  productLocalizedImages Json?
+  imageTextLocale String?
+  localizedImages Json?
   categoryName      String
   categoryNameEn    String?
   isCustom          Boolean @default(false)
