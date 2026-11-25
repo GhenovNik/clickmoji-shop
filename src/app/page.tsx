@@ -1,10 +1,9 @@
-import Link from 'next/link';
-import { ArrowRight } from 'lucide-react';
 import { getLocale, getTranslations } from 'next-intl/server';
 import ProductShowcase, {
   type ScreenId,
   type ShowcaseScreen,
 } from '@/components/landing/ProductShowcase';
+import StartButton from '@/components/landing/StartButton';
 
 const SCREEN_IDS: readonly ScreenId[] = ['cards', 'list', 'grid'];
 
@@ -33,16 +32,7 @@ export default async function Home() {
         </p>
 
         <div className="pt-1">
-          <Link
-            href="/categories"
-            className="inline-flex w-full sm:w-auto items-center justify-center gap-2.5 min-h-12 bg-primary hover:bg-primary/90 text-primary-foreground px-8 py-3.5 rounded-2xl font-bold text-base sm:text-lg shadow-soft hover:shadow-clay active:scale-[0.98] transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 group"
-          >
-            <span>{t('actions.start')}</span>
-            <ArrowRight
-              className="w-5 h-5 group-hover:translate-x-1 transition-transform"
-              aria-hidden="true"
-            />
-          </Link>
+          <StartButton label={t('actions.start')} errorLabel={t('actions.startFailed')} />
         </div>
       </section>
 
