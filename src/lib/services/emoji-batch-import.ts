@@ -1,13 +1,17 @@
 import { existsSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
-import type { PrismaClient } from '@prisma/client';
+import type { EmojiLibraryItem, PrismaClient } from '@prisma/client';
 import sharp from 'sharp';
 import { normalizeEmojiImage } from '@/lib/services/emoji-image-normalize';
 
 // Batch import (AGE-1465 item 2): the operator's Gemini sheets (3 columns, cells left to right,
-// top to bottom) plus docs/emoji-batches/manifest.json → normalized emoji in the library and on
-// catalogue products. Every cell has a stable reference ("batch-007#3"), so a second run reuses
-// what is stored instead of uploading again.
+// top to bottom) plus docs/emoji-batches/manifest.json and queue-manifest.json → normalized emoji
+// in the library and on catalogue records. Every cell has a stable reference ("batch-007#3"), so
+// a second run reuses what is stored instead of uploading again, and writes nothing that is
+// already in place.
+
+// What a cell's picture is for. Historical batches (no `target`) mean a product.
+export type ManifestTarget = 'product' | 'variant' | 'category';
 
 export type ManifestCell = {
   cell: number;
@@ -21,6 +25,9 @@ export type ManifestCell = {
   action: 'create' | 'update-image';
   // The product's picture now comes from this text-batch cell; this one stays in the library.
   supersededBy?: string;
+  target?: ManifestTarget;
+  // Variant only: the name of its catalogue product. The variant is looked up under that product.
+  parent?: string;
 };
 
 // universal: one text-free picture for every language; text: a Russian and an English sheet.
@@ -49,7 +56,12 @@ export type ProductPlan =
   | { kind: 'no-category' }
   | { kind: 'superseded'; by: string }
   // Several catalogue products share the name: nothing is linked, the operator decides.
-  | { kind: 'ambiguous'; productNames: string[] };
+  | { kind: 'ambiguous'; productNames: string[] }
+  // A queue target that is not in the catalogue: nothing is created, the picture stays in the library.
+  | { kind: 'not-found'; reason: string }
+  | { kind: 'variant'; variantId: string; productName: string; variantName: string }
+  | { kind: 'ambiguous-variant'; productName: string; variantNames: string[] }
+  | { kind: 'category'; categoryId: string; categoryName: string };
 
 export type CellPlan = {
   ref: string;
@@ -155,13 +167,20 @@ export async function readBatchImages(
 }
 
 type CatalogIndex = {
+  // Global products by normalized name.
   products: Map<string, { id: string; name: string }[]>;
-  categories: Map<string, { id: string; emoji: string }>;
+  // Variants of global products, by product id.
+  variants: Map<string, { id: string; name: string }[]>;
+  categories: Map<string, { id: string; name: string; emoji: string }>;
 };
 
 export async function loadCatalogIndex(prisma: PrismaClient): Promise<CatalogIndex> {
-  const [products, categories] = await Promise.all([
+  const [products, variants, categories] = await Promise.all([
     prisma.product.findMany({ where: { isGlobal: true }, select: { id: true, name: true } }),
+    prisma.productVariant.findMany({
+      where: { product: { isGlobal: true } },
+      select: { id: true, name: true, productId: true },
+    }),
     prisma.category.findMany({ select: { id: true, name: true, emoji: true } }),
   ]);
   const byName = new Map<string, { id: string; name: string }[]>();
@@ -169,20 +188,73 @@ export async function loadCatalogIndex(prisma: PrismaClient): Promise<CatalogInd
     const key = normalizeCatalogName(product.name);
     byName.set(key, [...(byName.get(key) ?? []), product]);
   }
+  const byProduct = new Map<string, { id: string; name: string }[]>();
+  for (const variant of variants) {
+    byProduct.set(variant.productId, [
+      ...(byProduct.get(variant.productId) ?? []),
+      { id: variant.id, name: variant.name },
+    ]);
+  }
   return {
     products: byName,
+    variants: byProduct,
     categories: new Map(categories.map((c) => [normalizeCatalogName(c.name), c])),
+  };
+}
+
+// A variant is looked up under its product only: the same variant name under another product is
+// not a match.
+function planVariant(cell: ManifestCell, index: CatalogIndex): ProductPlan {
+  const parentName = cell.parent ?? '';
+  const parents = index.products.get(normalizeCatalogName(parentName)) ?? [];
+  if (parents.length === 0) return { kind: 'not-found', reason: `нет товара «${parentName}»` };
+  if (parents.length > 1) {
+    return { kind: 'ambiguous', productNames: parents.map((product) => product.name) };
+  }
+  const [parent] = parents;
+  const matches = (index.variants.get(parent.id) ?? []).filter(
+    (variant) => normalizeCatalogName(variant.name) === normalizeCatalogName(cell.name)
+  );
+  if (matches.length === 0) {
+    return {
+      kind: 'not-found',
+      reason: `нет варианта «${cell.name}» у товара «${parent.name}»`,
+    };
+  }
+  if (matches.length > 1) {
+    return {
+      kind: 'ambiguous-variant',
+      productName: parent.name,
+      variantNames: matches.map((variant) => variant.name),
+    };
+  }
+  return {
+    kind: 'variant',
+    variantId: matches[0].id,
+    productName: parent.name,
+    variantName: matches[0].name,
   };
 }
 
 export function planProduct(cell: ManifestCell, index: CatalogIndex): ProductPlan {
   if (cell.supersededBy) return { kind: 'superseded', by: cell.supersededBy };
+  if (cell.target === 'variant') return planVariant(cell, index);
+  if (cell.target === 'category') {
+    const category = index.categories.get(normalizeCatalogName(cell.name));
+    return category
+      ? { kind: 'category', categoryId: category.id, categoryName: category.name }
+      : { kind: 'not-found', reason: `нет категории «${cell.name}»` };
+  }
+
   const matches = index.products.get(normalizeCatalogName(cell.name)) ?? [];
   if (matches.length > 1) {
     return { kind: 'ambiguous', productNames: matches.map((product) => product.name) };
   }
   const [product] = matches;
   if (product) return { kind: 'link', productId: product.id, productName: product.name };
+  // A queue product must already exist: an update never creates a product.
+  if (cell.target === 'product') return { kind: 'not-found', reason: `нет товара «${cell.name}»` };
+
   const category = index.categories.get(normalizeCatalogName(cell.category));
   return category
     ? { kind: 'create', categoryId: category.id, categoryEmoji: category.emoji }
@@ -205,12 +277,54 @@ export type AppliedCell = {
   ref: string;
   name: string;
   uploaded: number;
-  product: 'linked' | 'created' | 'library-only' | 'superseded' | 'ambiguous';
+  // False when every record already held what this run would write.
+  changed: boolean;
+  product:
+    | 'linked'
+    | 'created'
+    | 'variant'
+    | 'category'
+    | 'library-only'
+    | 'superseded'
+    | 'ambiguous'
+    | 'ambiguous-variant'
+    | 'not-found';
   productName?: string;
 };
 
+type LibraryData = {
+  imageUrl: string;
+  name: string;
+  nameEn: string;
+  tags: string[];
+  source: string;
+  locale: 'ru' | 'en' | null;
+  groupKey: string;
+};
+
+function sameLibraryItem(row: EmojiLibraryItem | null, data: LibraryData) {
+  return (
+    row !== null &&
+    row.imageUrl === data.imageUrl &&
+    row.name === data.name &&
+    row.nameEn === data.nameEn &&
+    row.source === data.source &&
+    row.locale === data.locale &&
+    row.groupKey === data.groupKey &&
+    row.tags.length === data.tags.length &&
+    row.tags.every((tag, i) => tag === data.tags[i])
+  );
+}
+
+// True when the stored record already holds every picture field this run would write.
+function holds(current: Record<string, unknown> | null, picture: Record<string, unknown>) {
+  return (
+    current !== null && Object.entries(picture).every(([key, value]) => current[key] === value)
+  );
+}
+
 // Writes one cell. Pictures already stored under the cell reference are reused, so a re-run
-// uploads nothing and only re-links the product.
+// uploads nothing, and a record that already holds the picture is left untouched.
 export async function applyCell(
   prisma: PrismaClient,
   plan: CellPlan,
@@ -219,7 +333,12 @@ export async function applyCell(
 ): Promise<AppliedCell> {
   const { cell, ref, images } = plan;
   const textBatch = plan.batchKind === 'text';
+  // A category has no English picture, so a label on its picture cannot be shown anywhere.
+  if (textBatch && plan.product.kind === 'category') {
+    throw new Error(`${ref}: a category picture must be text-free`);
+  }
   let uploaded = 0;
+  let changed = false;
 
   const store = async (
     locale: 'ru' | 'en' | null,
@@ -230,7 +349,7 @@ export async function applyCell(
     const imageUrl = existing ?? (await upload(image, locale === 'en' ? cell.nameEn : cell.name));
     const fresh = !existing;
     if (fresh) uploaded++;
-    const data = {
+    const data: LibraryData = {
       imageUrl,
       name: cell.name,
       nameEn: cell.nameEn,
@@ -239,12 +358,15 @@ export async function applyCell(
       locale,
       groupKey: ref,
     };
+    const current = await prisma.emojiLibraryItem.findUnique({ where: { sourceRef } });
+    if (sameLibraryItem(current, data)) return imageUrl;
     try {
       await prisma.emojiLibraryItem.upsert({
         where: { sourceRef },
         create: { sourceRef, ...data },
         update: data,
       });
+      changed = true;
     } catch (error) {
       // Without its library record a fresh upload would be orphaned and uploaded again on the
       // next run, so it is removed before the error goes on.
@@ -261,21 +383,25 @@ export async function applyCell(
   // A text-free picture serves both languages, so it clears a stale English one. A Russian
   // label imported before its English sheet leaves an English picture already stored alone.
   const picture = {
-    isCustom: true,
     imageUrl,
     ...(imageUrlEn || !textBatch ? { imageUrlEn } : {}),
   };
-  if (plan.product.kind === 'link') {
-    await prisma.product.update({ where: { id: plan.product.productId }, data: picture });
-    return {
-      ref,
-      name: cell.name,
-      uploaded,
-      product: 'linked',
-      productName: plan.product.productName,
-    };
+  const kind = plan.product.kind;
+
+  if (kind === 'link') {
+    const { productId, productName } = plan.product;
+    const data = { isCustom: true, ...picture };
+    const current = await prisma.product.findUnique({
+      where: { id: productId },
+      select: { imageUrl: true, imageUrlEn: true, isCustom: true },
+    });
+    if (!holds(current, data)) {
+      await prisma.product.update({ where: { id: productId }, data });
+      changed = true;
+    }
+    return { ref, name: cell.name, uploaded, changed, product: 'linked', productName };
   }
-  if (plan.product.kind === 'create') {
+  if (kind === 'create') {
     await prisma.product.create({
       data: {
         name: cell.name,
@@ -283,16 +409,63 @@ export async function applyCell(
         emoji: plan.product.categoryEmoji,
         categoryId: plan.product.categoryId,
         isGlobal: true,
+        isCustom: true,
         ...picture,
       },
     });
-    return { ref, name: cell.name, uploaded, product: 'created' };
+    return { ref, name: cell.name, uploaded, changed: true, product: 'created' };
   }
-  if (plan.product.kind === 'ambiguous') {
-    return { ref, name: cell.name, uploaded, product: 'ambiguous' };
+  if (kind === 'variant') {
+    const { variantId, productName, variantName } = plan.product;
+    const current = await prisma.productVariant.findUnique({
+      where: { id: variantId },
+      select: { imageUrl: true, imageUrlEn: true },
+    });
+    if (!holds(current, picture)) {
+      await prisma.productVariant.update({ where: { id: variantId }, data: picture });
+      changed = true;
+    }
+    return {
+      ref,
+      name: cell.name,
+      uploaded,
+      changed,
+      product: 'variant',
+      productName: `${productName} / ${variantName}`,
+    };
   }
-  if (plan.product.kind === 'superseded') {
-    return { ref, name: cell.name, uploaded, product: 'superseded' };
+  if (kind === 'category') {
+    const { categoryId, categoryName } = plan.product;
+    // Shown only when flagged custom, the same as a product picture.
+    const data = { isCustom: true, imageUrl };
+    const current = await prisma.category.findUnique({
+      where: { id: categoryId },
+      select: { imageUrl: true, isCustom: true },
+    });
+    if (!holds(current, data)) {
+      await prisma.category.update({ where: { id: categoryId }, data });
+      changed = true;
+    }
+    return {
+      ref,
+      name: cell.name,
+      uploaded,
+      changed,
+      product: 'category',
+      productName: categoryName,
+    };
   }
-  return { ref, name: cell.name, uploaded, product: 'library-only' };
+  if (kind === 'ambiguous') {
+    return { ref, name: cell.name, uploaded, changed, product: 'ambiguous' };
+  }
+  if (kind === 'ambiguous-variant') {
+    return { ref, name: cell.name, uploaded, changed, product: 'ambiguous-variant' };
+  }
+  if (kind === 'not-found') {
+    return { ref, name: cell.name, uploaded, changed, product: 'not-found' };
+  }
+  if (kind === 'superseded') {
+    return { ref, name: cell.name, uploaded, changed, product: 'superseded' };
+  }
+  return { ref, name: cell.name, uploaded, changed, product: 'library-only' };
 }

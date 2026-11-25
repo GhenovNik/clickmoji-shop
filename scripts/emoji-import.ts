@@ -13,16 +13,18 @@ import {
   storedPictures,
   type CellPlan,
   type ManifestBatch,
+  type ManifestCell,
+  type ProductPlan,
 } from '../src/lib/services/emoji-batch-import';
 
-// Imports the operator's emoji sheets (AGE-1465 item 2).
-//   npx tsx scripts/emoji-import.ts [--dir <folder>] [--batch 001,002,text-001] [--out <folder>]
+// Imports the operator's emoji sheets (AGE-1465 item 2, AGE-1667 queue).
+//   npx tsx scripts/emoji-import.ts [--dir <folder>] [--batch 001,002,text-001,queue-001] [--out <folder>]
 //   DATABASE_URL=... npx tsx scripts/emoji-import.ts ...            preview against the catalogue
 //   DATABASE_URL=... UPLOADTHING_TOKEN=... npx tsx scripts/emoji-import.ts --apply ...
 // Without --apply nothing is written: the normalized pictures and preview.html go to --out.
 // DATABASE_URL is read from the environment only, never from .env.
 
-const MANIFEST = 'docs/emoji-batches/manifest.json';
+const MANIFESTS = ['docs/emoji-batches/manifest.json', 'docs/emoji-batches/queue-manifest.json'];
 
 function argument(name: string) {
   const index = process.argv.indexOf(name);
@@ -47,7 +49,7 @@ type PreviewRow = {
   stored: boolean;
 };
 
-function previewHtml(rows: PreviewRow[], missing: string[]) {
+function previewHtml(rows: PreviewRow[], missing: string[], summary: string[]) {
   const tiles = (row: PreviewRow) =>
     [row.ru, row.en]
       .filter(Boolean)
@@ -68,22 +70,87 @@ function previewHtml(rows: PreviewRow[], missing: string[]) {
 img{width:72px;height:72px;padding:6px;border-radius:12px}.light{background:#f3f4f6}.dark{background:#1f2937}.pair{display:inline-flex;gap:4px;margin-right:10px}</style>
 </head><body><h1>Предпросмотр импорта emoji</h1>
 <p>${rows.length} ячеек. ${missing.length ? `Нет файлов: ${missing.map(escapeHtml).join(', ')}.` : ''}</p>
+${summary.map((line) => `<p>${escapeHtml(line)}</p>`).join('\n')}
 <table>${body}</table></body></html>`;
+}
+
+// What a cell will do, in words for the preview. Without a catalogue there is nothing to check.
+function describeAction(cell: ManifestCell, product: ProductPlan | null) {
+  if (cell.supersededBy) return `только в библиотеку: картинка товара — из ${cell.supersededBy}`;
+  if (!product) {
+    if (cell.target === 'variant')
+      return `привязать к варианту «${cell.name}» (каталог не проверялся)`;
+    if (cell.target === 'category')
+      return `привязать к категории «${cell.name}» (каталог не проверялся)`;
+    return cell.action === 'create'
+      ? 'создать товар (по манифесту; каталог не проверялся)'
+      : 'картинка для существующего товара (по манифесту)';
+  }
+  switch (product.kind) {
+    case 'link':
+      return `привязать к товару «${product.productName}»`;
+    case 'variant':
+      return `привязать к варианту «${product.variantName}» товара «${product.productName}»`;
+    case 'category':
+      return `привязать к категории «${product.categoryName}»`;
+    case 'create':
+      return `создать товар в «${cell.category}»`;
+    case 'superseded':
+      return `только в библиотеку: картинка товара — из ${product.by}`;
+    case 'ambiguous':
+      return `только в библиотеку: несколько товаров с этим названием (${product.productNames.join(', ')}) — выберите в админке`;
+    case 'ambiguous-variant':
+      return `только в библиотеку: несколько вариантов «${cell.name}» у товара «${product.productName}» (${product.variantNames.join(', ')}) — выберите в админке`;
+    case 'not-found':
+      return `только в библиотеку: не найдено — ${product.reason}`;
+    case 'no-category':
+      return `только в библиотеку: нет категории «${cell.category}»`;
+  }
+}
+
+// Counts for the preview: every cell of the selected batches is a target, found or not.
+function summarize(targets: { cell: ManifestCell; product: ProductPlan | null }[]) {
+  const found = targets.filter(
+    ({ product }) =>
+      product?.kind === 'link' || product?.kind === 'variant' || product?.kind === 'category'
+  );
+  const notFound = targets.filter(({ product }) => product?.kind === 'not-found');
+  const ambiguous = targets.filter(
+    ({ product }) => product?.kind === 'ambiguous' || product?.kind === 'ambiguous-variant'
+  );
+  const lines = [
+    `Целей: ${targets.length}; найдено в каталоге: ${found.length}; ненайденных: ${notFound.length}; неоднозначных: ${ambiguous.length}.`,
+  ];
+  for (const { cell, product } of notFound) {
+    lines.push(
+      `Не найдено: ${cell.target ?? 'product'} «${cell.name}» — ${(product as { reason: string }).reason}`
+    );
+  }
+  for (const { cell, product } of ambiguous) {
+    lines.push(`Неоднозначно: ${cell.name} — ${describeAction(cell, product)}`);
+  }
+  return lines;
+}
+
+function argumentBatches(value: string) {
+  return value
+    .split(',')
+    .map((id) => (/^(batch|text|queue)-/.test(id) ? id : `batch-${id.padStart(3, '0')}`));
 }
 
 async function main() {
   const dir = resolve(expandHome(argument('--dir') ?? '~/Downloads/clickmoji-batches'));
   const out = resolve(expandHome(argument('--out') ?? join(dir, 'preview')));
-  const only = argument('--batch')
-    ?.split(',')
-    .map((id) => (/^(batch|text)-/.test(id) ? id : `batch-${id.padStart(3, '0')}`));
+  const only = argument('--batch') ? argumentBatches(argument('--batch')!) : undefined;
   const apply = process.argv.includes('--apply');
 
   if (apply && (!process.env.DATABASE_URL || !process.env.UPLOADTHING_TOKEN)) {
     throw new Error('--apply needs DATABASE_URL and UPLOADTHING_TOKEN in the environment');
   }
 
-  const manifest = JSON.parse(readFileSync(MANIFEST, 'utf8')) as ManifestBatch[];
+  const manifest = MANIFESTS.flatMap(
+    (path) => JSON.parse(readFileSync(path, 'utf8')) as ManifestBatch[]
+  );
   const batches = manifest.filter((batch) => !only || only.includes(batch.batch));
   const prisma = process.env.DATABASE_URL
     ? new PrismaClient({ adapter: createPrismaPgAdapter() })
@@ -94,15 +161,20 @@ async function main() {
   const plans: CellPlan[] = [];
   const rows: PreviewRow[] = [];
   const missing: string[] = [];
+  const targets: { cell: ManifestCell; product: ProductPlan | null }[] = [];
 
   for (const batch of batches) {
     const files = findBatchFiles(dir, batch.batch);
+    const refs = batch.cells.map((cell) => cellRef(batch.batch, cell.cell));
+    // Every cell is a target, whether or not its picture is on disk yet.
+    for (const cell of batch.cells) {
+      targets.push({ cell, product: index ? planProduct(cell, index) : null });
+    }
     if (!files.sheet && files.cells.size === 0) {
       if (only) missing.push(batch.batch);
       continue;
     }
     const images = await readBatchImages(batch, files, (path) => readFileSync(path));
-    const refs = batch.cells.map((cell) => cellRef(batch.batch, cell.cell));
     const stored = prisma ? await storedPictures(prisma, refs) : new Map<string, string>();
 
     for (const cell of batch.cells) {
@@ -118,21 +190,6 @@ async function main() {
       if (enFile && picture.en) writeFileSync(join(out, enFile), picture.en);
 
       const product = index ? planProduct(cell, index) : null;
-      const action = cell.supersededBy
-        ? `только в библиотеку: картинка товара — из ${cell.supersededBy}`
-        : !product
-          ? cell.action === 'create'
-            ? 'создать товар (по манифесту; каталог не проверялся)'
-            : 'картинка для существующего товара (по манифесту)'
-          : product.kind === 'link'
-            ? `привязать к товару «${product.productName}»`
-            : product.kind === 'create'
-              ? `создать товар в «${cell.category}»`
-              : product.kind === 'superseded'
-                ? `только в библиотеку: картинка товара — из ${product.by}`
-                : product.kind === 'ambiguous'
-                  ? `только в библиотеку: несколько товаров с этим названием (${product.productNames.join(', ')}) — выберите в админке`
-                  : `только в библиотеку: нет категории «${cell.category}»`;
       rows.push({
         ref,
         name: cell.name,
@@ -140,7 +197,7 @@ async function main() {
         category: cell.category,
         ru: ruFile,
         en: enFile,
-        action,
+        action: describeAction(cell, product),
         stored: stored.has(ref),
       });
       if (product) {
@@ -157,8 +214,12 @@ async function main() {
     }
   }
 
-  writeFileSync(join(out, 'preview.html'), previewHtml(rows, missing));
+  const summary = index
+    ? summarize(targets)
+    : [`Целей: ${targets.length}; каталог не проверялся (нет DATABASE_URL).`];
+  writeFileSync(join(out, 'preview.html'), previewHtml(rows, missing, summary));
   console.log(`Preview: ${join(out, 'preview.html')} (${rows.length} cells)`);
+  for (const line of summary) console.log(line);
   if (missing.length) console.log(`Missing: ${missing.join(', ')}`);
 
   if (apply && prisma) {
@@ -173,24 +234,34 @@ async function main() {
       if (key) await utapi.deleteFiles(key);
     };
     let uploaded = 0;
+    let changed = 0;
     for (const plan of plans) {
       const result = await applyCell(prisma, plan, upload, discard);
       uploaded += result.uploaded;
+      if (result.changed) changed++;
       const target =
         result.product === 'linked'
           ? `→ ${result.productName}`
-          : result.product === 'created'
-            ? '→ новый товар'
-            : result.product === 'superseded'
-              ? '→ только библиотека (перерисован в текстовой пачке)'
-              : result.product === 'ambiguous'
-                ? '→ только библиотека (неоднозначное название, выберите товар в админке)'
-                : '→ только библиотека';
+          : result.product === 'variant' || result.product === 'category'
+            ? `→ ${result.productName}`
+            : result.product === 'created'
+              ? '→ новый товар'
+              : result.product === 'superseded'
+                ? '→ только библиотека (перерисован в текстовой пачке)'
+                : result.product === 'ambiguous'
+                  ? '→ только библиотека (неоднозначное название, выберите товар в админке)'
+                  : result.product === 'ambiguous-variant'
+                    ? '→ только библиотека (неоднозначный вариант, выберите в админке)'
+                    : result.product === 'not-found'
+                      ? '→ только библиотека (цель не найдена в каталоге)'
+                      : '→ только библиотека';
       console.log(
-        `${result.ref} ${result.name} ${target}${result.uploaded ? '' : ' (без загрузки)'}`
+        `${result.ref} ${result.name} ${target}${result.changed ? '' : ' (без изменений)'}${
+          result.uploaded ? ` (загружено ${result.uploaded})` : ''
+        }`
       );
     }
-    console.log(`Applied ${plans.length} cells, uploaded ${uploaded} files.`);
+    console.log(`Applied ${plans.length} cells, uploaded ${uploaded} files, changed ${changed}.`);
   } else if (apply) {
     console.log('Nothing applied.');
   }

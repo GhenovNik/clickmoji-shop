@@ -162,7 +162,13 @@ describe('planProduct', () => {
         ],
       ],
     ]),
-    categories: new Map([[normalizeCatalogName('Молочные продукты'), { id: 'c1', emoji: '🥛' }]]),
+    variants: new Map(),
+    categories: new Map([
+      [
+        normalizeCatalogName('Молочные продукты'),
+        { id: 'c1', name: 'Молочные продукты', emoji: '🥛' },
+      ],
+    ]),
   };
 
   it('links an existing product by name, ё and case aside', () => {
@@ -202,11 +208,149 @@ describe('planProduct', () => {
   });
 });
 
+describe('planProduct for queue targets', () => {
+  const apple = { id: 'apple', name: 'Яблоко' };
+  const index = {
+    products: new Map([
+      [normalizeCatalogName('Яблоко'), [apple]],
+      [normalizeCatalogName('Хлеб'), [{ id: 'bread', name: 'Хлеб' }]],
+      [
+        normalizeCatalogName('Дубль'),
+        [
+          { id: 'd1', name: 'Дубль' },
+          { id: 'd2', name: 'Дубль' },
+        ],
+      ],
+    ]),
+    variants: new Map([
+      [
+        'apple',
+        [
+          { id: 'v1', name: 'Яблоко Ханикрисп' },
+          { id: 'v2', name: 'Яблоко Гала' },
+        ],
+      ],
+      [
+        'bread',
+        [
+          { id: 'v3', name: 'Хлеб белый' },
+          { id: 'v4', name: 'Хлеб белый' },
+        ],
+      ],
+    ]),
+    categories: new Map([
+      [normalizeCatalogName('Фрукты'), { id: 'c2', name: 'Фрукты', emoji: '🍎' }],
+    ]),
+  };
+  const target = (overrides: Partial<ManifestCell>): ManifestCell => ({
+    cell: 1,
+    category: 'Фрукты',
+    name: 'Яблоко',
+    nameEn: 'Apple',
+    action: 'update-image',
+    target: 'product',
+    ...overrides,
+  });
+
+  it('finds a variant under its parent product', () => {
+    expect(
+      planProduct(
+        target({ target: 'variant', parent: 'яблоко', name: 'Яблоко  Ханикрисп', nameEn: 'x' }),
+        index
+      )
+    ).toEqual({
+      kind: 'variant',
+      variantId: 'v1',
+      productName: 'Яблоко',
+      variantName: 'Яблоко Ханикрисп',
+    });
+  });
+
+  it('does not take a variant of another product with the same name', () => {
+    expect(
+      planProduct(target({ target: 'variant', parent: 'Яблоко', name: 'Хлеб белый' }), index)
+    ).toEqual({ kind: 'not-found', reason: 'нет варианта «Хлеб белый» у товара «Яблоко»' });
+  });
+
+  it('reports an unknown parent and an unknown variant as not found', () => {
+    expect(planProduct(target({ target: 'variant', parent: 'Нет', name: 'x' }), index)).toEqual({
+      kind: 'not-found',
+      reason: 'нет товара «Нет»',
+    });
+  });
+
+  it('lists the products when a variant parent name is ambiguous', () => {
+    const dup = {
+      ...index,
+      products: new Map([
+        [normalizeCatalogName('Дубль'), index.products.get(normalizeCatalogName('Дубль'))!],
+      ]),
+    };
+    expect(planProduct(target({ target: 'variant', parent: 'Дубль', name: 'x' }), dup)).toEqual({
+      kind: 'ambiguous',
+      productNames: ['Дубль', 'Дубль'],
+    });
+  });
+
+  it('lists the variants when one parent has two variants of that name', () => {
+    expect(
+      planProduct(target({ target: 'variant', parent: 'Хлеб', name: 'Хлеб белый' }), index)
+    ).toEqual({
+      kind: 'ambiguous-variant',
+      productName: 'Хлеб',
+      variantNames: ['Хлеб белый', 'Хлеб белый'],
+    });
+  });
+
+  it('finds a category by its own name and reports a missing one', () => {
+    expect(planProduct(target({ target: 'category', name: 'фрукты' }), index)).toEqual({
+      kind: 'category',
+      categoryId: 'c2',
+      categoryName: 'Фрукты',
+    });
+    expect(planProduct(target({ target: 'category', name: 'Овощи' }), index)).toEqual({
+      kind: 'not-found',
+      reason: 'нет категории «Овощи»',
+    });
+  });
+
+  it('never creates a queue product that is missing from the catalogue', () => {
+    expect(planProduct(target({ name: 'Манго' }), index)).toEqual({
+      kind: 'not-found',
+      reason: 'нет товара «Манго»',
+    });
+  });
+
+  it('keeps the historical create fallback for cells without a target', () => {
+    const { target: _target, ...legacy } = target({ name: 'Манго' });
+    expect(planProduct({ ...legacy, action: 'create' }, index)).toEqual({
+      kind: 'create',
+      categoryId: 'c2',
+      categoryEmoji: '🍎',
+    });
+  });
+});
+
 describe('applyCell', () => {
   function fakePrisma() {
     return {
-      emojiLibraryItem: { upsert: vi.fn().mockResolvedValue({}) },
-      product: { update: vi.fn().mockResolvedValue({}), create: vi.fn().mockResolvedValue({}) },
+      emojiLibraryItem: {
+        upsert: vi.fn().mockResolvedValue({}),
+        findUnique: vi.fn().mockResolvedValue(null),
+      },
+      product: {
+        update: vi.fn().mockResolvedValue({}),
+        create: vi.fn().mockResolvedValue({}),
+        findUnique: vi.fn().mockResolvedValue(null),
+      },
+      productVariant: {
+        update: vi.fn().mockResolvedValue({}),
+        findUnique: vi.fn().mockResolvedValue(null),
+      },
+      category: {
+        update: vi.fn().mockResolvedValue({}),
+        findUnique: vi.fn().mockResolvedValue(null),
+      },
     };
   }
 
@@ -374,6 +518,153 @@ describe('applyCell', () => {
         imageUrlEn: 'https://utfs.io/f/en.webp',
       },
     });
+  });
+});
+
+describe('applyCell for variants and categories', () => {
+  const PNG = Buffer.from('ru');
+  const HONEYCRISP: ManifestCell = {
+    cell: 1,
+    category: 'Фрукты',
+    name: 'Яблоко Ханикрисп',
+    nameEn: 'Honeycrisp apple',
+    action: 'update-image',
+    target: 'variant',
+    parent: 'Яблоко',
+  };
+
+  function records() {
+    return {
+      emojiLibraryItem: {
+        upsert: vi.fn().mockResolvedValue({}),
+        findUnique: vi.fn().mockResolvedValue(null),
+      },
+      product: {
+        update: vi.fn().mockResolvedValue({}),
+        create: vi.fn(),
+        findUnique: vi.fn().mockResolvedValue(null),
+      },
+      productVariant: {
+        update: vi.fn().mockResolvedValue({}),
+        findUnique: vi.fn().mockResolvedValue(null),
+      },
+      category: {
+        update: vi.fn().mockResolvedValue({}),
+        findUnique: vi.fn().mockResolvedValue(null),
+      },
+    };
+  }
+
+  const planFor = (product: CellPlan['product'], overrides: Partial<CellPlan> = {}): CellPlan => ({
+    ref: 'queue-001#1',
+    batch: 'queue-001',
+    batchKind: 'universal',
+    cell: HONEYCRISP,
+    images: { ru: PNG },
+    stored: {},
+    product,
+    ...overrides,
+  });
+
+  it('writes the variant picture to the variant only', async () => {
+    const prisma = records();
+    const plan = planFor({
+      kind: 'variant',
+      variantId: 'v1',
+      productName: 'Яблоко',
+      variantName: 'Яблоко Ханикрисп',
+    });
+
+    const result = await applyCell(
+      prisma as unknown as PrismaClient,
+      plan,
+      vi.fn(async () => 'https://utfs.io/f/variant.webp')
+    );
+
+    expect(result).toMatchObject({ product: 'variant', changed: true, uploaded: 1 });
+    expect(prisma.productVariant.update).toHaveBeenCalledWith({
+      where: { id: 'v1' },
+      // A text-free picture serves both languages, so a stale English one is cleared.
+      data: { imageUrl: 'https://utfs.io/f/variant.webp', imageUrlEn: null },
+    });
+    expect(prisma.product.update).not.toHaveBeenCalled();
+  });
+
+  it('writes the category picture with the custom flag the storefront checks', async () => {
+    const prisma = records();
+    const plan = planFor(
+      { kind: 'category', categoryId: 'c2', categoryName: 'Фрукты' },
+      { cell: { ...HONEYCRISP, name: 'Фрукты', nameEn: 'Fruits', target: 'category' } }
+    );
+
+    await applyCell(
+      prisma as unknown as PrismaClient,
+      plan,
+      vi.fn(async () => 'https://utfs.io/f/cat.webp')
+    );
+
+    expect(prisma.category.update).toHaveBeenCalledWith({
+      where: { id: 'c2' },
+      data: { isCustom: true, imageUrl: 'https://utfs.io/f/cat.webp' },
+    });
+  });
+
+  it('refuses a category picture that carries text, before anything is written', async () => {
+    const prisma = records();
+    const plan = planFor(
+      { kind: 'category', categoryId: 'c2', categoryName: 'Фрукты' },
+      { batchKind: 'text', images: { ru: PNG, en: PNG } }
+    );
+    const upload = vi.fn(async () => 'https://utfs.io/f/x.webp');
+
+    await expect(applyCell(prisma as unknown as PrismaClient, plan, upload)).rejects.toThrow(
+      'text-free'
+    );
+    expect(upload).not.toHaveBeenCalled();
+    expect(prisma.emojiLibraryItem.upsert).not.toHaveBeenCalled();
+  });
+
+  it('keeps a not-found target in the library and writes no catalogue record', async () => {
+    const prisma = records();
+    const plan = planFor({ kind: 'not-found', reason: 'нет варианта «Яблоко Ханикрисп»' });
+
+    const result = await applyCell(
+      prisma as unknown as PrismaClient,
+      plan,
+      vi.fn(async () => 'https://utfs.io/f/x.webp')
+    );
+
+    expect(result).toMatchObject({ product: 'not-found', changed: true });
+    expect(prisma.emojiLibraryItem.upsert).toHaveBeenCalledTimes(1);
+    expect(prisma.productVariant.update).not.toHaveBeenCalled();
+    expect(prisma.category.update).not.toHaveBeenCalled();
+  });
+
+  it('writes nothing on a re-run when every record already holds the picture', async () => {
+    const prisma = records();
+    const stored = 'https://utfs.io/f/cat.webp';
+    prisma.emojiLibraryItem.findUnique.mockResolvedValue({
+      imageUrl: stored,
+      name: 'Яблоко Ханикрисп',
+      nameEn: 'Honeycrisp apple',
+      tags: ['фрукты'],
+      source: 'batch',
+      locale: null,
+      groupKey: 'queue-001#1',
+    });
+    prisma.productVariant.findUnique.mockResolvedValue({ imageUrl: stored, imageUrlEn: null });
+    const plan = planFor(
+      { kind: 'variant', variantId: 'v1', productName: 'Яблоко', variantName: 'Яблоко Ханикрисп' },
+      { stored: { ru: stored } }
+    );
+    const upload = vi.fn();
+
+    const result = await applyCell(prisma as unknown as PrismaClient, plan, upload);
+
+    expect(result).toMatchObject({ product: 'variant', changed: false, uploaded: 0 });
+    expect(upload).not.toHaveBeenCalled();
+    expect(prisma.emojiLibraryItem.upsert).not.toHaveBeenCalled();
+    expect(prisma.productVariant.update).not.toHaveBeenCalled();
   });
 });
 
