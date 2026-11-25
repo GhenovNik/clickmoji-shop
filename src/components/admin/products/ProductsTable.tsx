@@ -148,6 +148,7 @@ export default function ProductsTable({ products, onEdit, onDelete }: ProductsTa
                       <LocalizedName
                         names={namesOf(product.category)}
                         locale={locale}
+                        primaryOnly
                         className="wrap-break-word"
                       />
                     </div>
@@ -222,7 +223,7 @@ export default function ProductsTable({ products, onEdit, onDelete }: ProductsTa
                   ) : (
                     <span>{product.category.emoji}</span>
                   )}
-                  <LocalizedName names={namesOf(product.category)} locale={locale} />
+                  <LocalizedName names={namesOf(product.category)} locale={locale} primaryOnly />
                 </div>
               </div>
             </div>

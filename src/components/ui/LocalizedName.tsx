@@ -14,11 +14,14 @@ type LocalizedNameProps = {
   secondaryClassName?: string;
   /** Text appended to the big line, e.g. a count. */
   suffix?: ReactNode;
+  /** Categories show one name only: the big one in the interface language, never the small line. */
+  primaryOnly?: boolean;
 };
 
 /**
  * Draws the name pair of `namePair`: the big name, and the small English line under it when the
  * rule asks for one. Every catalogue list, card and label uses it, so the rule lives in one place.
+ * Categories pass `primaryOnly`, which keeps the same big name and drops the small line.
  */
 export function LocalizedName({
   names,
@@ -27,8 +30,11 @@ export function LocalizedName({
   primaryClassName,
   secondaryClassName,
   suffix,
+  primaryOnly = false,
 }: LocalizedNameProps) {
-  const { primary, primaryLang, secondary } = namePair(names, locale);
+  const pair = namePair(names, locale);
+  const { primary, primaryLang } = pair;
+  const secondary = primaryOnly ? undefined : pair.secondary;
   return (
     <span className={cn('block min-w-0', className)}>
       <span lang={primaryLang} className={primaryClassName}>

@@ -54,6 +54,45 @@ describe('LocalizedName', () => {
     expect(container.textContent).toBe('ZuqqiniZucchini');
   });
 
+  it('primaryOnly in Russian draws the Russian name only, with no English line', () => {
+    const { container } = renderWithIntl(
+      <LocalizedName names={namesOf(zucchini)} locale="ru" primaryOnly />
+    );
+
+    expect(screen.getByText('Кабачок').getAttribute('lang')).toBe('ru');
+    expect(screen.queryByText('Zucchini')).toBeNull();
+    expect(container.textContent).toBe('Кабачок');
+  });
+
+  it('primaryOnly in English draws the English name only', () => {
+    const { container } = renderWithIntl(
+      <LocalizedName names={namesOf(zucchini)} locale="en" primaryOnly />,
+      { locale: 'en' }
+    );
+
+    expect(container.textContent).toBe('Zucchini');
+  });
+
+  it('primaryOnly with an invented language draws only that name big', () => {
+    const { container } = renderWithIntl(
+      <LocalizedName
+        names={{ ru: 'Кабачок', en: 'Zucchini', zz: 'Zuqqini' }}
+        locale="zz"
+        primaryOnly
+      />
+    );
+
+    expect(screen.getByText('Zuqqini').getAttribute('lang')).toBe('zz');
+    expect(screen.queryByText('Zucchini')).toBeNull();
+    expect(container.textContent).toBe('Zuqqini');
+  });
+
+  it('keeps the English line for products and variants by default', () => {
+    const { container } = renderWithIntl(<LocalizedName names={namesOf(zucchini)} locale="ru" />);
+
+    expect(container.textContent).toBe('КабачокZucchini');
+  });
+
   it('appends its suffix to the big line', () => {
     renderWithIntl(<LocalizedName names={namesOf(zucchini)} locale="en" suffix=" (3)" />, {
       locale: 'en',

@@ -123,9 +123,9 @@ function CategoriesPageContent() {
                           <LocalizedName
                             names={namesOf(category)}
                             locale={locale}
+                            primaryOnly
                             className="text-center"
                             primaryClassName="text-base font-semibold leading-[1.1] text-gray-900"
-                            secondaryClassName="truncate"
                           />
                         </h3>
                         {category._count && (

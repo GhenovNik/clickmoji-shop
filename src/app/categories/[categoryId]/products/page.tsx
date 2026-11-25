@@ -62,31 +62,34 @@ function ProductsPageContent() {
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 p-6 pb-32">
       <div className="max-w-4xl mx-auto">
-        <div className="text-center mb-8">
-          {category?.isCustom && category?.imageUrl ? (
-            <Image
-              src={category.imageUrl}
-              alt={categoryName}
-              width={96}
-              height={96}
-              className="w-24 h-24 object-contain mx-auto mb-2"
-            />
-          ) : (
-            <div className="text-6xl mb-2">{category?.emoji || '📦'}</div>
-          )}
-          <h1 className="text-4xl font-bold mb-2 text-gray-900">
+        <div className="text-center mb-6">
+          {/* One line: the small category icon sits beside the single-name heading. */}
+          <h1 className="flex items-center justify-center gap-2 mb-2 text-gray-900">
             {category ? (
-              <LocalizedName
-                names={namesOf(category)}
-                locale={locale}
-                className="text-center"
-                primaryClassName="text-4xl font-bold text-gray-900"
-              />
+              <>
+                {category.isCustom && category.imageUrl ? (
+                  <Image
+                    src={category.imageUrl}
+                    alt={categoryName}
+                    width={28}
+                    height={28}
+                    className="w-7 h-7 object-contain shrink-0"
+                  />
+                ) : (
+                  <span className="text-2xl leading-none shrink-0">{category.emoji || '📦'}</span>
+                )}
+                <LocalizedName
+                  names={namesOf(category)}
+                  locale={locale}
+                  primaryOnly
+                  className="min-w-0 text-xl sm:text-2xl font-bold"
+                  primaryClassName="text-xl sm:text-2xl font-bold text-gray-900 wrap-break-word"
+                />
+              </>
             ) : (
-              tCommon('loading')
+              <span className="text-xl font-bold">{tCommon('loading')}</span>
             )}
           </h1>
-          <p className="text-gray-700">{t('products.subtitle')}</p>
 
           {isAuthenticated && (
             <button

@@ -54,10 +54,11 @@ export default function ShoppingCategoryGroup({
           <LocalizedName
             names={namesOf(category)}
             locale={locale}
-            // Compact list only: 16px + 12px lines (28px header instead of 36px), so the three
-            // pending groups keep the seven items above the bottom navigation at 375x812.
+            primaryOnly
+            // Compact list only: one 16px line, so the group header is 24px (measured on the
+            // candidate) and the three pending groups keep the seven items above the bottom
+            // navigation at 375x812. The English line used to make the header two lines (28px).
             className={cn('min-w-0 flex-1 truncate', view === 'list' && 'leading-4')}
-            secondaryClassName={view === 'list' ? 'leading-3' : undefined}
             suffix={` (${count})`}
           />
           <Chevron size={18} aria-hidden="true" />

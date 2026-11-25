@@ -396,7 +396,11 @@ export default function ProductSearch({ compact = false }: { compact?: boolean }
                         ) : (
                           <span>{product.category.emoji}</span>
                         )}
-                        <LocalizedName names={namesOf(product.category)} locale={locale} />
+                        <LocalizedName
+                          names={namesOf(product.category)}
+                          locale={locale}
+                          primaryOnly
+                        />
                       </p>
                       {product.variants && product.variants.length > 0 && (
                         <div className="mt-2">

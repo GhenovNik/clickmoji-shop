@@ -28,3 +28,28 @@ describe('catalogue name display sites', () => {
     expect(source).not.toContain('nameLang');
   });
 });
+
+// Category labels show one name in the interface language, so every LocalizedName that draws a
+// category passes `primaryOnly`. Product and variant labels keep the small English line.
+const CATEGORY_LABEL_SITES = [
+  'src/components/shopping/ShoppingCategoryGroup.tsx',
+  'src/components/ProductSearch.tsx',
+  'src/components/admin/categories/CategoriesTable.tsx',
+  'src/components/admin/products/ProductsTable.tsx',
+  'src/app/history/page.tsx',
+  'src/app/categories/page.tsx',
+  'src/app/categories/[categoryId]/products/page.tsx',
+];
+
+describe('category labels show one name', () => {
+  it.each(CATEGORY_LABEL_SITES)('%s draws category names with primaryOnly', (file) => {
+    const source = readFileSync(path.join(process.cwd(), file), 'utf8');
+    // A category call is one whose `names` prop is built from a category (`category`, `product.category`, `categoryName`).
+    const categoryCalls = [...source.matchAll(/<LocalizedName\s[\s\S]*?\/>/g)]
+      .map((match) => match[0])
+      .filter((call) => /names=\{[^}]*categor/i.test(call));
+
+    expect(categoryCalls.length).toBeGreaterThan(0);
+    for (const call of categoryCalls) expect(call).toContain('primaryOnly');
+  });
+});

@@ -265,6 +265,7 @@ export default function HistoryPage() {
                                     nameEn: item.categoryNameEn,
                                   })}
                                   locale={locale}
+                                  primaryOnly
                                   className="text-sm text-gray-600"
                                 />
                                 {item.note && <p className="text-xs text-gray-500">{item.note}</p>}

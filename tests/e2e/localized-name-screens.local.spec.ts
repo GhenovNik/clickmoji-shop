@@ -116,7 +116,7 @@ test.describe('catalogue names by interface language', () => {
     isMobile: true,
     hasTouch: true,
   });
-  test('catalog in Russian: Russian name big, English small under it', async ({
+  test('catalog in Russian: category one Russian name, products keep the English hint', async ({
     page,
     context,
   }) => {
@@ -126,9 +126,13 @@ test.describe('catalogue names by interface language', () => {
 
     await expect(page.getByText('Milk', { exact: true })).toBeVisible();
     await expect(page.getByText('Молоко', { exact: true })).toBeVisible();
-    // Category heading: Russian big, English small under it.
-    await expect(page.getByText('Молочные продукты', { exact: true })).toBeVisible();
-    await expect(page.getByText('Dairy', { exact: true })).toBeVisible();
+    // Category heading: one Russian name, a single line, no English line and no subtitle.
+    const heading = page.getByRole('heading', { level: 1, name: 'Молочные продукты' });
+    await expect(heading).toBeVisible();
+    await expect(page.getByText('Dairy', { exact: true })).toHaveCount(0);
+    await expect(page.getByText('Выберите товары одним нажатием')).toHaveCount(0);
+    const headingBox = await heading.boundingBox();
+    expect(headingBox?.height ?? Infinity).toBeLessThanOrEqual(40);
     await expect(page.getByText('Ketchup', { exact: true })).toBeVisible();
     await screenshot(page, 'catalog-ru.png');
   });
@@ -149,7 +153,7 @@ test.describe('catalogue names by interface language', () => {
     await screenshot(page, 'catalog-en.png');
   });
 
-  test('shopping list in Russian: Russian name big, English small under it', async ({
+  test('shopping list in Russian: category group one Russian name, product hints kept', async ({
     page,
     context,
   }) => {
@@ -159,9 +163,9 @@ test.describe('catalogue names by interface language', () => {
 
     await expect(page.getByTestId('shopping-item')).toHaveCount(products.length);
     await expect(page.getByText('Milk', { exact: true })).toBeVisible();
-    // Group heading (the category, with its count): Russian big, English small under it.
+    // Group heading (the category, with its count): the Russian name only.
     await expect(page.locator('h3', { hasText: 'Молочные продукты' })).toBeVisible();
-    await expect(page.locator('h3', { hasText: 'Dairy' })).toBeVisible();
+    await expect(page.locator('h3', { hasText: 'Dairy' })).toHaveCount(0);
     await screenshot(page, 'list-ru.png');
   });
 

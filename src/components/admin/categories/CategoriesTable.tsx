@@ -87,8 +87,8 @@ export default function CategoriesTable({
                     <LocalizedName
                       names={namesOf(category)}
                       locale={locale}
+                      primaryOnly
                       primaryClassName="text-sm font-medium text-gray-900"
-                      secondaryClassName="text-sm"
                     />
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
@@ -149,8 +149,8 @@ export default function CategoriesTable({
                   <LocalizedName
                     names={namesOf(category)}
                     locale={locale}
+                    primaryOnly
                     primaryClassName="font-semibold text-gray-900"
-                    secondaryClassName="text-sm"
                   />
                 </h3>
                 <div className="mt-2 flex items-center gap-4 text-xs text-gray-600">
