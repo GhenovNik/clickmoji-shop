@@ -48,6 +48,7 @@
     "db:restore": "tsx scripts/db-restore.ts",
     "db:files": "tsx scripts/db-files.ts cleanup-unused-images",
     "db:files:dry": "tsx scripts/db-files.ts cleanup-unused-images --dry-run",
+    "db:cleanup-guests": "tsx scripts/guest-cleanup.ts",
     "audit:prod": "npm audit --omit=dev --audit-level=high",
     "audit:all": "tsx scripts/audit-check.ts",
     "check": "prisma generate && npm run typecheck && npm run lint && npm run test",

@@ -36,11 +36,15 @@ export async function POST(request: Request) {
 
     const dbUser = await prisma.user.findUnique({
       where: { id: session.user.id },
-      select: { id: true, role: true, createdProductsCount: true },
+      select: { id: true, role: true, createdProductsCount: true, isGuest: true },
     });
 
     if (!dbUser) {
       return NextResponse.json({ error: t('api.products.userNotFound') }, { status: 404 });
+    }
+
+    if (dbUser.isGuest || session.user.isGuest) {
+      return NextResponse.json({ error: t('api.aiQuota.guestDisabled') }, { status: 403 });
     }
 
     const GENERATION_LIMIT = 10;

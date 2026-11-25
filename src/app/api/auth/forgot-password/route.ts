@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { createPasswordResetToken } from '@/lib/auth-tokens';
 import { sendPasswordResetEmail } from '@/lib/email';
+import { isGuestEmail } from '@/lib/guest';
 import {
   checkRateLimit,
   getClientIp,
@@ -42,13 +43,13 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: t('api.auth.emailRequired') }, { status: 400 });
     }
 
-    if (!isValidEmail(normalizedEmail)) {
+    if (!isValidEmail(normalizedEmail) || isGuestEmail(normalizedEmail)) {
       return NextResponse.json({ message: t('api.auth.emailSentIfExists') });
     }
 
     const user = await prisma.user.findUnique({ where: { email: normalizedEmail } });
 
-    if (!user) {
+    if (!user || user.isGuest) {
       return NextResponse.json({ message: t('api.auth.emailSentIfExists') });
     }
 

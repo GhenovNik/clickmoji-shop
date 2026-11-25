@@ -186,3 +186,96 @@ describe('funnel-analytics ordered distinct aggregation', () => {
     expect(summary.stages.map((s) => s.count)).toEqual([1, 1, 1, 1, 0]);
   });
 });
+
+describe('guest chain identity', () => {
+  const guestEvent = (
+    type: FunnelEventType,
+    createdAt: Date,
+    ids: { guestId: string | null; userId?: string | null; userIsGuest?: boolean | null }
+  ): FunnelEventRecord => ({
+    type,
+    createdAt,
+    guestId: ids.guestId,
+    userId: ids.userId ?? null,
+    userIsGuest: ids.userIsGuest ?? null,
+  });
+
+  it('counts one browser guest chain as one person across the Users of concurrent and restarted starts', () => {
+    const events: FunnelEventRecord[] = [
+      guestEvent('VISIT', hoursAgo(10), { guestId: 'g-chain' }),
+      // Two concurrent starts: REGISTER written by User A, LIST_CREATE by User B.
+      guestEvent('REGISTER', hoursAgo(9), {
+        guestId: 'g-chain',
+        userId: 'guest-a',
+        userIsGuest: true,
+      }),
+      guestEvent('LIST_CREATE', hoursAgo(8), {
+        guestId: 'g-chain',
+        userId: 'guest-b',
+        userIsGuest: true,
+      }),
+      // Session lost, guest restarted under User C, which buys.
+      guestEvent('ITEM_ADD', hoursAgo(7), {
+        guestId: 'g-chain',
+        userId: 'guest-c',
+        userIsGuest: true,
+      }),
+      guestEvent('ITEM_PURCHASE', hoursAgo(6), {
+        guestId: 'g-chain',
+        userId: 'guest-c',
+        userIsGuest: true,
+      }),
+      // Isolation: another browser only visits.
+      guestEvent('VISIT', hoursAgo(5), { guestId: 'g-other' }),
+    ];
+
+    const summary = aggregateFunnelWindow(events, 1, NOW);
+
+    expect(summary.stages.map((s) => s.count)).toEqual([2, 1, 1, 1, 1]);
+    const chainOnly = aggregateFunnelWindow(
+      events.filter((event) => event.guestId === 'g-chain'),
+      1,
+      NOW
+    );
+    expect(chainOnly.stages.map((s) => s.count)).toEqual([1, 1, 1, 1, 1]);
+  });
+
+  it('keeps ordinary users keyed by User.id and links an unattributed visit only to a non-guest user', () => {
+    const events: FunnelEventRecord[] = [
+      // Ordinary registration: the visit is linked to the non-guest user that registered.
+      guestEvent('VISIT', hoursAgo(12), { guestId: 'g-ordinary' }),
+      guestEvent('REGISTER', hoursAgo(11), {
+        guestId: 'g-ordinary',
+        userId: 'user-r',
+        userIsGuest: false,
+      }),
+      guestEvent('LIST_CREATE', hoursAgo(10), {
+        guestId: 'g-ordinary',
+        userId: 'user-r',
+        userIsGuest: false,
+      }),
+      // A guest chain: its visit must not be linked to any guest User row.
+      guestEvent('VISIT', hoursAgo(9), { guestId: 'g-guest' }),
+      guestEvent('REGISTER', hoursAgo(8), {
+        guestId: 'g-guest',
+        userId: 'guest-q',
+        userIsGuest: true,
+      }),
+    ];
+
+    const summary = aggregateFunnelWindow(events, 1, NOW);
+
+    expect(summary.stages.map((s) => s.count)).toEqual([2, 2, 1, 0, 0]);
+  });
+
+  it('keeps a guest event without a funnel guestId keyed by its User', () => {
+    const events: FunnelEventRecord[] = [
+      guestEvent('VISIT', hoursAgo(4), { guestId: null, userId: 'guest-z', userIsGuest: true }),
+      guestEvent('ITEM_ADD', hoursAgo(3), { guestId: null, userId: 'guest-z', userIsGuest: true }),
+    ];
+
+    const summary = aggregateFunnelWindow(events, 1, NOW);
+
+    expect(summary.stages.map((s) => s.count)).toEqual([1, 0, 0, 0, 0]);
+  });
+});
