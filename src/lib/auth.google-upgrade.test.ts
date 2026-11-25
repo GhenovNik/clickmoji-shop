@@ -54,12 +54,17 @@ const SECRET = 'test-secret-for-google-upgrade-callback';
 const GUEST_ID = 'guest-row-1';
 const EMAIL = 'shopper@example.com';
 const NOW = Math.floor(Date.now() / 1000);
+/** The OAuth state of the attempt the intent is bound to (the callback's validated state). */
+const ATTEMPT_STATE = 'state-of-the-attempt';
 
 type SignInParams = Parameters<NonNullable<typeof authOptions.callbacks>['signIn'] & object>[0];
 
 /** Arms the explicit upgrade the way POST /api/auth/guest-upgrade does: a signed httpOnly cookie. */
 async function armUpgrade(guestUserId = GUEST_ID, issuedAt = NOW) {
-  doubles.jar.set(GUEST_UPGRADE_INTENT_COOKIE, await mintGuestUpgradeIntent(guestUserId, issuedAt));
+  doubles.jar.set(
+    GUEST_UPGRADE_INTENT_COOKIE,
+    await mintGuestUpgradeIntent(guestUserId, ATTEMPT_STATE, issuedAt)
+  );
 }
 
 async function callback(
@@ -177,7 +182,7 @@ describe('Google upgrade callback: explicit guest upgrade (AGE-1667)', () => {
       GUEST_UPGRADE_INTENT_COOKIE,
       await (async () => {
         vi.stubEnv('AUTH_SECRET', 'attacker-secret');
-        const forged = await mintGuestUpgradeIntent(GUEST_ID);
+        const forged = await mintGuestUpgradeIntent(GUEST_ID, ATTEMPT_STATE);
         vi.stubEnv('AUTH_SECRET', SECRET);
         return forged;
       })()

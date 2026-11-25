@@ -20,6 +20,7 @@ import {
   isSessionTokenFreshForUser,
 } from './guest';
 import { GUEST_UPGRADE_PROVIDER_ID } from './guest-upgrade-intent';
+import { guestUpgradeOAuthCookies } from './guest-upgrade-oauth';
 
 const providers: NextAuthOptions['providers'] = [
   Credentials({
@@ -70,23 +71,29 @@ const providers: NextAuthOptions['providers'] = [
   }),
 ];
 
-if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET) {
+const googleConfigured = Boolean(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET);
+
+/**
+ * The explicit guest upgrade (AGE-1667) is a separate provider with the same Google client. The
+ * route in src/app/api/auth/[...nextauth] sends its requests to guestUpgradeAuthOptions, a NextAuth
+ * instance with namespaced round-trip cookies, so the two flows never overwrite each other's state.
+ */
+function googleUpgradeProvider() {
+  return Google({
+    id: GUEST_UPGRADE_PROVIDER_ID,
+    clientId: process.env.GOOGLE_CLIENT_ID as string,
+    clientSecret: process.env.GOOGLE_CLIENT_SECRET as string,
+  });
+}
+
+if (googleConfigured) {
   providers.push(
     Google({
-      clientId: process.env.GOOGLE_CLIENT_ID,
-      clientSecret: process.env.GOOGLE_CLIENT_SECRET,
+      clientId: process.env.GOOGLE_CLIENT_ID as string,
+      clientSecret: process.env.GOOGLE_CLIENT_SECRET as string,
     })
   );
-  // The explicit guest upgrade (AGE-1667) is a separate provider with the same Google client. Its
-  // OAuth round trip is bound to this provider id by NextAuth's signed state and PKCE cookies, so
-  // its callback is never an ordinary sign-in and an ordinary callback is never an upgrade.
-  providers.push(
-    Google({
-      id: GUEST_UPGRADE_PROVIDER_ID,
-      clientId: process.env.GOOGLE_CLIENT_ID,
-      clientSecret: process.env.GOOGLE_CLIENT_SECRET,
-    })
-  );
+  providers.push(googleUpgradeProvider());
 }
 
 /** Google identity verification for either Google provider: the same profile checks apply. */
@@ -142,6 +149,20 @@ async function completeGoogleUpgrade(
   (user as typeof user & { role?: string; isGuest?: boolean }).role = outcome.user.role;
   (user as typeof user & { isGuest?: boolean }).isGuest = false;
   return true;
+}
+
+/**
+ * The NextAuth instance that serves the explicit guest upgrade only: the `google-upgrade` provider
+ * and the namespaced round-trip cookies of guest-upgrade-oauth.ts. Null when Google is not configured.
+ */
+export function guestUpgradeAuthOptions(secure: boolean): NextAuthOptions | null {
+  if (!googleConfigured) return null;
+  return {
+    ...authOptions,
+    providers: [googleUpgradeProvider()],
+    useSecureCookies: secure,
+    cookies: guestUpgradeOAuthCookies(secure),
+  };
 }
 
 export const authOptions: NextAuthOptions = {

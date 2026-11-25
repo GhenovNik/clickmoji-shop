@@ -105,16 +105,21 @@ Google has two paths, and they are separate NextAuth providers that share one Go
 path is chosen by the provider whose OAuth round trip returned, never by a cookie or a callback URL:
 
 - `google` is the ordinary sign-in. It never reads the upgrade intent and never promotes a guest.
-- `google-upgrade` is the explicit upgrade (AGE-1667). NextAuth binds its signed state and PKCE
-  cookies to the provider id, so the `google` callback refuses an upgrade round trip and the
-  `google-upgrade` callback refuses an ordinary one. A canceled or concurrent flow therefore cannot
-  be completed by the other path.
+- `google-upgrade` is the explicit upgrade (AGE-1667). It is served by its own NextAuth instance
+  (`guestUpgradeAuthOptions`) whose round-trip cookies are namespaced (`next-auth.guest-upgrade.*`:
+  state, PKCE verifier, callback url). NextAuth keys those cookies by name, not by provider, so
+  without the namespace an ordinary start and an upgrade start overwrite each other. With it, both
+  round trips keep their own state, in either order, and an ordinary sign-in is never refused because
+  an upgrade started (or the reverse). Canceled round trips leave nothing the other path can consume.
 
-**Explicit upgrade.** The register page first calls `POST /api/auth/guest-upgrade`. For a live guest
-only, that route sets `clickmoji_guest_upgrade`: a signed (auth secret), httpOnly, SameSite Lax
-cookie bound to the guest's `User.id`, valid for 300 seconds. The page then starts Google with
-`signIn('google-upgrade')`. The callback runs the upgrade only with this intent and a live guest
-session that is the same guest:
+**Explicit upgrade.** The register page first calls `POST /api/auth/guest-upgrade`, which only
+confirms a live guest (409 otherwise) and sets no cookie. The page then starts Google with
+`signIn('google-upgrade')`. For a live guest, that start sets `clickmoji_guest_upgrade`: a signed
+(auth secret), httpOnly, SameSite Lax cookie bound to the guest's `User.id` and to the OAuth `state`
+of that round trip (the value in the authorization URL), valid for 300 seconds. The callback refuses
+unless the `state` it receives equals the intent's, so a newer attempt's intent cannot validate an
+older round trip. NextAuth then checks the state and PKCE cookies of the same round trip. The
+upgrade runs only with this intent and a live guest session that is the same guest:
 
 - **Live guest, verified Google address, no account holds it**: the guest is promoted in place with
   `promoteGuestWithGoogleIdentity` (same `User.id`, no password, verified now, `GUEST_REGISTERED`).
@@ -143,8 +148,10 @@ Decisions:
 
 - A forged intent cookie can only select the stricter explicit path. It never grants a promotion
   the guest session does not already hold.
-- The register page clears the intent cookie when it loads. The callback itself cannot set cookies,
-  so the cookie also expires on its own after 5 minutes.
+- The upgrade callback clears its round-trip and intent cookies whatever NextAuth decides (success,
+  refusal, cancellation). A callback whose state does not match the intent is refused without
+  touching cookies, because they may belong to a newer attempt still in progress. The intent also
+  expires on its own after 5 minutes.
 - A refused explicit upgrade cannot clear the stale guest cookie (a NextAuth redirect). The next
   guest API call clears it, as it does for any stale guest.
 - Two promotions at once (two guests, or Google and email for one guest): the conditional update and

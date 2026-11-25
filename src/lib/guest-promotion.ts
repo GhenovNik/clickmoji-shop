@@ -326,22 +326,31 @@ export async function promoteGuestWithGoogleIdentity(input: {
   });
 }
 
-type UpgradeIntentClaims = { kind?: unknown; guestUserId?: unknown; issuedAt?: unknown };
+type UpgradeIntentClaims = {
+  kind?: unknown;
+  guestUserId?: unknown;
+  state?: unknown;
+  issuedAt?: unknown;
+};
 
 /**
- * Mints the explicit-upgrade intent for a guest the caller has already verified as live (AGE-1667).
- * The value is signed with the auth secret, bound to that guest's User.id and stamped with its issue
- * time. It lives in an httpOnly cookie for five minutes; the register page never sees it.
+ * Mints the explicit-upgrade intent for one OAuth round trip (AGE-1667). The value is signed with the
+ * auth secret and bound to three things: the guest's User.id, the OAuth `state` of that round trip
+ * (the value NextAuth validates on its callback), and the issue time. It lives in an httpOnly cookie
+ * for five minutes. A newer intent carries a different state, so it cannot validate an older round trip.
  */
 export async function mintGuestUpgradeIntent(
   guestUserId: string,
+  state: string,
   nowSeconds: number = currentSessionIssuedAtSeconds()
 ): Promise<string> {
   const secret = getAuthSecret();
   if (!secret) throw new Error('Auth secret is missing');
+  if (!guestUserId || !state) throw new Error('Guest upgrade intent needs a guest and a state');
   const claims: UpgradeIntentClaims = {
     kind: 'guest-upgrade',
     guestUserId,
+    state,
     issuedAt: nowSeconds,
   };
   return encode({
@@ -353,13 +362,13 @@ export async function mintGuestUpgradeIntent(
 }
 
 /**
- * Reads the explicit-upgrade intent of the current request (AGE-1667). Returns the bound guest id
- * only for a signed, fresh intent of this kind; a missing, forged, malformed or old value returns
- * null. Ordinary Google sign-in never calls this, so a leftover intent cannot change its path.
+ * Reads the explicit-upgrade intent of the current request (AGE-1667). Returns the bound guest id and
+ * OAuth state only for a signed, fresh intent of this kind; a missing, forged, malformed or old value
+ * returns null. Ordinary Google sign-in never calls this, so a leftover intent cannot change its path.
  */
 export async function readGuestUpgradeIntent(
   nowSeconds: number = currentSessionIssuedAtSeconds()
-): Promise<{ guestUserId: string } | null> {
+): Promise<{ guestUserId: string; state: string } | null> {
   const secret = getAuthSecret();
   if (!secret) return null;
   let store: Awaited<ReturnType<typeof cookies>>;
@@ -381,13 +390,14 @@ export async function readGuestUpgradeIntent(
     return null;
   }
   if (!claims || claims.kind !== 'guest-upgrade') return null;
-  const { guestUserId, issuedAt } = claims;
+  const { guestUserId, state, issuedAt } = claims;
   if (typeof guestUserId !== 'string' || guestUserId.length === 0) return null;
+  if (typeof state !== 'string' || state.length === 0) return null;
   if (typeof issuedAt !== 'number' || !Number.isInteger(issuedAt)) return null;
   // Checked against the issue time as well as the cookie's own expiry, and not accepted from the future.
   if (issuedAt > nowSeconds + 30) return null;
   if (nowSeconds - issuedAt >= GUEST_UPGRADE_INTENT_MAX_AGE_SECONDS) return null;
-  return { guestUserId };
+  return { guestUserId, state };
 }
 
 /**

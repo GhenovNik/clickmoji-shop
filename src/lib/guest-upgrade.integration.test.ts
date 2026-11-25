@@ -159,7 +159,10 @@ describe.skipIf(!url || !isLocal)('guest upgrade on PostgreSQL', () => {
    * `google-upgrade` provider, as the register page starts it.
    */
   async function setUpgradeIntent(guestUserId: string) {
-    jar.cookies.set(UPGRADE_INTENT_COOKIE, await mintGuestUpgradeIntent(guestUserId));
+    jar.cookies.set(
+      UPGRADE_INTENT_COOKIE,
+      await mintGuestUpgradeIntent(guestUserId, 'state-of-the-attempt')
+    );
   }
 
   function googleSignIn(
