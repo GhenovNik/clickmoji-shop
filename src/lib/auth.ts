@@ -7,6 +7,7 @@ import { authConfig } from './auth.config';
 import { isEmailVerificationRequired } from './email';
 import { normalizeEmail } from './auth-security';
 import { readGuestIdFromRequestScope, recordFunnelEvent } from './funnel';
+import { isGuestEmail, isSessionTokenFreshForUser } from './guest';
 
 const providers: NextAuthOptions['providers'] = [
   Credentials({
@@ -23,11 +24,15 @@ const providers: NextAuthOptions['providers'] = [
       const email = normalizeEmail(credentials.email as string);
       const password = credentials.password as string;
 
+      if (isGuestEmail(email)) {
+        return null;
+      }
+
       const user = await prisma.user.findUnique({
         where: { email },
       });
 
-      if (!user || !user.password) {
+      if (!user || user.isGuest || !user.password) {
         return null;
       }
 
@@ -47,6 +52,7 @@ const providers: NextAuthOptions['providers'] = [
         name: user.name,
         image: user.image,
         role: user.role,
+        isGuest: user.isGuest,
       };
     },
   }),
@@ -79,12 +85,17 @@ export const authOptions: NextAuthOptions = {
       }
 
       const email = normalizeEmail((user.email || profile?.email || '') as string);
-      if (!email) {
+      if (!email || isGuestEmail(email)) {
         return false;
       }
 
       const existingUser = await prisma.user.findUnique({ where: { email } });
+      if (existingUser?.isGuest) {
+        return false;
+      }
+
       let authenticatedUserId: string;
+      let authenticatedRole = 'USER';
       let isNewUser = false;
 
       if (!existingUser) {
@@ -98,6 +109,7 @@ export const authOptions: NextAuthOptions = {
           },
         });
         authenticatedUserId = createdUser.id;
+        authenticatedRole = createdUser.role ?? 'USER';
         isNewUser = true;
       } else {
         await prisma.user.update({
@@ -110,7 +122,12 @@ export const authOptions: NextAuthOptions = {
           },
         });
         authenticatedUserId = existingUser.id;
+        authenticatedRole = existingUser.role ?? 'USER';
       }
+
+      user.id = authenticatedUserId;
+      (user as typeof user & { role?: string; isGuest?: boolean }).role = authenticatedRole;
+      (user as typeof user & { isGuest?: boolean }).isGuest = false;
 
       const guestId = await readGuestIdFromRequestScope();
       await recordFunnelEvent({
@@ -122,22 +139,53 @@ export const authOptions: NextAuthOptions = {
 
       return true;
     },
-    async jwt({ token, user }) {
+    async jwt({ token, user, account }) {
       if (user) {
-        token.id = user.id;
-        token.role = (user as typeof user & { role?: string }).role;
-        token.email = user.email;
-      }
-
-      if (token.email) {
-        const dbUser = await prisma.user.findUnique({
-          where: { email: token.email as string },
-        });
-        if (dbUser) {
+        if (account?.provider === 'google' && user.email) {
+          const dbUser = await prisma.user.findUnique({
+            where: { email: normalizeEmail(user.email) },
+            select: { id: true, role: true, email: true, isGuest: true },
+          });
+          if (!dbUser || dbUser.isGuest) {
+            throw new Error('Invalid OAuth user');
+          }
           token.id = dbUser.id;
           token.role = dbUser.role;
+          token.email = dbUser.email;
+          token.isGuest = dbUser.isGuest;
+          return token;
         }
+
+        token.id = user.id;
+        token.role = (user as typeof user & { role?: string }).role ?? 'USER';
+        token.email = user.email;
+        token.isGuest = Boolean((user as typeof user & { isGuest?: boolean }).isGuest);
+        return token;
       }
+
+      // Existing session refresh: identify strictly by User.id (never email fallback) and verify
+      // the JWT was issued at or after that row's creation second so deleted/recreated rows cannot
+      // inherit an older session.
+      if (typeof token.id !== 'string' || !token.id) {
+        throw new Error('Session token missing user id');
+      }
+
+      const dbUser = await prisma.user.findUnique({
+        where: { id: token.id },
+        select: { id: true, role: true, email: true, isGuest: true, createdAt: true },
+      });
+
+      if (
+        !dbUser ||
+        !isSessionTokenFreshForUser(token.iat as number | undefined, dbUser.createdAt)
+      ) {
+        throw new Error('Session user no longer valid');
+      }
+
+      token.id = dbUser.id;
+      token.role = dbUser.role;
+      token.email = dbUser.email;
+      token.isGuest = dbUser.isGuest;
 
       return token;
     },
@@ -145,6 +193,10 @@ export const authOptions: NextAuthOptions = {
       if (session.user) {
         session.user.id = token.id as string;
         session.user.role = token.role as string;
+        session.user.isGuest = Boolean(token.isGuest);
+      }
+      if (typeof token.iat === 'number') {
+        session.tokenIssuedAt = token.iat;
       }
       return session;
     },

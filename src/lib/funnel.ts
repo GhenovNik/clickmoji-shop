@@ -140,9 +140,15 @@ export type RecordFunnelEventInput = {
   userId?: string | null;
   guestId?: string | null;
   correlateGuest?: boolean;
+  /** Skip the write when this funnel guestId already has an event of the same type. */
+  dedupeByGuest?: boolean;
 };
 
 type FunnelEventDelegateLike = {
+  findFirst?: (args: {
+    where: { type: FunnelEventType; guestId: string };
+    select: { id: true };
+  }) => Promise<unknown>;
   create?: (args: {
     data: { type: FunnelEventType; userId: string | null; guestId: string | null };
   }) => Promise<unknown>;
@@ -172,14 +178,27 @@ export async function recordFunnelEvent(input: RecordFunnelEventInput): Promise<
       logFunnelWriteFailure('record', input.type, new Error('Funnel event storage unavailable'));
       return false;
     }
-    await funnelEvent.create({
-      data: {
-        type: input.type,
-        userId,
-        guestId,
-      },
-    });
-    recorded = true;
+
+    // One milestone per funnel guestId: a repeated guest start from the same browser must not
+    // inflate REGISTER or LIST_CREATE. Skipped writes still correlate below.
+    const alreadyRecorded =
+      input.dedupeByGuest && guestId && typeof funnelEvent.findFirst === 'function'
+        ? await funnelEvent.findFirst({
+            where: { type: input.type, guestId },
+            select: { id: true },
+          })
+        : null;
+
+    if (!alreadyRecorded) {
+      await funnelEvent.create({
+        data: {
+          type: input.type,
+          userId,
+          guestId,
+        },
+      });
+      recorded = true;
+    }
   } catch (error) {
     logFunnelWriteFailure('record', input.type, error);
   }
