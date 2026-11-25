@@ -229,6 +229,32 @@ describe('AccountPage', () => {
   });
 });
 
+describe('AccountPage guest and upgraded views (AGE-1667)', () => {
+  it.each(['ru', 'en'] as const)(
+    'hides the technical guest address and offers the save-account action in %s',
+    async (locale) => {
+      vi.stubGlobal('fetch', mockProfileFetch(false, true, null));
+      renderWithIntl(<AccountPage />, { locale });
+
+      const cta = await screen.findByRole('link', {
+        name: messages[locale].account.page.saveAccountCta,
+      });
+      expect(cta.getAttribute('href')).toBe('/register');
+      expect(document.body.textContent).not.toContain('@guest.clickmoji.invalid');
+    }
+  );
+
+  it('shows the email and no save-account action after the account is upgraded', async () => {
+    vi.stubGlobal('fetch', mockProfileFetch(false, false, 'Alice'));
+    renderWithIntl(<AccountPage />, { locale: 'en' });
+
+    expect(await screen.findByText('user@example.com')).toBeTruthy();
+    expect(
+      screen.queryByRole('link', { name: messages.en.account.page.saveAccountCta })
+    ).toBeNull();
+  });
+});
+
 describe('Navigation, registration links, footer and legal stubs', () => {
   it('links to /account from UserMenu and MobileNav in RU and EN', () => {
     for (const locale of ['ru', 'en'] as const) {

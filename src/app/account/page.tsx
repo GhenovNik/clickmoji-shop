@@ -297,6 +297,18 @@ export default function AccountPage() {
           </dl>
         </section>
 
+        {profile.isGuest && (
+          <section className="bg-card border border-border rounded-3xl shadow-soft p-5 sm:p-6 space-y-3">
+            <p className="text-sm text-muted-foreground">{t('page.guestSaveHint')}</p>
+            <Link
+              href="/register"
+              className="inline-flex items-center justify-center px-5 py-2.5 rounded-xl bg-primary text-primary-foreground font-semibold text-sm hover:bg-primary/90 transition-colors"
+            >
+              {t('page.saveAccountCta')}
+            </Link>
+          </section>
+        )}
+
         {/* Password Change: a guest has no password to change */}
         {!profile.isGuest && (
           <section className="bg-card border border-border rounded-3xl shadow-soft p-5 sm:p-6 space-y-4">

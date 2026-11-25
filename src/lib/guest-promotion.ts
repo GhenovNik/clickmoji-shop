@@ -16,6 +16,10 @@ import {
   recordGuestPromotionEvent,
 } from '@/lib/funnel';
 import { recordGuestActivity } from '@/lib/guest-activity';
+import {
+  GUEST_UPGRADE_INTENT_COOKIE,
+  GUEST_UPGRADE_INTENT_VALUE,
+} from '@/lib/guest-upgrade-intent';
 
 /**
  * In-place promotion of a server-backed guest into an ordinary account (AGE-1667).
@@ -320,6 +324,75 @@ export async function promoteGuestWithGoogleIdentity(input: {
     image: input.image,
     emailVerified: new Date(),
   });
+}
+
+/**
+ * Explicit upgrade intent (AGE-1667). The register page sets this short-lived, non-secret cookie
+ * right before it starts Google sign-in from the guest's "save account" action. Only a request that
+ * carries it may promote a guest through Google. Ordinary Google sign-in never reads it and keeps its
+ * own behaviour (sign into the matching account or create one), so a guest's Google login cannot
+ * silently convert the guest row.
+ *
+ * A forged cookie can only select the stricter explicit path: it never grants a promotion the guest
+ * session does not already hold.
+ */
+export async function readGuestUpgradeIntent(): Promise<boolean> {
+  try {
+    const store = await cookies();
+    return store.get(GUEST_UPGRADE_INTENT_COOKIE)?.value === GUEST_UPGRADE_INTENT_VALUE;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Outcome of an explicit guest upgrade through Google. The non-promoted statuses are reported back to
+ * the register page as `?upgrade=<status>`, and no session is issued for them.
+ * - `email-taken`: another account holds the address. No switch or merge; the user is told to sign in.
+ * - `unverified`: Google did not verify the address. The guest stays a guest.
+ * - `expired`: the guest session is stale, already an account, or its row is gone.
+ */
+export type GoogleUpgradeOutcome =
+  | {
+      status: 'promoted';
+      user: { id: string; email: string; name: string | null; role: string };
+    }
+  | { status: 'email-taken' }
+  | { status: 'unverified' }
+  | { status: 'expired' };
+
+/**
+ * Runs an explicit guest upgrade for a Google identity. Every refusal leaves the guest row untouched
+ * and creates no user. `guest` must come from resolveGuestFromCookieStore(); an anonymous caller never
+ * reaches this function (the auth callback falls back to ordinary sign-in for it).
+ */
+export async function upgradeGuestWithGoogle(input: {
+  guest: RegistrationGuestState;
+  email: string;
+  emailVerified: boolean;
+  existingUserId: string | null;
+  name: string | null;
+  image: string | null;
+}): Promise<GoogleUpgradeOutcome> {
+  if (input.guest.kind !== 'guest') return { status: 'expired' };
+  if (input.existingUserId) return { status: 'email-taken' };
+  if (!input.emailVerified) return { status: 'unverified' };
+
+  const outcome = await promoteGuestWithGoogleIdentity({
+    userId: input.guest.userId,
+    guestId: input.guest.guestId,
+    email: input.email,
+    name: input.name,
+    image: input.image,
+  });
+  switch (outcome.status) {
+    case 'promoted':
+      return { status: 'promoted', user: outcome.user };
+    case 'email-taken':
+      return { status: 'email-taken' };
+    default:
+      return { status: 'expired' };
+  }
 }
 
 /** Expires the guest session cookie on the response, so the old guest token is no longer sent. */

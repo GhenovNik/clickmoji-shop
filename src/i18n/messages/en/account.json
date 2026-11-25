@@ -3,6 +3,8 @@
     "title": "Account",
     "subtitle": "Profile, password, and account deletion",
     "guestSubtitle": "You’re signed in as a guest. Your lists and history are stored on the server.",
+    "saveAccountCta": "Save account",
+    "guestSaveHint": "Add an email and password to sign in from any device. Your lists and purchases stay where they are.",
     "backHome": "Back home",
     "loadError": "Failed to load account details"
   },

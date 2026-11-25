@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useTranslations } from 'next-intl';
 import {
   getPasswordIssue,
@@ -8,10 +8,25 @@ import {
   PASSWORD_MIN_LENGTH,
 } from '@/lib/validation/password';
 import { useRouter } from 'next/navigation';
-import { signIn, useSession } from 'next-auth/react';
+import { getProviders, signIn, useSession } from 'next-auth/react';
 import Link from 'next/link';
 import { Eye, EyeOff } from 'lucide-react';
 import LegalLinks from '@/components/LegalLinks';
+import { clearGuestUpgradeIntent, setGuestUpgradeIntent } from '@/lib/guest-upgrade-intent';
+
+/** Reasons the Google callback sends back as `/register?upgrade=<reason>` (AGE-1667). */
+function upgradeNoticeKeyFor(reason: string | null) {
+  switch (reason) {
+    case 'email-taken':
+      return 'register.upgradeEmailTaken' as const;
+    case 'unverified':
+      return 'register.upgradeUnverified' as const;
+    case 'expired':
+      return 'register.upgradeExpired' as const;
+    default:
+      return null;
+  }
+}
 
 export default function RegisterPage() {
   const t = useTranslations('auth');
@@ -22,10 +37,41 @@ export default function RegisterPage() {
   const [loading, setLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
+  const [googleEnabled, setGoogleEnabled] = useState(false);
+  const [upgradeReason, setUpgradeReason] = useState<string | null>(null);
+
+  useEffect(() => {
+    // The intent cookie only lives for one Google round trip; drop it as soon as this page is shown.
+    clearGuestUpgradeIntent();
+    setUpgradeReason(new URLSearchParams(window.location.search).get('upgrade'));
+
+    let active = true;
+    getProviders()
+      .then((providers) => {
+        if (active) setGoogleEnabled(Boolean(providers?.google));
+      })
+      .catch(() => {
+        if (active) setGoogleEnabled(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const upgradeNoticeKey = upgradeNoticeKeyFor(upgradeReason);
+  const shownError = error || (upgradeNoticeKey ? t(upgradeNoticeKey) : '');
+
+  function startGoogleUpgrade() {
+    setError('');
+    setUpgradeReason(null);
+    setGuestUpgradeIntent();
+    void signIn('google', { callbackUrl: '/' });
+  }
 
   async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     setError('');
+    setUpgradeReason(null);
     setLoading(true);
 
     const formData = new FormData(e.currentTarget);
@@ -97,6 +143,16 @@ export default function RegisterPage() {
               </p>
             )}
           </div>
+
+          {isGuest && googleEnabled && (
+            <button
+              type="button"
+              onClick={startGoogleUpgrade}
+              className="mb-4 w-full bg-white hover:bg-gray-50 text-gray-900 border border-gray-300 py-3 rounded-lg font-semibold transition-colors"
+            >
+              {t('register.saveWithGoogle')}
+            </button>
+          )}
 
           <form onSubmit={handleSubmit} className="space-y-4">
             <div>
@@ -179,8 +235,10 @@ export default function RegisterPage() {
               </div>
             </div>
 
-            {error && (
-              <div className="bg-red-50 text-red-600 px-4 py-3 rounded-lg text-sm">{error}</div>
+            {shownError && (
+              <div className="bg-red-50 text-red-600 px-4 py-3 rounded-lg text-sm">
+                {shownError}
+              </div>
             )}
 
             <button
@@ -188,7 +246,11 @@ export default function RegisterPage() {
               disabled={loading}
               className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-blue-400 text-white py-3 rounded-lg font-semibold transition-colors shadow-lg hover:shadow-xl"
             >
-              {loading ? t('register.submitting') : t('register.submit')}
+              {loading
+                ? t('register.submitting')
+                : isGuest
+                  ? t('register.saveAccount')
+                  : t('register.submit')}
             </button>
           </form>
 

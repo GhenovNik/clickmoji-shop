@@ -7,7 +7,11 @@ import { authConfig } from './auth.config';
 import { isEmailVerificationRequired } from './email';
 import { normalizeEmail } from './auth-security';
 import { readGuestIdFromRequestScope, recordFunnelEvent } from './funnel';
-import { promoteGuestWithGoogleIdentity, resolveGuestFromCookieStore } from './guest-promotion';
+import {
+  readGuestUpgradeIntent,
+  resolveGuestFromCookieStore,
+  upgradeGuestWithGoogle,
+} from './guest-promotion';
 import {
   currentSessionIssuedAtSeconds,
   isGuestEmail,
@@ -96,36 +100,37 @@ export const authOptions: NextAuthOptions = {
       }
 
       const existingUser = await prisma.user.findUnique({ where: { email } });
-      if (existingUser?.isGuest) {
-        return false;
-      }
 
-      // A guest that signs in with Google becomes an account in place (AGE-1667): the same User.id,
-      // no merge, and only for a verified Google address that no account holds yet. An existing
-      // account with this email is signed into as before, and the guest is left untouched.
-      if (!existingUser) {
+      // Explicit guest upgrade (AGE-1667): only a sign-in started from the guest's "save account"
+      // action with a live guest session may promote that guest. The guest keeps its User.id; no
+      // account is merged or switched. Every refusal is sent back to the register page as a
+      // redirect, so no session is issued and no second user is created. Ordinary Google sign-in
+      // (no intent, or no guest session) continues below unchanged.
+      if (await readGuestUpgradeIntent()) {
         const guest = await resolveGuestFromCookieStore();
-        if (guest.kind === 'guest') {
+        if (guest.kind !== 'anonymous') {
           const emailVerified =
             (profile as { email_verified?: unknown } | undefined)?.email_verified === true;
-          if (!emailVerified) {
-            return false;
-          }
-          const outcome = await promoteGuestWithGoogleIdentity({
-            userId: guest.userId,
-            guestId: guest.guestId,
+          const outcome = await upgradeGuestWithGoogle({
+            guest,
             email,
+            emailVerified,
+            existingUserId: existingUser?.id ?? null,
             name: user.name || null,
             image: user.image || null,
           });
           if (outcome.status !== 'promoted') {
-            return false;
+            return `/register?upgrade=${outcome.status}`;
           }
           user.id = outcome.user.id;
           (user as typeof user & { role?: string; isGuest?: boolean }).role = outcome.user.role;
           (user as typeof user & { isGuest?: boolean }).isGuest = false;
           return true;
         }
+      }
+
+      if (existingUser?.isGuest) {
+        return false;
       }
 
       let authenticatedUserId: string;

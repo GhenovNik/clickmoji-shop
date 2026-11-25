@@ -101,19 +101,37 @@ after promotion the ordinary AI and email behaviour applies with no extra switch
 
 ### Google sign-in from a guest session
 
-The Google OAuth callback reads the guest session from the request cookies. When a live guest holds
-the browser and the Google address has **no account yet**, and Google reports `email_verified: true`,
-the guest is promoted in place with the same `promoteGuestAccount` transaction (no password, verified
-now, no verification email). Any other case keeps the normal Google sign-in:
+Google has two paths, chosen by explicit intent and never by the guest cookie alone.
 
-- **Email already held by an account**: the browser signs into that account as before, and the guest
-  is not touched or merged. Refusing here would stop returning Google users from a browser that has
-  a guest cookie, since every guest is created by Start.
-- **Google address not verified**: the sign-in is refused and the guest stays a guest.
-- **Stale or missing guest**: treated as no guest, a plain Google sign-in. Unlike registration,
-  the callback cannot clear the cookie, and blocking Google sign-in would lock returning users out.
-- **Two promotions at once** (two guests, or Google and email for one guest): the conditional
-  update and the unique email decide. The loser is refused, and no second account is created.
+**Explicit upgrade.** The register page sets `clickmoji_guest_upgrade=google` (Max-Age 300,
+SameSite Lax, not a secret) right before Google sign-in from the guest's "Save account with Google"
+button. Only a callback that carries this cookie and a live guest session runs the upgrade:
+
+- **Live guest, verified Google address, no account holds it**: the guest is promoted in place with
+  `promoteGuestWithGoogleIdentity` (same `User.id`, no password, verified now, `GUEST_REGISTERED`).
+- **Address held by any account**: refused with `/register?upgrade=email-taken`. No sign-in, no
+  switch, no merge; the page shows "Эта почта уже зарегистрирована — войдите" (EN: "This email is
+  already registered — sign in").
+- **Address not verified by Google**: refused with `/register?upgrade=unverified`. No account is
+  created and the guest stays a guest.
+- **Stale, removed or already-promoted guest**: refused with `/register?upgrade=expired`. This is
+  the guest-side equivalent of `guestSessionExpired`: no second user is created.
+- **No guest session behind the cookie**: the intent is ignored and the ordinary path below runs.
+
+**Ordinary sign-in** (no intent cookie): unchanged from #167. The browser signs into the account
+that holds the address, or a new account is created. A guest row is never promoted, merged or
+removed by this path, so a guest's own Google login cannot silently convert the guest.
+
+Decisions:
+
+- A forged intent cookie can only select the stricter explicit path. It never grants a promotion
+  the guest session does not already hold.
+- The register page clears the intent cookie when it loads. The callback itself cannot set cookies,
+  so the cookie also expires on its own after 5 minutes.
+- A refused explicit upgrade cannot clear the stale guest cookie (a NextAuth redirect). The next
+  guest API call clears it, as it does for any stale guest.
+- Two promotions at once (two guests, or Google and email for one guest): the conditional update and
+  the unique email decide. The loser is refused, and no second account is created.
 
 ### Funnel
 
