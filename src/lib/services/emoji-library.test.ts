@@ -78,6 +78,42 @@ describe('isStoredImageInUse', () => {
     expect(await isStoredImageInUse(URL_A, { categoryId: 'c1' })).toBe(true);
   });
 
+  describe('legacy English column (rollout compatibility until AGE-1667 Ya6)', () => {
+    // One mocked `product.count` serves both checks: tell them apart by the column they filter.
+    function countOnly(column: 'imageUrl' | 'imageUrlEn') {
+      db.productCount.mockImplementation(async ({ where }: { where: Record<string, unknown> }) =>
+        column in where ? 1 : 0
+      );
+    }
+
+    it('refuses to delete a file that only the legacy column references', async () => {
+      // The previous release wrote imageUrlEn alone: no main picture, no dictionary entry.
+      countOnly('imageUrlEn');
+      expect(await isStoredImageInUse(URL_A)).toBe(true);
+      expect(db.productCount).toHaveBeenCalledWith({ where: { imageUrlEn: URL_A } });
+    });
+
+    it('does not count the product being edited, as for every other picture', async () => {
+      db.productCount.mockResolvedValue(0);
+      expect(await isStoredImageInUse(URL_A, { productId: 'p1' })).toBe(false);
+      expect(db.productCount).toHaveBeenCalledWith({
+        where: { imageUrlEn: URL_A, id: { not: 'p1' } },
+      });
+    });
+
+    it('still deletes a file nothing references, legacy column included', async () => {
+      expect(await isStoredImageInUse(URL_A)).toBe(false);
+    });
+
+    it('keeps the file when the legacy check fails', async () => {
+      db.productCount.mockImplementation(async ({ where }: { where: Record<string, unknown> }) => {
+        if ('imageUrlEn' in where) throw new Error('column "imageUrlEn" does not exist');
+        return 0;
+      });
+      expect(await isStoredImageInUse(URL_A)).toBe(true);
+    });
+  });
+
   it('keeps the file when reading the dictionaries fails', async () => {
     db.productFindMany.mockRejectedValue(new Error('connection lost'));
     expect(await isStoredImageInUse(URL_A)).toBe(true);

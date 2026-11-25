@@ -88,12 +88,19 @@
   `scripts/lib`), and the parser reads `localizedImages.en` first, then `imageUrlEn` of an older
   export.
 - **Deletion safety.** `isStoredImageInUse` (runtime) keeps a file that any dictionary entry of any
-  product shows, listed language or not, and keeps the file when the check fails. The runtime no
-  longer looks at `imageUrlEn`: a row can reference a file only there if a release before the
-  dictionary wrote it after the last backfill. So the offline cleanup (`npm run db:files`) still
-  passes the legacy column to the shared collector (`scripts/lib/legacy-picture-references.ts`) and
-  stops when that read fails. Rollout order that keeps this safe: run the Ya2 backfill, switch the
-  code, run the backfill again, and only then run any file cleanup.
+  product shows, listed language or not, and keeps the file when the check fails. Display and the
+  rest of `src` do not read `imageUrlEn`, but a row can reference a file only there: the previous
+  release writes the column alone, also between the Ya2 backfill and the switch of the code. So
+  the guard carries one **transitional compatibility check**: `legacyEnglishReferenceExists`
+  (`scripts/lib/legacy-picture-references.ts`), a boolean database count of products (other than the
+  one being edited) whose `imageUrlEn` is the file. It returns no legacy value, an error makes the
+  guard answer "in use", and it is tested for legacy-only denial and for fail-closed. The offline
+  cleanup (`npm run db:files`) passes the legacy column to the shared collector through the same
+  module and stops when that read fails. **Ya6 removes both with the column** (the helper, its call
+  in `isStoredImageInUse` and the cleanup's reader). Rollout order (run the Ya2 backfill, switch the
+  code, run the backfill again, then any file cleanup) narrows the window but does not by itself
+  make deletion safe: the check does, for as long as the column exists. The check and the delete
+  are still not atomic (AGE-1472).
 - **Rollback.** Writes keep mirroring the English entry into `imageUrlEn` (products, variants,
   history rows, the importer, catalogue cleanup), so the previous release shows the same pictures
   until Ya6.

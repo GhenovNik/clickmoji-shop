@@ -2,7 +2,7 @@
 import type { PrismaClient } from '@prisma/client';
 import { describe, expect, it, vi } from 'vitest';
 import { collectReferencedFileKeys } from '../../src/lib/services/stored-image-references';
-import { legacyEnglishReferences } from './legacy-picture-references';
+import { legacyEnglishReferenceExists, legacyEnglishReferences } from './legacy-picture-references';
 
 function db(
   products: Array<{
@@ -60,5 +60,41 @@ describe('legacyEnglishReferences', () => {
       new Error('connection lost')
     );
     await expect(legacyEnglishReferences(prisma)).rejects.toThrow('connection lost');
+  });
+});
+
+describe('legacyEnglishReferenceExists', () => {
+  function counter(count: number) {
+    const product = { count: vi.fn(async () => count) };
+    return {
+      prisma: { product } as unknown as Pick<PrismaClient, 'product'>,
+      count: product.count,
+    };
+  }
+
+  it('is a boolean from a database count and returns no legacy value', async () => {
+    const found = counter(2);
+    expect(await legacyEnglishReferenceExists(found.prisma, 'https://utfs.io/f/a')).toBe(true);
+    expect(found.count).toHaveBeenCalledWith({ where: { imageUrlEn: 'https://utfs.io/f/a' } });
+
+    expect(await legacyEnglishReferenceExists(counter(0).prisma, 'https://utfs.io/f/a')).toBe(
+      false
+    );
+  });
+
+  it('leaves the excepted product out of the count', async () => {
+    const none = counter(0);
+    await legacyEnglishReferenceExists(none.prisma, 'https://utfs.io/f/a', 'p1');
+    expect(none.count).toHaveBeenCalledWith({
+      where: { imageUrlEn: 'https://utfs.io/f/a', id: { not: 'p1' } },
+    });
+  });
+
+  it('fails instead of answering "unused" when the count fails', async () => {
+    const failing = counter(0);
+    failing.count.mockRejectedValue(new Error('connection lost'));
+    await expect(
+      legacyEnglishReferenceExists(failing.prisma, 'https://utfs.io/f/a')
+    ).rejects.toThrow('connection lost');
   });
 });

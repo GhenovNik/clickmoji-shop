@@ -14,3 +14,21 @@ export async function legacyEnglishReferences(prisma: Reader): Promise<string[]>
   });
   return rows.flatMap((row) => (row.imageUrlEn ? [row.imageUrlEn] : []));
 }
+
+// Whether any product other than `exceptProductId` still points at `imageUrl` in the legacy column.
+// This is the runtime deletion guard's rollout-compatibility check (`isStoredImageInUse`): the
+// previous release writes `imageUrlEn` only, and may do so between the Ya2 backfill and the switch
+// of the code, so a file can be referenced there and nowhere else. It is a count in the database
+// and returns a boolean, never a legacy value; display and `src` still do not read the column.
+// A failed read throws: the caller treats that as "in use" and keeps the file. Remove it with the
+// column in Ya6.
+export async function legacyEnglishReferenceExists(
+  prisma: Reader,
+  imageUrl: string,
+  exceptProductId?: string
+): Promise<boolean> {
+  const count = await prisma.product.count({
+    where: { imageUrlEn: imageUrl, ...(exceptProductId && { id: { not: exceptProductId } }) },
+  });
+  return count > 0;
+}

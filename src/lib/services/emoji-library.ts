@@ -1,6 +1,7 @@
 import { prisma } from '@/lib/prisma';
 import { Prisma } from '@prisma/client';
 import { localizedImagesOf } from '@/lib/product-image';
+import { legacyEnglishReferenceExists } from '../../../scripts/lib/legacy-picture-references';
 
 export type EmojiLibrarySource = 'generated' | 'upload' | 'batch';
 
@@ -109,7 +110,7 @@ export async function isStoredImageInUse(
   except: { productId?: string; categoryId?: string } = {}
 ) {
   try {
-    const [library, products, dictionaries, categories] = await Promise.all([
+    const [library, products, dictionaries, legacy, categories] = await Promise.all([
       prisma.emojiLibraryItem.count({ where: { imageUrl } }),
       // Any picture of a product keeps the file: the main one, and an entry of the dictionary
       // whatever its language (a language the picture list does not cover yet included).
@@ -120,11 +121,15 @@ export async function isStoredImageInUse(
         },
       }),
       referencedByDictionary(imageUrl, except.productId),
+      // Transitional (until AGE-1667 Ya6 drops the column): the previous release writes only
+      // `imageUrlEn`, so a file may be referenced there alone. A boolean existence check, no
+      // legacy value is read; a failure keeps the file like every other check here.
+      legacyEnglishReferenceExists(prisma, imageUrl, except.productId),
       prisma.category.count({
         where: { imageUrl, ...(except.categoryId && { id: { not: except.categoryId } }) },
       }),
     ]);
-    return library + products + dictionaries + categories > 0;
+    return library + products + dictionaries + categories > 0 || legacy;
   } catch (error) {
     console.error('Failed to check whether a stored image is in use:', error);
     return true;
