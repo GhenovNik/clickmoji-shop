@@ -274,6 +274,87 @@ describe.skipIf(!url)('account deletion guards on disposable PostgreSQL', () => 
     });
   });
 
+  describe('visibility change racing the deletion', () => {
+    // Polls pg_stat_activity until some other backend waits on a lock for a statement matching
+    // `fragment`, so the test orders the race by observed lock state instead of by sleeping.
+    async function waitForLockWaiter(fragment: string, timeoutMs = 10_000) {
+      const deadline = Date.now() + timeoutMs;
+      for (;;) {
+        const [{ waiting }] = await db.$queryRaw<Array<{ waiting: number }>>`
+          SELECT count(*)::int AS waiting FROM pg_stat_activity
+          WHERE datname = current_database() AND pid <> pg_backend_pid()
+            AND wait_event_type = 'Lock' AND query ILIKE ${fragment}`;
+        if (waiting > 0) return;
+        if (Date.now() >= deadline) throw new Error(`No backend waits on a lock for ${fragment}`);
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+    }
+
+    it('refuses when a formerly global product was made private before deletion and another user references it', async () => {
+      await db.item.create({ data: { listId: 'bob-list', productId: 'milk-global' } });
+      await db.product.update({ where: { id: 'milk-global' }, data: { isGlobal: false } });
+      const before = await stateOf();
+
+      const result = await deleteAccount({ userId: 'alice', password });
+
+      expect(result).toEqual({ status: 'cross_owner_references' });
+      expect(await stateOf()).toEqual(before);
+    });
+
+    it('keeps a foreign reference to a formerly global product when it turns private during deletion', async () => {
+      // Bob's list references Alice's global product while it is still global. The deletion
+      // must not treat it as her private product, so the reference must survive.
+      await db.item.create({ data: { listId: 'bob-list', productId: 'milk-global' } });
+
+      // Hold Alice's list lock in another transaction. The deletion then reaches its list step
+      // with every product lock it has taken so far, and waits there.
+      const holderLocked = barrier();
+      const releaseHolder = barrier();
+      const holder = writer.$transaction(async (tx) => {
+        await tx.$queryRaw`SELECT id FROM lists WHERE id = 'alice-list' FOR UPDATE`;
+        holderLocked.resolve();
+        await releaseHolder.promise;
+      });
+      await holderLocked.promise;
+
+      let deleting: Promise<unknown> | undefined;
+      let visibility: Promise<unknown> | undefined;
+      try {
+        deleting = deleteAccount({ userId: 'alice', password });
+        await waitForLockWaiter('%FROM lists%');
+
+        // The visibility change starts now. It must wait for the deletion to finish; if it can
+        // commit while the deletion is still running, the deletion may cascade Bob's reference.
+        visibility = writer.product
+          .update({ where: { id: 'milk-global' }, data: { isGlobal: false } })
+          .then(() => 'done' as const);
+        const visibilityState = await Promise.race([
+          visibility,
+          waitForLockWaiter('%update%products%').then(() => 'blocked' as const),
+        ]);
+        expect(visibilityState).toBe('blocked');
+      } finally {
+        // Release on failure too, so a broken run fails fast instead of timing out the deletion.
+        releaseHolder.resolve();
+        await Promise.allSettled([holder, deleting, visibility].filter(Boolean));
+      }
+
+      expect(await deleting).toEqual({ status: 'deleted' });
+      await visibility;
+
+      // Bob's reference survives and the product is not cascaded away.
+      const bobItems = await db.item.findMany({ where: { listId: 'bob-list' } });
+      expect(bobItems.map((i) => [i.productId, i.variantId])).toEqual([['milk-global', null]]);
+      const products = await db.product.findMany({ orderBy: { id: 'asc' } });
+      expect(products.map((p) => [p.id, p.createdById])).toEqual([['milk-global', null]]);
+      expect(await db.productVariant.findMany({ orderBy: { id: 'asc' } })).toEqual([
+        expect.objectContaining({ id: 'milk-variant', productId: 'milk-global' }),
+      ]);
+      expect((await db.user.findMany()).map((u) => u.id)).toEqual(['bob']);
+      expect(await db.list.findMany({ where: { userId: 'alice' } })).toEqual([]);
+    });
+  });
+
   describe('successful deletion with cross-owner data present', () => {
     it('removes private data, clears global product authorship and keeps other users rows intact', async () => {
       await db.product.create({

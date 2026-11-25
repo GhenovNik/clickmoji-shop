@@ -482,6 +482,8 @@ vi.mock('@/lib/prisma', () => {
           cascadeDeleteProducts(toDelete);
           return { count: toDelete.length };
         },
+        count: async ({ where }: { where: Record<string, unknown> }) =>
+          db.products.filter((p) => matches(p, where)).length,
       },
       list: {
         findMany: async ({
@@ -724,22 +726,18 @@ vi.mock('@/lib/prisma', () => {
           return user ? [{ id: user.id, emailVerified: user.emailVerified }] : [];
         }
         // Row locks are not simulated here; the fake only mirrors which rows the SQL selects.
+        // Every product the account created, global ones included, with the state the lock read.
         if (/FROM\s+products\s+WHERE\s+"createdById"/i.test(sql)) {
           recordOp('product', 'forUpdate');
           const userId = String(values[0]);
           return db.products
-            .filter((p) => p.createdById === userId && !p.isGlobal)
-            .map((p) => ({ id: p.id }));
+            .filter((p) => p.createdById === userId)
+            .map((p) => ({ id: p.id, isGlobal: p.isGlobal }));
         }
-        if (/FROM\s+product_variants\s+v\s+JOIN\s+products/i.test(sql)) {
+        if (/FROM\s+product_variants\s+v\s+WHERE\s+v\."productId"\s*=\s*ANY/i.test(sql)) {
           recordOp('product_variants', 'forUpdate');
-          const userId = String(values[0]);
-          const ownProductIds = new Set(
-            db.products.filter((p) => p.createdById === userId && !p.isGlobal).map((p) => p.id)
-          );
-          return db.variants
-            .filter((v) => ownProductIds.has(v.productId))
-            .map((v) => ({ id: v.id }));
+          const productIds = new Set(values[0] as string[]);
+          return db.variants.filter((v) => productIds.has(v.productId)).map((v) => ({ id: v.id }));
         }
         if (/FROM\s+lists\s+WHERE\s+"userId"/i.test(sql)) {
           recordOp('lists', 'forUpdate');

@@ -522,21 +522,28 @@ export async function deleteAccount(params: {
           where: { email: emailFilter },
         });
 
-        // Lock the account's own parent rows before reading any reference to them. An INSERT or
-        // UPDATE that points at one of these rows takes FOR KEY SHARE and waits for this lock, and
-        // under READ COMMITTED each later read sees every reference committed before the lock.
-        // Only rows owned by this account are locked.
-        const ownProducts = await tx.$queryRaw<Array<{ id: string }>>`
-          SELECT id FROM products
-          WHERE "createdById" = ${userId} AND "isGlobal" = false
+        // Lock every product this account created, global ones included, before reading any
+        // reference to them. A visibility or ownership change to one of these rows takes a row lock
+        // and waits for this transaction, and an INSERT that points at one takes FOR KEY SHARE and
+        // waits too. The private set is then read from the locked row state, and only those IDs are
+        // used for the reference checks and the delete. A product that turns private while
+        // deletion runs cannot join the set, because its row is already locked here.
+        const ownProducts = await tx.$queryRaw<Array<{ id: string; isGlobal: boolean }>>`
+          SELECT id, "isGlobal" FROM products
+          WHERE "createdById" = ${userId}
           ORDER BY id
           FOR UPDATE`;
-        const ownVariants = await tx.$queryRaw<Array<{ id: string }>>`
-          SELECT v.id FROM product_variants v
-          JOIN products p ON p.id = v."productId"
-          WHERE p."createdById" = ${userId} AND p."isGlobal" = false
-          ORDER BY v.id
-          FOR UPDATE OF v`;
+        const privateProductIds = ownProducts
+          .filter((product) => !product.isGlobal)
+          .map((product) => product.id);
+        const ownVariants =
+          privateProductIds.length === 0
+            ? []
+            : await tx.$queryRaw<Array<{ id: string }>>`
+                SELECT v.id FROM product_variants v
+                WHERE v."productId" = ANY(${privateProductIds}::text[])
+                ORDER BY v.id
+                FOR UPDATE OF v`;
         const ownLists = await tx.$queryRaw<Array<{ id: string }>>`
           SELECT id FROM lists WHERE "userId" = ${userId} ORDER BY id FOR UPDATE`;
 
@@ -544,7 +551,7 @@ export async function deleteAccount(params: {
         // change above, including the token deletions, so the account and session stay as they were.
         if (
           await hasCrossOwnerReferences(tx, userId, {
-            productIds: ownProducts.map((product) => product.id),
+            productIds: privateProductIds,
             variantIds: ownVariants.map((variant) => variant.id),
             listIds: ownLists.map((list) => list.id),
           })
@@ -552,15 +559,29 @@ export async function deleteAccount(params: {
           throw new AccountDeleteAbortedError('cross_owner_references');
         }
 
-        // Remove the user's private products (isGlobal = false) so no orphaned private data stays
-        // in the catalog. Global products (isGlobal = true) remain untouched; User deletion sets
-        // Product.createdById = null via onDelete: SetNull, preserving other users' lists/favorites.
-        await tx.product.deleteMany({
+        // Delete exactly the locked private products (isGlobal = false) so no orphaned private data
+        // stays in the catalog. Global products are not in the set and remain untouched; User
+        // deletion sets Product.createdById = null via onDelete: SetNull, preserving other users'
+        // lists and favorites that reference them.
+        const removedProducts = await tx.product.deleteMany({
           where: {
+            id: { in: privateProductIds },
             createdById: userId,
             isGlobal: false,
           },
         });
+        if (removedProducts.count !== privateProductIds.length) {
+          throw new AccountDeleteAbortedError('concurrent_change');
+        }
+
+        // Fail closed: a private product still owned by this account was attached to it after the
+        // lock above. Deleting the user would orphan it with SetNull, so abort instead.
+        const unlockedPrivateProducts = await tx.product.count({
+          where: { createdById: userId, isGlobal: false },
+        });
+        if (unlockedPrivateProducts > 0) {
+          throw new AccountDeleteAbortedError('concurrent_change');
+        }
 
         // Conditional delete (CAS on password) as defense-in-depth: if the password changed
         // concurrently, abort the transaction so token and product deletions roll back atomically.
