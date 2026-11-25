@@ -1,6 +1,6 @@
 // @vitest-environment node
 import sharp from 'sharp';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   EmojiImageTooLargeError,
   EmptyEmojiImageError,
@@ -243,12 +243,32 @@ describe('normalizeEmojiImage', { timeout: 30_000 }, () => {
   it('scales a large accepted picture down before building its masks', async () => {
     const input = await svg(3000, 3000, '<circle cx="1500" cy="1500" r="900" fill="#e53935"/>');
 
-    const started = Date.now();
-    const { info, alphaAt } = await decode(await normalizeEmojiImage(input));
+    const rawDimensions: Array<{ width: number; height: number }> = [];
+    const prototype = Object.getPrototypeOf(sharp());
+    const originalRaw = prototype.raw;
+    const rawSpy = vi.spyOn(prototype, 'raw').mockImplementation(function (this: sharp.Sharp, ...args: unknown[]) {
+      const pipeline = originalRaw.apply(this, args);
+      const originalToBuffer = pipeline.toBuffer;
+      pipeline.toBuffer = function (this: sharp.Sharp, ...bufferArgs: unknown[]) {
+        const result = originalToBuffer.apply(this, bufferArgs);
+        return result.then((output: { info?: { width: number; height: number } }) => {
+          if (output.info) rawDimensions.push({ width: output.info.width, height: output.info.height });
+          return output;
+        });
+      };
+      return pipeline;
+    });
+    let output: Buffer;
+    try {
+      output = await normalizeEmojiImage(input);
+    } finally {
+      rawSpy.mockRestore();
+    }
+    expect(rawDimensions[0]).toEqual({ width: 1024, height: 1024 });
+    const { info, alphaAt } = await decode(output);
 
     expect(info.width).toBe(NORMALIZED_EMOJI_SIZE);
     expect(alphaAt(128, 128)).toBe(255);
-    expect(Date.now() - started).toBeLessThan(5000);
   });
 
   it('keeps a dark object that touches the edge of the picture', async () => {
