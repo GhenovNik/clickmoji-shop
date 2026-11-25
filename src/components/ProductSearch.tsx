@@ -60,6 +60,10 @@ const addProductToListAPI = async (
   return res.json();
 };
 
+// A message the server wrote for the request language. Any other failure (a page that is not JSON,
+// a network error) has no text the user can read, so it gets the localized fallback instead.
+class ServerMessageError extends Error {}
+
 const createSmartProductAPI = async (productName: string) => {
   const res = await fetch('/api/products/smart-create', {
     method: 'POST',
@@ -67,8 +71,11 @@ const createSmartProductAPI = async (productName: string) => {
     body: JSON.stringify({ productName }),
   });
   if (!res.ok) {
-    const error = await res.json();
-    throw new Error(error.error || 'Failed to create product');
+    const error: { error?: unknown } | null = await res.json().catch(() => null);
+    if (typeof error?.error === 'string' && error.error.trim()) {
+      throw new ServerMessageError(error.error);
+    }
+    throw new Error('Failed to create product');
   }
   return res.json();
 };
@@ -259,7 +266,7 @@ export default function ProductSearch({ compact = false }: { compact?: boolean }
             ? t(
                 catalogProduct.exists ? 'search.existingButAddFailed' : 'search.createdButAddFailed'
               )
-            : error instanceof Error
+            : error instanceof ServerMessageError
               ? error.message
               : t('search.createFailed')
         );
