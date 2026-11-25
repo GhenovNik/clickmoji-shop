@@ -204,20 +204,27 @@ Verified production backups run via `npm run db:backup:verified` (`node scripts/
        # to the disposable test target, and enter AGE_IDENTITY without shell echo.
        # Copy to a private 0700/0600 local snapshot outside the repository so the SHA-256 hash and
        # age -d read the exact same ciphertext bytes:
-       SNAP_DIR=$(umask 077 && mktemp -d)
-       trap 'rm -rf "$SNAP_DIR"' EXIT
-       cp "$BACKUP_DIR/$BACKUP_FILE" "$SNAP_DIR/$BACKUP_FILE"
-       chmod 600 "$SNAP_DIR/$BACKUP_FILE"
-       RESTORED_SHA256=$(shasum -a 256 "$SNAP_DIR/$BACKUP_FILE" | awk '{print $1}')
-
-       printf '%s\n' "$AGE_IDENTITY" | pg_run -i -v "$SNAP_DIR:/snap:ro" -e BACKUP_FILE "$IMAGE" sh -c '
-         set -eu
-         set -o pipefail
-         apk add --no-cache age >/dev/null
-         age -d -i /dev/stdin "/snap/$BACKUP_FILE" | pg_restore --no-owner --no-privileges --exit-on-error --dbname "$PGDATABASE"
-       '
-       rm -rf "$SNAP_DIR"
-       trap - EXIT
+       unset RESTORED_SHA256
+       if RESTORED_SHA256=$(
+         SNAP_DIR=$(umask 077 && mktemp -d) || exit 1
+         trap 'rm -rf "$SNAP_DIR"' EXIT
+         cp "$BACKUP_DIR/$BACKUP_FILE" "$SNAP_DIR/$BACKUP_FILE" || exit 1
+         chmod 600 "$SNAP_DIR/$BACKUP_FILE" || exit 1
+         checksum=$(shasum -a 256 "$SNAP_DIR/$BACKUP_FILE") || exit 1
+         printf '%s\n' "$AGE_IDENTITY" | pg_run -i -v "$SNAP_DIR:/snap:ro" -e BACKUP_FILE "$IMAGE" sh -c '
+           set -eu
+           set -o pipefail
+           apk add --no-cache age >/dev/null
+           age -d -i /dev/stdin "/snap/$BACKUP_FILE" | pg_restore --no-owner --no-privileges --exit-on-error --dbname "$PGDATABASE"
+         ' >&2 || exit 1
+         printf '%s\n' "${checksum%% *}"
+       ); then
+         printf '%s\n' 'Restore succeeded. Inspect the restored tables before confirming.'
+       else
+         unset RESTORED_SHA256
+         printf '%s\n' 'Restore failed. Stop here and repeat the restore before confirming.' >&2
+         false
+       fi
        ```
 
        Confirm the restored tables and data in that separate test database before proceeding.
@@ -225,7 +232,7 @@ Verified production backups run via `npm run db:backup:verified` (`node scripts/
     4. **Record explicit operator confirmation with the snapshot SHA-256 (connects to no DB, requires no private key, deletes nothing):**
 
        ```sh
-       npm run db:backup:verified -- --confirm-encrypted-restore "$BACKUP_FILE" --sha256 "$RESTORED_SHA256"
+       npm run db:backup:verified -- --confirm-encrypted-restore "$BACKUP_FILE" --sha256 "${RESTORED_SHA256:?Complete the restore successfully before confirming}"
        ```
 
        (or `node scripts/backup/cli.mjs --confirm-encrypted-restore "$BACKUP_FILE" --sha256 "$RESTORED_SHA256"` with `BACKUP_DIR` and `BACKUP_STATUS_FILE` set). Under the shared `.backup.lock` and Git guard, this verifies that the on-disk `.dump.age` and its `meta/<copy>.json` still match `"$RESTORED_SHA256"` and records the confirmation into `backups/meta/.encrypted-restore-confirmed.json` (`0600`) as well as the durable confirmed public-key policy in `backups/meta/.confirmed-recipient.json` (`0600`). Missing, incomplete, foreign, corrupted/substituted, digest-mismatched, or stale files (older than a newer `.dump`) are rejected without deleting anything.
