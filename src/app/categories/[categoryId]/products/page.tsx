@@ -64,26 +64,30 @@ function ProductsPageContent() {
       <div className="max-w-4xl mx-auto">
         <div className="text-center mb-6">
           {/* One line: the small category icon sits beside the single-name heading. */}
-          <h1 className="flex items-center justify-center gap-2 mb-2 text-gray-900">
+          <h1
+            className="flex items-center justify-center gap-2 mb-2 text-gray-900"
+            title={categoryName || undefined}
+          >
             {category ? (
               <>
                 {category.isCustom && category.imageUrl ? (
                   <Image
                     src={category.imageUrl}
-                    alt={categoryName}
+                    alt=""
                     width={28}
                     height={28}
                     className="w-7 h-7 object-contain shrink-0"
                   />
                 ) : (
-                  <span className="text-2xl leading-none shrink-0">{category.emoji || '📦'}</span>
+                  <span aria-hidden="true" className="text-2xl leading-none shrink-0">
+                    {category.emoji || '📦'}
+                  </span>
                 )}
                 <LocalizedName
                   names={namesOf(category)}
                   locale={locale}
                   primaryOnly
-                  className="min-w-0 text-xl sm:text-2xl font-bold"
-                  primaryClassName="text-xl sm:text-2xl font-bold text-gray-900 wrap-break-word"
+                  className="truncate text-xl sm:text-2xl font-bold"
                 />
               </>
             ) : (
