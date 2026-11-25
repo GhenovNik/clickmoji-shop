@@ -172,9 +172,14 @@ describe('two-path consistency and preview rendering (AGE-1667 C3)', () => {
           '--detail-threshold',
           String(importScore1),
         ],
-        { cwd: REPO_ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }
+        {
+          cwd: REPO_ROOT,
+          encoding: 'utf8',
+          env: { ...process.env, DATABASE_URL: '' },
+          stdio: ['ignore', 'pipe', 'pipe'],
+        }
       );
-      expect(cli.status).toBe(0);
+      expect(cli.status, cli.stderr).toBe(0);
       const html = readFileSync(join(outDir, 'preview.html'), 'utf8');
 
       // Top section shows all four style references and their scores.
