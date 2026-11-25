@@ -1,4 +1,5 @@
 // @vitest-environment node
+import type { Prisma } from '@prisma/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   cleanupInactiveGuests,
@@ -47,6 +48,8 @@ function matchesWhere(user: FakeUser, where: Record<string, unknown>): boolean {
 function createFakeDb(seed: FakeUser[], hooks?: { beforeDelete?: (users: FakeUser[]) => void }) {
   const users = [...seed];
   const db: GuestCleanupDbClient = {
+    // The fake has no real transaction: the batch callback runs against the same in-memory rows.
+    $transaction: async (run) => run(db as unknown as Prisma.TransactionClient),
     user: {
       count: async ({ where }) =>
         users.filter((u) => matchesWhere(u, where as Record<string, unknown>)).length,
@@ -245,7 +248,7 @@ describe('cleanupInactiveGuests', () => {
       ],
       { beforeDelete: () => calls.push('delete') }
     );
-    const handOff = vi.fn(async ({ candidateIds }: { candidateIds: string[] }) => {
+    const handOff = vi.fn(async ({ candidateIds }: { candidateIds: string[] }, _tx) => {
       calls.push(`handOff:${candidateIds.join(',')}`);
       return 0;
     });
@@ -254,7 +257,10 @@ describe('cleanupInactiveGuests', () => {
 
     expect(result.deletedCount).toBe(1);
     expect(calls).toEqual(['handOff:guest-stale', 'delete']);
-    expect(handOff).toHaveBeenCalledWith({ candidateIds: ['guest-stale'], cutoff: daysAgo(30) });
+    expect(handOff).toHaveBeenCalledWith(
+      { candidateIds: ['guest-stale'], cutoff: daysAgo(30) },
+      expect.anything()
+    );
 
     const failing = createFakeDb([
       {
