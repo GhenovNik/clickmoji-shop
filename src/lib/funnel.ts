@@ -161,6 +161,14 @@ type FunnelEventDelegateLike = {
 const GUEST_MILESTONE_LOCK_NAMESPACE = 'clickmoji:funnel-guest-milestone:v1:';
 
 /**
+ * Lock key of one funnel guest chain. Every writer of that chain's once-per-guest milestones and
+ * the guest cleanup hand-off takes the same transaction-scoped advisory lock, so they run in turn.
+ */
+export function guestMilestoneLockKey(guestId: string): string {
+  return `${GUEST_MILESTONE_LOCK_NAMESPACE}${guestId}`;
+}
+
+/**
  * Writes a once-per-guest milestone (REGISTER, LIST_CREATE). The check and the insert run in one
  * transaction that first takes a transaction-scoped PostgreSQL advisory lock keyed by the funnel
  * guestId. Concurrent starts from the same browser therefore run one after another: the second
@@ -178,7 +186,7 @@ async function recordGuestMilestoneOnce(
   userId: string | null,
   guestId: string
 ): Promise<boolean> {
-  const lockKey = `${GUEST_MILESTONE_LOCK_NAMESPACE}${guestId}`;
+  const lockKey = guestMilestoneLockKey(guestId);
   return prisma.$transaction(async (tx) => {
     await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
 
