@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -93,6 +93,33 @@ describe('repo root and canonical outside-repo guard (AGE-1667 C3 B3)', () => {
     ).rejects.toThrow('inside repository');
     expect(existsSync(join(TOOL_REPO_ROOT, 'guard-audit-cache-never'))).toBe(false);
   });
+
+  it.each(['direct path', 'directory alias'])(
+    'audit refuses to overwrite the export through a %s',
+    async (pathKind) => {
+      const outside = created('c3-audit-export-');
+      const alias = join(created('c3-audit-alias-'), 'output');
+      symlinkSync(outside, alias, 'dir');
+      const input = join(outside, 'detail-report.json');
+      const cache = join(outside, 'unused-cache');
+      const bytes = Buffer.from('{"categories":[]}\n');
+      writeFileSync(input, bytes);
+      await expect(
+        runAuditCli([
+          '--input',
+          input,
+          '--out',
+          pathKind === 'direct path' ? outside : alias,
+          '--cache-dir',
+          cache,
+          '--offline',
+        ])
+      ).rejects.toThrow('would overwrite the catalogue export');
+      expect(readFileSync(input)).toEqual(bytes);
+      expect(existsSync(join(outside, 'detail-report.md'))).toBe(false);
+      expect(existsSync(cache)).toBe(false);
+    }
+  );
 
   it('loader refuses a dangling cache link into the checkout and writes nothing there', async () => {
     const cacheDir = created('c3-loader-');

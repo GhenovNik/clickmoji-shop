@@ -15,7 +15,7 @@ import {
   parseDetailThreshold,
   type CatalogAuditScope,
 } from '../src/lib/services/emoji-detail';
-import { assertAuditOutputPath } from '../src/lib/services/safe-paths';
+import { assertAuditOutputPath, canonicalPath } from '../src/lib/services/safe-paths';
 
 // Measures the canonical detail score on public images from a catalogue export JSON without any
 // database connection. Downloaded images are cached only in a temporary directory outside the repo.
@@ -117,8 +117,14 @@ export async function runAuditCli(argv = process.argv.slice(2)): Promise<number>
   assertPathOutsideRepo(cacheDir);
   if (outDir) {
     assertPathOutsideRepo(outDir);
-    assertAuditOutputPath(join(outDir, 'detail-report.json'));
-    assertAuditOutputPath(join(outDir, 'detail-report.md'));
+    const source = canonicalPath(inputPath);
+    for (const name of ['detail-report.json', 'detail-report.md']) {
+      const destination = join(outDir, name);
+      if (canonicalPath(destination) === source) {
+        throw new Error(`Audit report output would overwrite the catalogue export "${inputPath}"`);
+      }
+      assertAuditOutputPath(destination);
+    }
   }
 
   let rawJson: unknown;
