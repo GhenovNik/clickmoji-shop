@@ -134,6 +134,16 @@ export default function FunnelDashboard({ report }: FunnelDashboardProps) {
                   </table>
                 </div>
 
+                <div className="flex items-center justify-between gap-3 text-sm border-t border-gray-100 pt-3">
+                  <span className="text-gray-600">{t('funnelPage.guestPromotions')}</span>
+                  <span
+                    data-testid={`funnel-guest-promotions-${windowSummary.days}`}
+                    className="font-semibold text-gray-900"
+                  >
+                    {numberFormatter.format(windowSummary.guestPromotions)}
+                  </span>
+                </div>
+
                 {visitCount === 0 && (
                   <p className="text-xs text-gray-500 pt-1">{t('funnelPage.noData')}</p>
                 )}

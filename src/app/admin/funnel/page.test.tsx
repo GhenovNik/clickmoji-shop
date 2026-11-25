@@ -37,6 +37,8 @@ const SAMPLE_REPORT: FunnelReport = {
       windowStart: '2026-11-23T12:00:00.000Z',
       windowEnd: '2026-11-24T12:00:00.000Z',
       overallRate: null,
+
+      guestPromotions: 0,
       stages: [
         { stage: 'visit', count: 0, transitionRate: null },
         { stage: 'auth', count: 0, transitionRate: null },
@@ -50,6 +52,8 @@ const SAMPLE_REPORT: FunnelReport = {
       windowStart: '2026-11-17T12:00:00.000Z',
       windowEnd: '2026-11-24T12:00:00.000Z',
       overallRate: 0.25,
+
+      guestPromotions: 0,
       stages: [
         { stage: 'visit', count: 20, transitionRate: null },
         { stage: 'auth', count: 10, transitionRate: 0.5 },
@@ -63,6 +67,8 @@ const SAMPLE_REPORT: FunnelReport = {
       windowStart: '2026-10-25T12:00:00.000Z',
       windowEnd: '2026-11-24T12:00:00.000Z',
       overallRate: 0.2,
+
+      guestPromotions: 0,
       stages: [
         { stage: 'visit', count: 100, transitionRate: null },
         { stage: 'auth', count: 50, transitionRate: 0.5 },

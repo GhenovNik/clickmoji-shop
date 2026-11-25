@@ -9,6 +9,9 @@ export const FUNNEL_GUEST_MAX_AGE_SECONDS = 60 * 60 * 24 * 90;
 export const FUNNEL_EVENT_TYPES = [
   'VISIT',
   'REGISTER',
+  // A server guest that became an ordinary account in place (AGE-1667). Not a REGISTER: a new
+  // registration and a promotion are different events, and the report counts them apart.
+  'GUEST_REGISTERED',
   'LOGIN',
   'LIST_CREATE',
   'ITEM_ADD',

@@ -51,6 +51,7 @@
     "refresh": "Refresh",
     "updatedAt": "Updated {time}",
     "overallConversion": "Visit → Purchase",
+    "guestPromotions": "Guest accounts registered",
     "entry": "Entry",
     "emptyRate": "—",
     "noData": "No funnel events recorded in this period yet.",

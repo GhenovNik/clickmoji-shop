@@ -51,6 +51,7 @@
     "refresh": "Обновить",
     "updatedAt": "Обновлено {time}",
     "overallConversion": "Визит → Покупка",
+    "guestPromotions": "Гостей, ставших аккаунтом",
     "entry": "Вход",
     "emptyRate": "—",
     "noData": "За этот период событий воронки пока нет.",
