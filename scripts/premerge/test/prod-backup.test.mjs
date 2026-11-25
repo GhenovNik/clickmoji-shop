@@ -265,9 +265,7 @@ describe('libpq-env.mjs', () => {
       );
       assert.equal(result.status, 0, result.stderr);
       const text = readFileSync(out, 'utf8');
-      const expected = libpqEnv(
-        'postgresql://u%27x:p%27w@127.0.0.1:6543/app?sslmode=require'
-      );
+      const expected = libpqEnv('postgresql://u%27x:p%27w@127.0.0.1:6543/app?sslmode=require');
       assert.match(text, /^export PGUSER='u'\\''x'$/m, 'single quote is escaped, not evaluated');
       assert.match(text, /^export PGPASSWORD='p'\\''w'$/m);
       assert.equal(expected.PGPORT, '6543');
