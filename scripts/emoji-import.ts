@@ -4,6 +4,15 @@ import { join, resolve } from 'node:path';
 import { PrismaClient } from '@prisma/client';
 import { createPrismaPgAdapter } from '../src/lib/prisma-adapter';
 import {
+  DEFAULT_DETAIL_THRESHOLD_BYTES,
+  DEFAULT_STYLE_REFS_DIR,
+  detailScoreFromNormalized,
+  isDetailAboveThreshold,
+  loadStyleRefs,
+  parseDetailThreshold,
+  type StyleRefSample,
+} from '../src/lib/services/emoji-detail';
+import {
   applyCell,
   cellRef,
   findBatchFiles,
@@ -22,11 +31,11 @@ import {
 } from '../src/lib/services/emoji-batch-import';
 
 // Imports the operator's emoji sheets (AGE-1465 item 2, AGE-1667 queue, AGE-1667 C6 replacements).
-//   npx tsx scripts/emoji-import.ts [--dir <folder>] [--batch 001,002,text-001,queue-001] [--out <folder>]
+//   npx tsx scripts/emoji-import.ts [--dir <folder>] [--batch 001,002,text-001,queue-001] [--out <folder>] [--detail-threshold <bytes>]
 //   DATABASE_URL=... npx tsx scripts/emoji-import.ts ...            preview against the catalogue
 //   DATABASE_URL=... UPLOADTHING_TOKEN=... npx tsx scripts/emoji-import.ts --apply ...
 //   ... --replace-auth <file.json>   the old URLs of the replaced categories (required for --apply)
-// Without --apply nothing is written: the normalized pictures and preview.html go to --out.
+// Without --apply nothing is written: the normalized pictures, style refs and preview.html go to --out.
 // DATABASE_URL is read from the environment only, never from .env. The replacement file is never
 // committed: it lists the picture URL the operator saw on each replaced category, see the README.
 
@@ -34,7 +43,12 @@ const MANIFESTS = ['docs/emoji-batches/manifest.json', 'docs/emoji-batches/queue
 
 function argument(name: string) {
   const index = process.argv.indexOf(name);
-  return index >= 0 ? process.argv[index + 1] : undefined;
+  if (index < 0) return undefined;
+  const value = process.argv[index + 1];
+  if (!value || value.startsWith('--')) {
+    throw new Error(`Флаг ${name} требует значение`);
+  }
+  return value;
 }
 
 function expandHome(path: string) {
@@ -44,37 +58,109 @@ function expandHome(path: string) {
 const escapeHtml = (value: string) =>
   value.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!);
 
-type PreviewRow = {
+export type PreviewRow = {
   ref: string;
   name: string;
   nameEn: string;
   category: string;
   ru: string;
+  ruDetail: number;
   en?: string;
+  enDetail?: number;
   action: string;
   stored: boolean;
 };
 
-function previewHtml(rows: PreviewRow[], missing: string[], summary: string[]) {
-  const tiles = (row: PreviewRow) =>
-    [row.ru, row.en]
-      .filter(Boolean)
-      .map(
-        (file) =>
-          `<span class="pair"><img src="${file}" class="light"><img src="${file}" class="dark"></span>`
-      )
-      .join('');
-  const body = rows
+export type PreviewRenderOptions = {
+  styleRefs: StyleRefSample[];
+  threshold: number;
+};
+
+function styleRefsSectionHtml(styleRefs: StyleRefSample[], threshold: number) {
+  const cards = styleRefs
     .map(
-      (row) => `<tr><td>${escapeHtml(row.ref)}</td><td>${tiles(row)}</td>
-<td><b>${escapeHtml(row.name)}</b><br><small>${escapeHtml(row.nameEn)} · ${escapeHtml(row.category)}</small></td>
-<td>${escapeHtml(row.action)}${row.stored ? '<br><small>уже в библиотеке — повторной загрузки не будет</small>' : ''}</td></tr>`
+      (ref) => `<div class="ref-card">
+  <div class="ref-images">
+    <span class="pair"><img src="${escapeHtml(ref.outFile)}" class="img-56 light" alt="${escapeHtml(ref.label)} 56px"><img src="${escapeHtml(ref.outFile)}" class="img-56 dark" alt="${escapeHtml(ref.label)} 56px dark"></span>
+    <span class="pair"><img src="${escapeHtml(ref.outFile)}" class="img-lg light" alt="${escapeHtml(ref.label)} крупно"><img src="${escapeHtml(ref.outFile)}" class="img-lg dark" alt="${escapeHtml(ref.label)} крупно dark"></span>
+  </div>
+  <div class="ref-meta"><b>${escapeHtml(ref.label)}</b> <small>(${escapeHtml(ref.labelEn)})</small><br><small>${escapeHtml(ref.filename)} · ${escapeHtml(ref.sourceRef)}</small><br><span class="metric">детальность: <b>${ref.detailScore} Б</b></span></div>
+</div>`
     )
     .join('\n');
+  return `<section class="style-refs">
+  <div class="style-refs-head">
+    <h2>Образцы стиля (docs/emoji-batches/style-refs/)</h2>
+    <p class="hint">Сравнение рядом с образцами: слева размер на телефоне (56 px), справа крупно (128 px). Порог детальности: строго выше <b>${threshold} Б</b> (нормализованный WebP 256×256 q=82).</p>
+  </div>
+  <div class="ref-grid">${cards}</div>
+</section>`;
+}
+
+export function previewHtml(
+  rows: PreviewRow[],
+  missing: string[],
+  summary: string[],
+  options: PreviewRenderOptions = { styleRefs: [], threshold: DEFAULT_DETAIL_THRESHOLD_BYTES }
+) {
+  const { styleRefs, threshold } = options;
+  const renderVariantTiles = (label: string | null, file: string) =>
+    `<div class="variant-row">${label ? `<span class="lang-tag">${escapeHtml(label)}</span>` : ''}<span class="pair" title="56 px"><img src="${escapeHtml(file)}" class="img-56 light"><img src="${escapeHtml(file)}" class="img-56 dark"></span><span class="pair" title="крупно"><img src="${escapeHtml(file)}" class="img-lg light"><img src="${escapeHtml(file)}" class="img-lg dark"></span></div>`;
+
+  const tiles = (row: PreviewRow) => {
+    const parts = [renderVariantTiles(row.en ? 'RU' : null, row.ru)];
+    if (row.en) parts.push(renderVariantTiles('EN', row.en));
+    return parts.join('');
+  };
+
+  const detailCell = (row: PreviewRow) => {
+    const ruAbove = isDetailAboveThreshold(row.ruDetail, threshold);
+    const enAbove = row.enDetail !== undefined && isDetailAboveThreshold(row.enDetail, threshold);
+    const items = [
+      `<span class="metric">${row.en ? 'ru: ' : ''}детальность <b>${row.ruDetail} Б</b>${ruAbove ? ` <span class="badge-outlier">выше порога (&gt; ${threshold} Б)</span>` : ''}</span>`,
+    ];
+    if (row.enDetail !== undefined) {
+      items.push(
+        `<br><span class="metric">en: детальность <b>${row.enDetail} Б</b>${enAbove ? ` <span class="badge-outlier">выше порога (&gt; ${threshold} Б)</span>` : ''}</span>`
+      );
+    }
+    return items.join('');
+  };
+
+  const body = rows
+    .map((row) => {
+      const outlier =
+        isDetailAboveThreshold(row.ruDetail, threshold) ||
+        (row.enDetail !== undefined && isDetailAboveThreshold(row.enDetail, threshold));
+      return `<tr${outlier ? ' class="outlier"' : ''}><td>${escapeHtml(row.ref)}</td><td>${tiles(row)}</td>
+<td><b>${escapeHtml(row.name)}</b><br><small>${escapeHtml(row.nameEn)} · ${escapeHtml(row.category)}</small><br>${detailCell(row)}</td>
+<td>${escapeHtml(row.action)}${row.stored ? '<br><small>уже в библиотеке — повторной загрузки не будет</small>' : ''}</td></tr>`;
+    })
+    .join('\n');
+
+  const refsBlock = styleRefs.length > 0 ? styleRefsSectionHtml(styleRefs, threshold) : '';
+
   return `<!doctype html><html lang="ru"><head><meta charset="utf-8"><title>Предпросмотр импорта emoji</title>
-<style>body{font:14px system-ui;margin:16px}table{border-collapse:collapse}td{border-bottom:1px solid #ddd;padding:6px 10px;vertical-align:middle}
-img{width:72px;height:72px;padding:6px;border-radius:12px}.light{background:#f3f4f6}.dark{background:#1f2937}.pair{display:inline-flex;gap:4px;margin-right:10px}</style>
+<style>body{font:14px system-ui;margin:16px;color:#111827}
+h1{margin:0 0 8px}h2{margin:0 0 6px;font-size:16px}
+.style-refs{background:#ffffff;border:1px solid #d1d5db;border-radius:12px;padding:12px 14px;margin-bottom:16px;box-shadow:0 2px 8px rgba(0,0,0,.06)}
+.hint{margin:0 0 10px;color:#4b5563;font-size:13px}
+.ref-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:10px}
+.ref-card{border:1px solid #e5e7eb;border-radius:10px;padding:8px 10px;background:#f9fafb;display:flex;flex-direction:column;gap:6px}
+.ref-images{display:flex;align-items:center;flex-wrap:wrap;gap:8px}
+.ref-meta{font-size:13px;line-height:1.35}
+table{border-collapse:collapse;width:100%}td{border-bottom:1px solid #ddd;padding:8px 10px;vertical-align:middle}
+tr.outlier{background:#fffbeb}
+.variant-row{display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin:2px 0}
+.lang-tag{font-size:11px;font-weight:700;padding:2px 5px;border-radius:4px;background:#e5e7eb;color:#374151}
+.img-56{width:56px;height:56px;padding:4px;border-radius:10px;object-fit:contain}
+.img-lg{width:128px;height:128px;padding:8px;border-radius:14px;object-fit:contain}
+.light{background:#f3f4f6}.dark{background:#1f2937}
+.pair{display:inline-flex;gap:4px;align-items:center}
+.metric{display:inline-block;margin-top:4px;font-size:13px;color:#1f2937}
+.badge-outlier{display:inline-block;margin-left:6px;padding:1px 7px;border-radius:999px;background:#fef3c7;border:1px solid #f59e0b;color:#92400e;font-size:12px;font-weight:600}</style>
 </head><body><h1>Предпросмотр импорта emoji</h1>
+${refsBlock}
 <p>${rows.length} ячеек. ${missing.length ? `Нет файлов: ${missing.map(escapeHtml).join(', ')}.` : ''}</p>
 ${summary.map((line) => `<p>${escapeHtml(line)}</p>`).join('\n')}
 <table>${body}</table></body></html>`;
@@ -162,11 +248,13 @@ function argumentBatches(value: string) {
     .map((id) => (/^(batch|text|queue)-/.test(id) ? id : `batch-${id.padStart(3, '0')}`));
 }
 
-async function main() {
+export async function main() {
   const dir = resolve(expandHome(argument('--dir') ?? '~/Downloads/clickmoji-batches'));
   const out = resolve(expandHome(argument('--out') ?? join(dir, 'preview')));
   const only = argument('--batch') ? argumentBatches(argument('--batch')!) : undefined;
   const apply = process.argv.includes('--apply');
+  const threshold = parseDetailThreshold(argument('--detail-threshold'));
+  const styleRefsDir = argument('--style-refs') ?? DEFAULT_STYLE_REFS_DIR;
 
   if (apply && (!process.env.DATABASE_URL || !process.env.UPLOADTHING_TOKEN)) {
     throw new Error('--apply needs DATABASE_URL and UPLOADTHING_TOKEN in the environment');
@@ -194,11 +282,15 @@ async function main() {
       `--apply: ${replaceCount(batches)} замен(ы) картинок категорий требуют --replace-auth <файл> с прежним URL и флагом isCustom каждой категории (см. docs/emoji-batches/README.md)`
     );
   }
+  const styleRefs = await loadStyleRefs(styleRefsDir);
   const prisma = process.env.DATABASE_URL
     ? new PrismaClient({ adapter: createPrismaPgAdapter() })
     : null;
 
   mkdirSync(out, { recursive: true });
+  for (const ref of styleRefs) {
+    writeFileSync(join(out, ref.outFile), ref.buffer);
+  }
   const index = prisma ? await loadCatalogIndex(prisma) : null;
   const plans: CellPlan[] = [];
   const rows: PreviewRow[] = [];
@@ -231,6 +323,9 @@ async function main() {
       writeFileSync(join(out, ruFile), picture.ru);
       if (enFile && picture.en) writeFileSync(join(out, enFile), picture.en);
 
+      const ruDetail = detailScoreFromNormalized(picture.ru);
+      const enDetail = picture.en ? detailScoreFromNormalized(picture.en) : undefined;
+
       const product = index ? planProduct(cell, index) : null;
       const replacement =
         cell.action === 'replace' && authorization
@@ -245,7 +340,9 @@ async function main() {
         nameEn: cell.nameEn,
         category: cell.category,
         ru: ruFile,
+        ruDetail,
         en: enFile,
+        enDetail,
         action: clash
           ? `конфликт: картинка записана для другой цели («${owner?.name}») — не будет записана`
           : describeAction(cell, product),
@@ -275,7 +372,17 @@ async function main() {
       `Замен картинок категорий: ${replaces}; ${authorization ? 'старые URL проверены по --replace-auth' : 'без --replace-auth запись невозможна'}.`
     );
   }
-  writeFileSync(join(out, 'preview.html'), previewHtml(rows, missing, summary));
+  const scores = rows.flatMap((row) =>
+    row.enDetail !== undefined ? [row.ruDetail, row.enDetail] : [row.ruDetail]
+  );
+  const aboveThreshold = scores.filter((score) => isDetailAboveThreshold(score, threshold)).length;
+  summary.push(
+    `Детальность (байты WebP, порог > ${threshold} Б): выше порога ${aboveThreshold} из ${scores.length} картинок.`
+  );
+  writeFileSync(
+    join(out, 'preview.html'),
+    previewHtml(rows, missing, summary, { styleRefs, threshold })
+  );
   console.log(`Preview: ${join(out, 'preview.html')} (${rows.length} cells)`);
   for (const line of summary) console.log(line);
   if (missing.length) console.log(`Missing: ${missing.join(', ')}`);
@@ -328,7 +435,9 @@ async function main() {
   await prisma?.$disconnect();
 }
 
-main().catch((error) => {
-  console.error(error);
-  process.exit(1);
-});
+if (process.argv[1]?.endsWith('emoji-import.ts')) {
+  main().catch((error) => {
+    console.error(error);
+    process.exit(1);
+  });
+}
