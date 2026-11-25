@@ -284,6 +284,75 @@ Verified production backups run via `npm run db:backup:verified` (`node scripts/
     '
     ```
 
+### Включение копий на Mac mini
+
+Задание launchd запускает `scripts/backup/run-scheduled.sh` каждые 3 дня (интервал задаётся настройкой). Скрипт берёт адрес роли только на чтение из связки ключей macOS и запускает `npm run db:backup:verified` с `BACKUP_DIR` основной копии `~/Projects/clickmoji-shop/backups/`, без шифрования (`BACKUP_ENCRYPT=0`) и с двумя последними удачными копиями (`BACKUP_RETENTION_COUNT=2`). Адрес передаётся только в окружение этого одного процесса `npm`: не в argv, не в файл, не в журнал.
+
+- **Предварительно на Mac mini:** Docker Desktop запущен в пользовательской сессии; `node` и `npm` доступны в `PATH` при установке; основная копия лежит в `~/Projects/clickmoji-shop`, и её `backups/` игнорируется git. Ничего не устанавливается и не скачивается.
+
+#### Действия оператора (два, однократно)
+
+1. **Роль только на чтение в Neon, SQL-командами.** Выполняет владелец базы в SQL-редакторе Neon; повышенная роль Neon не нужна. Пароль создаётся в менеджере паролей и вставляется в редактор вместо `<пароль>`. Ни адрес, ни пароль в чат, задачи или файлы не передаются.
+
+   ```sql
+   CREATE ROLE clickmoji_backup_ro LOGIN PASSWORD '<пароль>' NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS;
+   GRANT CONNECT ON DATABASE <имя базы> TO clickmoji_backup_ro;
+   GRANT USAGE ON SCHEMA public TO clickmoji_backup_ro;
+   GRANT SELECT ON ALL TABLES IN SCHEMA public TO clickmoji_backup_ro;
+   GRANT SELECT ON ALL SEQUENCES IN SCHEMA public TO clickmoji_backup_ro;
+   -- Таблицы, которые появятся позже миграциями, получают право на чтение от роли, создающей их.
+   ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO clickmoji_backup_ro;
+   ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON SEQUENCES TO clickmoji_backup_ro;
+   ```
+
+   Вместо явных `GRANT SELECT` можно выдать `GRANT pg_read_all_data TO clickmoji_backup_ro;`, если владелец имеет на это право. Явные выдачи предпочтительнее: они видны в каталоге.
+
+   **Проверка отсутствия записи** (от владельца, только системный каталог; данные не читаются и не меняются, записью пробовать нельзя даже с откатом):
+
+   ```sql
+   -- Ноль строк: нет права записи ни на таблицу, ни на последовательность, в том числе через PUBLIC и членство в ролях.
+   SELECT n.nspname, c.relname, c.relkind
+   FROM pg_class c
+   JOIN pg_namespace n ON n.oid = c.relnamespace
+   WHERE n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
+     AND (
+       (c.relkind IN ('r', 'p', 'v', 'm', 'f') AND (
+         has_table_privilege('clickmoji_backup_ro', c.oid, 'INSERT')
+         OR has_table_privilege('clickmoji_backup_ro', c.oid, 'UPDATE')
+         OR has_table_privilege('clickmoji_backup_ro', c.oid, 'DELETE')
+         OR has_table_privilege('clickmoji_backup_ro', c.oid, 'TRUNCATE')
+         OR has_table_privilege('clickmoji_backup_ro', c.oid, 'REFERENCES')
+         OR has_table_privilege('clickmoji_backup_ro', c.oid, 'TRIGGER')))
+       OR (c.relkind = 'S' AND has_sequence_privilege('clickmoji_backup_ro', c.oid, 'UPDATE'))
+     );
+   -- Ноль строк: нет права создавать объекты в схемах базы.
+   SELECT nspname FROM pg_namespace WHERE has_schema_privilege('clickmoji_backup_ro', oid, 'CREATE');
+   -- Ноль строк: роль без признаков администратора.
+   SELECT rolname FROM pg_roles
+   WHERE rolname = 'clickmoji_backup_ro'
+     AND (rolsuper OR rolcreaterole OR rolcreatedb OR rolbypassrls OR rolreplication);
+   ```
+
+   Каждый запрос должен вернуть ноль строк. Если хотя бы один вернул строку, роль не готова: отозвать лишнее (`REVOKE`) и повторить проверку.
+
+2. **Адрес в связку ключей Mac mini.** Команда запрашивает значение интерактивно (`-w` без значения, см. `man security`). В терминале Mac mini вставьте полный прямой адрес роли вида `postgres://clickmoji_backup_ro:…@…/…?sslmode=require` (прямой, не через пулер) и нажмите Enter:
+
+   ```sh
+   security add-generic-password -s clickmoji-backup-readonly -a clickmoji -w
+   ```
+
+   Если элемент уже есть, `security` сообщит об этом. Тогда сначала удалите его: `security delete-generic-password -s clickmoji-backup-readonly -a clickmoji`, и повторите команду. Адрес не набирается в командной строке, поэтому не попадает в историю shell.
+
+#### Установка и удаление (куратор)
+
+- **Первая копия вручную**, до установки задания, из основной копии: `bash scripts/backup/run-scheduled.sh`. При запросе доступа к связке ключей разрешить один раз. Итог записан в статус-файл (см. ниже).
+- **Установка:** `bash scripts/backup/launchd/install.sh` из `~/Projects/clickmoji-shop`. Интервал по умолчанию 259200 секунд (3 дня); другой задаётся `CLICKMOJI_BACKUP_INTERVAL_SECONDS` (целое число, не меньше 60). Повторный запуск заменяет агент, не создавая второго. Агент `com.clickmoji.db-backup` не запускается сразу (`RunAtLoad` выключен), первый запуск по интервалу.
+- **Удаление:** `bash scripts/backup/launchd/uninstall.sh`. Удаляет агент и его plist; статус-файл, журнал и копии не трогает. Повторный запуск безопасен.
+- **Статус-файл:** `~/Library/Logs/clickmoji-backup/status.tsv`, по одной строке на запуск, три поля через табуляцию: `<время UTC с миллисекундами>\t<ok|failed>\t<текст>`. Удачный запуск: `…\tok\tsize=<байты> verify=ok file=clickmoji-<UTC>.dump prune=<результат>`. Неудачный: `…\tfailed\tсбой: <причина>`; при отсутствии роли в связке: `…\tfailed\tсбой: нет роли только на чтение в связке ключей`. Пульт читает дату последней строки. Адреса, пароли и данные в файле не попадают.
+- **Журнал launchd:** `~/Library/Logs/clickmoji-backup/launchd.log` (вывод `npm`; адрес базы в нём не появляется).
+- **Копии:** `~/Projects/clickmoji-shop/backups/`, каталог и файлы доступны только владельцу. Не выполнять `git clean -x` в основной копии.
+- **Глубина восстановления Neon (PITR):** `<TBD: confirm Neon plan PITR restore window in task Г>`. Тариф Neon не подтверждён: ВОПРОС: тариф Neon. Значение записывается сюда после подтверждения; до тех пор его не угадываем.
+
 ### Production recovery
 
 Never restore into the live database. Restore to a separate target, check it against expectations written down
