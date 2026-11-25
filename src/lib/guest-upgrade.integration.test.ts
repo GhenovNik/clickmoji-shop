@@ -164,12 +164,13 @@ describe.skipIf(!url || !isLocal)('guest upgrade on PostgreSQL', () => {
     );
   }
 
-  function googleSignIn(
+  async function googleSignIn(
     email: string,
     options: { verified?: boolean; sub?: string; explicit?: string } = {}
   ) {
     const sub = options.sub ?? `google-${randomUUID()}`;
-    if (options.explicit) setUpgradeIntent(options.explicit);
+    // The intent cookie is minted asynchronously: it must be in the jar before the callback reads it.
+    if (options.explicit) await setUpgradeIntent(options.explicit);
     const callback = options.explicit ? upgradeSignInCallback : signInCallback;
     return callback({
       user: { id: sub, email, name: 'Google Name', image: 'https://img.example.test/a.png' },
