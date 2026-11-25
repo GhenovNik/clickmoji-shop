@@ -154,10 +154,13 @@ models (e.g. `gemini-3.1-flash-lite-image`, `imagen-4.0-*`) also fail closed bef
 - Retained production backups must be encrypted, access-controlled, monitored, and restore-tested.
 - Do not publish or retain production database copies in GitHub Actions artifacts, releases,
   caches, or repository files, even encrypted. Existing copies there are removed under task A.
-- The existing **Production migration** workflow on `master` may use an unencrypted temporary
-  dump solely for its in-run restore check on the isolated runner. It deletes the dump after
-  successful restore and applies migrations only after that check succeeds. The runner copy is
-  temporary; use the production recovery procedure for recovery after DDL.
+- While Clickmoji is in development mode, operator decision В35 (25 November 2026) allows
+  the existing **Production migration** workflow on `master` to use an unencrypted temporary
+  dump for its isolated runner restore check. It deletes the dump after successful restore and
+  applies migrations only after that check succeeds. Revisit this exception when Clickmoji
+  enters production operation, where a fresh encrypted backup outside GitHub is required.
+- A successful runner restore verifies the temporary dump. The retained recovery point after
+  DDL comes from G0, the Mac backup process ([PR #163](https://github.com/GhenovNik/clickmoji-shop/pull/163)).
 - Before a production migration, create and verify a fresh backup, run `prisma migrate deploy` with
   a direct/unpooled database URL, and confirm `prisma migrate status` afterwards.
 
