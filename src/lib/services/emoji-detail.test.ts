@@ -85,12 +85,17 @@ describe('emoji detail metric and strict threshold (AGE-1667 C3)', () => {
     expect(isDetailAboveThreshold(threshold + 1, threshold)).toBe(true);
   });
 
-  it('scores a detailed patterned image strictly higher than a smooth shape', async () => {
-    const smooth = await measureEmojiDetail(await smoothCirclePng());
-    const detailed = await measureEmojiDetail(await detailedPatternPng());
-    expect(smooth.bytes).toBeGreaterThan(0);
-    expect(detailed.bytes).toBeGreaterThan(smooth.bytes);
-  });
+  // Image processing exceeded the default 5s in the full check.
+  it(
+    'scores a detailed patterned image strictly higher than a smooth shape',
+    { timeout: 20_000 },
+    async () => {
+      const smooth = await measureEmojiDetail(await smoothCirclePng());
+      const detailed = await measureEmojiDetail(await detailedPatternPng());
+      expect(smooth.bytes).toBeGreaterThan(0);
+      expect(detailed.bytes).toBeGreaterThan(smooth.bytes);
+    }
+  );
 
   it('rejects empty buffers', async () => {
     expect(() => detailScoreFromNormalized(Buffer.alloc(0))).toThrow('empty');

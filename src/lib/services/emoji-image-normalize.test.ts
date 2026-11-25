@@ -101,7 +101,8 @@ describe('normalizeEmojiImage', () => {
     expect(alphaAt(128, 128)).toBe(255);
   });
 
-  it('keeps a white label on coloured packaging by default', async () => {
+  // Image processing exceeded the default 5s in the full check.
+  it('keeps a white label on coloured packaging by default', { timeout: 20_000 }, async () => {
     for (const label of ['#ffffff', '#fafafa']) {
       const input = await svg(
         256,
@@ -115,47 +116,67 @@ describe('normalizeEmojiImage', () => {
     }
   });
 
-  it('clears an enclosed gap of the background colour only when asked, for text-free pictures', async () => {
-    const input = await svg(
-      300,
-      300,
-      '<circle cx="150" cy="150" r="90" fill="#43a047"/><circle cx="150" cy="150" r="30" fill="#ffffff"/>'
-    );
+  // Image processing exceeded the default 5s in the full check.
+  it(
+    'clears an enclosed gap of the background colour only when asked, for text-free pictures',
+    { timeout: 20_000 },
+    async () => {
+      const input = await svg(
+        300,
+        300,
+        '<circle cx="150" cy="150" r="90" fill="#43a047"/><circle cx="150" cy="150" r="30" fill="#ffffff"/>'
+      );
 
-    const kept = await decode(await normalizeEmojiImage(input));
-    const cleared = await decode(await normalizeEmojiImage(input, { clearEnclosedGaps: true }));
+      const kept = await decode(await normalizeEmojiImage(input));
+      const cleared = await decode(await normalizeEmojiImage(input, { clearEnclosedGaps: true }));
 
-    expect(kept.alphaAt(128, 128)).toBe(255);
-    expect(cleared.alphaAt(128, 128)).toBe(0);
-    expect(cleared.alphaAt(128, 40)).toBe(255);
-  });
+      expect(kept.alphaAt(128, 128)).toBe(255);
+      expect(cleared.alphaAt(128, 128)).toBe(0);
+      expect(cleared.alphaAt(128, 40)).toBe(255);
+    }
+  );
 
-  it('drops the light grid dashes a Gemini sheet leaves at the cell edge', async () => {
-    const dashes = Array.from(
-      { length: 20 },
-      (_, i) => `<rect x="${i * 30}" y="2" width="15" height="2" fill="#d6d6d6"/>`
-    ).join('');
-    const input = await svg(
-      600,
-      600,
-      `${dashes}<circle cx="300" cy="320" r="150" fill="#fb8c00"/>`
-    );
+  // Image processing exceeded the default 5s in the full check.
+  it(
+    'drops the light grid dashes a Gemini sheet leaves at the cell edge',
+    { timeout: 20_000 },
+    async () => {
+      const dashes = Array.from(
+        { length: 20 },
+        (_, i) => `<rect x="${i * 30}" y="2" width="15" height="2" fill="#d6d6d6"/>`
+      ).join('');
+      const input = await svg(
+        600,
+        600,
+        `${dashes}<circle cx="300" cy="320" r="150" fill="#fb8c00"/>`
+      );
 
-    const { box } = await decode(await normalizeEmojiImage(input));
+      const { box } = await decode(await normalizeEmojiImage(input));
 
-    // A kept dash row would stretch the box to the top of the cell and push the circle down.
-    expect(Math.abs(box.top - (255 - box.bottom))).toBeLessThanOrEqual(2);
-  });
+      // A kept dash row would stretch the box to the top of the cell and push the circle down.
+      expect(Math.abs(box.top - (255 - box.bottom))).toBeLessThanOrEqual(2);
+    }
+  );
 
-  it('removes transparency of a transparent-background source the same way as white', async () => {
-    const input = await svg(400, 400, '<circle cx="300" cy="100" r="60" fill="#8e24aa"/>', 'none');
+  // Image processing exceeded the default 5s in the full check.
+  it(
+    'removes transparency of a transparent-background source the same way as white',
+    { timeout: 20_000 },
+    async () => {
+      const input = await svg(
+        400,
+        400,
+        '<circle cx="300" cy="100" r="60" fill="#8e24aa"/>',
+        'none'
+      );
 
-    const { alphaAt, box } = await decode(await normalizeEmojiImage(input));
+      const { alphaAt, box } = await decode(await normalizeEmojiImage(input));
 
-    expect(alphaAt(0, 0)).toBe(0);
-    expect(alphaAt(128, 128)).toBe(255);
-    expect(box.right - box.left).toBeGreaterThan(205);
-  });
+      expect(alphaAt(0, 0)).toBe(0);
+      expect(alphaAt(128, 128)).toBe(255);
+      expect(box.right - box.left).toBeGreaterThan(205);
+    }
+  );
 
   it('keeps a white object on a transparent background', async () => {
     const input = await svg(
