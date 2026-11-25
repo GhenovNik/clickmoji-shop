@@ -5,6 +5,7 @@ import sharp from 'sharp';
 import { localizedImagesForStorage } from '@/lib/picture-storage';
 import { localizedImagesOf } from '@/lib/product-image';
 import { normalizeEmojiImage } from '@/lib/services/emoji-image-normalize';
+import { LEGACY_ENGLISH_UNSET } from '../../../scripts/lib/legacy-picture-transition';
 
 // Batch import (AGE-1465 item 2): the operator's Gemini sheets (3 columns, cells left to right,
 // top to bottom) plus docs/emoji-batches/manifest.json and queue-manifest.json → normalized emoji
@@ -613,7 +614,12 @@ async function writeWhere(
 // A queue write changes a record only while its picture slots are empty. The one exception is an
 // English picture added to a Russian one this cell stored itself (`stagedRu`, the library record it
 // owns): then only the empty English slot is filled. Each condition is repeated in the database
-// write, so a picture attached by hand between the read and the write is never replaced.
+// write, so a picture attached by hand between the read and the write is never replaced. For a
+// record with an English slot the write is also conditioned on the legacy English column being
+// empty (a write-only predicate, `LEGACY_ENGLISH_UNSET`): the importer never reads the column, and
+// the previous release may hold the only address of the English picture there, already or from
+// between the read and the write. The database matches both the dictionary and the column in one
+// statement; a row that fails either is a conflict, and its address stays.
 async function writeQueuePicture(
   record: CatalogRecord,
   intent: PictureIntent,
@@ -641,7 +647,10 @@ async function writeQueuePicture(
     return { changed: false, conflict: 'уже есть картинка, которую эта пачка не записывает' };
   }
 
-  const where = { imageUrl: slot, ...(english && dictionaryAs(current)) };
+  const where = {
+    imageUrl: slot,
+    ...(english && { ...dictionaryAs(current), ...LEGACY_ENGLISH_UNSET }),
+  };
   return writeWhere(record, where, { ...flat, ...pictureData(current, intent) }, intent, flat);
 }
 

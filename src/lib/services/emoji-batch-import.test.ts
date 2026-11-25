@@ -609,7 +609,12 @@ describe('applyCell for variants and categories', () => {
     expect(result).toMatchObject({ product: 'variant', changed: true, uploaded: 1 });
     expect(prisma.productVariant.updateMany).toHaveBeenCalledWith({
       // Written only while the variant still has no picture: a manual one is never replaced.
-      where: { id: 'v1', imageUrl: null, localizedImages: { equals: Prisma.DbNull } },
+      where: {
+        id: 'v1',
+        imageUrl: null,
+        localizedImages: { equals: Prisma.DbNull },
+        imageUrlEn: null,
+      },
       // A text-free picture serves both languages, so a stale English one is cleared.
       data: { imageUrl: 'https://utfs.io/f/variant.webp', imageUrlEn: null },
     });
@@ -807,7 +812,8 @@ const satisfies = (value: unknown, condition: unknown) => {
     const { equals } = condition as { equals: unknown };
     return equals === Prisma.DbNull ? value == null : sameJson(value, equals);
   }
-  return value === condition;
+  // A column a row does not carry is SQL NULL, as for the legacy English column of a test row.
+  return condition === null ? (value ?? null) === null : value === condition;
 };
 
 // Whether a catalogue row matches one clause of a `where.OR` list, as the reference check asks.
@@ -981,7 +987,12 @@ describe('queue writes are conditional on the state at write time (AGE-1667 B2)'
 
     expect(result).toMatchObject({ product: 'conflict', changed: true });
     expect(row.updateMany).toHaveBeenCalledWith({
-      where: { id: 'p1', imageUrl: null, localizedImages: { equals: Prisma.DbNull } },
+      where: {
+        id: 'p1',
+        imageUrl: null,
+        localizedImages: { equals: Prisma.DbNull },
+        imageUrlEn: null,
+      },
       data: { isCustom: true, imageUrl: QUEUED, imageUrlEn: null },
     });
     expect(row.update).not.toHaveBeenCalled();
@@ -1180,7 +1191,12 @@ describe('queue writes are conditional on the state at write time (AGE-1667 B2)'
       expect(second.conflict).toBeUndefined();
       expect(data).toMatchObject({ imageUrl: RU, localizedImages: { en: EN } });
       expect(row.updateMany).toHaveBeenLastCalledWith({
-        where: { id: path.start.id, imageUrl: RU, localizedImages: { equals: Prisma.DbNull } },
+        where: {
+          id: path.start.id,
+          imageUrl: RU,
+          localizedImages: { equals: Prisma.DbNull },
+          imageUrlEn: null,
+        },
         data: expect.objectContaining({ imageUrl: RU, localizedImages: { en: EN } }),
       });
       expect(library.rows.get('queue-001#1')).toMatchObject({ imageUrl: RU, locale: 'ru' });
@@ -1351,7 +1367,12 @@ describe('library reuse is bound to the target that wrote it (AGE-1667 B3)', () 
     expect(result).toMatchObject({ product: 'linked', uploaded: 0 });
     expect(upload).not.toHaveBeenCalled();
     expect(row.updateMany).toHaveBeenCalledWith({
-      where: { id: 'pear', imageUrl: null, localizedImages: { equals: Prisma.DbNull } },
+      where: {
+        id: 'pear',
+        imageUrl: null,
+        localizedImages: { equals: Prisma.DbNull },
+        imageUrlEn: null,
+      },
       data: { isCustom: true, imageUrl: APPLE, imageUrlEn: null },
     });
   });
@@ -2655,7 +2676,12 @@ describe('an import keeps the other languages of the dictionary (AGE-1667 Ya3)',
       expect(row).toMatchObject({ imageUrl: RU, localizedImages: { es: ES, en: EN } });
       // The write is conditioned on the dictionary exactly as it was read.
       expect(record.updateMany).toHaveBeenCalledWith({
-        where: { id: row.id, imageUrl: null, localizedImages: { equals: { es: ES } } },
+        where: {
+          id: row.id,
+          imageUrl: null,
+          localizedImages: { equals: { es: ES } },
+          imageUrlEn: null,
+        },
         data: expect.objectContaining({ localizedImages: { es: ES, en: EN }, imageUrlEn: EN }),
       });
     }
@@ -2758,6 +2784,200 @@ describe('an import keeps the other languages of the dictionary (AGE-1667 Ya3)',
       expect(result).toMatchObject({ changed: false, uploaded: 0, conflict: undefined });
       expect(record.updateMany).not.toHaveBeenCalled();
       expect(record.update).not.toHaveBeenCalled();
+    }
+  );
+});
+
+// The legacy English column is written by the previous release alone, so a row can hold the only
+// address of its English picture there (the dictionary has none), already or from between this
+// run's read and its write. The import never reads the column; the database write is conditioned
+// on it being empty, together with the dictionary as read, and a row that fails it keeps its
+// address (AGE-1667 Ya3, review round 4).
+describe('a queue write keeps an English address only the previous release holds (AGE-1667 Ya3)', () => {
+  const RU = 'https://utfs.io/f/ru.webp';
+  const EN = 'https://utfs.io/f/en.webp';
+  const LEGACY = 'https://utfs.io/f/legacy-only.webp';
+  const REF = 'queue-001#1';
+
+  type Kind = 'product' | 'variant';
+  type Mode = { label: string; batchKind: 'text' | 'universal'; withEn: boolean };
+  const MODES: Mode[] = [
+    { label: 'text, Russian and English sheets', batchKind: 'text', withEn: true },
+    { label: 'text, Russian sheet only', batchKind: 'text', withEn: false },
+    { label: 'universal, text-free picture', batchKind: 'universal', withEn: false },
+  ];
+  const CASES = (['product', 'variant'] as const).flatMap((kind) =>
+    MODES.map((mode) => [kind, mode.label, mode] as const)
+  );
+
+  const cellOf = (kind: Kind): ManifestCell => ({
+    cell: 1,
+    target: kind,
+    ...(kind === 'variant' ? { parent: 'Яблоко' } : {}),
+    category: 'Фрукты',
+    name: 'Груша',
+    nameEn: 'Pear',
+    action: 'update-image',
+  });
+  const planOf = (kind: Kind, { batchKind, withEn }: Mode): CellPlan => ({
+    ref: REF,
+    batch: 'queue-001',
+    batchKind,
+    cell: cellOf(kind),
+    images: withEn ? { ru: Buffer.from('ru'), en: Buffer.from('en') } : { ru: Buffer.from('ru') },
+    stored: {},
+    product:
+      kind === 'product'
+        ? { kind: 'link', productId: 'pear', productName: 'Груша' }
+        : { kind: 'variant', variantId: 'v-pear', productName: 'Яблоко', variantName: 'Груша' },
+  });
+  const rowOf = (kind: Kind, slots: Record<string, unknown> = {}) =>
+    ({
+      id: kind === 'product' ? 'pear' : 'v-pear',
+      imageUrl: null,
+      localizedImages: null,
+      imageUrlEn: null,
+      isCustom: false,
+      ...slots,
+    }) as Row;
+  const prismaOf = (kind: Kind, row: Row, library = memoryLibrary()) => {
+    const record = liveRow(row);
+    return {
+      prisma: {
+        ...noCatalogue(),
+        emojiLibraryItem: library,
+        ...(kind === 'product' ? { product: record } : { productVariant: record }),
+      } as unknown as PrismaClient,
+      record,
+    };
+  };
+  const upload = () => vi.fn(async (image: Buffer) => (image.toString() === 'en' ? EN : RU));
+  // The previous release writes its English address after this run has read the row.
+  const oldWriterAfterRead = (record: ReturnType<typeof liveRow>, row: Row) =>
+    record.findUnique.mockImplementationOnce(async () => {
+      const seen = { ...row };
+      row.imageUrlEn = LEGACY;
+      return seen;
+    });
+  // The record is read for its pictures and nothing else: no legacy column is selected.
+  const readsNoLegacy = (record: ReturnType<typeof liveRow>) => {
+    for (const [args] of record.findUnique.mock.calls as unknown as [{ select?: object }][]) {
+      expect(Object.keys(args.select ?? {})).not.toContain('imageUrlEn');
+    }
+  };
+
+  it.each(CASES)(
+    'keeps an address already in the legacy column of a free record (%s, %s)',
+    async (kind, _label, mode) => {
+      const row = rowOf(kind, { imageUrlEn: LEGACY });
+      const { prisma, record } = prismaOf(kind, row);
+
+      const result = await applyCell(prisma, planOf(kind, mode), upload());
+
+      expect(result).toMatchObject({ product: 'conflict' });
+      expect(result.conflict).toBeDefined();
+      expect(row).toMatchObject({
+        imageUrl: null,
+        localizedImages: null,
+        imageUrlEn: LEGACY,
+        isCustom: false,
+      });
+      expect(record.updateMany).toHaveBeenCalledTimes(1);
+      expect(record.updateMany.mock.calls[0][0].where).toMatchObject({ imageUrlEn: null });
+      expect(record.update).not.toHaveBeenCalled();
+      readsNoLegacy(record);
+    }
+  );
+
+  it.each(CASES)(
+    'keeps an address written to the legacy column after the read (%s, %s)',
+    async (kind, _label, mode) => {
+      const row = rowOf(kind);
+      const { prisma, record } = prismaOf(kind, row);
+      oldWriterAfterRead(record, row);
+
+      const result = await applyCell(prisma, planOf(kind, mode), upload());
+
+      expect(result).toMatchObject({ product: 'conflict' });
+      expect(result.conflict).toBeDefined();
+      expect(row).toMatchObject({
+        imageUrl: null,
+        localizedImages: null,
+        imageUrlEn: LEGACY,
+        isCustom: false,
+      });
+      expect(record.updateMany).toHaveBeenCalledTimes(1);
+      expect(record.update).not.toHaveBeenCalled();
+      readsNoLegacy(record);
+    }
+  );
+
+  it.each(['product', 'variant'] as const)(
+    'still writes a free record whose legacy column is empty (%s)',
+    async (kind) => {
+      const row = rowOf(kind);
+      const { prisma, record } = prismaOf(kind, row);
+
+      const result = await applyCell(prisma, planOf(kind, MODES[0]), upload());
+
+      expect(result).toMatchObject({ changed: true, conflict: undefined });
+      expect(row).toMatchObject({ imageUrl: RU, localizedImages: { en: EN }, imageUrlEn: EN });
+      expect(record.updateMany.mock.calls[0][0].where).toMatchObject({ imageUrlEn: null });
+    }
+  );
+
+  // A Russian picture this cell stored, its English sheet queued later: only an empty English slot
+  // is filled, and the legacy column counts as part of that slot.
+  describe.each(['product', 'variant'] as const)(
+    'an English sheet after the Russian one (%s)',
+    (kind) => {
+      const first = () => ({ ...planOf(kind, MODES[1]) });
+      const second = () => ({ ...planOf(kind, MODES[0]) });
+
+      it('keeps an address already in the legacy column', async () => {
+        const row = rowOf(kind);
+        const { prisma, record } = prismaOf(kind, row);
+        await applyCell(prisma, first(), upload());
+        expect(row).toMatchObject({ imageUrl: RU, localizedImages: null });
+        // The previous release writes its English address between the two runs.
+        row.imageUrlEn = LEGACY;
+
+        const result = await applyCell(prisma, second(), upload());
+
+        expect(result).toMatchObject({ product: 'conflict' });
+        expect(row).toMatchObject({ imageUrl: RU, localizedImages: null, imageUrlEn: LEGACY });
+        expect(record.updateMany).toHaveBeenCalledTimes(2);
+        expect(record.updateMany.mock.calls[1][0].where).toMatchObject({
+          imageUrl: RU,
+          imageUrlEn: null,
+        });
+        readsNoLegacy(record);
+      });
+
+      it('keeps an address written to the legacy column after the read', async () => {
+        const row = rowOf(kind);
+        const { prisma, record } = prismaOf(kind, row);
+        await applyCell(prisma, first(), upload());
+        oldWriterAfterRead(record, row);
+
+        const result = await applyCell(prisma, second(), upload());
+
+        expect(result).toMatchObject({ product: 'conflict' });
+        expect(row).toMatchObject({ imageUrl: RU, localizedImages: null, imageUrlEn: LEGACY });
+        expect(record.updateMany).toHaveBeenCalledTimes(2);
+        readsNoLegacy(record);
+      });
+
+      it('fills the empty English slot when nothing is in the legacy column', async () => {
+        const row = rowOf(kind);
+        const { prisma } = prismaOf(kind, row);
+        await applyCell(prisma, first(), upload());
+
+        const result = await applyCell(prisma, second(), upload());
+
+        expect(result).toMatchObject({ changed: true, conflict: undefined });
+        expect(row).toMatchObject({ imageUrl: RU, localizedImages: { en: EN }, imageUrlEn: EN });
+      });
     }
   );
 });

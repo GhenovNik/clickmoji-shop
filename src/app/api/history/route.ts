@@ -132,7 +132,8 @@ export async function POST(request: Request) {
       // list but never copied into the snapshot. The same statement reads the pictures of the
       // visible products: the snapshot is never refilled later, so a product whose English
       // address is still only in the legacy column (the previous release writes it alone) gets it
-      // folded into the dictionary here (the dictionary wins; see legacy-picture-transition.ts).
+      // folded into the dictionary here. The legacy column of the same read wins, an explicit null
+      // included, as in the backfill (see legacy-picture-transition.ts).
       // A product that is not visible is not read, so it has no fallback either.
       const pictures =
         items.length > 0

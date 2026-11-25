@@ -155,7 +155,13 @@
   reads and conditions on the dictionary: a queue write applies only while the main picture is empty
   and the dictionary is exactly as read (`localizedImages` equals the value read, or SQL NULL), so a
   picture, or any language, attached between the read and the write is never replaced or lost; a
-  failed condition is re-read and reported as before. A historical cell writes by id unless it
+  failed condition is re-read and reported as before. For a product or a variant the same statement
+  also requires the legacy English column to be empty (a write predicate from
+  `scripts/lib/legacy-picture-transition.ts`, never selected): an address that only the previous
+  release holds, present before the read or written between the read and the write, makes the write
+  count 0 and the cell a conflict, so the old address stays, for the universal and the text intent
+  alike. Applies to a free record and to the English slot added to a Russian picture the cell stored
+  itself; categories have no English slot. A historical cell writes by id unless it
   changes the dictionary of a record it read, in which case the same condition applies. An English
   entry is rewritten only when it changes. The exported-catalogue parser (`scripts/lib/catalog-export.ts`)
   and the Ya2 backfill (`scripts/lib/localized-pictures-backfill.ts`) are the readers of the legacy

@@ -42,6 +42,17 @@ export function withLegacyEnglish(row: {
   return legacy ? { ...pictures, [ENGLISH]: legacy } : pictures;
 }
 
+// The write condition of an import that fills a free English slot (AGE-1667 Ya3, review round 4).
+// The importer does not read the legacy column, so it cannot tell from its own read that the
+// previous release holds the only address of the English picture there (the dictionary has none),
+// nor that the previous release wrote one between the importer's read and its write. The condition
+// below is part of the same `updateMany` as the dictionary condition (`localizedImages` as read), so
+// the database decides both atomically: a row whose legacy column is not empty is not matched, the
+// write counts 0 and the importer reports a conflict instead of overwriting or clearing the address.
+// It is a write predicate only: nothing is selected, nothing reaches a response. Ya6 deletes it
+// with the columns.
+export const LEGACY_ENGLISH_UNSET = { imageUrlEn: null } as const;
+
 // What a history snapshot copies of a product's pictures, in canonical form.
 export type SnapshotPictures = {
   imageUrl: string | null;
