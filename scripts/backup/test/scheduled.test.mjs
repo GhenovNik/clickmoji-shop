@@ -92,9 +92,15 @@ echo "backup: ok verify=ok size=1 file=x prune=ok"
 exit "\${FAKE_NPM_EXIT:-0}"
 `;
 
-// Fake launchctl: the loaded state is a marker file; every call is logged with its arguments.
+// Fake launchctl: the loaded state is a copy of the plist that was bootstrapped, so a test can tell
+// which definition is loaded; every call is logged with its arguments.
 // FAKE_BOOTSTRAP_FAIL_ALL makes every bootstrap fail; FAKE_BOOTSTRAP_FAIL_WHEN makes a bootstrap fail
 // only when the plist it loads contains that fixed text.
+// Signal windows: with FAKE_SIGNAL_SIG set, the fake sends that signal to the installer (its parent)
+// from inside one call. FAKE_SIGNAL_VERB=bootout sends it after the job is unloaded;
+// FAKE_SIGNAL_VERB=bootstrap sends it during a bootstrap whose plist contains FAKE_SIGNAL_WHEN, and
+// FAKE_SIGNAL_RESULT=fail makes that bootstrap fail after the signal (the default is to load and return 0).
+// The shell runs its trap only after the call returns, as it does for a real signal.
 const FAKE_LAUNCHCTL = `#!/bin/sh
 state="$FAKE_RECORD_DIR/loaded"
 printf '%s\\n' "$*" >> "$FAKE_RECORD_DIR/launchctl.log"
@@ -103,13 +109,19 @@ case "$1" in
   bootout)
     if [ -n "\${FAKE_BOOTOUT_FAIL:-}" ]; then exit 5; fi
     if [ ! -f "$state" ]; then exit 113; fi
-    rm -f "$state"; exit 0 ;;
+    rm -f "$state"
+    if [ "\${FAKE_SIGNAL_VERB:-}" = bootout ]; then kill -"$FAKE_SIGNAL_SIG" "$PPID"; fi
+    exit 0 ;;
   bootstrap)
     if [ -n "\${FAKE_BOOTSTRAP_FAIL_ALL:-}" ]; then exit 5; fi
     if [ -n "\${FAKE_BOOTSTRAP_FAIL_WHEN:-}" ] && grep -q -F -- "$FAKE_BOOTSTRAP_FAIL_WHEN" "$3"; then exit 5; fi
     if [ -f "$state" ]; then exit 37; fi
     if [ ! -f "$3" ]; then exit 2; fi
-    touch "$state"; exit 0 ;;
+    if [ "\${FAKE_SIGNAL_VERB:-}" = bootstrap ] && grep -q -F -- "$FAKE_SIGNAL_WHEN" "$3"; then
+      kill -"$FAKE_SIGNAL_SIG" "$PPID"
+      if [ "\${FAKE_SIGNAL_RESULT:-ok}" = fail ]; then exit 5; fi
+    fi
+    cp -- "$3" "$state"; exit 0 ;;
   *) exit 1 ;;
 esac
 `;
@@ -527,6 +539,133 @@ describe('launchd installer and remover', () => {
     assert.deepEqual(readFileSync(plistPath(sandbox)), oldPlist, 'old plist kept for recovery');
     assert.equal(existsSync(path.join(sandbox.record, 'loaded')), false, 'job is not loaded');
   });
+
+  // Catchable signals only: SIGKILL cannot be trapped, so no shell can roll back after it.
+  const CATCHABLE_SIGNALS = ['HUP', 'INT', 'TERM'];
+  const OLD_INTERVAL = '259200';
+  const NEW_INTERVAL = '3600';
+
+  function replaceEnv(sandbox, sig, extra = {}) {
+    return baseEnv(sandbox, {
+      CLICKMOJI_BACKUP_INTERVAL_SECONDS: NEW_INTERVAL,
+      FAKE_SIGNAL_SIG: sig,
+      ...extra,
+    });
+  }
+
+  // The loaded state is a copy of the bootstrapped plist, so this checks which definition is loaded.
+  function assertLoadedDefinition(sandbox, expected) {
+    const loaded = path.join(sandbox.record, 'loaded');
+    assert.ok(existsSync(loaded), 'a job is loaded');
+    assert.deepEqual(readFileSync(loaded), expected, 'the loaded job is the expected definition');
+  }
+
+  function assertOldAgentRestored(sandbox, result, sig, oldPlist) {
+    assert.equal(result.status, 1, result.stderr);
+    assert.ok(result.stderr.includes(`прервано сигналом ${sig}`), result.stderr);
+    assert.equal(result.stderr.includes(RECOVERY_FAILED), false, result.stderr);
+    assert.deepEqual(
+      readFileSync(plistPath(sandbox)),
+      oldPlist,
+      'old plist restored byte for byte'
+    );
+    assertLoadedDefinition(sandbox, oldPlist);
+    assert.deepEqual(agentDirFiles(sandbox), [`${LABEL}.plist`], 'no temporary copies left');
+  }
+
+  for (const sig of CATCHABLE_SIGNALS) {
+    it(`restores the old plist and loaded job when ${sig} lands during bootout`, () => {
+      const sandbox = makeSandbox();
+      linkMainCheckout(sandbox);
+      assert.equal(run(INSTALL, [], baseEnv(sandbox)).status, 0);
+      const oldPlist = readFileSync(plistPath(sandbox));
+
+      const result = run(INSTALL, [], replaceEnv(sandbox, sig, { FAKE_SIGNAL_VERB: 'bootout' }));
+
+      assertOldAgentRestored(sandbox, result, sig, oldPlist);
+      const changing = launchctlCalls(sandbox)
+        .map((line) => line.split(' ')[0])
+        .filter((verb) => verb === 'bootout' || verb === 'bootstrap');
+      assert.deepEqual(changing.slice(-2), ['bootout', 'bootstrap'], 'old job reloaded once');
+    });
+
+    it(`restores the old plist and loaded job when ${sig} lands as the new bootstrap fails`, () => {
+      const sandbox = makeSandbox();
+      linkMainCheckout(sandbox);
+      assert.equal(run(INSTALL, [], baseEnv(sandbox)).status, 0);
+      const oldPlist = readFileSync(plistPath(sandbox));
+
+      const result = run(
+        INSTALL,
+        [],
+        replaceEnv(sandbox, sig, {
+          FAKE_SIGNAL_VERB: 'bootstrap',
+          FAKE_SIGNAL_WHEN: `<integer>${NEW_INTERVAL}</integer>`,
+          FAKE_SIGNAL_RESULT: 'fail',
+        })
+      );
+
+      assertOldAgentRestored(sandbox, result, sig, oldPlist);
+      const changing = launchctlCalls(sandbox)
+        .map((line) => line.split(' ')[0])
+        .filter((verb) => verb === 'bootout' || verb === 'bootstrap');
+      assert.deepEqual(
+        changing.slice(-3),
+        ['bootout', 'bootstrap', 'bootstrap'],
+        'bootout, the signalled bootstrap, then the restore'
+      );
+    });
+
+    it(`unloads the new job and restores the old one when ${sig} lands as the new bootstrap succeeds`, () => {
+      // The new job is loaded when the signal arrives. Leaving it loaded against the restored file
+      // would be the bug, so the rollback must bootout it before it bootstraps the old job again.
+      const sandbox = makeSandbox();
+      linkMainCheckout(sandbox);
+      assert.equal(run(INSTALL, [], baseEnv(sandbox)).status, 0);
+      const oldPlist = readFileSync(plistPath(sandbox));
+
+      const result = run(
+        INSTALL,
+        [],
+        replaceEnv(sandbox, sig, {
+          FAKE_SIGNAL_VERB: 'bootstrap',
+          FAKE_SIGNAL_WHEN: `<integer>${NEW_INTERVAL}</integer>`,
+        })
+      );
+
+      assertOldAgentRestored(sandbox, result, sig, oldPlist);
+      const changing = launchctlCalls(sandbox)
+        .map((line) => line.split(' ')[0])
+        .filter((verb) => verb === 'bootout' || verb === 'bootstrap');
+      assert.deepEqual(
+        changing.slice(-4),
+        ['bootout', 'bootstrap', 'bootout', 'bootstrap'],
+        'bootout, new bootstrap, bootout of the new job, restore'
+      );
+    });
+
+    it(`leaves no agent and no plist when ${sig} lands during the first install`, () => {
+      const sandbox = makeSandbox();
+      linkMainCheckout(sandbox);
+
+      const result = run(
+        INSTALL,
+        [],
+        baseEnv(sandbox, {
+          FAKE_SIGNAL_SIG: sig,
+          FAKE_SIGNAL_VERB: 'bootstrap',
+          FAKE_SIGNAL_WHEN: `<integer>${OLD_INTERVAL}</integer>`,
+        })
+      );
+
+      assert.equal(result.status, 1, result.stderr);
+      assert.ok(result.stderr.includes(`прервано сигналом ${sig}`), result.stderr);
+      assert.equal(result.stderr.includes(RECOVERY_FAILED), false, result.stderr);
+      assert.equal(existsSync(path.join(sandbox.record, 'loaded')), false, 'not loaded');
+      assert.equal(existsSync(plistPath(sandbox)), false, 'no plist left behind');
+      assert.deepEqual(agentDirFiles(sandbox), [], 'a later run starts clean');
+    });
+  }
 
   it('removes the agent, is idempotent, and keeps the status file and copies', () => {
     const sandbox = makeSandbox();

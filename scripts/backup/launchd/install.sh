@@ -68,6 +68,83 @@ chmod 700 "$STATE_DIR"
 TMP_PLIST="$AGENTS_DIR/.$LABEL.plist.tmp.$$"
 PREV_PLIST="$AGENTS_DIR/.$LABEL.plist.prev.$$"
 trap 'rm -f "$TMP_PLIST"' EXIT
+
+# Read-only state, taken before anything changes.
+was_loaded=0
+if launchctl print "$DOMAIN/$LABEL" >/dev/null 2>&1; then was_loaded=1; fi
+had_plist=0
+if [ -e "$PLIST" ] || [ -L "$PLIST" ]; then had_plist=1; fi
+
+# Raised just before the command they name runs, so a command cut short by a signal is still undone.
+old_unload_started=0
+old_moved_started=0
+new_placed_started=0
+new_bootstrap_started=0
+
+recovery_failed() {
+  printf 'install: ВОССТАНОВЛЕНИЕ НЕ УДАЛОСЬ: %s\n' "$1" >&2
+  printf 'install: агент %s может быть не загружен; проверьте %s и повторите install.sh\n' "$LABEL" "$PLIST" >&2
+  if [ -e "$PREV_PLIST" ]; then
+    printf 'install: прежний plist сохранён в %s\n' "$PREV_PLIST" >&2
+  fi
+  exit 2
+}
+
+# Rollback puts the old plist back and reloads the old job if it was loaded before. A job that was not
+# loaded before is never loaded by a rollback.
+#
+# A catchable signal (HUP, INT, TERM) goes through the same rollback. Bash runs a trap only after the
+# launchctl call in progress returns, so the rollback may find that the new job was loaded just before
+# the signal arrived; it unloads that job before the old plist is restored and the old job reloaded.
+rollback() {
+  # Signals are ignored from here on, so a second one cannot start a nested rollback.
+  trap '' HUP INT TERM
+  printf 'install: %s\n' "$1" >&2
+
+  # 1. A bootstrapped new job must not stay loaded against the restored file. The old job was unloaded
+  #    before that bootstrap started, so a loaded job at this point is the new one.
+  if [ "$new_bootstrap_started" -eq 1 ] && launchctl print "$DOMAIN/$LABEL" >/dev/null 2>&1; then
+    launchctl bootout "$DOMAIN/$LABEL" || recovery_failed "не удалось выгрузить новый агент"
+  fi
+
+  # 2. Remove the new plist. Once the old plist has been moved aside, a file at $PLIST is the new one.
+  if [ "$new_placed_started" -eq 1 ] && { [ -e "$PLIST" ] || [ -L "$PLIST" ]; }; then
+    rm -f "$PLIST" || recovery_failed "не удалось убрать новый plist $PLIST"
+  fi
+
+  # 3. Put the old plist back. mv moves the same file, so its bytes are unchanged.
+  if [ "$old_moved_started" -eq 1 ] && [ -e "$PREV_PLIST" ]; then
+    mv -f "$PREV_PLIST" "$PLIST" || recovery_failed "не удалось вернуть прежний plist из $PREV_PLIST"
+  fi
+
+  if [ "$was_loaded" -eq 0 ]; then
+    printf 'install: откат выполнен; агент %s не установлен\n' "$LABEL" >&2
+    exit 1
+  fi
+  # 4. The old job was loaded before. If nothing was unloaded, it is still loaded and its plist untouched.
+  if [ "$old_unload_started" -eq 0 ]; then
+    printf 'install: изменений не было; прежний агент и plist не тронуты\n' >&2
+    exit 1
+  fi
+  if ! launchctl print "$DOMAIN/$LABEL" >/dev/null 2>&1; then
+    if ! { launchctl bootstrap "$DOMAIN" "$PLIST" && launchctl print "$DOMAIN/$LABEL" >/dev/null 2>&1; }; then
+      recovery_failed "прежний агент не загрузился обратно после отката"
+    fi
+  fi
+  printf 'install: прежний агент восстановлен из прежнего plist; новая настройка не установлена\n' >&2
+  exit 1
+}
+
+on_signal() {
+  rollback "прервано сигналом $1"
+}
+
+# Traps are set before the first change, so a signal at any later point reaches rollback. They are
+# cleared once the new job is confirmed. Signals during the early steps leave nothing to undo.
+trap 'on_signal HUP' HUP
+trap 'on_signal INT' INT
+trap 'on_signal TERM' TERM
+
 sed \
   -e "s|__LABEL__|$LABEL|g" \
   -e "s|__WRAPPER__|$WRAPPER|g" \
@@ -83,61 +160,28 @@ fi
 # old plist is moved aside (same bytes, same file), the new one is put in place and bootstrapped. Any
 # failure from that point goes through rollback, which puts the old plist back and reloads the old job
 # if it was loaded before. A job that was not loaded before is never loaded by a rollback.
-was_loaded=0
-if launchctl print "$DOMAIN/$LABEL" >/dev/null 2>&1; then was_loaded=1; fi
-had_plist=0
-if [ -e "$PLIST" ] || [ -L "$PLIST" ]; then had_plist=1; fi
-moved_old=0
-placed_new=0
-
-recovery_failed() {
-  printf 'install: ВОССТАНОВЛЕНИЕ НЕ УДАЛОСЬ: %s\n' "$1" >&2
-  printf 'install: агент %s может быть не загружен; проверьте %s и повторите install.sh\n' "$LABEL" "$PLIST" >&2
-  if [ "$moved_old" -eq 1 ]; then
-    printf 'install: прежний plist сохранён в %s\n' "$PREV_PLIST" >&2
-  fi
-  exit 2
-}
-
-rollback() {
-  printf 'install: %s\n' "$1" >&2
-  if [ "$placed_new" -eq 1 ]; then
-    rm -f "$PLIST" || recovery_failed "не удалось убрать новый plist $PLIST"
-    placed_new=0
-  fi
-  if [ "$moved_old" -eq 1 ]; then
-    mv -f "$PREV_PLIST" "$PLIST" || recovery_failed "не удалось вернуть прежний plist из $PREV_PLIST"
-    moved_old=0
-  fi
-  if [ "$was_loaded" -eq 1 ]; then
-    if launchctl bootstrap "$DOMAIN" "$PLIST" && launchctl print "$DOMAIN/$LABEL" >/dev/null 2>&1; then
-      printf 'install: прежний агент восстановлен из прежнего plist; новая настройка не установлена\n' >&2
-      exit 1
-    fi
-    recovery_failed "прежний агент не загрузился обратно после отката"
-  fi
-  printf 'install: откат выполнен; агент %s не установлен\n' "$LABEL" >&2
-  exit 1
-}
-
 if [ "$had_plist" -eq 1 ]; then
   if [ "$was_loaded" -eq 1 ]; then
+    old_unload_started=1
     launchctl bootout "$DOMAIN/$LABEL" || fail "launchctl bootout не выполнен; прежний агент и plist не тронуты"
   fi
+  old_moved_started=1
   mv -f "$PLIST" "$PREV_PLIST" || rollback "не удалось отложить прежний plist"
-  moved_old=1
 elif [ "$was_loaded" -eq 1 ]; then
   fail "прежний агент загружен, но его plist отсутствует; обновление остановлено до выгрузки"
 fi
 
+new_placed_started=1
 mv -f "$TMP_PLIST" "$PLIST" || rollback "не удалось записать новый plist"
-placed_new=1
 trap - EXIT
 
+new_bootstrap_started=1
 if ! launchctl bootstrap "$DOMAIN" "$PLIST"; then
   rollback "launchctl bootstrap нового агента не выполнен"
 fi
-if [ "$moved_old" -eq 1 ]; then
+# The new job is confirmed. From here on the install is complete and nothing is rolled back.
+trap - HUP INT TERM
+if [ "$old_moved_started" -eq 1 ]; then
   rm -f "$PREV_PLIST"
 fi
 
