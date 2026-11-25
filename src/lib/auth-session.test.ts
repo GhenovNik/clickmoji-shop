@@ -1,40 +1,39 @@
 // @vitest-environment node
-import { describe, expect, it } from 'vitest';
-import { readSessionClaims } from './auth-session';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const NOW = Date.UTC(2026, 10, 24, 12, 0, 0);
+const doubles = vi.hoisted(() => ({
+  getServerSession: vi.fn(),
+}));
 
-describe('readSessionClaims', () => {
-  it('accepts a token with a DB id and a millisecond issuance time', () => {
-    expect(readSessionClaims({ id: 'cuid_1', authIssuedAt: NOW - 1000 }, NOW)).toEqual({
-      id: 'cuid_1',
-      authIssuedAt: NOW - 1000,
-    });
+vi.mock('next-auth', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('next-auth')>();
+  return { ...actual, getServerSession: doubles.getServerSession };
+});
+
+vi.mock('@/lib/prisma', () => ({ prisma: {} }));
+
+const { auth } = await import('./auth');
+
+describe('auth()', () => {
+  beforeEach(() => {
+    doubles.getServerSession.mockReset();
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
   });
 
-  it('rejects a legacy token without the issuance claim', () => {
-    expect(readSessionClaims({ id: 'cuid_1', email: 'a@b.c', iat: 1_700_000_000 }, NOW)).toBeNull();
+  it('returns the session next-auth resolves for a valid token', async () => {
+    const session = { user: { id: 'user-1', role: 'USER' }, expires: '2099-01-01T00:00:00Z' };
+    doubles.getServerSession.mockResolvedValue(session);
+
+    await expect(auth()).resolves.toEqual(session);
   });
 
-  it('rejects an issuance time given in seconds instead of milliseconds', () => {
-    expect(
-      readSessionClaims({ id: 'cuid_1', authIssuedAt: Math.floor(NOW / 1000) }, NOW)
-    ).toBeNull();
-  });
+  it('treats a token rejected by the jwt callback (deleted or recreated user) as signed out', async () => {
+    doubles.getServerSession.mockRejectedValue(new Error('Session user no longer valid'));
 
-  it('rejects an issuance time in the future beyond clock skew', () => {
-    expect(readSessionClaims({ id: 'cuid_1', authIssuedAt: NOW + 5 * 60_000 }, NOW)).toBeNull();
-  });
-
-  it('rejects a missing, empty or non-string id and non-numeric time', () => {
-    expect(readSessionClaims({ authIssuedAt: NOW }, NOW)).toBeNull();
-    expect(readSessionClaims({ id: '', authIssuedAt: NOW }, NOW)).toBeNull();
-    expect(readSessionClaims({ id: 42, authIssuedAt: NOW }, NOW)).toBeNull();
-    expect(readSessionClaims({ id: 'cuid_1', authIssuedAt: '2026-11-24' }, NOW)).toBeNull();
-  });
-
-  it('rejects a missing token', () => {
-    expect(readSessionClaims(null, NOW)).toBeNull();
-    expect(readSessionClaims(undefined, NOW)).toBeNull();
+    await expect(auth()).resolves.toBeNull();
+    expect(console.warn).toHaveBeenCalledWith(
+      'Session token rejected; treating caller as signed out',
+      { errorName: 'Error' }
+    );
   });
 });

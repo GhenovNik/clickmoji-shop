@@ -83,6 +83,8 @@ export async function DELETE(request: Request) {
           },
           { status: 400 }
         );
+      case 'guest_account':
+        return NextResponse.json({ error: t('api.account.guestDeleteForbidden') }, { status: 403 });
       case 'concurrent_change':
         return NextResponse.json(
           { error: t('api.account.passwordChangedConcurrently') },

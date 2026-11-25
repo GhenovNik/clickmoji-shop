@@ -306,7 +306,11 @@ describe('direct entry visit tracking (proxy)', () => {
   });
 
   it('records VISIT with the session user ID for a signed-in entry', async () => {
-    doubles.getToken.mockResolvedValue({ id: 'user-signed-in', authIssuedAt: Date.now() });
+    doubles.getToken.mockResolvedValue({
+      id: 'user-signed-in',
+      sub: 'user-signed-in',
+      sessionIssuedAt: Math.floor(Date.now() / 1000),
+    });
 
     await proxy(new NextRequest('http://localhost/categories'));
 

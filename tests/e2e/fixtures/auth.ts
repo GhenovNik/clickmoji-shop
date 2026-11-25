@@ -228,6 +228,15 @@ export async function mockPublicCatalog(page: Page) {
       return;
     }
 
+    if (url.pathname === '/api/auth/guest') {
+      await route.fulfill({
+        status: 201,
+        contentType: 'application/json',
+        body: JSON.stringify({ user: { id: 'e2e-guest', role: 'USER', isGuest: true } }),
+      });
+      return;
+    }
+
     if (url.pathname === '/api/categories') {
       await route.fulfill(json([e2eCategory]));
       return;

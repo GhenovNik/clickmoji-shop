@@ -27,7 +27,12 @@ vi.mock('@/lib/funnel', () => ({
 import proxy from './proxy';
 
 const NOW = Date.now();
-const validToken = { id: 'user_current', role: 'USER', authIssuedAt: NOW - 60_000 };
+const validToken = {
+  id: 'user_current',
+  sub: 'user_current',
+  role: 'USER',
+  sessionIssuedAt: Math.floor((NOW - 60_000) / 1000),
+};
 const legacyToken = {
   id: 'user_current',
   role: 'ADMIN',
@@ -43,7 +48,11 @@ const redirectLocation = (response: Response) => response.headers.get('location'
 describe('proxy session handling', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    findUserMock.mockResolvedValue({ createdAt: new Date(NOW - 120_000), role: 'USER' });
+    findUserMock.mockResolvedValue({
+      createdAt: new Date(NOW - 120_000),
+      role: 'USER',
+      isGuest: false,
+    });
     vi.stubEnv('PLAYWRIGHT_AUTH_BYPASS', '');
   });
 
@@ -111,5 +120,54 @@ describe('proxy session handling', () => {
     getTokenMock.mockResolvedValue({ ...validToken, role: 'ADMIN' });
 
     expect(redirectLocation(await proxy(get('/admin')))).toBeNull();
+  });
+});
+
+describe('proxy guest handling: the account row is canonical', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.stubEnv('PLAYWRIGHT_AUTH_BYPASS', '');
+  });
+
+  it('sends a guest away from /admin even when the token names an administrator', async () => {
+    getTokenMock.mockResolvedValue({ ...validToken, role: 'ADMIN', isGuest: false });
+    findUserMock.mockResolvedValue({
+      createdAt: new Date(NOW - 120_000),
+      role: 'ADMIN',
+      isGuest: true,
+    });
+
+    expect(redirectLocation(await proxy(get('/admin')))).toBe('http://localhost/');
+  });
+
+  it('keeps a guest on protected pages and out of the login redirect loop', async () => {
+    getTokenMock.mockResolvedValue({ ...validToken, isGuest: true });
+    findUserMock.mockResolvedValue({
+      createdAt: new Date(NOW - 120_000),
+      role: 'USER',
+      isGuest: true,
+    });
+
+    expect(redirectLocation(await proxy(get('/lists')))).toBeNull();
+    expect(redirectLocation(await proxy(get('/login')))).toBeNull();
+    expect(redirectLocation(await proxy(get('/register')))).toBeNull();
+  });
+
+  it('does not trust a guest claim in the token when the DB row is a registered account', async () => {
+    getTokenMock.mockResolvedValue({ ...validToken, role: 'ADMIN', isGuest: true });
+    findUserMock.mockResolvedValue({
+      createdAt: new Date(NOW - 120_000),
+      role: 'ADMIN',
+      isGuest: false,
+    });
+
+    expect(redirectLocation(await proxy(get('/admin')))).toBeNull();
+  });
+
+  it('treats a token whose account row was deleted as signed out, even for a guest-looking token', async () => {
+    getTokenMock.mockResolvedValue({ ...validToken, isGuest: true });
+    findUserMock.mockResolvedValue(null);
+
+    expect(redirectLocation(await proxy(get('/lists')))).toBe('http://localhost/login');
   });
 });

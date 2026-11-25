@@ -151,10 +151,218 @@ models (e.g. `gemini-3.1-flash-lite-image`, `imagen-4.0-*`) also fail closed bef
 - Restore **local development** DB from a specific local file (local only): `npm run db:restore -- clickmoji-YYYYMMDD-HHMMSS.dump`
 - Both run `pg_dump` / `pg_restore` in the `postgres:17-alpine` image: production is PostgreSQL 17.11
   and a `pg_dump` 16 client refuses a 17 server.
-- Production backups must be encrypted, access-controlled, monitored, and restore-tested.
+- Production backups must be access-controlled, monitored, and restore-tested; encryption with `age` is enabled explicitly for production (`BACKUP_ENCRYPT=1`), while development runs unencrypted by default (`BACKUP_ENCRYPT=0`, explicit B35 exception for protected `backups/`).
 - Do not store production database copies in GitHub in any form: not as Actions artifacts (short-term ones included), releases, caches or repository files, even encrypted. The earlier allowance for short-term ordinary artifacts is withdrawn; GitHub takes no part in copying. Existing production copies there are removed under task A, not kept as a fallback.
 - Before a production migration, create and verify a fresh backup, run `prisma migrate deploy` with
   a direct/unpooled database URL, and confirm `prisma migrate status` afterwards.
+
+### Verified production backups and retention (AGE-1669)
+
+Verified production backups run via `npm run db:backup:verified` (`node scripts/backup/cli.mjs`) inside pinned PostgreSQL 17 containers.
+
+- **What automated verification proves (and does not prove):**
+  - Every run dumps the source database (`pg_dump --format=custom`), restores that plaintext `dump.custom` into a disposable PostgreSQL 17 cluster, and verifies schema identities, applied Prisma migration, and row counts (`verifyScope: "plaintext"` in `meta/<copy>.json`).
+  - Each published copy records `sizeBytes` and `sha256` in `meta/<copy>.json`. Before taking, confirming, or pruning any backup, the script verifies the exact byte size and `sha256` of existing accepted copies; any truncation, same-size byte substitution, or legacy record lacking a recorded digest (which is never auto-promoted by re-hashing) fails closed and preserves all existing copies intact.
+  - When `BACKUP_ENCRYPT=1`, the script snapshots the validated public key from `BACKUP_AGE_RECIPIENT_FILE` into the temporary run directory outside any repository, encrypts `dump.custom` with `age` using that exact snapshot, stamps the same snapshot's `recipientSha256`, and verifies non-empty ciphertext output before atomic publication.
+  - Automated runs hold **no private key** and therefore **do not prove decryption** of `.dump.age` with the operator's `age` identity. Proving `.dump.age` decryption and restore requires an explicit operator restore test and confirmation (binding the exact ciphertext `sha256` from the restored snapshot) before old unencrypted `.dump` copies are deleted or saved encrypted copies are rotated.
+
+- **Destination and Git guard (`BACKUP_DIR`):**
+  - Store copies in `backups/` of the **main repository checkout** on the Mac mini (for example, `~/Projects/clickmoji-shop/backups/`), which is gitignored via `/backups/` in `.gitignore`.
+  - `BACKUP_DIR` **must** be explicitly configured as an **absolute path** to that main checkout's `backups/` directory (no default; relative or missing `BACKUP_DIR` fails even when run outside any repository or from a worktree). This prevents runs from temporary worktrees or other checkouts from creating a separate backup history.
+  - Before creating or writing anything—and again immediately before atomic publication—the script resolves the physical path of `BACKUP_DIR` and runs `git check-ignore` in the destination repository regardless of the caller's working directory (covering dump files, `.partial-*` temporaries, `meta/*.json`, and confirmation state). If Git is unavailable or any physical path inside a repository is not ignored, the script fails with a status reason and writes nothing.
+  - The directory is maintained at mode `0700`, and both temporary `.partial-*` files and final published copies are created with mode `0600` from creation.
+  - Intermediate plaintext dumps (`dump.custom`) and temporary PostgreSQL 17 clusters exist only inside a private temporary directory outside any repository (`TMPDIR` / `os.tmpdir()`) and are deleted on completion, failure, and interruption. Storing a verified unencrypted `clickmoji-<UTC>.dump` inside protected `backups/` when `BACKUP_ENCRYPT` is off is an explicit operator exception (B35).
+  - Published files are written under a `.partial-*` temporary name and atomically renamed after full write and `fsync`, prior to pruning. An interrupted write is never counted as a completed copy.
+  - **Warning:** Never run `git clean -x` (or `git clean -fdx`) in the main checkout and never delete `backups/`, or all retained copies and their `meta/` records will be lost.
+
+- **Settings, modes, and step-by-step cutover to production:**
+  - Three explicit settings govern retention, schedule interval, and encryption (scheduler/launchd configuration stays in task Г):
+    1. `BACKUP_RETENTION_COUNT`: number of newest successful copies to keep across `.dump` and `.dump.age` formats (integer >= 1, default `2`; no weekly or monthly tiers).
+    2. Job interval (configured in the scheduler): determines how often backups run.
+    3. `BACKUP_ENCRYPT`: `0`/unset (default, unencrypted `clickmoji-<UTC>.dump`, `BACKUP_AGE_RECIPIENT_FILE` not required) or `1` (explicit `age` encryption to `clickmoji-<UTC>.dump.age`, requiring `BACKUP_AGE_RECIPIENT_FILE`; missing/invalid key when enabled fails early with a status reason).
+  - **Development (current):** `BACKUP_ENCRYPT=0` (default), `BACKUP_RETENTION_COUNT=2`, scheduled once every **3 days**. With successful runs, the 2 retained copies cover roughly **3–6 days** back.
+  - **Production (at first users):** switch to **daily** interval, `BACKUP_ENCRYPT=1` (with `BACKUP_AGE_RECIPIENT_FILE`), and **more than 2** retained copies; the exact copy count `N` is determined by the operator at cutover (not predetermined; no fixed production number is hard-coded here). Switching changes only those settings—no code changes.
+  - **Step-by-step cutover from unencrypted mode to encrypted production:**
+    1. **Enable production settings:** set daily scheduler interval (task Г), `BACKUP_ENCRYPT=1`, `BACKUP_AGE_RECIPIENT_FILE` pointing to the public `age1...` recipient file, and `BACKUP_RETENTION_COUNT` to the operator-chosen production `N`.
+    2. **Run the first encrypted backup (no plaintext deletion yet):**
+
+       ```sh
+       npm run db:backup:verified
+       ```
+
+       - Existing accepted unencrypted `.dump` copies are **not** deleted by normal pruning while waiting for confirmation. If `BACKUP_RETENTION_COUNT` is smaller than the number of existing accepted unencrypted `.dump` copies (for example `N=1` with 2 existing `.dump` copies), the backup run refuses early before publication with a reason instructing you to raise `BACKUP_RETENTION_COUNT` for the transition period (meanwhile, `--confirm-encrypted-restore` remains available if a `.dump.age` copy already exists).
+       - **Temporary limit exception:** with `plainKept` unencrypted `.dump` copies (`<= N`), the **first** `.dump.age` copy of the current transition is preserved for operator verification, and any other `.dump.age` copies may fill only free slots inside the normal limit `N`. Total retained copies are therefore capped at `max(N, plainKept + 1)` (at most `N + 1` when unencrypted copies fill `N`, never `N + 2`).
+       - If unencrypted copies and the first `.dump.age` copy already fill that cap and further unconfirmed runs execute, each run still dumps, verifies restore, and checks encryption, does not keep the newly produced `.dump.age`, preserves the existing `.dump` copies and first `.dump.age` copy (leaving the comparison baseline on the surviving copy), and reports `verify=ok decrypt=unconfirmed kept=<first .dump.age> new=pruned` without claiming the pruned copy was saved.
+       - If starting directly with `BACKUP_ENCRYPT=1` and **no initial unencrypted copies**, runs up to `N` succeed with `decrypt=unconfirmed`, and any run that would evict an unconfirmed copy refuses early until the operator confirms decryption of a saved `.dump.age` copy (or raises `BACKUP_RETENTION_COUNT`).
+       - The status line and CLI output carry the reminder:
+         `decrypt=unconfirmed (шифрование включено, открытые копии ждут подтверждения восстановления)` (or `первая копия ждёт подтверждения восстановления` when no unencrypted copies exist).
+
+    3. **Decrypt and restore the first `.dump.age` copy from a protected local snapshot into a separate empty PostgreSQL 17 database (never production):**
+
+       ```sh
+       # Set BACKUP_FILE to the first clickmoji-<UTC>.dump.age name and PGHOST/PGPORT/PGDATABASE/PGUSER/PGPASSWORD/PGSSLMODE
+       # to the disposable test target, and enter AGE_IDENTITY without shell echo.
+       # Copy to a private 0700/0600 local snapshot outside the repository so the SHA-256 hash and
+       # age -d read the exact same ciphertext bytes:
+       unset RESTORED_SHA256
+       if RESTORED_SHA256=$(
+         SNAP_DIR=$(umask 077 && mktemp -d) || exit 1
+         trap 'rm -rf "$SNAP_DIR"' EXIT
+         cp "$BACKUP_DIR/$BACKUP_FILE" "$SNAP_DIR/$BACKUP_FILE" || exit 1
+         chmod 600 "$SNAP_DIR/$BACKUP_FILE" || exit 1
+         checksum=$(shasum -a 256 "$SNAP_DIR/$BACKUP_FILE") || exit 1
+         printf '%s\n' "$AGE_IDENTITY" | pg_run -i -v "$SNAP_DIR:/snap:ro" -e BACKUP_FILE "$IMAGE" sh -c '
+           set -eu
+           set -o pipefail
+           apk add --no-cache age >/dev/null
+           age -d -i /dev/stdin "/snap/$BACKUP_FILE" | pg_restore --no-owner --no-privileges --exit-on-error --dbname "$PGDATABASE"
+         ' >&2 || exit 1
+         printf '%s\n' "${checksum%% *}"
+       ); then
+         printf '%s\n' 'Restore succeeded. Inspect the restored tables before confirming.'
+       else
+         unset RESTORED_SHA256
+         printf '%s\n' 'Restore failed. Stop here and repeat the restore before confirming.' >&2
+         false
+       fi
+       ```
+
+       Confirm the restored tables and data in that separate test database before proceeding.
+
+    4. **Record explicit operator confirmation with the snapshot SHA-256 (connects to no DB, requires no private key, deletes nothing):**
+
+       ```sh
+       npm run db:backup:verified -- --confirm-encrypted-restore "$BACKUP_FILE" --sha256 "${RESTORED_SHA256:?Complete the restore successfully before confirming}"
+       ```
+
+       (or `node scripts/backup/cli.mjs --confirm-encrypted-restore "$BACKUP_FILE" --sha256 "$RESTORED_SHA256"` with `BACKUP_DIR` and `BACKUP_STATUS_FILE` set). Under the shared `.backup.lock` and Git guard, this verifies that the on-disk `.dump.age` and its `meta/<copy>.json` still match `"$RESTORED_SHA256"` and records the confirmation into `backups/meta/.encrypted-restore-confirmed.json` (`0600`) as well as the durable confirmed public-key policy in `backups/meta/.confirmed-recipient.json` (`0600`). Missing, incomplete, foreign, corrupted/substituted, digest-mismatched, or stale files (older than a newer `.dump`) are rejected without deleting anything.
+
+    5. **Run the next successful encrypted backup to complete the cutover:**
+
+       ```sh
+       npm run db:backup:verified
+       ```
+
+       Only **after** the new `.dump.age` copy is verified and atomically published does the script verify the confirmed ciphertext fingerprint, automatically purge unencrypted `.dump` copies, return to the unified retention limit `N` across encrypted copies, and clear the consumed transition state `.encrypted-restore-confirmed.json`. The durable recipient policy `.confirmed-recipient.json` remains in place across cutover, restarts, and temporary switches to `BACKUP_ENCRYPT=0`: any subsequent `BACKUP_ENCRYPT=1` run (or `--confirm-encrypted-restore`) with a different public key in `BACKUP_AGE_RECIPIENT_FILE` fails closed before dump, publication, or pruning (key rotation is outside Г0). On this cutover run that removes unencrypted copies, the **operator-confirmed** `.dump.age` copy is guaranteed to stay among the `N` retained copies (including `N = 1`, where the confirmed copy takes priority on that cutover run over the newly published unconfirmed ciphertext and the status/CLI report `kept=<confirmed .dump.age> new=pruned`; subsequent runs after unencrypted copies are gone apply standard `N`-copy retention). Excess unconfirmed encrypted copies are pruned before unencrypted copies (oldest-to-newest), and confirmation state is cleared only after unencrypted copies are removed, so no interruption point during cleanup destroys an available verified copy. If that run fails before full publication (or is rejected by the row-drop guard), existing unencrypted `.dump` copies and the confirmation state remain intact.
+
+  - **Freshness threshold:** Computed as **interval + 1 day** (no separate threshold setting): `4 days` in development (`3 days + 1 day`), `2 days` once switched to daily production (`1 day + 1 day`).
+
+- **Row-count drop guard (>20%) and single-run confirmation:**
+  - Each verified restore compares exact row counts per table against the **latest accepted copy of any age** (even if that previous accepted copy is older than 2 days).
+  - A drop greater than **20%** on any table rejects the new copy, preserves all existing copies intact, and writes the failure reason to `BACKUP_STATUS_FILE`.
+  - Legitimate bulk deletions (such as cleaning test data) can trigger this guard. Once you confirm the deletion is intentional, run **one explicit single-run confirmation** with the standard CLI flag:
+
+    ```sh
+    npm run db:backup:verified -- --allow-row-drop
+    ```
+
+    (or `node scripts/backup/cli.mjs --allow-row-drop` with the same environment variables). Do not put `--allow-row-drop` in scheduled jobs. It still runs the full dump, temporary PostgreSQL 17 restore, schema identity, and migration checks, publishes the copy with `verify=ok`, and updates the comparison baseline for subsequent runs.
+
+- **Choosing between retained copies and Neon PITR:**
+  - Always check the actual `createdAt` timestamps in `meta/<copy>.json` against the time of corruption or bad migration.
+  - Restore from a retained backup whenever a **usable copy taken before the error** still exists (roughly 3–6 days back at 2 copies / every 3 days; in a daily 2-copy cycle, corruption noticed after 2 days has no pre-error copy).
+  - When no usable pre-error copy exists, the only recovery option is **Neon point-in-time recovery (PITR)** within the Neon plan's restore window.
+  - **Confirmed Neon PITR restore window:** See [Включение копий на Mac mini](#включение-копий-на-mac-mini).
+
+- **Direct restore commands (into a fresh empty PostgreSQL 17 target, never production):**
+  - Unencrypted verified copy (`clickmoji-<UTC>.dump`):
+
+    ```sh
+    pg_run -v "$BACKUP_DIR:/backup:ro" -e BACKUP_FILE "$IMAGE" sh -c '
+      pg_restore --no-owner --no-privileges --exit-on-error --dbname "$PGDATABASE" "/backup/$BACKUP_FILE"
+    '
+    ```
+
+  - Encrypted copy (`clickmoji-<UTC>.dump.age`):
+
+    ```sh
+    printf '%s\n' "$AGE_IDENTITY" | pg_run -i -v "$BACKUP_DIR:/backup:ro" -e BACKUP_FILE "$IMAGE" sh -c '
+      set -eu
+      set -o pipefail
+      apk add --no-cache age >/dev/null
+      age -d -i /dev/stdin "/backup/$BACKUP_FILE" | pg_restore --no-owner --no-privileges --exit-on-error --dbname "$PGDATABASE"
+    '
+    ```
+
+### Включение копий на Mac mini
+
+Задание launchd запускает `scripts/backup/run-scheduled.sh` каждые 3 дня (интервал задаётся настройкой). Скрипт берёт адрес роли только на чтение из связки ключей macOS и запускает `npm run db:backup:verified` с `BACKUP_DIR` основной копии `~/Projects/clickmoji-shop/backups/`, без шифрования (`BACKUP_ENCRYPT=0`) и с двумя последними удачными копиями (`BACKUP_RETENTION_COUNT=2`). Адрес передаётся только в окружение этого одного процесса `npm`: не в argv, не в файл, не в журнал.
+
+- **Предварительно на Mac mini:** Docker Desktop запущен в пользовательской сессии; `node` и `npm` доступны в `PATH` при установке; основная копия лежит в `~/Projects/clickmoji-shop`, и её `backups/` игнорируется git. Ничего не устанавливается и не скачивается.
+
+#### Действия оператора (два, однократно)
+
+1. **Роль только на чтение в Neon, SQL-командами.** Выполняет владелец базы в SQL-редакторе Neon; повышенная роль Neon не нужна. Пароль создаётся в менеджере паролей и вставляется в редактор вместо `<пароль>`. Ни адрес, ни пароль в чат, задачи или файлы не передаются.
+
+   ```sql
+   CREATE ROLE clickmoji_backup_ro LOGIN PASSWORD '<пароль>' NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS;
+   GRANT CONNECT ON DATABASE <имя базы> TO clickmoji_backup_ro;
+   GRANT USAGE ON SCHEMA public TO clickmoji_backup_ro;
+   GRANT SELECT ON ALL TABLES IN SCHEMA public TO clickmoji_backup_ro;
+   GRANT SELECT ON ALL SEQUENCES IN SCHEMA public TO clickmoji_backup_ro;
+   -- Таблицы, которые появятся позже миграциями, получают право на чтение от роли, создающей их.
+   ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO clickmoji_backup_ro;
+   ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON SEQUENCES TO clickmoji_backup_ro;
+   ```
+
+   Вместо явных `GRANT SELECT` можно выдать `GRANT pg_read_all_data TO clickmoji_backup_ro;`, если владелец имеет на это право. Явные выдачи предпочтительнее: они видны в каталоге.
+
+   **Проверка отсутствия записи** (от владельца, только системный каталог; данные не читаются и не меняются, записью пробовать нельзя даже с откатом):
+
+   ```sql
+   -- Ноль строк: нет права записи ни на таблицу, ни на последовательность, в том числе через PUBLIC и членство в ролях.
+   SELECT n.nspname, c.relname, c.relkind
+   FROM pg_class c
+   JOIN pg_namespace n ON n.oid = c.relnamespace
+   WHERE n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
+     AND (
+       (c.relkind IN ('r', 'p', 'v', 'm', 'f') AND (
+         has_table_privilege('clickmoji_backup_ro', c.oid, 'INSERT')
+         OR has_table_privilege('clickmoji_backup_ro', c.oid, 'UPDATE')
+         OR has_table_privilege('clickmoji_backup_ro', c.oid, 'DELETE')
+         OR has_table_privilege('clickmoji_backup_ro', c.oid, 'TRUNCATE')
+         OR has_table_privilege('clickmoji_backup_ro', c.oid, 'REFERENCES')
+         OR has_table_privilege('clickmoji_backup_ro', c.oid, 'TRIGGER')))
+       OR (c.relkind = 'S' AND has_sequence_privilege('clickmoji_backup_ro', c.oid, 'UPDATE'))
+     );
+   -- Ноль строк: нет права создавать объекты в схемах базы.
+   SELECT nspname FROM pg_namespace WHERE has_schema_privilege('clickmoji_backup_ro', oid, 'CREATE');
+   -- Ноль строк: роль без признаков администратора.
+   SELECT rolname FROM pg_roles
+   WHERE rolname = 'clickmoji_backup_ro'
+     AND (rolsuper OR rolcreaterole OR rolcreatedb OR rolbypassrls OR rolreplication);
+   ```
+
+   Каждый запрос должен вернуть ноль строк. Если хотя бы один вернул строку, роль не готова: отозвать лишнее (`REVOKE`) и повторить проверку.
+
+2. **Адрес в связку ключей Mac mini.** Команда запрашивает значение интерактивно (`-w` без значения, см. `man security`). В терминале Mac mini вставьте полный прямой адрес роли вида `postgres://clickmoji_backup_ro:…@…/…?sslmode=require` (прямой, не через пулер) и нажмите Enter:
+
+   ```sh
+   security add-generic-password -s clickmoji-backup-readonly -a clickmoji -w
+   ```
+
+   Если элемент уже есть, `security` сообщит об этом. Тогда сначала удалите его: `security delete-generic-password -s clickmoji-backup-readonly -a clickmoji`, и повторите команду. Адрес не набирается в командной строке, поэтому не попадает в историю shell.
+
+   Команда `add-generic-password` пишет в связку по умолчанию, а сценарий читает только из связки входа `~/Library/Keychains/login.keychain-db` (явный путь, без поиска по всем связкам). Поэтому до добавления проверьте, что связка по умолчанию — связка входа: `security default-keychain` должна показать `…/Library/Keychains/login.keychain-db`. Если это не так, сделайте связку входа связкой по умолчанию в Keychain Access (правый клик по связке «login» → «Сделать связкой по умолчанию») и только после этого выполните добавление. Не передавайте путь к связке как аргумент `-w`: этот флаг принимает значение пароля.
+
+   Проверка после добавления (значение не выводится, нужен только код возврата):
+
+   ```sh
+   security find-generic-password -s clickmoji-backup-readonly -a clickmoji "$HOME/Library/Keychains/login.keychain-db" >/dev/null && echo найдено
+   ```
+
+   Выведено «найдено» — элемент на месте. Сценарий не ищет запасной вариант: если найден только элемент в другой связке или с другим счётом, запуск завершится со статусом `сбой: нет роли только на чтение в связке ключей`.
+
+#### Установка и удаление (куратор)
+
+- **Первая копия вручную**, до установки задания, из основной копии: `bash scripts/backup/run-scheduled.sh`. Если macOS запросит доступ, разрешите его для `/usr/bin/security` к этой записи на постоянной основе, чтобы плановый запуск мог прочитать её без диалога. Итог записан в статус-файл (см. ниже).
+- **Установка:** `bash scripts/backup/launchd/install.sh` из `~/Projects/clickmoji-shop`. Интервал по умолчанию 259200 секунд (3 дня); другой задаётся `CLICKMOJI_BACKUP_INTERVAL_SECONDS` (целое число, не меньше 60). Повторный запуск заменяет агент, не создавая второго. Агент `com.clickmoji.db-backup` не запускается сразу (`RunAtLoad` выключен), первый запуск по интервалу.
+- **Удаление:** `bash scripts/backup/launchd/uninstall.sh`. Удаляет агент и его plist; статус-файл, журнал и копии не трогает. Повторный запуск безопасен.
+- **Статус-файл:** `~/Library/Logs/clickmoji-backup/status.tsv`, по одной строке на запуск, три поля через табуляцию: `<время UTC с миллисекундами>\t<ok|failed>\t<текст>`. Удачный запуск: `…\tok\tsize=<байты> verify=ok file=clickmoji-<UTC>.dump prune=<результат>`. Неудачный: `…\tfailed\tсбой: <причина>`; при отсутствии роли в связке: `…\tfailed\tсбой: нет роли только на чтение в связке ключей`. Для контроля давности пульт читает дату последней строки с `ok`. При интервале 3 дня порог составляет 4 суток. Адреса, пароли и данные в файле не попадают.
+- **Журнал launchd:** `~/Library/Logs/clickmoji-backup/launchd.log` (вывод `npm`; адрес базы в нём не появляется).
+- **Копии:** `~/Projects/clickmoji-shop/backups/`, каталог и файлы доступны только владельцу. Не выполнять `git clean -x` в основной копии.
+- **Глубина восстановления Neon (PITR):** Neon Free: окно восстановления на момент времени до 6 часов, не больше 1 ГБ изменений на проект. Источник: [тарифы Neon](https://neon.com/docs/introduction/plans) и [окно восстановления](https://neon.com/docs/postgres/backup-restore/history-window), проверено 2026-11-25.
+- Если порчу заметили позже чем через 6 часов, восстановиться можно только из сохранившейся копии, сделанной до порчи (до 3–6 суток назад при штатном расписании).
 
 ### Production recovery
 
@@ -692,9 +900,18 @@ SQL
 #### Restore the encrypted copy
 
 Set the placeholders in the private terminal. `BACKUP_DIR` must be an absolute path to the directory that holds the
-copy and its `meta/` directory. The directory is mounted read-only. `TARGET_URL` must be the new empty database from
-the previous step, never production. The libpq variables come from it through `load_libpq_env` and reach the
-container by name only.
+copy and its `meta/` directory (for example, `~/Projects/clickmoji-shop/backups` in the main checkout). The directory
+is mounted read-only. `TARGET_URL` must be the new empty database from the previous step, never production. The libpq
+variables come from it through `load_libpq_env` and reach the container by name only.
+
+For an unencrypted verified copy (`clickmoji-<UTC timestamp>.dump`, used when `BACKUP_ENCRYPT` is off), replace the
+`age -d ... | pg_restore ...` pipeline with a direct `pg_restore` against `"/backup/$BACKUP_FILE"`:
+
+```sh
+pg_run -v "$BACKUP_DIR:/backup:ro" -e BACKUP_FILE "$IMAGE" sh -c '
+  pg_restore --no-owner --no-privileges --exit-on-error --dbname "$PGDATABASE" "/backup/$BACKUP_FILE"
+'
+```
 
 ```sh
 BACKUP_DIR='<absolute-directory-containing-the-encrypted-copy>'
@@ -729,8 +946,7 @@ Each encrypted copy has a record `meta/<copy>.json` written next to it. Its fiel
 
 - `name`: the copy's file name.
 - `createdAt`: the UTC start of the backup run, written before the dump was taken. This is the copy's recovery point.
-- `verify`: `ok`, or `suspicious` when a table fell by more than 20% against the previous copy. `suspicious` is an
-  operator decision, not a pass.
+- `verify`: `ok` for an accepted copy (including one accepted via `--allow-row-drop`). Copies with a >20% table row drop without `--allow-row-drop` are rejected before publishing; legacy records may carry `suspicious`, which is an operator decision, not a pass.
 - `migration`: the latest applied migration of the copied database.
 - `counts`: exact `count(*)` per table, keyed `schema.table`.
 - `flagged`: tables flagged as suspicious.
@@ -1774,6 +1990,26 @@ Execute using `tsx`:
 - Files: `npx tsx scripts/db-files.ts --help`
 - Transfer: `npx tsx scripts/db-transfer.ts --help`
   - `migrate-data` requires `DB_TRANSFER_SOURCE_URL` (source database) and `DB_TRANSFER_TARGET_URL` (target database); neither has a default value.
+- Primary catalog image audit: `vercel env run -e production -- npm run audit:catalog-images` (read-only DB check + actual HTTP `GET` image verification within bounded time/bytes, rejecting non-200, `HEAD`/`GET` mismatches, and non-image/HTML payloads; prints only item names, HTTP/status codes, and aggregate counts)
+- Primary catalog image repair: `vercel env run -e production -- npm run db:repair-catalog-images -- --plan <plan.json>` (dry-run by default; validates replacement URLs against the storefront `next.config.ts` `remotePatterns` contract before HTTP/DB, requires proven `404`/`410` absence on old URLs and `GET` 200 image bytes on new URLs, and treats `429`/`503`/ambiguous states as `UNKNOWN`; add `--apply` for atomic `Serializable` update)
+
+### Primary catalog image audit and repair (AGE-1667)
+
+1. **Pre-check & encrypted backup (before any write):**
+   - Run the read-only HTTP audit from a clean checkout without `.env`:
+     `vercel env run -e production -- npm run audit:catalog-images`
+   - Record before-counts (`checked`, `ok_200`, `failed`, `emoji_only`) and the failing item names.
+   - Take a verified encrypted production backup (`npm run db:backup:verified` / direct unpooled URL per _Database_ and _Production recovery_ above). Never store production dumps in Git or GitHub.
+2. **Dry-run & atomic apply (only with proven `old -> new` pairs):**
+   - Prepare a local `--plan <plan.json>` outside the repository containing only proven `{ target, category, name, expectedImageUrl, expectedIsCustom, newImageUrl }` entries (never commit production URLs or plans to Git). Every `newImageUrl` must match the storefront `next.config.ts` `images.remotePatterns` contract (`https://utfs.io/f/*` or `https://3kv5vvupx6.ufs.sh/f/*`).
+   - Run dry-run first (validates storefront URL contract, checks live CDN `HEAD`+`GET` status/image bytes, and verifies read-only DB preconditions):
+     `vercel env run -e production -- npm run db:repair-catalog-images -- --plan /path/to/repair-plan.json`
+   - Stop on any conflict, disallowed replacement URL, non-image/mismatched `GET` on new URL, still-200 old URL, or `UNKNOWN` old-URL status (`429`/`503`/timeout/mismatch).
+   - Apply inside one `Serializable` transaction (conditional `updateMany` on `expectedImageUrl` and `expectedIsCustom`; aborts and rolls back all changes if any concurrent edit occurs):
+     `vercel env run -e production -- npm run db:repair-catalog-images -- --plan /path/to/repair-plan.json --apply`
+3. **Post-check & safe rollback:**
+   - Re-run `vercel env run -e production -- npm run audit:catalog-images` and confirm `failed=0` (`exit 0`).
+   - **Rollback:** Do **not** re-run `repair-catalog-images` with reversed URLs: the script rejects both `newImageUrl` when the old URL returns `404`/`410` and `expectedImageUrl` when the repaired URL now returns `200`. Rollback commands do not rely on HTTP CDN probes: restore from the pre-repair backup using _Production recovery_ (new target, verification, write barrier, cutover) or execute a coordinator-approved conditional SQL `UPDATE` matching `newImageUrl` back to the saved pre-repair values in a single transaction, then re-verify counts with `audit:catalog-images`.
 
 ## Deploy
 

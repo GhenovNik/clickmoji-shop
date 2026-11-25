@@ -1,6 +1,5 @@
 import { expect, type Locator, type Page, type TestInfo } from '@playwright/test';
 import { encode } from 'next-auth/jwt';
-import { SESSION_ISSUED_AT_CLAIM } from '../../../src/lib/auth-session';
 import { E2E_AUTH_COOKIE, mockAuthenticatedShopping } from './auth';
 import {
   MODAL_FOOTER_ADMIN,
@@ -17,7 +16,7 @@ export async function mockModalAdmin(page: Page) {
   await mockAuthenticatedShopping(page);
   // The existing proxy intentionally treats the bypass cookie as USER, never ADMIN.
   // A NextAuth token signed with the local-only secret, bound to the real fixture admin
-  // row and stamped with authIssuedAt, exercises the real /admin routes and the DB-backed
+  // row and stamped with sessionIssuedAt, exercises the real /admin routes and the DB-backed
   // session checks. All browser API calls remain intercepted.
   await page.context().clearCookies({ name: E2E_AUTH_COOKIE });
   await page.context().addCookies([
@@ -31,7 +30,7 @@ export async function mockModalAdmin(page: Page) {
           email: MODAL_FOOTER_ADMIN.email,
           name: MODAL_FOOTER_ADMIN.name,
           role: 'ADMIN',
-          [SESSION_ISSUED_AT_CLAIM]: Date.now(),
+          sessionIssuedAt: Math.floor(Date.now() / 1000),
         },
         maxAge: 3600,
       }),

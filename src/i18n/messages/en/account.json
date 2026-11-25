@@ -13,7 +13,8 @@
     "createdAtLabel": "Member since",
     "signInMethodLabel": "Sign-in method",
     "signInMethodPassword": "Email and password",
-    "signInMethodGoogle": "Google"
+    "signInMethodGoogle": "Google",
+    "signInMethodGuest": "Guest"
   },
   "password": {
     "title": "Change password",

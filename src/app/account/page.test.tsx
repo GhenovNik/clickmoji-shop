@@ -56,7 +56,7 @@ import TermsPage from '@/app/terms/page';
 import PrivacyPage from '@/app/privacy/page';
 import LoginPage from '@/app/login/page';
 
-function mockProfileFetch(hasPassword = true) {
+function mockProfileFetch(hasPassword = true, isGuest = false) {
   return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = typeof input === 'string' ? input : input.toString();
     if (url === '/api/account' && (!init?.method || init.method === 'GET')) {
@@ -68,6 +68,7 @@ function mockProfileFetch(hasPassword = true) {
           role: 'USER',
           createdAt: '2026-11-20T10:00:00.000Z',
           hasPassword,
+          isGuest,
         },
       });
     }
@@ -130,6 +131,44 @@ describe('AccountPage', () => {
       expect(document.getElementById('currentPassword')).toBeNull();
       expect(document.getElementById('deleteConfirmation')).toBeTruthy();
       expect(screen.getByPlaceholderText(messages[locale].account.delete.phraseWord)).toBeTruthy();
+    }
+  );
+
+  it.each(['ru', 'en'] as const)(
+    'labels a server guest as Guest and hides password change and deletion in %s',
+    async (locale) => {
+      vi.stubGlobal('fetch', mockProfileFetch(false, true));
+      renderWithIntl(<AccountPage />, { locale });
+
+      expect(
+        await screen.findByText(messages[locale].account.profile.signInMethodGuest)
+      ).toBeTruthy();
+      expect(screen.queryByText(messages[locale].account.profile.signInMethodGoogle)).toBeNull();
+      expect(screen.queryByText(messages[locale].account.password.title)).toBeNull();
+      expect(screen.queryByText(messages[locale].account.password.googleNoticeBody)).toBeNull();
+      expect(screen.queryByText(messages[locale].account.delete.title)).toBeNull();
+      expect(screen.queryByText(messages[locale].account.delete.description)).toBeNull();
+      expect(document.getElementById('currentPassword')).toBeNull();
+      expect(document.getElementById('deleteConfirmation')).toBeNull();
+      expect(document.getElementById('deletePassword')).toBeNull();
+      // The profile itself stays visible to the guest.
+      expect(screen.getByText('user@example.com')).toBeTruthy();
+    }
+  );
+
+  it.each(['ru', 'en'] as const)(
+    'keeps a passwordless Google user on Google, with the notice and phrase deletion, in %s',
+    async (locale) => {
+      vi.stubGlobal('fetch', mockProfileFetch(false, false));
+      renderWithIntl(<AccountPage />, { locale });
+
+      expect(
+        await screen.findByText(messages[locale].account.profile.signInMethodGoogle)
+      ).toBeTruthy();
+      expect(screen.queryByText(messages[locale].account.profile.signInMethodGuest)).toBeNull();
+      expect(screen.getByText(messages[locale].account.password.googleNoticeBody)).toBeTruthy();
+      expect(screen.getByText(messages[locale].account.delete.title)).toBeTruthy();
+      expect(document.getElementById('deleteConfirmation')).toBeTruthy();
     }
   );
 

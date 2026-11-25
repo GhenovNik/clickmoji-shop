@@ -33,6 +33,7 @@ export async function getAccountProfile(userId: string) {
       createdAt: true,
       updatedAt: true,
       password: true,
+      isGuest: true,
     },
   });
 
@@ -385,6 +386,7 @@ export type DeleteAccountResult =
   | { status: 'password_required' }
   | { status: 'incorrect_password' }
   | { status: 'confirmation_required' }
+  | { status: 'guest_account' }
   | { status: 'concurrent_change' };
 
 export function isValidDeleteConfirmationPhrase(confirmation: string | undefined): boolean {
@@ -467,11 +469,17 @@ export async function deleteAccount(params: {
 
   const user = await prisma.user.findUnique({
     where: { id: userId },
-    select: { id: true, email: true, password: true },
+    select: { id: true, email: true, password: true, isGuest: true },
   });
 
   if (!user) {
     return { status: 'not_found' };
+  }
+
+  // A guest has no password and no confirmation step in the UI; its row is removed only by the
+  // guest cleanup job, never through this endpoint.
+  if (user.isGuest) {
+    return { status: 'guest_account' };
   }
 
   if (user.password) {

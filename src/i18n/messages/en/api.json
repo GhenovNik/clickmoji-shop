@@ -7,6 +7,7 @@
     "unavailable": "AI is temporarily unavailable. Please try again later.",
     "monthlyUnavailable": "AI features are temporarily unavailable. Please try again later.",
     "disabled": "AI features are turned off for this role.",
+    "guestDisabled": "AI features require an account. Sign up or log in to use AI.",
     "exhausted": "The daily AI request limit is used up. Please try again tomorrow."
   },
   "auth": {
@@ -38,7 +39,8 @@
     "passwordRequiredToDelete": "Enter your current password to confirm deletion",
     "deleteConfirmationRequired": "Type \"{word}\" to confirm account deletion",
     "deleted": "Account deleted",
-    "deleteFailed": "Failed to delete account"
+    "deleteFailed": "Failed to delete account",
+    "guestDeleteForbidden": "A guest account cannot be deleted from this page"
   },
   "lists": {
     "defaultNames": {
@@ -177,6 +179,8 @@
     "categoryFieldsRequired": "Missing required fields: name, nameEn, order",
     "categoryImageRequired": "Either emoji or custom image (imageUrl) is required",
     "createCategoryFailed": "Failed to create category",
-    "fetchFunnelFailed": "Failed to load funnel analytics"
+    "fetchFunnelFailed": "Failed to load funnel analytics",
+    "guestSessionFailed": "Could not start a guest session. Please try again.",
+    "guestActivityFailed": "Could not save guest activity. Please try again."
   }
 }

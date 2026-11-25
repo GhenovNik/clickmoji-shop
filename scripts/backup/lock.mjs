@@ -18,7 +18,7 @@
 // Child processes do not receive the descriptor: libuv starts them with only their stdio, so a
 // docker client cannot keep the lock alive after the writer has gone (checked by a test).
 import { spawn } from 'node:child_process';
-import { closeSync, fstatSync, lstatSync, mkdirSync } from 'node:fs';
+import { chmodSync, closeSync, fstatSync, lstatSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { LOCK_NAME } from './constants.mjs';
 
@@ -64,6 +64,7 @@ export function pidAlive(pid) {
 export function launchLocked(backupDir, command, { env = process.env, stdio = 'inherit' } = {}) {
   // The lock file lives in the backup directory, which is created private, as the run would.
   mkdirSync(backupDir, { recursive: true, mode: 0o700 });
+  chmodSync(backupDir, 0o700);
   const childEnv = { ...env };
   delete childEnv[LOCK_FD_ENV];
   return spawn(PERL, ['-e', LAUNCHER, path.join(backupDir, LOCK_NAME), ...command], {

@@ -10,6 +10,9 @@ vi.mock('@/lib/api-messages', () => ({ apiText: async (_locale: unknown, key: st
 
 import { requireUser } from './auth-guards';
 
+const ACCOUNT_CREATED_AT = new Date(Date.UTC(2026, 10, 1));
+const SESSION_ISSUED_AT_SEC = Math.floor(Date.UTC(2026, 10, 24, 12) / 1000);
+
 describe('requireUser', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -17,9 +20,14 @@ describe('requireUser', () => {
 
   it('returns the session with the DB role for an existing account', async () => {
     authMock.mockResolvedValue({
+      sessionIssuedAt: SESSION_ISSUED_AT_SEC,
       user: { id: 'user_current', email: 'ada@example.com', role: 'USER' },
     });
-    prismaUser.findUnique.mockResolvedValue({ id: 'user_current', role: 'ADMIN' });
+    prismaUser.findUnique.mockResolvedValue({
+      id: 'user_current',
+      role: 'ADMIN',
+      createdAt: ACCOUNT_CREATED_AT,
+    });
 
     const result = await requireUser();
 
@@ -29,6 +37,7 @@ describe('requireUser', () => {
   it('does not fall back to the email when the session id no longer exists', async () => {
     // Deleted account; a re-registered account with the same email exists under a new id.
     authMock.mockResolvedValue({
+      sessionIssuedAt: SESSION_ISSUED_AT_SEC,
       user: { id: 'user_old', email: 'ada@example.com', role: 'USER' },
     });
     prismaUser.findUnique.mockImplementation(

@@ -2,6 +2,7 @@ import crypto from 'crypto';
 import type { Prisma } from '@prisma/client';
 import { prisma } from './prisma';
 import { normalizeEmail } from './auth-security';
+import { isGuestEmail } from './guest';
 
 type TokenDbClient = Pick<
   Prisma.TransactionClient,
@@ -38,6 +39,9 @@ export async function createEmailVerificationToken(email: string) {
 
 export async function consumeEmailVerificationToken(email: string, token: string) {
   const normalizedEmail = normalizeEmail(email);
+  if (isGuestEmail(normalizedEmail)) {
+    return { success: false, reason: 'invalid' } as const;
+  }
   const hashedToken = hashToken(token);
   const record = await prisma.emailVerificationToken.findFirst({
     where: {
@@ -55,12 +59,16 @@ export async function consumeEmailVerificationToken(email: string, token: string
     return { success: false, reason: 'expired' } as const;
   }
 
-  await prisma.user.update({
-    where: { email: normalizedEmail },
+  const updated = await prisma.user.updateMany({
+    where: { email: normalizedEmail, isGuest: false },
     data: { emailVerified: new Date() },
   });
 
   await prisma.emailVerificationToken.delete({ where: { id: record.id } });
+
+  if (updated.count === 0) {
+    return { success: false, reason: 'invalid' } as const;
+  }
 
   return { success: true } as const;
 }

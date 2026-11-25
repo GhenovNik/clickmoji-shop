@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
 import { getToken } from 'next-auth/jwt';
-import { readSessionClaims } from '@/lib/auth-session';
+import { isSessionTokenFreshForUser } from '@/lib/guest';
 import { prisma } from '@/lib/prisma';
 import {
   checkRateLimit,
@@ -95,17 +95,26 @@ export default async function proxy(request: NextRequest) {
     secret: process.env.AUTH_SECRET || process.env.NEXTAUTH_SECRET,
   });
 
-  const claims = readSessionClaims(token);
-  const account = claims
-    ? await prisma.user.findUnique({
-        where: { id: claims.id },
-        select: { createdAt: true, role: true },
-      })
-    : null;
+  // The account row is the canonical source: the id bound into the token must still name a live
+  // account, and the token's immutable issuance claim must not predate that row. A deleted or
+  // recreated account, or a token without a complete claim set, is treated as signed out.
+  const hasCompleteIdentity =
+    typeof token?.id === 'string' && token.id.length > 0 && token.sub === token.id;
+  const account =
+    token && hasCompleteIdentity
+      ? await prisma.user.findUnique({
+          where: { id: token.id as string },
+          select: { id: true, createdAt: true, role: true, isGuest: true },
+        })
+      : null;
   const activeAccount =
-    account && claims && account.createdAt.getTime() <= claims.authIssuedAt ? account : null;
+    account && isSessionTokenFreshForUser(token?.sessionIssuedAt, account.createdAt)
+      ? account
+      : null;
   const hasE2EAuth = hasPlaywrightAuthBypass(request);
   const isLoggedIn = Boolean(activeAccount) || hasE2EAuth;
+  // Guest status comes from the DB label of the active account, never from the token alone.
+  const isGuest = !hasE2EAuth && Boolean(activeAccount?.isGuest);
   const userRole = hasE2EAuth ? 'USER' : activeAccount?.role;
   const isPublicRoute = publicRoutes.includes(pathname) || isPublicCatalogRoute(pathname);
 
@@ -115,7 +124,7 @@ export default async function proxy(request: NextRequest) {
       return NextResponse.redirect(loginUrl);
     }
 
-    if (userRole !== 'ADMIN') {
+    if (isGuest || userRole !== 'ADMIN') {
       return NextResponse.redirect(new URL('/', request.url));
     }
     return NextResponse.next();
@@ -125,12 +134,13 @@ export default async function proxy(request: NextRequest) {
     return NextResponse.redirect(new URL('/login', request.url));
   }
 
-  if (isLoggedIn && (pathname === '/login' || pathname === '/register')) {
+  // Guests can still visit /login and /register to sign into or create a regular account.
+  if (isLoggedIn && !isGuest && (pathname === '/login' || pathname === '/register')) {
     return NextResponse.redirect(new URL('/', request.url));
   }
 
   if (isFunnelEntryRoute(pathname) && isDocumentGetRequest(request)) {
-    return recordEntryVisit(request, activeAccount ? claims!.id : null);
+    return recordEntryVisit(request, activeAccount ? (token?.id as string) : null);
   }
 
   return NextResponse.next();

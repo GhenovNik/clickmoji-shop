@@ -8,6 +8,7 @@
   "account": "Account",
   "login": "Log in",
   "register": "Sign up",
+  "guest": "Guest",
   "logout": "Log out",
   "admin": "Admin",
   "switchLanguage": "Change language"

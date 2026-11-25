@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import bcrypt from 'bcryptjs';
 
 type UserRow = {
+  isGuest?: boolean;
   id: string;
   email: string;
   name: string | null;
@@ -2145,5 +2146,64 @@ describe('DELETE /api/account: another user referencing a private product keeps 
     );
     expect(db.variants.map((v) => v.id)).not.toContain('var-private-free');
     expect(db.items.find((i) => i.id === 'item-b-foreign')?.productId).toBe('prod-private-a');
+  });
+});
+
+describe('guest account boundary: the DB label decides', () => {
+  const GUEST_EMAIL = 'guest_0f1e2d3c@guest.clickmoji.invalid';
+
+  beforeEach(() => {
+    const now = new Date();
+    db.users.push({
+      id: 'user-guest',
+      email: GUEST_EMAIL,
+      name: null,
+      password: null,
+      image: null,
+      role: 'USER',
+      emailVerified: null,
+      createdProductsCount: 0,
+      createdAt: now,
+      updatedAt: now,
+      isGuest: true,
+    });
+    doubles.requireUser.mockResolvedValue({
+      session: { user: { id: 'user-guest', email: GUEST_EMAIL, role: 'USER', isGuest: true } },
+    });
+  });
+
+  it('refuses DELETE for a guest even with the confirmation phrase, and keeps the row', async () => {
+    const res = await accountRoute.DELETE(
+      jsonRequest('http://localhost/api/account', 'DELETE', { confirmation: 'DELETE' }, 'en')
+    );
+
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({
+      error: 'A guest account cannot be deleted from this page',
+    });
+    expect(db.users.map((u) => u.id)).toContain('user-guest');
+  });
+
+  it('reports the guest label and no local password on GET /api/account', async () => {
+    const res = await accountRoute.GET(jsonRequest('http://localhost/api/account', 'GET'));
+
+    expect((await res.json()).user).toMatchObject({
+      id: 'user-guest',
+      isGuest: true,
+      hasPassword: false,
+    });
+  });
+
+  it('refuses a password change for a guest, which has no local password', async () => {
+    const res = await passwordRoute.POST(
+      jsonRequest(
+        'http://localhost/api/account/password',
+        'POST',
+        { currentPassword: 'Password123', newPassword: 'NewPassword123' },
+        'en'
+      )
+    );
+
+    expect(res.status).toBe(400);
   });
 });

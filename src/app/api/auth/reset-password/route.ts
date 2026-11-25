@@ -3,6 +3,7 @@ import bcrypt from 'bcryptjs';
 import { prisma } from '@/lib/prisma';
 import { consumePasswordResetToken } from '@/lib/auth-tokens';
 import { getPasswordValidationError } from '@/lib/validation/password';
+import { isGuestEmail } from '@/lib/guest';
 import {
   checkRateLimit,
   getClientIp,
@@ -34,7 +35,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: t('api.auth.resetFieldsRequired') }, { status: 400 });
     }
 
-    if (!isValidEmail(normalizedEmail)) {
+    if (!isValidEmail(normalizedEmail) || isGuestEmail(normalizedEmail)) {
       return NextResponse.json({ error: t('api.auth.resetLinkInvalid') }, { status: 400 });
     }
 
@@ -47,11 +48,14 @@ export async function POST(request: Request) {
     const outcome = await prisma.$transaction(async (tx) => {
       // Lock the user row before consuming reset tokens so reset, password change, and account
       // deletion always lock `users` before `password_reset_tokens` and cannot deadlock.
-      const lockedUsers = await tx.$queryRaw<Array<{ id: string; emailVerified: Date | null }>>`
-        SELECT id, "emailVerified" FROM users WHERE email = ${normalizedEmail} FOR UPDATE
+      const lockedUsers = await tx.$queryRaw<
+        Array<{ id: string; emailVerified: Date | null; isGuest: boolean }>
+      >`
+        SELECT id, "emailVerified", "isGuest" FROM users WHERE email = ${normalizedEmail} FOR UPDATE
       `;
       const user = lockedUsers[0];
-      if (!user) {
+      // A guest row has no reset path: the DB label decides, not the placeholder address alone.
+      if (!user || user.isGuest) {
         return { ok: false as const, reason: t('api.auth.resetLinkInvalid') };
       }
 

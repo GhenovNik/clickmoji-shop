@@ -19,6 +19,7 @@ type AccountProfile = {
   role: 'USER' | 'ADMIN';
   createdAt: string;
   hasPassword: boolean;
+  isGuest: boolean;
 };
 
 export default function AccountPage() {
@@ -276,9 +277,11 @@ export default function AccountPage() {
             <div className="rounded-2xl bg-muted/40 p-3">
               <dt className="text-xs text-muted-foreground">{t('profile.signInMethodLabel')}</dt>
               <dd className="font-medium text-foreground mt-0.5">
-                {profile.hasPassword
-                  ? t('profile.signInMethodPassword')
-                  : t('profile.signInMethodGoogle')}
+                {profile.isGuest
+                  ? t('profile.signInMethodGuest')
+                  : profile.hasPassword
+                    ? t('profile.signInMethodPassword')
+                    : t('profile.signInMethodGoogle')}
               </dd>
             </div>
             <div className="rounded-2xl bg-muted/40 p-3">
@@ -288,232 +291,238 @@ export default function AccountPage() {
           </dl>
         </section>
 
-        {/* Password Change */}
-        <section className="bg-card border border-border rounded-3xl shadow-soft p-5 sm:p-6 space-y-4">
-          <div className="flex items-center gap-2">
-            <KeyRound className="w-5 h-5 text-primary shrink-0" aria-hidden="true" />
-            <h2 className="text-lg sm:text-xl font-bold text-foreground">{t('password.title')}</h2>
-          </div>
-
-          {profile.hasPassword ? (
-            <>
-              <p className="text-sm text-muted-foreground">{t('password.description')}</p>
-              <form onSubmit={handlePasswordSubmit} className="space-y-4">
-                <div>
-                  <label
-                    htmlFor="currentPassword"
-                    className="block text-sm font-medium text-foreground mb-1"
-                  >
-                    {t('password.currentLabel')}
-                  </label>
-                  <div className="relative">
-                    <input
-                      id="currentPassword"
-                      name="currentPassword"
-                      type={showCurrentPassword ? 'text' : 'password'}
-                      autoComplete="current-password"
-                      value={currentPassword}
-                      onChange={(e) => setCurrentPassword(e.target.value)}
-                      required
-                      placeholder={t('password.currentPlaceholder')}
-                      className="w-full px-4 py-2.5 pr-11 rounded-xl border border-gray-300 bg-white text-gray-900 focus:ring-2 focus:ring-primary focus:border-transparent"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setShowCurrentPassword((prev) => !prev)}
-                      className="absolute inset-y-0 right-0 px-3 text-gray-500 hover:text-gray-700"
-                      aria-label={
-                        showCurrentPassword
-                          ? tAuth('common.hidePassword')
-                          : tAuth('common.showPassword')
-                      }
-                    >
-                      {showCurrentPassword ? <EyeOff size={18} /> : <Eye size={18} />}
-                    </button>
-                  </div>
-                </div>
-
-                <div>
-                  <label
-                    htmlFor="newPassword"
-                    className="block text-sm font-medium text-foreground mb-1"
-                  >
-                    {t('password.newLabel')}
-                  </label>
-                  <div className="relative">
-                    <input
-                      id="newPassword"
-                      name="newPassword"
-                      type={showNewPassword ? 'text' : 'password'}
-                      autoComplete="new-password"
-                      value={newPassword}
-                      onChange={(e) => setNewPassword(e.target.value)}
-                      required
-                      placeholder={tAuth('common.passwordMinPlaceholder', {
-                        min: PASSWORD_MIN_LENGTH,
-                      })}
-                      className="w-full px-4 py-2.5 pr-11 rounded-xl border border-gray-300 bg-white text-gray-900 focus:ring-2 focus:ring-primary focus:border-transparent"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setShowNewPassword((prev) => !prev)}
-                      className="absolute inset-y-0 right-0 px-3 text-gray-500 hover:text-gray-700"
-                      aria-label={
-                        showNewPassword
-                          ? tAuth('common.hidePassword')
-                          : tAuth('common.showPassword')
-                      }
-                    >
-                      {showNewPassword ? <EyeOff size={18} /> : <Eye size={18} />}
-                    </button>
-                  </div>
-                </div>
-
-                <div>
-                  <label
-                    htmlFor="confirmNewPassword"
-                    className="block text-sm font-medium text-foreground mb-1"
-                  >
-                    {t('password.confirmLabel')}
-                  </label>
-                  <div className="relative">
-                    <input
-                      id="confirmNewPassword"
-                      name="confirmNewPassword"
-                      type={showConfirmPassword ? 'text' : 'password'}
-                      autoComplete="new-password"
-                      value={confirmPassword}
-                      onChange={(e) => setConfirmPassword(e.target.value)}
-                      required
-                      placeholder={tAuth('common.confirmPasswordPlaceholder')}
-                      className="w-full px-4 py-2.5 pr-11 rounded-xl border border-gray-300 bg-white text-gray-900 focus:ring-2 focus:ring-primary focus:border-transparent"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setShowConfirmPassword((prev) => !prev)}
-                      className="absolute inset-y-0 right-0 px-3 text-gray-500 hover:text-gray-700"
-                      aria-label={
-                        showConfirmPassword
-                          ? tAuth('common.hidePassword')
-                          : tAuth('common.showPassword')
-                      }
-                    >
-                      {showConfirmPassword ? <EyeOff size={18} /> : <Eye size={18} />}
-                    </button>
-                  </div>
-                </div>
-
-                {passwordError && (
-                  <div className="bg-red-50 text-red-700 px-4 py-3 rounded-xl text-sm">
-                    {passwordError}
-                  </div>
-                )}
-
-                {passwordSuccess && (
-                  <div className="bg-green-50 text-green-700 px-4 py-3 rounded-xl text-sm">
-                    {passwordSuccess}
-                  </div>
-                )}
-
-                <button
-                  type="submit"
-                  disabled={passwordLoading}
-                  className="w-full sm:w-auto px-5 py-2.5 rounded-xl bg-primary text-primary-foreground font-semibold text-sm hover:bg-primary/90 disabled:opacity-50 transition-colors"
-                >
-                  {passwordLoading ? t('password.submitting') : t('password.submit')}
-                </button>
-              </form>
-            </>
-          ) : (
-            <div className="rounded-2xl bg-blue-50 border border-blue-200 p-4 space-y-1">
-              <p className="text-sm font-semibold text-blue-900">
-                {t('password.googleNoticeTitle')}
-              </p>
-              <p className="text-sm text-blue-800">{t('password.googleNoticeBody')}</p>
+        {/* Password Change: a guest has no password to change */}
+        {!profile.isGuest && (
+          <section className="bg-card border border-border rounded-3xl shadow-soft p-5 sm:p-6 space-y-4">
+            <div className="flex items-center gap-2">
+              <KeyRound className="w-5 h-5 text-primary shrink-0" aria-hidden="true" />
+              <h2 className="text-lg sm:text-xl font-bold text-foreground">
+                {t('password.title')}
+              </h2>
             </div>
-          )}
-        </section>
 
-        {/* Delete Account */}
-        <section className="bg-card border border-red-200 rounded-3xl shadow-soft p-5 sm:p-6 space-y-4">
-          <div className="flex items-center gap-2 text-red-700">
-            <ShieldAlert className="w-5 h-5 shrink-0" aria-hidden="true" />
-            <h2 className="text-lg sm:text-xl font-bold">{t('delete.title')}</h2>
-          </div>
-          <p className="text-sm text-muted-foreground">{t('delete.description')}</p>
-
-          <form onSubmit={handleDeleteSubmit} className="space-y-4">
             {profile.hasPassword ? (
-              <div>
-                <p className="text-sm font-medium text-foreground mb-1.5">
-                  {t('delete.passwordPrompt')}
+              <>
+                <p className="text-sm text-muted-foreground">{t('password.description')}</p>
+                <form onSubmit={handlePasswordSubmit} className="space-y-4">
+                  <div>
+                    <label
+                      htmlFor="currentPassword"
+                      className="block text-sm font-medium text-foreground mb-1"
+                    >
+                      {t('password.currentLabel')}
+                    </label>
+                    <div className="relative">
+                      <input
+                        id="currentPassword"
+                        name="currentPassword"
+                        type={showCurrentPassword ? 'text' : 'password'}
+                        autoComplete="current-password"
+                        value={currentPassword}
+                        onChange={(e) => setCurrentPassword(e.target.value)}
+                        required
+                        placeholder={t('password.currentPlaceholder')}
+                        className="w-full px-4 py-2.5 pr-11 rounded-xl border border-gray-300 bg-white text-gray-900 focus:ring-2 focus:ring-primary focus:border-transparent"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowCurrentPassword((prev) => !prev)}
+                        className="absolute inset-y-0 right-0 px-3 text-gray-500 hover:text-gray-700"
+                        aria-label={
+                          showCurrentPassword
+                            ? tAuth('common.hidePassword')
+                            : tAuth('common.showPassword')
+                        }
+                      >
+                        {showCurrentPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                      </button>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label
+                      htmlFor="newPassword"
+                      className="block text-sm font-medium text-foreground mb-1"
+                    >
+                      {t('password.newLabel')}
+                    </label>
+                    <div className="relative">
+                      <input
+                        id="newPassword"
+                        name="newPassword"
+                        type={showNewPassword ? 'text' : 'password'}
+                        autoComplete="new-password"
+                        value={newPassword}
+                        onChange={(e) => setNewPassword(e.target.value)}
+                        required
+                        placeholder={tAuth('common.passwordMinPlaceholder', {
+                          min: PASSWORD_MIN_LENGTH,
+                        })}
+                        className="w-full px-4 py-2.5 pr-11 rounded-xl border border-gray-300 bg-white text-gray-900 focus:ring-2 focus:ring-primary focus:border-transparent"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowNewPassword((prev) => !prev)}
+                        className="absolute inset-y-0 right-0 px-3 text-gray-500 hover:text-gray-700"
+                        aria-label={
+                          showNewPassword
+                            ? tAuth('common.hidePassword')
+                            : tAuth('common.showPassword')
+                        }
+                      >
+                        {showNewPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                      </button>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label
+                      htmlFor="confirmNewPassword"
+                      className="block text-sm font-medium text-foreground mb-1"
+                    >
+                      {t('password.confirmLabel')}
+                    </label>
+                    <div className="relative">
+                      <input
+                        id="confirmNewPassword"
+                        name="confirmNewPassword"
+                        type={showConfirmPassword ? 'text' : 'password'}
+                        autoComplete="new-password"
+                        value={confirmPassword}
+                        onChange={(e) => setConfirmPassword(e.target.value)}
+                        required
+                        placeholder={tAuth('common.confirmPasswordPlaceholder')}
+                        className="w-full px-4 py-2.5 pr-11 rounded-xl border border-gray-300 bg-white text-gray-900 focus:ring-2 focus:ring-primary focus:border-transparent"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowConfirmPassword((prev) => !prev)}
+                        className="absolute inset-y-0 right-0 px-3 text-gray-500 hover:text-gray-700"
+                        aria-label={
+                          showConfirmPassword
+                            ? tAuth('common.hidePassword')
+                            : tAuth('common.showPassword')
+                        }
+                      >
+                        {showConfirmPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                      </button>
+                    </div>
+                  </div>
+
+                  {passwordError && (
+                    <div className="bg-red-50 text-red-700 px-4 py-3 rounded-xl text-sm">
+                      {passwordError}
+                    </div>
+                  )}
+
+                  {passwordSuccess && (
+                    <div className="bg-green-50 text-green-700 px-4 py-3 rounded-xl text-sm">
+                      {passwordSuccess}
+                    </div>
+                  )}
+
+                  <button
+                    type="submit"
+                    disabled={passwordLoading}
+                    className="w-full sm:w-auto px-5 py-2.5 rounded-xl bg-primary text-primary-foreground font-semibold text-sm hover:bg-primary/90 disabled:opacity-50 transition-colors"
+                  >
+                    {passwordLoading ? t('password.submitting') : t('password.submit')}
+                  </button>
+                </form>
+              </>
+            ) : (
+              <div className="rounded-2xl bg-blue-50 border border-blue-200 p-4 space-y-1">
+                <p className="text-sm font-semibold text-blue-900">
+                  {t('password.googleNoticeTitle')}
                 </p>
-                <label htmlFor="deletePassword" className="sr-only">
-                  {t('delete.passwordLabel')}
-                </label>
-                <div className="relative">
+                <p className="text-sm text-blue-800">{t('password.googleNoticeBody')}</p>
+              </div>
+            )}
+          </section>
+        )}
+
+        {/* Delete Account: a guest is removed by cleanup, not from this page */}
+        {!profile.isGuest && (
+          <section className="bg-card border border-red-200 rounded-3xl shadow-soft p-5 sm:p-6 space-y-4">
+            <div className="flex items-center gap-2 text-red-700">
+              <ShieldAlert className="w-5 h-5 shrink-0" aria-hidden="true" />
+              <h2 className="text-lg sm:text-xl font-bold">{t('delete.title')}</h2>
+            </div>
+            <p className="text-sm text-muted-foreground">{t('delete.description')}</p>
+
+            <form onSubmit={handleDeleteSubmit} className="space-y-4">
+              {profile.hasPassword ? (
+                <div>
+                  <p className="text-sm font-medium text-foreground mb-1.5">
+                    {t('delete.passwordPrompt')}
+                  </p>
+                  <label htmlFor="deletePassword" className="sr-only">
+                    {t('delete.passwordLabel')}
+                  </label>
+                  <div className="relative">
+                    <input
+                      id="deletePassword"
+                      name="deletePassword"
+                      type={showDeletePassword ? 'text' : 'password'}
+                      autoComplete="current-password"
+                      value={deleteInput}
+                      onChange={(e) => setDeleteInput(e.target.value)}
+                      required
+                      placeholder={t('delete.passwordPlaceholder')}
+                      className="w-full px-4 py-2.5 pr-11 rounded-xl border border-red-200 bg-white text-gray-900 focus:ring-2 focus:ring-red-500 focus:border-transparent"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowDeletePassword((prev) => !prev)}
+                      className="absolute inset-y-0 right-0 px-3 text-gray-500 hover:text-gray-700"
+                      aria-label={
+                        showDeletePassword
+                          ? tAuth('common.hidePassword')
+                          : tAuth('common.showPassword')
+                      }
+                    >
+                      {showDeletePassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div>
+                  <label
+                    htmlFor="deleteConfirmation"
+                    className="block text-sm font-medium text-foreground mb-1.5"
+                  >
+                    {t('delete.phrasePrompt', { word: phraseWord })}
+                  </label>
                   <input
-                    id="deletePassword"
-                    name="deletePassword"
-                    type={showDeletePassword ? 'text' : 'password'}
-                    autoComplete="current-password"
+                    id="deleteConfirmation"
+                    name="deleteConfirmation"
+                    type="text"
                     value={deleteInput}
                     onChange={(e) => setDeleteInput(e.target.value)}
                     required
-                    placeholder={t('delete.passwordPlaceholder')}
-                    className="w-full px-4 py-2.5 pr-11 rounded-xl border border-red-200 bg-white text-gray-900 focus:ring-2 focus:ring-red-500 focus:border-transparent"
+                    placeholder={phraseWord}
+                    className="w-full px-4 py-2.5 rounded-xl border border-red-200 bg-white text-gray-900 focus:ring-2 focus:ring-red-500 focus:border-transparent"
                   />
-                  <button
-                    type="button"
-                    onClick={() => setShowDeletePassword((prev) => !prev)}
-                    className="absolute inset-y-0 right-0 px-3 text-gray-500 hover:text-gray-700"
-                    aria-label={
-                      showDeletePassword
-                        ? tAuth('common.hidePassword')
-                        : tAuth('common.showPassword')
-                    }
-                  >
-                    {showDeletePassword ? <EyeOff size={18} /> : <Eye size={18} />}
-                  </button>
                 </div>
-              </div>
-            ) : (
-              <div>
-                <label
-                  htmlFor="deleteConfirmation"
-                  className="block text-sm font-medium text-foreground mb-1.5"
-                >
-                  {t('delete.phrasePrompt', { word: phraseWord })}
-                </label>
-                <input
-                  id="deleteConfirmation"
-                  name="deleteConfirmation"
-                  type="text"
-                  value={deleteInput}
-                  onChange={(e) => setDeleteInput(e.target.value)}
-                  required
-                  placeholder={phraseWord}
-                  className="w-full px-4 py-2.5 rounded-xl border border-red-200 bg-white text-gray-900 focus:ring-2 focus:ring-red-500 focus:border-transparent"
-                />
-              </div>
-            )}
+              )}
 
-            {deleteError && (
-              <div className="bg-red-50 text-red-700 px-4 py-3 rounded-xl text-sm">
-                {deleteError}
-              </div>
-            )}
+              {deleteError && (
+                <div className="bg-red-50 text-red-700 px-4 py-3 rounded-xl text-sm">
+                  {deleteError}
+                </div>
+              )}
 
-            <button
-              type="submit"
-              disabled={deleteLoading || !deleteInput.trim()}
-              className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl bg-red-600 hover:bg-red-700 text-white font-semibold text-sm disabled:opacity-50 transition-colors"
-            >
-              <Trash2 className="w-4 h-4 shrink-0" aria-hidden="true" />
-              <span>{deleteLoading ? t('delete.submitting') : t('delete.submit')}</span>
-            </button>
-          </form>
-        </section>
+              <button
+                type="submit"
+                disabled={deleteLoading || !deleteInput.trim()}
+                className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl bg-red-600 hover:bg-red-700 text-white font-semibold text-sm disabled:opacity-50 transition-colors"
+              >
+                <Trash2 className="w-4 h-4 shrink-0" aria-hidden="true" />
+                <span>{deleteLoading ? t('delete.submitting') : t('delete.submit')}</span>
+              </button>
+            </form>
+          </section>
+        )}
       </div>
     </div>
   );
