@@ -88,6 +88,11 @@ export async function DELETE(request: Request) {
           { error: t('api.account.passwordChangedConcurrently') },
           { status: 409 }
         );
+      case 'cross_owner_references':
+        return NextResponse.json(
+          { error: t('api.account.deleteBlockedByForeignReferences') },
+          { status: 409 }
+        );
     }
   } catch (error) {
     console.error('Error deleting account:', error);

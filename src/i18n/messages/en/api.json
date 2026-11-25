@@ -38,7 +38,8 @@
     "passwordRequiredToDelete": "Enter your current password to confirm deletion",
     "deleteConfirmationRequired": "Type \"{word}\" to confirm account deletion",
     "deleted": "Account deleted",
-    "deleteFailed": "Failed to delete account"
+    "deleteFailed": "Failed to delete account",
+    "deleteBlockedByForeignReferences": "Account cannot be deleted yet: other users' lists, favorites or history still reference your private products or their variants. Nothing was changed."
   },
   "lists": {
     "defaultNames": {
