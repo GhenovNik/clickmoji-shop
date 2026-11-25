@@ -82,7 +82,7 @@ describe.skipIf(!url)('searchProducts on PostgreSQL', () => {
       locale: 'en',
     });
 
-    expect(result).toMatchObject({ imageUrlEn: null });
+    expect(result).toMatchObject({ localizedImages: null, imageTextLocale: null });
     expect(result.category).toMatchObject({
       nameEn: `Test ${suffix}`,
       isCustom: false,

@@ -65,7 +65,11 @@ export default function VariantMenu({
             const hasSecondary = namePair(namesOf(variant), locale).secondary !== undefined;
             // A variant without a picture or emoji of its own shows the product's.
             const variantImage = productImageUrl(
-              { imageUrl: variant.imageUrl ?? null, imageUrlEn: variant.imageUrlEn },
+              {
+                imageUrl: variant.imageUrl ?? null,
+                imageTextLocale: variant.imageTextLocale,
+                localizedImages: variant.localizedImages,
+              },
               locale
             );
             const image = variantImage || (variant.emoji ? null : productImage);

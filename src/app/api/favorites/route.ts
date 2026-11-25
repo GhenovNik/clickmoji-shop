@@ -21,7 +21,8 @@ const variantSelect = {
   nameEn: true,
   emoji: true,
   imageUrl: true,
-  imageUrlEn: true,
+  imageTextLocale: true,
+  localizedImages: true,
 } as const;
 
 // GET /api/favorites - list the current user's favorite products and starred variants. A starred

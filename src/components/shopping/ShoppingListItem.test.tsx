@@ -19,7 +19,7 @@ const item: Item = {
     emoji: '🥛',
     isCustom: true,
     imageUrl: '/uploads/milk-ru.png',
-    imageUrlEn: '/uploads/milk-en.png',
+    localizedImages: { en: '/uploads/milk-en.png' },
     category: { name: 'Молочное', nameEn: 'Dairy', emoji: '🥛', order: 1 },
   },
   variant: { id: 'v-1', name: 'Обезжиренное', nameEn: 'Skimmed', emoji: '🥛' },

@@ -1,4 +1,5 @@
-import type { PrismaClient } from '@prisma/client';
+import { Prisma, type PrismaClient } from '@prisma/client';
+import { localizedImagesOf } from '../product-image';
 
 // Every picture URL the database still points at, from one place for every cleanup command:
 // both pictures of a product, a category picture whatever its isCustom flag says (the stored URL
@@ -19,8 +20,17 @@ type ReferenceReader = Pick<PrismaClient, 'product' | 'category' | 'emojiLibrary
 export async function collectReferencedFileKeys(prisma: ReferenceReader) {
   const [products, categories, libraryItems] = await Promise.all([
     prisma.product.findMany({
-      where: { OR: [{ imageUrl: { not: null } }, { imageUrlEn: { not: null } }] },
-      select: { imageUrl: true, imageUrlEn: true },
+      // The legacy English column is read as well: a row written before the dictionary keeps its
+      // file referenced here until that column is dropped (AGE-1667 Я6). Deleting a file early is
+      // the one loss this check must not cause.
+      where: {
+        OR: [
+          { imageUrl: { not: null } },
+          { imageUrlEn: { not: null } },
+          { localizedImages: { not: Prisma.DbNull } },
+        ],
+      },
+      select: { imageUrl: true, imageUrlEn: true, localizedImages: true },
     }),
     prisma.category.findMany({
       where: { imageUrl: { not: null } },
@@ -30,7 +40,11 @@ export async function collectReferencedFileKeys(prisma: ReferenceReader) {
   ]);
 
   const urls = [
-    ...products.flatMap((product) => [product.imageUrl, product.imageUrlEn]),
+    ...products.flatMap((product) => [
+      product.imageUrl,
+      product.imageUrlEn,
+      ...Object.values(localizedImagesOf(product.localizedImages)),
+    ]),
     ...categories.map((category) => category.imageUrl),
     ...libraryItems.map((item) => item.imageUrl),
   ];

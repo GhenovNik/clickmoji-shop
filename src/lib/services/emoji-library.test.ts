@@ -33,7 +33,14 @@ describe('isStoredImageInUse', () => {
   it('is free to delete when nothing else shows the file', async () => {
     expect(await isStoredImageInUse(URL_A, { productId: 'p1' })).toBe(false);
     expect(db.productCount).toHaveBeenCalledWith({
-      where: { OR: [{ imageUrl: URL_A }, { imageUrlEn: URL_A }], id: { not: 'p1' } },
+      where: {
+        OR: [
+          { imageUrl: URL_A },
+          { imageUrlEn: URL_A },
+          { localizedImages: { path: ['en'], equals: URL_A } },
+        ],
+        id: { not: 'p1' },
+      },
     });
   });
 

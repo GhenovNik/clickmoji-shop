@@ -21,7 +21,8 @@ type HistoryItem = {
   productNameEn?: string | null;
   productEmoji: string;
   productImageUrl: string | null;
-  productImageUrlEn?: string | null;
+  imageTextLocale?: string | null;
+  localizedImages?: unknown;
   categoryName: string;
   categoryNameEn?: string | null;
   isCustom: boolean;
@@ -224,7 +225,11 @@ export default function HistoryPage() {
                             nameEn: item.productNameEn,
                           });
                           const imageUrl = productImageUrl(
-                            { imageUrl: item.productImageUrl, imageUrlEn: item.productImageUrlEn },
+                            {
+                              imageUrl: item.productImageUrl,
+                              imageTextLocale: item.imageTextLocale,
+                              localizedImages: item.localizedImages,
+                            },
                             locale
                           );
                           return (

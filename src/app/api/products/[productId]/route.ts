@@ -2,6 +2,9 @@ import { NextResponse } from 'next/server';
 import { apiText } from '@/lib/api-messages';
 import { prisma } from '@/lib/prisma';
 import { requireAdmin } from '@/lib/auth-guards';
+import { DICTIONARY_LANGUAGES } from '@/lib/image-languages';
+import { legacyEnglishOf, localizedImagesForStorage } from '@/lib/picture-storage';
+import { localizedImagesOf } from '@/lib/product-image';
 
 // Replaced or deleted pictures are not removed from UploadThing here. Between checking that
 // nothing shows a file and deleting it, another request could attach the same URL again, leaving
@@ -18,7 +21,17 @@ export async function PUT(
 
     const { productId } = await params;
     const body = await request.json();
-    const { name, nameEn, emoji, categoryId, isCustom, imageUrl, imageUrlEn, variants } = body;
+    const {
+      name,
+      nameEn,
+      emoji,
+      categoryId,
+      isCustom,
+      imageUrl,
+      imageTextLocale,
+      localizedImages,
+      variants,
+    } = body;
 
     const product = await prisma.$transaction(async (tx) => {
       const updatedProduct = await tx.product.update({
@@ -30,7 +43,11 @@ export async function PUT(
           ...(categoryId && { categoryId }),
           ...(isCustom !== undefined && { isCustom }),
           ...(imageUrl !== undefined && { imageUrl }),
-          ...(imageUrlEn !== undefined && { imageUrlEn: imageUrlEn || null }),
+          ...(imageTextLocale !== undefined && { imageTextLocale: imageTextLocale || null }),
+          ...(localizedImages !== undefined && {
+            localizedImages: localizedImagesForStorage(localizedImages),
+            imageUrlEn: legacyEnglishOf(localizedImagesOf(localizedImages, DICTIONARY_LANGUAGES)),
+          }),
         },
       });
 

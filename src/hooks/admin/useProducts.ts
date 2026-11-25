@@ -1,5 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useTranslations } from 'next-intl';
+import type { LocalizedImages } from '@/lib/product-image';
 
 export interface Product {
   id: string;
@@ -8,6 +9,8 @@ export interface Product {
   emoji: string;
   isCustom: boolean;
   imageUrl: string | null;
+  imageTextLocale?: string | null;
+  localizedImages?: unknown;
   categoryId: string;
   variants?: ProductVariant[];
   category: {
@@ -33,16 +36,23 @@ interface ProductInput {
   categoryId: string;
   isCustom: boolean;
   imageUrl: string;
-  imageUrlEn?: string | null;
+  imageTextLocale?: string | null;
+  localizedImages?: LocalizedImages;
   variants?: Array<Partial<ProductVariant>>;
 }
 
-// The picture is kept only while the custom-image flag is on. An unchecked flag clears both
-// addresses whatever picture is passed; the stored files are not deleted (AGE-1620).
+// The picture is kept only while the custom-image flag is on. An unchecked flag clears the main
+// address, its text language and every language picture whatever picture is passed; the stored
+// files are not deleted (AGE-1620).
 const pictureFields = (data: ProductInput, imageUrl?: string) =>
   data.isCustom
     ? { isCustom: true, imageUrl: imageUrl || null }
-    : { isCustom: false, imageUrl: null, imageUrlEn: null };
+    : {
+        isCustom: false,
+        imageUrl: null,
+        imageTextLocale: null,
+        localizedImages: {},
+      };
 
 // API functions
 const fetchProductsAPI = async (): Promise<Product[]> => {

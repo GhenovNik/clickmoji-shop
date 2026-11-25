@@ -35,13 +35,13 @@ const savedProduct = {
   emoji: '🍏',
   isCustom: true,
   imageUrl: 'https://utfs.io/f/old.webp',
-  imageUrlEn: 'https://utfs.io/f/old-en.webp' as string | null,
+  localizedImages: { en: 'https://utfs.io/f/old-en.webp' } as Record<string, string>,
   categoryId: 'c1',
 };
 
 const plainProduct = {
   ...savedProduct,
-  imageUrlEn: null as string | null,
+  localizedImages: null as Record<string, string> | null,
 };
 
 const createObjectURLMock = vi.fn(() => 'blob:file-preview');
@@ -277,7 +277,8 @@ describe('AC-2 unchecking the custom-image checkbox clears the picture', () => {
 
     await waitFor(() => expect(onSubmit).toHaveBeenCalled());
     const [data, imageUrl] = onSubmit.mock.calls[0]!;
-    expect(data).toMatchObject({ isCustom: false, imageUrl: '', imageUrlEn: null });
+    expect(data).toMatchObject({ isCustom: false, imageUrl: '' });
+    expect(data.localizedImages).toEqual({});
     expect(imageUrl ?? '').toBe('');
   });
 
@@ -308,7 +309,8 @@ describe('AC-2 unchecking the custom-image checkbox clears the picture', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Сохранить изменения' }));
     await waitFor(() => expect(onSubmit).toHaveBeenCalled());
     const [data, imageUrl] = onSubmit.mock.calls[0]!;
-    expect(data).toMatchObject({ isCustom: false, imageUrlEn: null });
+    expect(data.isCustom).toBe(false);
+    expect(data.localizedImages).toEqual({});
     expect(data.imageUrl || null).toBeNull();
     expect(imageUrl ?? '').toBe('');
     expect(calls.some(({ url }) => url.includes('/api/emoji/upload'))).toBe(false);
@@ -330,7 +332,7 @@ describe('AC-3 keeping the custom image', () => {
     expect(data).toMatchObject({
       isCustom: true,
       imageUrl: 'https://utfs.io/f/old.webp',
-      imageUrlEn: 'https://utfs.io/f/old-en.webp',
+      localizedImages: { en: 'https://utfs.io/f/old-en.webp' },
     });
     expect(imageUrl).toBe('https://utfs.io/f/old.webp');
   });
@@ -408,7 +410,7 @@ describe('AC-5 new picture from AI and library', () => {
     expect(screen.getByRole('button', { name: /текущее изображение/i })).toBeTruthy();
   });
 
-  it('(c) library pick with an English version: revert restores old and old imageUrlEn', async () => {
+  it('(c) library pick with an English version: revert restores old and old English picture', async () => {
     mockFetch([
       {
         url: /\/api\/emoji\/library\?q=/,
@@ -455,7 +457,7 @@ describe('AC-5 new picture from AI and library', () => {
     ).toContain('old-en.webp');
   });
 
-  it('(d) English-only library pick: revert restores the previous imageUrlEn', async () => {
+  it('(d) English-only library pick: revert restores the previous English picture', async () => {
     mockFetch([
       {
         url: /\/api\/emoji\/library\?q=/,

@@ -25,7 +25,7 @@ const honeycrisp = {
   nameEn: 'Honeycrisp apple',
   emoji: '🍎',
   imageUrl: '/honeycrisp.webp',
-  imageUrlEn: null,
+  localizedImages: null,
 };
 
 function post(body: unknown) {

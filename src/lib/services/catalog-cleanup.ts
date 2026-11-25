@@ -1,4 +1,7 @@
 import type { Prisma } from '@prisma/client';
+import { DICTIONARY_LANGUAGES } from '../image-languages';
+import { legacyEnglishOf, localizedImagesForStorage } from '../picture-storage';
+import { localizedImagesOf, type LocalizedImages } from '../product-image';
 
 // One-off catalogue cleanup (operator decision of 2026-11-01): duplicate products are merged into
 // the singular one, a few specific products become variants of their base product, misfiled
@@ -143,7 +146,15 @@ export async function applyCatalogCleanup(
     if (!(keep.isCustom && keep.imageUrl) && drop.isCustom && drop.imageUrl) {
       await tx.product.update({
         where: { id: keep.id },
-        data: { isCustom: true, imageUrl: drop.imageUrl, imageUrlEn: drop.imageUrlEn },
+        data: {
+          isCustom: true,
+          imageUrl: drop.imageUrl,
+          imageTextLocale: drop.imageTextLocale,
+          localizedImages: localizedImagesForStorage(drop.localizedImages),
+          imageUrlEn: legacyEnglishOf(
+            localizedImagesOf(drop.localizedImages, DICTIONARY_LANGUAGES)
+          ),
+        },
       });
     }
     await tx.product.delete({ where: { id: drop.id } });
@@ -179,22 +190,39 @@ export async function applyCatalogCleanup(
     ) {
       throw new Error(`Ambiguous or conflicting variant ${step.name} / ${step.nameEn}`);
     }
+    const childLocalized: LocalizedImages = child.isCustom
+      ? localizedImagesOf(child.localizedImages, DICTIONARY_LANGUAGES)
+      : {};
     const pictures = {
       imageUrl: child.isCustom ? child.imageUrl : null,
-      imageUrlEn: child.isCustom ? child.imageUrlEn : null,
+      imageTextLocale: child.isCustom ? child.imageTextLocale : null,
+      localized: childLocalized,
     };
+    const existingLocalized: LocalizedImages = existing
+      ? localizedImagesOf(existing.localizedImages, DICTIONARY_LANGUAGES)
+      : {};
     // Never silently overwrite a different existing picture, or lose the child's picture.
-    for (const key of ['imageUrl', 'imageUrlEn'] as const) {
-      if (existing?.[key] && pictures[key] && existing[key] !== pictures[key]) {
-        throw new Error(`Conflicting variant ${step.name}: ${key}`);
+    if (existing?.imageUrl && pictures.imageUrl && existing.imageUrl !== pictures.imageUrl) {
+      throw new Error(`Conflicting variant ${step.name}: imageUrl`);
+    }
+    for (const language of DICTIONARY_LANGUAGES) {
+      const current = existingLocalized[language];
+      const next = pictures.localized[language];
+      if (current && next && current !== next) {
+        throw new Error(`Conflicting variant ${step.name}: ${language}`);
       }
     }
+    const mergedLocalized = { ...existingLocalized, ...pictures.localized };
     const variant = existing
       ? await tx.productVariant.update({
           where: { id: existing.id },
           data: {
             imageUrl: pictures.imageUrl ?? existing.imageUrl,
-            imageUrlEn: pictures.imageUrlEn ?? existing.imageUrlEn,
+            imageTextLocale: pictures.imageUrl
+              ? pictures.imageTextLocale
+              : existing.imageTextLocale,
+            localizedImages: localizedImagesForStorage(mergedLocalized),
+            imageUrlEn: legacyEnglishOf(mergedLocalized),
           },
         })
       : await tx.productVariant.create({
@@ -203,7 +231,10 @@ export async function applyCatalogCleanup(
             name: step.name,
             nameEn: step.nameEn,
             emoji: child.emoji,
-            ...pictures,
+            imageUrl: pictures.imageUrl,
+            imageTextLocale: pictures.imageTextLocale,
+            localizedImages: localizedImagesForStorage(pictures.localized),
+            imageUrlEn: legacyEnglishOf(pictures.localized),
           },
         });
     const moved = { productId: parent.id, variantId: variant.id };

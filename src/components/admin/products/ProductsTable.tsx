@@ -14,7 +14,8 @@ interface Product {
   emoji: string;
   isCustom: boolean;
   imageUrl: string | null;
-  imageUrlEn?: string | null;
+  imageTextLocale?: string | null;
+  localizedImages?: unknown;
   categoryId: string;
   variants?: { id: string; name: string; nameEn: string; emoji: string }[];
   category: {

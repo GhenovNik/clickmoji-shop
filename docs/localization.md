@@ -37,9 +37,14 @@
 - Products, variants and categories keep the Russian name in `name` and the English one in
   `nameEn`; `localizedName(entity, locale)` (`src/lib/catalog-name.ts`) picks one, English falling
   back to Russian.
-- Pictures with text on the packaging have an English version in `products.imageUrlEn`;
-  `productImageUrl(product, locale)` (`src/lib/product-image.ts`) uses it in English and keeps the
-  main picture otherwise. Text-free pictures are shared by both languages.
+- Product, variant and history pictures are chosen by one pure function,
+  `productImageUrl(picture, locale, options?)` (`src/lib/product-image.ts`), which the server and
+  the browser run alike. Its input is the main picture (`imageUrl`), the language of its text
+  (`imageTextLocale`: empty = unlabelled, `none` = no text, otherwise a language) and the dictionary
+  `localizedImages` (`{"<language>": "<url>"}`). The picture languages are listed in
+  `src/lib/image-languages.ts`; the five selection steps are tested in `product-image.test.ts`.
+- `imageUrlEn` is a legacy mirror of the English dictionary entry, kept until AGE-1667 Я6: no
+  display reads it.
 - History snapshots copy the English names and picture next to the Russian ones. Snapshots taken
   before this change keep only their Russian copy: they are not filled from today's catalogue.
 - Search (`src/lib/services/product-search.ts`) finds products by either language and ranks

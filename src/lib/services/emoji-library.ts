@@ -1,4 +1,5 @@
 import { prisma } from '@/lib/prisma';
+import { DICTIONARY_LANGUAGES } from '@/lib/image-languages';
 
 export type EmojiLibrarySource = 'generated' | 'upload' | 'batch';
 
@@ -93,10 +94,18 @@ export async function isStoredImageInUse(
   try {
     const [library, products, categories] = await Promise.all([
       prisma.emojiLibraryItem.count({ where: { imageUrl } }),
-      // Either picture of a product keeps the file: the English one may be the only reference.
+      // Any picture of a product keeps the file: a language picture may be the only reference.
+      // The legacy English column stays in the check until it is dropped (AGE-1667 Я6): a row
+      // written before the dictionary is the only place that reference may exist.
       prisma.product.count({
         where: {
-          OR: [{ imageUrl }, { imageUrlEn: imageUrl }],
+          OR: [
+            { imageUrl },
+            { imageUrlEn: imageUrl },
+            ...DICTIONARY_LANGUAGES.map((language) => ({
+              localizedImages: { path: [language], equals: imageUrl },
+            })),
+          ],
           ...(except.productId && { id: { not: except.productId } }),
         },
       }),

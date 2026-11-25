@@ -6,6 +6,9 @@ import { auth } from '@/lib/auth';
 import { visibleProductsWhere } from '@/lib/product-visibility';
 import { getRequestLocale } from '@/lib/auth-security';
 import { sortByDisplayedName } from '@/lib/catalog-sort';
+import { DICTIONARY_LANGUAGES } from '@/lib/image-languages';
+import { legacyEnglishOf, localizedImagesForStorage } from '@/lib/picture-storage';
+import { localizedImagesOf } from '@/lib/product-image';
 
 export async function GET(request: Request) {
   try {
@@ -79,7 +82,17 @@ export async function POST(request: Request) {
     if (guard instanceof Response) return guard;
 
     const body = await request.json();
-    const { name, nameEn, emoji, categoryId, isCustom, imageUrl, imageUrlEn, variants } = body;
+    const {
+      name,
+      nameEn,
+      emoji,
+      categoryId,
+      isCustom,
+      imageUrl,
+      imageTextLocale,
+      localizedImages,
+      variants,
+    } = body;
 
     // An emoji is required unless a custom image is supplied.
     if (!name || !nameEn || !categoryId) {
@@ -104,7 +117,9 @@ export async function POST(request: Request) {
         categoryId,
         isCustom: isCustom || false,
         imageUrl: imageUrl || null,
-        imageUrlEn: imageUrlEn || null,
+        imageTextLocale: imageTextLocale || null,
+        localizedImages: localizedImagesForStorage(localizedImages),
+        imageUrlEn: legacyEnglishOf(localizedImagesOf(localizedImages, DICTIONARY_LANGUAGES)),
         variants: Array.isArray(variants)
           ? {
               create: variants

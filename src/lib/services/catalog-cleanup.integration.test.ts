@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { readFileSync } from 'node:fs';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { PrismaClient, type Prisma } from '@prisma/client';
+import { Prisma, PrismaClient } from '@prisma/client';
 import { createPrismaPgAdapter } from '../prisma-adapter';
 import { applyCatalogCleanup, type CatalogCleanupPlan } from './catalog-cleanup';
 
@@ -77,6 +77,7 @@ describe.skipIf(!url)('catalog cleanup on disposable PostgreSQL', () => {
           isCustom: id === 'child',
           imageUrl: id === 'child' ? '/child.webp' : null,
           imageUrlEn: id === 'child' ? '/child-en.webp' : null,
+          localizedImages: id === 'child' ? { en: '/child-en.webp' } : Prisma.DbNull,
         },
       });
       await db.item.create({ data: { id: `item-${id}`, listId: 'list', productId: id } });
@@ -145,7 +146,7 @@ describe.skipIf(!url)('catalog cleanup on disposable PostgreSQL', () => {
             : conflict === 'different RU'
               ? { name: 'Другое' }
               : conflict === 'picture conflict'
-                ? { imageUrlEn: '/other.webp' }
+                ? { localizedImages: { en: '/other.webp' } }
                 : {}
         ),
       });
@@ -163,6 +164,7 @@ describe.skipIf(!url)('catalog cleanup on disposable PostgreSQL', () => {
     expect(await db.productVariant.findUnique({ where: { id: 'existing' } })).toMatchObject({
       imageUrl: '/child.webp',
       imageUrlEn: '/child-en.webp',
+      localizedImages: { en: '/child-en.webp' },
     });
     expect(await db.item.findUnique({ where: { id: 'item-child' } })).toMatchObject({
       productId: 'apple',

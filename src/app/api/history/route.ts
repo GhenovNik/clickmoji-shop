@@ -9,6 +9,7 @@ import {
   visibleVariantProductIds,
 } from '@/lib/product-visibility';
 import { lockOwnedList } from '@/lib/list-lock';
+import { historyPictureFields } from '@/lib/picture-storage';
 
 export async function GET(request?: Request) {
   try {
@@ -155,8 +156,7 @@ export async function POST(request: Request) {
                 productName: item.product.name,
                 productNameEn: item.product.nameEn || null,
                 productEmoji: item.product.emoji,
-                productImageUrl: item.product.imageUrl,
-                productImageUrlEn: item.product.imageUrlEn,
+                ...historyPictureFields(item.product),
                 categoryName: item.product.category.name,
                 categoryNameEn: item.product.category.nameEn || null,
                 isCustom: item.product.isCustom,

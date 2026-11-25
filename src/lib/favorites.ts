@@ -6,7 +6,8 @@ export type FavoriteVariant = {
   nameEn?: string | null;
   emoji: string;
   imageUrl: string | null;
-  imageUrlEn?: string | null;
+  imageTextLocale?: string | null;
+  localizedImages?: unknown;
 };
 
 type FavoriteProductFields = {
@@ -16,7 +17,8 @@ type FavoriteProductFields = {
   emoji: string;
   isCustom: boolean;
   imageUrl: string | null;
-  imageUrlEn?: string | null;
+  imageTextLocale?: string | null;
+  localizedImages?: unknown;
 };
 
 // One entry of GET /api/favorites: a product favorite has `variant: null`, a starred variant

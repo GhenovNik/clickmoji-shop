@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { collectReferencedFileKeys, storedFileKey } from './stored-image-references';
 
 function reader(rows: {
-  products?: { imageUrl: string | null; imageUrlEn: string | null }[];
+  products?: { imageUrl: string | null; imageUrlEn: string | null; localizedImages?: unknown }[];
   categories?: { imageUrl: string | null; isCustom: boolean }[];
   library?: { imageUrl: string }[];
 }) {
@@ -32,7 +32,23 @@ describe('collectReferencedFileKeys', () => {
     expect(keys.has('category-x')).toBe(true);
   });
 
-  it('collects both product pictures, categories and the library, ignoring empty fields', async () => {
+  it('keeps a file that only a picture-language entry of a product references', async () => {
+    const { keys } = await collectReferencedFileKeys(
+      reader({
+        products: [
+          {
+            imageUrl: null,
+            imageUrlEn: null,
+            localizedImages: { en: 'https://utfs.io/f/dictionary-only' },
+          },
+        ],
+      })
+    );
+
+    expect(keys.has('dictionary-only')).toBe(true);
+  });
+
+  it('collects product, category and library pictures, ignoring empty fields', async () => {
     const { keys, counts } = await collectReferencedFileKeys(
       reader({
         products: [

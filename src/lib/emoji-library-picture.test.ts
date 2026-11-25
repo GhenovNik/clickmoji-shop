@@ -31,15 +31,16 @@ describe('groupLibraryItems', () => {
       expect.objectContaining({
         key: 'text-001#2',
         imageUrl: 'https://utfs.io/f/ru.webp',
-        imageUrlEn: 'https://utfs.io/f/en.webp',
+        imageTextLocale: 'ru',
+        localizedImages: { en: 'https://utfs.io/f/en.webp' },
       }),
     ]);
   });
 
-  it('gives a text-free picture no English version', () => {
+  it('marks a text-free picture as none and gives it no other-language version', () => {
     const [picture] = groupLibraryItems([item({ id: 'a', locale: null, groupKey: 'batch-009#1' })]);
 
-    expect(picture.imageUrlEn).toBeNull();
+    expect(picture).toMatchObject({ imageTextLocale: 'none', localizedImages: {} });
   });
 
   it('keeps pictures without a group apart', () => {
@@ -51,6 +52,19 @@ describe('groupLibraryItems', () => {
       item({ id: 'en', locale: 'en', groupKey: 'g', imageUrl: 'https://utfs.io/f/en.webp' }),
     ]);
 
-    expect(picture).toMatchObject({ imageUrl: null, imageUrlEn: 'https://utfs.io/f/en.webp' });
+    expect(picture).toMatchObject({
+      imageUrl: null,
+      imageTextLocale: null,
+      localizedImages: { en: 'https://utfs.io/f/en.webp' },
+    });
+  });
+
+  it('ignores a language that is not in the picture-language list', () => {
+    const [picture] = groupLibraryItems([
+      item({ id: 'ru', locale: 'ru', groupKey: 'g', imageUrl: 'https://utfs.io/f/ru.webp' }),
+      item({ id: 'xx', locale: 'xx', groupKey: 'g', imageUrl: 'https://utfs.io/f/xx.webp' }),
+    ]);
+
+    expect(picture.localizedImages).toEqual({});
   });
 });

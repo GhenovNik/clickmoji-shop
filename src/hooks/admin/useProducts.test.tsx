@@ -15,7 +15,7 @@ const baseData = {
   emoji: '🍏',
   categoryId: 'c1',
   imageUrl: 'https://utfs.io/f/old.webp',
-  imageUrlEn: 'https://utfs.io/f/old-en.webp' as string | null,
+  localizedImages: { en: 'https://utfs.io/f/old-en.webp' },
   variants: [],
 };
 
@@ -62,7 +62,7 @@ afterEach(() => {
 });
 
 describe('useProducts update body', () => {
-  it('AC-2: unchecking the custom image sends isCustom: false, imageUrl: null, imageUrlEn: null and no deletion request', async () => {
+  it('AC-2: unchecking the custom image sends isCustom: false, imageUrl: null, localizedImages: {} and no deletion request', async () => {
     const calls = stubFetch();
     const { result } = renderHook(() => useProducts(), { wrapper: createWrapper() });
 
@@ -73,7 +73,7 @@ describe('useProducts update body', () => {
     const puts = putCalls(calls);
     expect(puts).toHaveLength(1);
     const body = JSON.parse(String(puts[0]!.init?.body));
-    expect(body).toMatchObject({ isCustom: false, imageUrl: null, imageUrlEn: null });
+    expect(body).toMatchObject({ isCustom: false, imageUrl: null, localizedImages: {} });
 
     expect(calls.every(({ init }) => (init?.method ?? 'GET') !== 'DELETE')).toBe(true);
     const bodies = calls.map(({ init }) => String(init?.body ?? ''));
@@ -95,7 +95,7 @@ describe('useProducts update body', () => {
     const puts = putCalls(calls);
     expect(puts).toHaveLength(1);
     const body = JSON.parse(String(puts[0]!.init?.body));
-    expect(body).toMatchObject({ isCustom: false, imageUrl: null, imageUrlEn: null });
+    expect(body).toMatchObject({ isCustom: false, imageUrl: null, localizedImages: {} });
   });
 
   it('AC-3: keeping the custom image sends the same body as before the change', async () => {
@@ -116,7 +116,7 @@ describe('useProducts update body', () => {
     expect(body).toMatchObject({
       isCustom: true,
       imageUrl: 'https://utfs.io/f/old.webp',
-      imageUrlEn: 'https://utfs.io/f/old-en.webp',
+      localizedImages: { en: 'https://utfs.io/f/old-en.webp' },
     });
   });
 
@@ -136,7 +136,7 @@ describe('useProducts update body', () => {
     );
     expect(posts).toHaveLength(1);
     const body = JSON.parse(String(posts[0]!.init?.body));
-    expect(body).toMatchObject({ isCustom: false, imageUrl: null, imageUrlEn: null });
+    expect(body).toMatchObject({ isCustom: false, imageUrl: null, localizedImages: {} });
   });
 
   it('AC-2 (create): creating a product with the checkbox unchecked sends nulls', async () => {
@@ -152,6 +152,6 @@ describe('useProducts update body', () => {
     );
     expect(posts).toHaveLength(1);
     const body = JSON.parse(String(posts[0]!.init?.body));
-    expect(body).toMatchObject({ isCustom: false, imageUrl: null, imageUrlEn: null });
+    expect(body).toMatchObject({ isCustom: false, imageUrl: null, localizedImages: {} });
   });
 });

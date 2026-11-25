@@ -74,7 +74,7 @@ function catalogue() {
       isCustom: true,
       emoji: '🍎',
       imageUrl: '/apples.webp',
-      imageUrlEn: null,
+      localizedImages: null,
       categoryId: 'fruit',
     },
     {
@@ -85,7 +85,7 @@ function catalogue() {
       isCustom: true,
       emoji: '🍏',
       imageUrl: '/hc.webp',
-      imageUrlEn: '/hc-en.webp',
+      localizedImages: { en: '/hc-en.webp' },
       categoryId: 'fruit',
     },
     {
@@ -186,7 +186,7 @@ describe('applyCatalogCleanup', () => {
       nameEn: plan.variants[0].nameEn,
       emoji: '🍏',
       imageUrl: null,
-      imageUrlEn: null,
+      localizedImages: null,
       ...overrides,
     };
   }
@@ -196,7 +196,7 @@ describe('applyCatalogCleanup', () => {
     [existingVariant({ name: 'Другое яблоко' })],
     [existingVariant(), existingVariant({ id: 'second' })],
     [existingVariant({ imageUrl: '/different.webp' })],
-    [existingVariant({ imageUrlEn: '/different-en.webp' })],
+    [existingVariant({ localizedImages: { en: '/different-en.webp' } })],
   ])('rejects conflicting or ambiguous existing variants: %j', async (...candidates) => {
     const db = catalogue();
     db.productVariant.rows.push(...candidates);
@@ -219,7 +219,7 @@ describe('applyCatalogCleanup', () => {
     db.productVariant.rows.push(existingVariant());
     await run(db);
     expect(db.productVariant.rows).toEqual([
-      existingVariant({ imageUrl: '/hc.webp', imageUrlEn: '/hc-en.webp' }),
+      existingVariant({ imageUrl: '/hc.webp', imageUrlEn: '/hc-en.webp', localizedImages: { en: '/hc-en.webp' } }),
     ]);
     expect(db.item.rows.find((row) => row.id === 'i-2')).toMatchObject({
       productId: 'apple',
@@ -280,6 +280,7 @@ describe('applyCatalogCleanup', () => {
       emoji: '🍏',
       imageUrl: '/hc.webp',
       imageUrlEn: '/hc-en.webp',
+      localizedImages: { en: '/hc-en.webp' },
     });
     expect(db.product.rows.map((row) => row.id)).not.toContain('honeycrisp');
     expect(db.item.rows.find((row) => row.id === 'i-2')).toMatchObject({

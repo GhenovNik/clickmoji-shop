@@ -760,7 +760,7 @@ describe('list-key refresh (AGE-1649)', () => {
       emoji: product.emoji,
       isCustom: false,
       imageUrl: null,
-      imageUrlEn: null,
+      localizedImages: null,
       category: { name: 'Молочное', nameEn: 'Dairy', emoji: '🥛', order: 1 },
     },
     variant: null,

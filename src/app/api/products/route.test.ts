@@ -31,7 +31,7 @@ function row(id: string, name: string, nameEn: string | null) {
     isGlobal: true,
     createdById: null,
     imageUrl: null,
-    imageUrlEn: null,
+    localizedImages: null,
     variants: [],
     category: {
       id: 'cat-1',

@@ -4,6 +4,8 @@ import Image from 'next/image';
 import { useState, useRef, useEffect } from 'react';
 import { useLocale, useTranslations } from 'next-intl';
 import { localizedName } from '@/lib/catalog-name';
+import { DICTIONARY_LANGUAGES, type DictionaryLanguage } from '@/lib/image-languages';
+import { localizedImagesOf, type LocalizedImages } from '@/lib/product-image';
 import EmojiPicker from '../shared/EmojiPicker';
 import ImagePreviewButton from '../shared/ImagePreviewButton';
 
@@ -14,7 +16,8 @@ interface Product {
   emoji: string;
   isCustom: boolean;
   imageUrl: string | null;
-  imageUrlEn?: string | null;
+  imageTextLocale?: string | null;
+  localizedImages?: unknown;
   categoryId: string;
   variants?: ProductVariant[];
 }
@@ -49,9 +52,21 @@ export type FormData = {
   categoryId: string;
   isCustom: boolean;
   imageUrl: string;
-  // English version of a labelled picture; null when the picture has no text.
-  imageUrlEn: string | null;
+  // Language of the text on imageUrl: null = not labelled, 'none' = no text, otherwise a language.
+  imageTextLocale: string | null;
+  // Pictures in the other picture languages, by language; a language without an entry has none.
+  localizedImages: LocalizedImages;
   variants?: ProductVariant[];
+};
+
+// The wording of one dictionary language's picture field. Typed per language: a language added to
+// the picture-language list fails the type check until its wording exists here.
+type PictureText = {
+  savedLabel: string;
+  newLabel: string;
+  currentLabel: string;
+  currentAlt: string;
+  removeLabel: string;
 };
 
 const MAX_UPLOAD_MB = 3;
@@ -76,7 +91,8 @@ export default function ProductForm({ product, categories, onSubmit, onCancel }:
     categoryId: product?.categoryId || '',
     isCustom: product?.isCustom || false,
     imageUrl: product?.imageUrl || '',
-    imageUrlEn: product?.imageUrlEn || null,
+    imageTextLocale: product?.imageTextLocale ?? null,
+    localizedImages: localizedImagesOf(product?.localizedImages, DICTIONARY_LANGUAGES),
     variants: product?.variants || [],
   });
 
@@ -90,7 +106,8 @@ export default function ProductForm({ product, categories, onSubmit, onCancel }:
   // AI answer both fall back to it.
   const [savedImage] = useState(() => ({
     imageUrl: product?.imageUrl ?? '',
-    imageUrlEn: product?.imageUrlEn ?? (null as string | null),
+    imageTextLocale: product?.imageTextLocale ?? (null as string | null),
+    localizedImages: localizedImagesOf(product?.localizedImages, DICTIONARY_LANGUAGES),
   }));
   // INV-1: every selection action bumps the sequence; an AI answer applies only while the
   // sequence still equals the value recorded at the request.
@@ -98,20 +115,35 @@ export default function ProductForm({ product, categories, onSubmit, onCancel }:
   const aiRequestSeq = useRef(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const mainPictureChanged = !!selectedFile || formData.imageUrl !== savedImage.imageUrl;
-  const englishPictureChanged = formData.imageUrlEn !== savedImage.imageUrlEn;
-  const hasNewPicture = mainPictureChanged || englishPictureChanged;
+  const languageChanged = (language: DictionaryLanguage) =>
+    formData.localizedImages[language] !== savedImage.localizedImages[language];
+  const hasNewPicture = mainPictureChanged || DICTIONARY_LANGUAGES.some(languageChanged);
   const newMainPreview = selectedFile ? filePreviewUrl : formData.imageUrl || null;
+
+  const pictureText: Record<DictionaryLanguage, PictureText> = {
+    en: {
+      savedLabel: t('shared.nowEnglishImage'),
+      newLabel: t('shared.newEnglishImage'),
+      currentLabel: t('productForm.englishVersion'),
+      currentAlt: t('productForm.englishVersionAlt'),
+      removeLabel: t('productForm.removeEnglishVersion'),
+    },
+  };
 
   const clearFileInput = () => {
     setSelectedFile(null);
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
-  // Deleting the English picture is a selection action: a pending AI answer must not replace
+  // Deleting a language's picture is a selection action: a pending AI answer must not replace
   // the main picture or report its result (AGE-1626).
-  const removeEnglishPicture = () => {
+  const removeLanguagePicture = (language: DictionaryLanguage) => {
     selectionSeq.current += 1;
-    setFormData((prev) => ({ ...prev, imageUrlEn: null }));
+    setFormData((prev) => {
+      const localizedImages = { ...prev.localizedImages };
+      delete localizedImages[language];
+      return { ...prev, localizedImages };
+    });
   };
 
   // Revert: any new pick (file, AI or library) is dropped; nothing is saved here.
@@ -121,7 +153,8 @@ export default function ProductForm({ product, categories, onSubmit, onCancel }:
     setFormData((prev) => ({
       ...prev,
       imageUrl: savedImage.imageUrl,
-      imageUrlEn: savedImage.imageUrlEn,
+      imageTextLocale: savedImage.imageTextLocale,
+      localizedImages: savedImage.localizedImages,
     }));
   };
 
@@ -155,6 +188,8 @@ export default function ProductForm({ product, categories, onSubmit, onCancel }:
       return;
     }
     selectionSeq.current += 1;
+    // An uploaded picture is not labelled until someone says what its text is.
+    setFormData((prev) => ({ ...prev, imageTextLocale: null }));
     setSelectedFile(file);
   };
 
@@ -184,7 +219,10 @@ export default function ProductForm({ product, categories, onSubmit, onCancel }:
 
     // FR-2: an unchecked custom-image box saves no picture; the stored file is not deleted.
     if (!formData.isCustom) {
-      await onSubmit({ ...formData, imageUrl: '', imageUrlEn: null }, '');
+      await onSubmit(
+        { ...formData, imageUrl: '', imageTextLocale: null, localizedImages: {} },
+        ''
+      );
       return;
     }
 
@@ -361,17 +399,31 @@ export default function ProductForm({ product, categories, onSubmit, onCancel }:
           onGenerateImage={(url) => {
             if (aiRequestSeq.current !== selectionSeq.current) return;
             clearFileInput();
-            setFormData((prev) => ({ ...prev, imageUrl: url, isCustom: true }));
+            setFormData((prev) => ({
+              ...prev,
+              imageUrl: url,
+              imageTextLocale: null,
+              isCustom: true,
+            }));
           }}
-          onSelectLibraryImage={({ imageUrl, imageUrlEn }) => {
+          onSelectLibraryImage={({ imageUrl, imageTextLocale, localizedImages }) => {
             selectionSeq.current += 1;
-            // An English-only library picture fills the English field and keeps the main one.
+            // Without a main picture only the language versions are filled; the main one stays.
             if (!imageUrl) {
-              setFormData((prev) => ({ ...prev, imageUrlEn }));
+              setFormData((prev) => ({
+                ...prev,
+                localizedImages: { ...prev.localizedImages, ...localizedImages },
+              }));
               return;
             }
             clearFileInput();
-            setFormData((prev) => ({ ...prev, imageUrl, imageUrlEn, isCustom: true }));
+            setFormData((prev) => ({
+              ...prev,
+              imageUrl,
+              imageTextLocale,
+              localizedImages,
+              isCustom: true,
+            }));
           }}
         />
       </div>
@@ -469,60 +521,68 @@ export default function ProductForm({ product, categories, onSubmit, onCancel }:
                 </div>
               )
             )}
-            {englishPictureChanged ? (
-              <div className="mt-2 flex flex-wrap gap-4">
-                {savedImage.imageUrlEn && (
-                  <div className="flex flex-col gap-1">
-                    <span className="text-sm text-gray-600">{t('shared.nowEnglishImage')}</span>
-                    <ImagePreviewButton
-                      src={savedImage.imageUrlEn}
-                      alt={t('productForm.englishVersionAlt')}
-                      imgClassName="w-16 h-16"
-                    />
+            {DICTIONARY_LANGUAGES.map((language) => {
+              const text = pictureText[language];
+              const current = formData.localizedImages[language];
+              const saved = savedImage.localizedImages[language];
+              if (languageChanged(language)) {
+                return (
+                  <div key={language} className="mt-2 flex flex-wrap gap-4">
+                    {saved && (
+                      <div className="flex flex-col gap-1">
+                        <span className="text-sm text-gray-600">{text.savedLabel}</span>
+                        <ImagePreviewButton
+                          src={saved}
+                          alt={text.currentAlt}
+                          imgClassName="w-16 h-16"
+                        />
+                      </div>
+                    )}
+                    {current && (
+                      <div className="flex flex-col gap-1">
+                        <span className="text-sm text-gray-600">{text.newLabel}</span>
+                        <div className="flex items-center gap-3">
+                          <ImagePreviewButton
+                            src={current}
+                            alt={t('productForm.newImageAlt')}
+                            imgClassName="w-16 h-16"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => removeLanguagePicture(language)}
+                            className="text-sm text-red-600 hover:text-red-800"
+                          >
+                            {text.removeLabel}
+                          </button>
+                        </div>
+                      </div>
+                    )}
                   </div>
-                )}
-                {formData.imageUrlEn && (
-                  <div className="flex flex-col gap-1">
-                    <span className="text-sm text-gray-600">{t('shared.newEnglishImage')}</span>
+                );
+              }
+              return (
+                current && (
+                  <div key={language} className="mt-2">
+                    <p className="text-sm text-gray-600">{text.currentLabel}</p>
                     <div className="flex items-center gap-3">
                       <ImagePreviewButton
-                        src={formData.imageUrlEn}
-                        alt={t('productForm.newImageAlt')}
+                        src={current}
+                        alt={text.currentAlt}
+                        className="mt-1"
                         imgClassName="w-16 h-16"
                       />
                       <button
                         type="button"
-                        onClick={removeEnglishPicture}
+                        onClick={() => removeLanguagePicture(language)}
                         className="text-sm text-red-600 hover:text-red-800"
                       >
-                        {t('productForm.removeEnglishVersion')}
+                        {text.removeLabel}
                       </button>
                     </div>
                   </div>
-                )}
-              </div>
-            ) : (
-              formData.imageUrlEn && (
-                <div className="mt-2">
-                  <p className="text-sm text-gray-600">{t('productForm.englishVersion')}</p>
-                  <div className="flex items-center gap-3">
-                    <ImagePreviewButton
-                      src={formData.imageUrlEn}
-                      alt={t('productForm.englishVersionAlt')}
-                      className="mt-1"
-                      imgClassName="w-16 h-16"
-                    />
-                    <button
-                      type="button"
-                      onClick={removeEnglishPicture}
-                      className="text-sm text-red-600 hover:text-red-800"
-                    >
-                      {t('productForm.removeEnglishVersion')}
-                    </button>
-                  </div>
-                </div>
-              )
-            )}
+                )
+              );
+            })}
           </div>
         )}
       </div>

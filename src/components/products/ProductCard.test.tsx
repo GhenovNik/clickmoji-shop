@@ -17,7 +17,7 @@ const product: Product = {
   emoji: '🥛',
   isCustom: true,
   imageUrl: '/uploads/milk-ru.png',
-  imageUrlEn: '/uploads/milk-en.png',
+  localizedImages: { en: '/uploads/milk-en.png' },
   variants: [{ id: 'v-1', name: 'Обезжиренное', nameEn: 'Skimmed', emoji: '' }],
   category: {
     id: 'dairy',
@@ -71,7 +71,7 @@ describe('a product card', () => {
   });
 
   it('keeps the main picture in English when there is no English one', () => {
-    renderCard({ ...product, imageUrlEn: null }, 'en');
+    renderCard({ ...product, localizedImages: null }, 'en');
 
     expect(pictureSrc('Milk')).toContain('milk-ru.png');
   });
@@ -122,7 +122,7 @@ describe('the image placeholder of a product card', () => {
   });
 
   it('shows the emoji as before for a product without a picture', () => {
-    const withoutImage: Product = { ...product, imageUrl: null, imageUrlEn: null };
+    const withoutImage: Product = { ...product, imageUrl: null, localizedImages: null };
     renderCard(withoutImage, 'ru');
 
     expect(screen.getByText('🥛')).toBeTruthy();
