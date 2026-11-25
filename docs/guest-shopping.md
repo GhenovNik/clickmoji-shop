@@ -11,7 +11,8 @@ can build lists, add products, purchase, and read history, without registering.
    row. A valid existing session is reused instead of creating another guest.
 3. Lists, items, purchases, history and restore use the normal authenticated routes. Their
    ownership checks are unchanged, so a guest sees and changes only its own data.
-4. Converting to a regular account is `POST /api/auth/register` (see below).
+4. Regular registration is `POST /api/auth/register`, unchanged. It ignores the guest cookie and
+   creates a separate account; it never modifies or adopts the guest (see below).
 
 ## Decisions
 
@@ -36,26 +37,21 @@ can build lists, add products, purchase, and read history, without registering.
   funnel. The new `User.id` is still correlated to the funnel rows. Guest funnel rows are
   deleted with the guest by the existing `onDelete: Cascade`.
 
-## Conversion (guest to regular account)
+## Not in this change: guest to regular account
 
-`POST /api/auth/register` checks for a guest session cookie first:
+Registration does not convert a guest. `POST /api/auth/register` ignores the guest session
+cookie: it creates a new `User` row with starter lists, exactly as before, and never updates
+the guest row. The guest keeps its placeholder email, `isGuest = true`, lists and purchases.
+A duplicate email returns `400 userExists`, and a guest email is refused with `400 invalidEmail`.
 
-1. The cookie is decoded with `AUTH_SECRET`. The row must still exist, still have
-   `isGuest = true`, and the token must be fresh for its `createdAt`. Otherwise the request
-   takes the normal registration path.
-2. The **same row** is updated (`updateMany ... where { id, isGuest: true }`): real email,
-   password hash, name, `isGuest = false`, `guestLastActiveAt = null`.
-   `User.id` does not change, so lists, items, purchases, history, AI counters and funnel rows
-   stay attached. Starter lists are not created again.
-3. A duplicate email returns `400 userExists`. If the verification email cannot be sent, the
-   row is reverted to guest state (placeholder email, `isGuest = true`) and the response is
-   `503`. The guest keeps its shopping data.
-4. The response is `201` with `converted: true` and the unchanged `user.id`. The existing JWT
-   for that id is refreshed by the `jwt` callback on the next session read and carries
-   `isGuest = false`.
+A later change may convert a guest in place, keeping the same `User.id`. That change is out of
+scope here and needs its own design. It must update the existing row (`where { id, isGuest: true }`)
+to set the real email, password hash and name, and `isGuest = false`. It must not create a second
+row, copy or merge lists, or re-run starter lists. A guest cookie must never be used to change
+another account.
 
-Conversion is visible in analytics as `users.isGuest` changing from `true` to `false` on the
-same id. No second `REGISTER` is written.
+A later conversion would show in analytics as `users.isGuest` changing from `true` to `false` on
+the same id, with no second `REGISTER` written.
 
 ## Inactive guest cleanup
 
@@ -70,7 +66,7 @@ npm run db:cleanup-guests -- --inactive-days 45   # delete guests idle for 45+ d
   negative, fractional or malformed values fail closed with exit code 1.
 - Eligibility is strict: `isGuest = true`, `role = 'USER'`, and `guestLastActiveAt` (or
   `createdAt` when that is null) older than the cutoff. Each batch re-checks the same filter in
-  its `deleteMany`, so a guest that became active or converted in the meantime is kept.
+  its `deleteMany`, so a guest that became active or stopped being a guest in the meantime is kept.
 - Regular users, admins and recent guests are never matched. Deletion cascades to the guest's
   lists, items, history, favorites, AI counters and funnel rows.
 - `guestLastActiveAt` is refreshed by `requireUser` at most once a minute, and by the guest

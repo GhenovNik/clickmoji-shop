@@ -8,11 +8,6 @@ import { starterListData } from '@/lib/starter-lists';
 import { getGuestIdFromRequest, recordFunnelEvent } from '@/lib/funnel';
 import { isGuestEmail } from '@/lib/guest';
 import {
-  convertGuestToRegisteredUser,
-  findConvertibleGuestFromRequest,
-  revertGuestConversion,
-} from '@/lib/guest-conversion';
-import {
   checkRateLimit,
   getClientIp,
   getRequestLocale,
@@ -74,57 +69,6 @@ export async function POST(request: Request) {
     const hashedPassword = await bcrypt.hash(password, 12);
 
     const requiresEmailVerification = isEmailVerificationRequired();
-
-    // A server guest converts in place: same User.id, lists, purchases and history are kept.
-    const guest = await findConvertibleGuestFromRequest(request);
-    if (guest) {
-      const conversion = await convertGuestToRegisteredUser({
-        guest,
-        email: normalizedEmail,
-        passwordHash: hashedPassword,
-        name: typeof name === 'string' ? name.trim() || null : null,
-        requiresEmailVerification,
-      });
-
-      if (conversion.kind === 'duplicate') {
-        return NextResponse.json({ error: t('api.auth.userExists') }, { status: 400 });
-      }
-
-      if (conversion.kind === 'converted') {
-        let emailSent = false;
-        if (requiresEmailVerification) {
-          try {
-            const token = await createEmailVerificationToken(normalizedEmail);
-            await sendVerificationEmail({ email: normalizedEmail, token, locale });
-            emailSent = true;
-          } catch (emailError) {
-            console.error('Verification email error:', emailError);
-            // Strict mode: the guest keeps its shopping data and returns to guest state.
-            await revertGuestConversion(guest, normalizedEmail);
-            return NextResponse.json(
-              { error: t('api.auth.verificationEmailFailed') },
-              { status: 503 }
-            );
-          }
-        }
-
-        return NextResponse.json(
-          {
-            message: t('api.auth.userCreated'),
-            emailSent,
-            requiresEmailVerification,
-            converted: true,
-            user: {
-              id: conversion.user.id,
-              email: conversion.user.email,
-              name: conversion.user.name,
-            },
-          },
-          { status: 201 }
-        );
-      }
-      // The guest row vanished between the session check and the update: register normally below.
-    }
 
     // Create the user account.
     const user = await prisma.user.create({

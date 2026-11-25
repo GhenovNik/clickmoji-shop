@@ -82,7 +82,7 @@ export function inactiveGuestWhere(cutoff: Date): Prisma.UserWhereInput {
  * Deletes server-backed guest accounts inactive longer than `inactiveDays` (and their owned
  * lists, items, history, favorites, AI usage counters and user-scoped funnel events via schema
  * cascades). Re-checks eligibility inside every batch delete to avoid racing with a guest that
- * becomes active or converts concurrently.
+ * becomes active or stops being a guest concurrently.
  */
 export async function cleanupInactiveGuests({
   db = prisma,

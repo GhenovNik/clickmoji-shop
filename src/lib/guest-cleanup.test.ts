@@ -185,7 +185,7 @@ describe('cleanupInactiveGuests', () => {
     expect(users).toHaveLength(1);
   });
 
-  it('re-checks eligibility during deleteMany so a guest that became active or converted is kept', async () => {
+  it('re-checks eligibility during deleteMany so a guest that became active or stopped being a guest is kept', async () => {
     const { db, users } = createFakeDb(
       [
         {
@@ -199,7 +199,7 @@ describe('cleanupInactiveGuests', () => {
       ],
       {
         beforeDelete: (rows) => {
-          // Simulates the guest touching activity or converting to a regular account mid-job.
+          // Simulates the guest touching activity or being changed to a regular account mid-job.
           rows[0].guestLastActiveAt = NOW;
           rows[0].isGuest = false;
         },

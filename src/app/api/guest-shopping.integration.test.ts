@@ -353,7 +353,7 @@ describe.skipIf(!url)('server guest shopping on PostgreSQL', () => {
     await expect(authOptions.callbacks!.jwt!({ token: decodedJwt! } as never)).rejects.toThrow();
   });
 
-  it('converts a live guest in place keeping User.id and purchases, and dedupes funnel milestones per guestId', async () => {
+  it('leaves a live guest untouched when a regular registration runs from the same browser', async () => {
     const { FUNNEL_GUEST_COOKIE, signGuestId } = await import('@/lib/funnel');
     const { NEXTAUTH_SESSION_COOKIE } = await import('@/lib/guest');
     const { authOptions } = await import('@/lib/auth');
@@ -363,7 +363,6 @@ describe.skipIf(!url)('server guest shopping on PostgreSQL', () => {
     const startHeaders = { cookie: `NEXT_LOCALE=ru; ${funnelCookie}` };
     authHolder.session = null;
 
-    // Start, then start again from the same browser with the session lost (funnel cookie kept).
     const startRes = await routes.guestAuth.POST(
       new Request('http://localhost:3000/api/auth/guest', { method: 'POST', headers: startHeaders })
     );
@@ -374,19 +373,6 @@ describe.skipIf(!url)('server guest shopping on PostgreSQL', () => {
       new RegExp(`${NEXTAUTH_SESSION_COOKIE}=([^;]+)`)
     )![1];
 
-    const secondStartRes = await routes.guestAuth.POST(
-      new Request('http://localhost:3000/api/auth/guest', { method: 'POST', headers: startHeaders })
-    );
-    expect(secondStartRes.status).toBe(201);
-    createdUserIds.push(((await secondStartRes.json()) as { user: { id: string } }).user.id);
-    expect(await db.funnelEvent.count({ where: { guestId: visitGuestId, type: 'REGISTER' } })).toBe(
-      1
-    );
-    expect(
-      await db.funnelEvent.count({ where: { guestId: visitGuestId, type: 'LIST_CREATE' } })
-    ).toBe(1);
-
-    // The first guest buys something before converting.
     const decoded = await decode({ token: sessionToken, secret: process.env.AUTH_SECRET! });
     authHolder.session = {
       tokenIssuedAt: decoded!.iat as number,
@@ -397,21 +383,23 @@ describe.skipIf(!url)('server guest shopping on PostgreSQL', () => {
       await routes.lists.GET(new Request('http://localhost/api/lists', { headers: guestHeaders }))
     ).json()) as Array<{ id: string; isActive: boolean }>;
     const activeList = lists.find((l) => l.isActive)!;
-    const listsBefore = await db.list.count({ where: { userId: guest.id } });
     const addRes = await routes.addItems.POST(
       new Request(`http://localhost/api/lists/${activeList.id}/items`, {
         method: 'POST',
         headers: guestHeaders,
-        body: JSON.stringify({ items: [{ productId: globalProductId, note: 'convert' }] }),
+        body: JSON.stringify({ items: [{ productId: globalProductId, note: 'stays-guest' }] }),
       }),
       { params: Promise.resolve({ listId: activeList.id }) }
     );
     expect(addRes.status).toBe(200);
+    const guestBefore = await db.user.findUnique({ where: { id: guest.id } });
+    const guestListsBefore = await db.list.count({ where: { userId: guest.id } });
 
-    // Register with the guest session cookie: the same User row becomes a regular account.
+    // Regular registration with the guest cookie creates a separate account; it never adopts the guest.
     const previousVerification = process.env.AUTH_REQUIRE_EMAIL_VERIFICATION;
     process.env.AUTH_REQUIRE_EMAIL_VERIFICATION = 'false';
-    const convertedEmail = `converted-${suffix}@example.test`;
+    const regularEmail = `regular-${suffix}@example.test`;
+    let registeredId = '';
     try {
       const registerRes = await routes.register.POST(
         new Request('http://localhost:3000/api/auth/register', {
@@ -421,37 +409,44 @@ describe.skipIf(!url)('server guest shopping on PostgreSQL', () => {
             cookie: `${startHeaders.cookie}; ${NEXTAUTH_SESSION_COOKIE}=${sessionToken}`,
           },
           body: JSON.stringify({
-            email: convertedEmail,
-            password: 'Convert-1667-pass',
-            name: 'Converted',
+            email: regularEmail,
+            password: 'Regular-1667-pass',
+            name: 'Regular',
           }),
         })
       );
       expect(registerRes.status).toBe(201);
       const registerBody = (await registerRes.json()) as {
         converted?: boolean;
-        user: { id: string };
+        user: { id: string; email: string };
       };
-      expect(registerBody.converted).toBe(true);
-      expect(registerBody.user.id).toBe(guest.id);
+      expect(registerBody.converted).toBeUndefined();
+      expect(registerBody.user.id).not.toBe(guest.id);
+      registeredId = registerBody.user.id;
+      createdUserIds.push(registeredId);
     } finally {
       if (previousVerification === undefined) delete process.env.AUTH_REQUIRE_EMAIL_VERIFICATION;
       else process.env.AUTH_REQUIRE_EMAIL_VERIFICATION = previousVerification;
     }
 
-    const converted = await db.user.findUnique({ where: { id: guest.id } });
-    expect(converted).toMatchObject({
-      isGuest: false,
-      email: convertedEmail,
-      guestLastActiveAt: null,
+    // The guest row is unchanged: still a guest, same placeholder email, same lists and items.
+    expect(await db.user.findUnique({ where: { id: guest.id } })).toMatchObject({
+      isGuest: true,
+      email: guestBefore!.email,
     });
-    expect(await db.list.count({ where: { userId: guest.id } })).toBe(listsBefore);
+    expect(await db.list.count({ where: { userId: guest.id } })).toBe(guestListsBefore);
     expect(await db.item.count({ where: { listId: activeList.id } })).toBe(1);
-    expect(await db.user.count({ where: { email: convertedEmail } })).toBe(1);
 
-    // The old guest JWT keeps working for the same User.id, now as a regular account.
+    // The regular account is a separate, non-guest row with its own starter lists.
+    expect(await db.user.findUnique({ where: { id: registeredId } })).toMatchObject({
+      isGuest: false,
+      email: regularEmail,
+    });
+    expect(await db.list.count({ where: { userId: registeredId } })).toBeGreaterThan(0);
+
+    // The guest's old JWT still resolves to the guest row, not to the new account.
     const refreshed = await authOptions.callbacks!.jwt!({ token: decoded! } as never);
     expect(refreshed.id).toBe(guest.id);
-    expect(refreshed.isGuest).toBe(false);
+    expect(refreshed.isGuest).toBe(true);
   });
 });
