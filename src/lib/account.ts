@@ -2,7 +2,12 @@ import bcrypt from 'bcryptjs';
 import type { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
 import { normalizeEmail } from '@/lib/auth-security';
-import { visibleItemsWhere, visibleProductsWhere } from '@/lib/product-visibility';
+import {
+  keepSnapshotVariant,
+  visibleItemsWhere,
+  visibleProductsWhere,
+  visibleVariantProductIds,
+} from '@/lib/product-visibility';
 
 export const ACCOUNT_DELETE_PHRASES = {
   ru: 'УДАЛИТЬ',
@@ -153,27 +158,6 @@ function sameProductVariant<T extends ExportVariantRow & { productId: string }>(
     emoji: variant.emoji,
     imageUrl: variant.imageUrl,
     imageUrlEn: variant.imageUrlEn,
-  };
-}
-
-// Snapshot columns survive deletion, so the row stays. Its variant part is exported only while the
-// variant is still visible to the user and agrees with the snapshot product (when that is still set).
-function keepSnapshotVariant<T extends { productId: string | null; variantId: string | null }>(
-  item: T,
-  visibleVariantProductIds: Map<string, string>
-) {
-  if (item.variantId === null) return item;
-  const variantProductId = visibleVariantProductIds.get(item.variantId);
-  const consistent =
-    variantProductId !== undefined &&
-    (item.productId === null || variantProductId === item.productId);
-  if (consistent) return item;
-  return {
-    ...item,
-    variantId: null,
-    variantName: null,
-    variantNameEn: null,
-    variantEmoji: null,
   };
 }
 
@@ -341,18 +325,10 @@ export async function exportAccountData(userId: string) {
       ),
     ];
     // Variant visibility comes from its own product, not from the snapshot's productId.
-    const visibleSnapshotVariants =
-      snapshotVariantIds.length > 0
-        ? await tx.productVariant.findMany({
-            where: {
-              id: { in: snapshotVariantIds },
-              product: visibleProductsWhere(userId),
-            },
-            select: { id: true, productId: true },
-          })
-        : [];
-    const visibleSnapshotVariantProductIds = new Map(
-      visibleSnapshotVariants.map((variant) => [variant.id, variant.productId])
+    const visibleSnapshotVariantProductIds = await visibleVariantProductIds(
+      tx,
+      userId,
+      snapshotVariantIds
     );
 
     // ListHistoryItem.productId uses onDelete: SetNull so a user's own snapshot survives product

@@ -1,9 +1,13 @@
 // @vitest-environment node
 import bcrypt from 'bcryptjs';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { PrismaClient } from '@prisma/client';
 import { createPrismaPgAdapter } from './prisma-adapter';
 import type { deleteAccount as DeleteAccountFn } from './account';
+
+// Route handlers read the signed-in user from requireUser; the rest of the stack is real.
+const auth = vi.hoisted(() => ({ requireUser: vi.fn() }));
+vi.mock('@/lib/auth-guards', () => ({ requireUser: auth.requireUser }));
 
 // Run only through npm run test:account-delete-postgres: it creates and removes its own Docker DB.
 const url = process.env.INTEGRATION_DATABASE_URL;
@@ -508,6 +512,198 @@ describe.skipIf(!url)('account deletion guards on disposable PostgreSQL', () => 
         (await db.listHistoryItem.findMany()).map((hi) => [hi.productId, hi.variantId])
       ).toEqual([['milk-global', 'milk-variant']]);
       expect((await db.list.findMany()).map((l) => l.userId)).toEqual(['bob']);
+    });
+  });
+
+  // After Alice's deletion the legacy rows of Bob still point at her kept private variant
+  // (alice-variant, of the ownerless alice-private). Ordinary reads must not serialize it, while
+  // Bob's own consistent variant (milk-variant of the global milk-global) stays visible.
+  describe('legacy foreign variant stays out of ordinary and export reads after deletion', () => {
+    const bobRequest = (path: string, init?: RequestInit) =>
+      new Request(`http://localhost${path}`, init);
+    const jsonPost = (path: string, body: unknown) =>
+      bobRequest(path, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+
+    beforeEach(() => {
+      auth.requireUser.mockResolvedValue({ session: { user: { id: 'bob' } } });
+    });
+
+    it('GET /api/lists/[listId] drops the foreign variant and its id but keeps the product and the own variant', async () => {
+      await db.item.create({
+        data: {
+          listId: 'bob-list',
+          productId: 'milk-global',
+          variantId: 'alice-variant',
+          note: 'чужой',
+        },
+      });
+      await db.item.create({
+        data: { listId: 'bob-list', productId: 'milk-global', variantId: 'milk-variant', note: 'свой' },
+      });
+      expect(await deleteAccount({ userId: 'alice', password })).toEqual({ status: 'deleted' });
+
+      const { GET } = await import('@/app/api/lists/[listId]/route');
+      const response = await GET(bobRequest('/api/lists/bob-list'), {
+        params: Promise.resolve({ listId: 'bob-list' }),
+      });
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      const byNote = Object.fromEntries(
+        (body.items as { note: string; productId: string; variantId: string | null; variant: { id: string } | null }[]).map(
+          (item) => [item.note, item]
+        )
+      );
+      expect(byNote['чужой']).toMatchObject({ productId: 'milk-global', variantId: null, variant: null });
+      expect(byNote['свой']).toMatchObject({
+        productId: 'milk-global',
+        variantId: 'milk-variant',
+        variant: { id: 'milk-variant', name: '3.2%' },
+      });
+      expect(JSON.stringify(body)).not.toContain('alice-variant');
+      expect(JSON.stringify(body)).not.toContain('Ханикрисп');
+    });
+
+    it('the account export drops the same foreign variant from Bob list items', async () => {
+      await db.item.create({
+        data: { listId: 'bob-list', productId: 'milk-global', variantId: 'alice-variant' },
+      });
+      expect(await deleteAccount({ userId: 'alice', password })).toEqual({ status: 'deleted' });
+
+      const { exportAccountData } = await import('./account');
+      const exported = await exportAccountData('bob');
+      const serialized = JSON.stringify(exported);
+
+      expect(exported?.lists[0].items.map((item) => [item.product.id, item.variant])).toEqual([
+        ['milk-global', null],
+      ]);
+      expect(serialized).not.toContain('alice-variant');
+      expect(serialized).not.toContain('Ханикрисп');
+    });
+
+    it('GET /api/history hides the foreign snapshot variant and keeps the consistent one', async () => {
+      await db.listHistory.create({
+        data: { id: 'bob-history', userId: 'bob', listName: 'История Боба' },
+      });
+      await db.listHistoryItem.create({
+        data: {
+          historyId: 'bob-history',
+          productId: 'milk-global',
+          variantId: 'alice-variant',
+          productName: 'Молоко',
+          productEmoji: '🥛',
+          categoryName: 'Фрукты',
+          variantName: 'Ханикрисп',
+          variantEmoji: '🍎',
+          addedAt: new Date(),
+        },
+      });
+      await db.listHistoryItem.create({
+        data: {
+          historyId: 'bob-history',
+          productId: 'milk-global',
+          variantId: 'milk-variant',
+          productName: 'Молоко',
+          productEmoji: '🥛',
+          categoryName: 'Фрукты',
+          variantName: '3.2%',
+          variantEmoji: '🥛',
+          addedAt: new Date(),
+        },
+      });
+      expect(await deleteAccount({ userId: 'alice', password })).toEqual({ status: 'deleted' });
+
+      const { GET } = await import('@/app/api/history/route');
+      const body = await (await GET(bobRequest('/api/history'))).json();
+
+      expect(
+        body[0].items.map((item: { variantId: string | null; variantName: string | null }) => [
+          item.variantId,
+          item.variantName,
+        ]).sort()
+      ).toEqual([
+        [null, null],
+        ['milk-variant', '3.2%'],
+      ]);
+      expect(JSON.stringify(body)).not.toContain('alice-variant');
+      expect(JSON.stringify(body)).not.toContain('Ханикрисп');
+    });
+
+    it('completing a list copies only the own variant into the new snapshot', async () => {
+      await db.item.create({
+        data: { listId: 'bob-list', productId: 'milk-global', variantId: 'alice-variant' },
+      });
+      await db.item.create({
+        data: { listId: 'bob-list', productId: 'milk-global', variantId: 'milk-variant' },
+      });
+      expect(await deleteAccount({ userId: 'alice', password })).toEqual({ status: 'deleted' });
+
+      const { POST } = await import('@/app/api/history/route');
+      const response = await POST(jsonPost('/api/history', { listId: 'bob-list' }));
+      const created = await response.json();
+
+      expect(response.status).toBe(200);
+      const expected = [
+        [null, null],
+        ['milk-variant', '3.2%'],
+      ];
+      expect(
+        created.items.map((item: { variantId: string | null; variantName: string | null }) => [
+          item.variantId,
+          item.variantName,
+        ]).sort()
+      ).toEqual(expected);
+      expect(JSON.stringify(created)).not.toContain('alice-variant');
+      expect(JSON.stringify(created)).not.toContain('Ханикрисп');
+      const stored = await db.listHistoryItem.findMany({ where: { historyId: created.id } });
+      expect(stored.map((item) => [item.variantId, item.variantName]).sort()).toEqual(expected);
+    });
+
+    it('restoring a snapshot recreates only the own variant link', async () => {
+      await db.listHistory.create({
+        data: { id: 'bob-history', userId: 'bob', listName: 'История Боба' },
+      });
+      await db.listHistoryItem.create({
+        data: {
+          historyId: 'bob-history',
+          productId: 'milk-global',
+          variantId: 'alice-variant',
+          productName: 'Молоко',
+          productEmoji: '🥛',
+          categoryName: 'Фрукты',
+          addedAt: new Date(),
+        },
+      });
+      await db.listHistoryItem.create({
+        data: {
+          historyId: 'bob-history',
+          productId: 'milk-global',
+          variantId: 'milk-variant',
+          productName: 'Молоко',
+          productEmoji: '🥛',
+          categoryName: 'Фрукты',
+          addedAt: new Date(),
+        },
+      });
+      expect(await deleteAccount({ userId: 'alice', password })).toEqual({ status: 'deleted' });
+
+      const { POST } = await import('@/app/api/history/[historyId]/restore/route');
+      const response = await POST(jsonPost('/api/history/bob-history/restore', {}), {
+        params: Promise.resolve({ historyId: 'bob-history' }),
+      });
+      const result = await response.json();
+
+      expect(result).toMatchObject({ createdCount: 2, skippedCount: 0 });
+      const restored = await db.item.findMany({ where: { listId: result.listId } });
+      expect(restored).toHaveLength(2);
+      expect(restored.filter((item) => item.variantId !== null).map((item) => item.variantId)).toEqual([
+        'milk-variant',
+      ]);
+      expect(restored.every((item) => item.productId === 'milk-global')).toBe(true);
     });
   });
 });
