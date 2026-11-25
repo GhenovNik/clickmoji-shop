@@ -1,6 +1,10 @@
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { test, type BrowserContext, type Page, type Route } from '@playwright/test';
+import {
+  LOCALIZED_API_ERROR_HEADER,
+  LOCALIZED_API_ERROR_VALUE,
+} from '../../src/lib/api-error-source';
 import { E2E_AUTH_BYPASS_TOKEN, E2E_AUTH_COOKIE, E2E_LIST_ID, e2eCategory } from './fixtures/auth';
 
 // AGE-1667 H1: phone-width (390 px) sweep of the user screens in Russian and English, on local
@@ -254,7 +258,13 @@ async function setup(page: Page, context: BrowserContext, locale: Locale, scenar
     const url = new URL(request.url());
     const json = (body: unknown, status = 200) =>
       route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) });
-    const fail = () => json({ error: lookup(messages(locale, 'api'), 'import.importFailed') }, 500);
+    const importError = (key: string, status: number) =>
+      route.fulfill({
+        status,
+        headers: { [LOCALIZED_API_ERROR_HEADER]: LOCALIZED_API_ERROR_VALUE },
+        contentType: 'application/json',
+        body: JSON.stringify({ error: lookup(messages(locale, 'api'), key) }),
+      });
     const mode = (value: Mode | undefined) => value ?? 'ok';
 
     if (url.pathname === '/api/auth/session') {
@@ -302,12 +312,12 @@ async function setup(page: Page, context: BrowserContext, locale: Locale, scenar
       url.pathname === `/api/lists/${E2E_LIST_ID}/import-text` ||
       url.pathname === '/api/lists/import-text'
     ) {
-      if (scenario.importText === 'error') return fail();
+      if (scenario.importText === 'error') return importError('import.importFailed', 500);
       if (scenario.importText === 'rate') {
-        return json({ error: lookup(messages(locale, 'api'), 'rateLimited') }, 429);
+        return importError('rateLimited', 429);
       }
       if (scenario.importText === 'large') {
-        return json({ error: lookup(messages(locale, 'api'), 'import.payloadTooLarge') }, 413);
+        return importError('import.payloadTooLarge', 413);
       }
       if (scenario.importText === 'result') return json(importResult(locale));
       return json({ message: '', results: { added: [], created: [], skipped: [], failed: [] } });

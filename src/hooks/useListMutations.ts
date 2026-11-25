@@ -39,7 +39,9 @@ function localizedApiErrorMessage(res: Response, body: unknown): string | null {
 }
 
 function isImportResponse(body: unknown): body is { results: Record<string, unknown> } {
-  return isRecord(body) && isRecord(body.results);
+  if (!isRecord(body) || !isRecord(body.results)) return false;
+  const results = body.results;
+  return ['added', 'created', 'skipped', 'failed'].every((key) => Array.isArray(results[key]));
 }
 
 const textOf = (value: unknown) => (typeof value === 'string' ? value : '');
