@@ -45,10 +45,12 @@ export async function POST(request: Request) {
 
     const hashedPassword = await bcrypt.hash(password, 12);
     const outcome = await prisma.$transaction(async (tx) => {
-      const user = await tx.user.findUnique({
-        where: { email: normalizedEmail },
-        select: { id: true, emailVerified: true },
-      });
+      // Lock the user row before consuming reset tokens so reset, password change, and account
+      // deletion always lock `users` before `password_reset_tokens` and cannot deadlock.
+      const lockedUsers = await tx.$queryRaw<Array<{ id: string; emailVerified: Date | null }>>`
+        SELECT id, "emailVerified" FROM users WHERE email = ${normalizedEmail} FOR UPDATE
+      `;
+      const user = lockedUsers[0];
       if (!user) {
         return { ok: false as const, reason: t('api.auth.resetLinkInvalid') };
       }

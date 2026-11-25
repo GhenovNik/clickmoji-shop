@@ -283,10 +283,13 @@ export async function exportAccountData(userId: string) {
         : [];
     const visibleSnapshotProductIds = new Set(visibleSnapshotProducts.map((product) => product.id));
 
+    // ListHistoryItem.productId uses onDelete: SetNull so a user's own snapshot survives product
+    // deletion. Keep nulled-out own snapshots while filtering non-null productIds through
+    // visibleProductsWhere so legacy references to another user's private product are never exported.
     const history = rawHistories.map((entry) => ({
       ...entry,
       items: entry.items.filter(
-        (item) => Boolean(item.productId) && visibleSnapshotProductIds.has(item.productId!)
+        (item) => item.productId === null || visibleSnapshotProductIds.has(item.productId)
       ),
     }));
 
@@ -334,6 +337,12 @@ export function isValidDeleteConfirmationPhrase(confirmation: string | undefined
   return normalized === ACCOUNT_DELETE_PHRASES.en || normalized === ACCOUNT_DELETE_PHRASES.ru;
 }
 
+class AccountDeleteAbortedError extends Error {
+  constructor(public readonly status: 'not_found' | 'concurrent_change') {
+    super(`Account deletion aborted: ${status}`);
+  }
+}
+
 export async function deleteAccount(params: {
   userId: string;
   password?: string;
@@ -362,42 +371,64 @@ export async function deleteAccount(params: {
     return { status: 'confirmation_required' };
   }
 
-  return prisma.$transaction(async (tx) => {
-    const current = await tx.user.findUnique({
-      where: { id: userId },
-      select: { id: true, email: true, password: true },
-    });
+  try {
+    return await prisma.$transaction(async (tx) => {
+      // Lock the user row first (`users` -> tokens -> `products`) so deletion, password change,
+      // and password reset always acquire locks in the same order and cannot deadlock.
+      const lockedUsers = await tx.$queryRaw<
+        Array<{ id: string; email: string; password: string | null }>
+      >`SELECT id, email, password FROM users WHERE id = ${userId} FOR UPDATE`;
+      const current = lockedUsers[0];
 
-    if (!current) {
-      return { status: 'not_found' };
+      if (!current) {
+        return { status: 'not_found' };
+      }
+
+      if (current.password !== user.password) {
+        return { status: 'concurrent_change' };
+      }
+
+      const emailFilter = emailLookupFilter(current.email);
+      await tx.emailVerificationToken.deleteMany({
+        where: { email: emailFilter },
+      });
+      await tx.passwordResetToken.deleteMany({
+        where: { email: emailFilter },
+      });
+
+      // Remove the user's private products (isGlobal = false) so no orphaned private data stays
+      // in the catalog. Global products (isGlobal = true) remain untouched; User deletion sets
+      // Product.createdById = null via onDelete: SetNull, preserving other users' lists/favorites.
+      await tx.product.deleteMany({
+        where: {
+          createdById: userId,
+          isGlobal: false,
+        },
+      });
+
+      // Conditional delete (CAS on password) as defense-in-depth: if the password changed
+      // concurrently, abort the transaction so token and product deletions roll back atomically.
+      const deleted = await tx.user.deleteMany({
+        where: {
+          id: userId,
+          password: user.password,
+        },
+      });
+
+      if (deleted.count === 0) {
+        const stillExists = await tx.user.findUnique({
+          where: { id: userId },
+          select: { id: true },
+        });
+        throw new AccountDeleteAbortedError(stillExists ? 'concurrent_change' : 'not_found');
+      }
+
+      return { status: 'deleted' };
+    });
+  } catch (error) {
+    if (error instanceof AccountDeleteAbortedError) {
+      return { status: error.status };
     }
-
-    if (current.password !== user.password) {
-      return { status: 'concurrent_change' };
-    }
-
-    const emailFilter = emailLookupFilter(current.email);
-    await tx.emailVerificationToken.deleteMany({
-      where: { email: emailFilter },
-    });
-    await tx.passwordResetToken.deleteMany({
-      where: { email: emailFilter },
-    });
-
-    // Remove the user's private products (isGlobal = false) so no orphaned private data stays
-    // in the catalog. Global products (isGlobal = true) remain untouched; User deletion sets
-    // Product.createdById = null via onDelete: SetNull, preserving other users' lists/favorites.
-    await tx.product.deleteMany({
-      where: {
-        createdById: userId,
-        isGlobal: false,
-      },
-    });
-
-    await tx.user.delete({
-      where: { id: userId },
-    });
-
-    return { status: 'deleted' };
-  });
+    throw error;
+  }
 }

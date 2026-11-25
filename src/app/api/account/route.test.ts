@@ -198,8 +198,72 @@ function cascadeDeleteProducts(productIds: string[]) {
 
 const doubles = vi.hoisted(() => ({
   requireUser: vi.fn(),
-  onBeforePasswordUpdateTx: vi.fn<() => void>(),
+  onBeforePasswordUpdateTx: vi.fn<() => void | Promise<void>>(),
+  onBeforeDeleteLock: vi.fn<() => void | Promise<void>>(),
+  onAfterDeleteLock: vi.fn<() => void | Promise<void>>(),
+  onAfterResetLock: vi.fn<() => void | Promise<void>>(),
+  onBeforeUserDeleteMany: vi.fn<() => void | Promise<void>>(),
 }));
+
+type TxTraceEntry = { tx: number; table: string; op: string };
+const txTrace: TxTraceEntry[] = [];
+
+function snapshotDb() {
+  return {
+    users: db.users.map((row) => ({ ...row })),
+    emailTokens: db.emailTokens.map((row) => ({ ...row })),
+    resetTokens: db.resetTokens.map((row) => ({ ...row })),
+    categories: db.categories.map((row) => ({ ...row })),
+    products: db.products.map((row) => ({ ...row })),
+    variants: db.variants.map((row) => ({ ...row })),
+    lists: db.lists.map((row) => ({ ...row })),
+    items: db.items.map((row) => ({ ...row })),
+    favorites: db.favorites.map((row) => ({ ...row })),
+    variantFavorites: db.variantFavorites.map((row) => ({ ...row })),
+    histories: db.histories.map((row) => ({ ...row })),
+    historyItems: db.historyItems.map((row) => ({ ...row })),
+    aiUsage: db.aiUsage.map((row) => ({ ...row })),
+    funnelEvents: db.funnelEvents.map((row) => ({ ...row })),
+  };
+}
+
+function restoreDb(snapshot: ReturnType<typeof snapshotDb>) {
+  db.users = snapshot.users;
+  db.emailTokens = snapshot.emailTokens;
+  db.resetTokens = snapshot.resetTokens;
+  db.categories = snapshot.categories;
+  db.products = snapshot.products;
+  db.variants = snapshot.variants;
+  db.lists = snapshot.lists;
+  db.items = snapshot.items;
+  db.favorites = snapshot.favorites;
+  db.variantFavorites = snapshot.variantFavorites;
+  db.histories = snapshot.histories;
+  db.historyItems = snapshot.historyItems;
+  db.aiUsage = snapshot.aiUsage;
+  db.funnelEvents = snapshot.funnelEvents;
+}
+
+function deleteUserCascade(userId: string) {
+  // Mirror Prisma/Postgres cascades and SetNull semantics.
+  db.users = db.users.filter((u) => u.id !== userId);
+  const deletedListIds = new Set(db.lists.filter((l) => l.userId === userId).map((l) => l.id));
+  db.lists = db.lists.filter((l) => l.userId !== userId);
+  db.items = db.items.filter((i) => !deletedListIds.has(i.listId));
+  db.favorites = db.favorites.filter((f) => f.userId !== userId);
+  db.variantFavorites = db.variantFavorites.filter((vf) => vf.userId !== userId);
+  const deletedHistoryIds = new Set(
+    db.histories.filter((h) => h.userId === userId).map((h) => h.id)
+  );
+  db.histories = db.histories.filter((h) => h.userId !== userId);
+  db.historyItems = db.historyItems.filter((hi) => !deletedHistoryIds.has(hi.historyId));
+  db.aiUsage = db.aiUsage.filter((a) => a.userId !== userId);
+  db.funnelEvents = db.funnelEvents.filter((e) => e.userId !== userId);
+  // SetNull for Product.createdById on remaining products (e.g. global products).
+  db.products = db.products.map((p) =>
+    p.createdById === userId ? { ...p, createdById: null } : p
+  );
+}
 
 vi.mock('@/lib/auth-guards', () => ({
   requireUser: doubles.requireUser,
@@ -214,241 +278,286 @@ vi.mock('@/lib/auth-security', async (importOriginal) => {
 });
 
 vi.mock('@/lib/prisma', () => {
-  const prisma = {
-    user: {
-      findUnique: async ({
-        where,
-        select,
-      }: {
-        where: { id?: string; email?: string };
-        select?: Record<string, unknown>;
-      }) => {
-        const user = db.users.find((u) => (where.id ? u.id === where.id : u.email === where.email));
-        return user ? pickSelected(user, select) : null;
-      },
-      update: async ({
-        where,
-        data,
-      }: {
-        where: { id?: string; email?: string };
-        data: Partial<UserRow>;
-      }) => {
-        const user = db.users.find((u) => (where.id ? u.id === where.id : u.email === where.email));
-        if (!user) throw new Error('User not found');
-        Object.assign(user, data, { updatedAt: new Date() });
-        return user;
-      },
-      updateMany: async ({
-        where,
-        data,
-      }: {
-        where: Record<string, unknown>;
-        data: Partial<UserRow>;
-      }) => {
-        doubles.onBeforePasswordUpdateTx();
-        const matched = db.users.filter((u) => matches(u, where));
-        for (const u of matched) {
-          Object.assign(u, data, { updatedAt: new Date() });
-        }
-        return { count: matched.length };
-      },
-      delete: async ({ where }: { where: { id: string } }) => {
-        const user = db.users.find((u) => u.id === where.id);
-        if (!user) throw new Error('User not found');
-        // Mirror Prisma/Postgres cascades and SetNull semantics.
-        db.users = db.users.filter((u) => u.id !== where.id);
-        const deletedListIds = new Set(
-          db.lists.filter((l) => l.userId === where.id).map((l) => l.id)
-        );
-        db.lists = db.lists.filter((l) => l.userId !== where.id);
-        db.items = db.items.filter((i) => !deletedListIds.has(i.listId));
-        db.favorites = db.favorites.filter((f) => f.userId !== where.id);
-        db.variantFavorites = db.variantFavorites.filter((vf) => vf.userId !== where.id);
-        const deletedHistoryIds = new Set(
-          db.histories.filter((h) => h.userId === where.id).map((h) => h.id)
-        );
-        db.histories = db.histories.filter((h) => h.userId !== where.id);
-        db.historyItems = db.historyItems.filter((hi) => !deletedHistoryIds.has(hi.historyId));
-        db.aiUsage = db.aiUsage.filter((a) => a.userId !== where.id);
-        db.funnelEvents = db.funnelEvents.filter((e) => e.userId !== where.id);
-        // SetNull for Product.createdById on remaining products (e.g. global products).
-        db.products = db.products.map((p) =>
-          p.createdById === where.id ? { ...p, createdById: null } : p
-        );
-        return user;
-      },
-    },
-    emailVerificationToken: {
-      deleteMany: async ({ where }: { where: Record<string, unknown> }) => {
-        const before = db.emailTokens.length;
-        db.emailTokens = db.emailTokens.filter((row) => !matches(row, where));
-        return { count: before - db.emailTokens.length };
-      },
-    },
-    passwordResetToken: {
-      findFirst: async ({ where }: { where: Record<string, unknown> }) =>
-        db.resetTokens.find((row) => matches(row, where)) ?? null,
-      deleteMany: async ({ where }: { where: Record<string, unknown> }) => {
-        const before = db.resetTokens.length;
-        db.resetTokens = db.resetTokens.filter((row) => !matches(row, where));
-        return { count: before - db.resetTokens.length };
-      },
-    },
-    product: {
-      findMany: async ({
-        where,
-        select,
-      }: {
-        where: Record<string, unknown>;
-        select?: Record<string, unknown>;
-      }) => {
-        const rows = db.products.filter((p) => matches(p, where));
-        return rows.map((p) => {
-          const base = pickSelected(p, select);
-          if (select?.category) {
-            const cat = db.categories.find((c) => c.id === p.categoryId)!;
-            base.category = pickSelected(
-              cat,
-              (select.category as { select?: Record<string, unknown> }).select
+  let txSeq = 0;
+  const userLockTails = new Map<string, Promise<void>>();
+  const activeLockOwners = new Map<string, number>();
+
+  async function acquireUserLock(
+    lockKey: string,
+    txId: number | undefined,
+    txReleases: Array<() => void>
+  ) {
+    if (txId !== undefined && activeLockOwners.get(lockKey) === txId) {
+      return;
+    }
+    const previous = userLockTails.get(lockKey);
+    let releaseHeld!: () => void;
+    const held = new Promise<void>((resolve) => {
+      releaseHeld = resolve;
+    });
+    const tail = (previous ?? Promise.resolve()).then(() => held);
+    userLockTails.set(lockKey, tail);
+    await (previous ?? Promise.resolve());
+    if (txId !== undefined) {
+      activeLockOwners.set(lockKey, txId);
+    }
+    const release = () => {
+      if (txId !== undefined && activeLockOwners.get(lockKey) === txId) {
+        activeLockOwners.delete(lockKey);
+      }
+      releaseHeld();
+      if (userLockTails.get(lockKey) === tail) {
+        userLockTails.delete(lockKey);
+      }
+    };
+    if (txId !== undefined) {
+      txReleases.push(release);
+    } else {
+      return release;
+    }
+  }
+
+  function makeClient(txId?: number, txReleases: Array<() => void> = []) {
+    const recordOp = (table: string, op: string) => {
+      if (txId !== undefined) {
+        txTrace.push({ tx: txId, table, op });
+      }
+    };
+
+    const client = {
+      user: {
+        findUnique: async ({
+          where,
+          select,
+        }: {
+          where: { id?: string; email?: string };
+          select?: Record<string, unknown>;
+        }) => {
+          const user = db.users.find((u) =>
+            where.id ? u.id === where.id : u.email === where.email
+          );
+          return user ? pickSelected(user, select) : null;
+        },
+        update: async ({
+          where,
+          data,
+        }: {
+          where: { id?: string; email?: string };
+          data: Partial<UserRow>;
+        }) => {
+          recordOp('users', 'update');
+          const target = db.users.find((u) =>
+            where.id ? u.id === where.id : u.email === where.email
+          );
+          const release = target ? await acquireUserLock(target.id, txId, txReleases) : undefined;
+          try {
+            const user = db.users.find((u) =>
+              where.id ? u.id === where.id : u.email === where.email
             );
+            if (!user) throw new Error('User not found');
+            Object.assign(user, data, { updatedAt: new Date() });
+            return user;
+          } finally {
+            release?.();
           }
-          if (select?.variants) {
-            const vars = db.variants.filter((v) => v.productId === p.id);
-            base.variants = vars.map((v) =>
-              pickSelected(v, (select.variants as { select?: Record<string, unknown> }).select)
-            );
+        },
+        updateMany: async ({
+          where,
+          data,
+        }: {
+          where: Record<string, unknown>;
+          data: Partial<UserRow>;
+        }) => {
+          recordOp('users', 'updateMany');
+          await doubles.onBeforePasswordUpdateTx();
+          const candidates = db.users.filter((u) => matches(u, where));
+          const releases: Array<() => void> = [];
+          for (const candidate of candidates) {
+            const rel = await acquireUserLock(candidate.id, txId, txReleases);
+            if (rel) releases.push(rel);
           }
-          return base;
-        });
-      },
-      deleteMany: async ({ where }: { where: Record<string, unknown> }) => {
-        const toDelete = db.products.filter((p) => matches(p, where)).map((p) => p.id);
-        cascadeDeleteProducts(toDelete);
-        return { count: toDelete.length };
-      },
-    },
-    list: {
-      findMany: async ({
-        where,
-        select,
-      }: {
-        where: Record<string, unknown>;
-        select?: Record<string, unknown>;
-      }) => {
-        const lists = db.lists.filter((l) => matches(l, where));
-        return lists.map((list) => {
-          const base = pickSelected(list, select);
-          const itemsSpec = select?.items as
-            { where?: Record<string, unknown>; select?: Record<string, unknown> } | undefined;
-          if (itemsSpec) {
-            const listItems = db.items.filter(
-              (item) =>
-                item.listId === list.id &&
-                (!itemsSpec.where ||
-                  matches(item as unknown as Record<string, unknown>, itemsSpec.where))
-            );
-            base.items = listItems.map((item) => {
-              const itemOut = pickSelected(item, itemsSpec.select);
-              if (itemsSpec.select?.product) {
-                const prod = db.products.find((p) => p.id === item.productId)!;
-                const prodSelect = (
-                  itemsSpec.select.product as { select?: Record<string, unknown> }
-                ).select;
-                const prodOut = pickSelected(prod, prodSelect);
-                if (prodSelect?.category) {
-                  const cat = db.categories.find((c) => c.id === prod.categoryId)!;
-                  prodOut.category = pickSelected(
-                    cat,
-                    (prodSelect.category as { select?: Record<string, unknown> }).select
-                  );
-                }
-                itemOut.product = prodOut;
-              }
-              if (itemsSpec.select?.variant) {
-                const variant = item.variantId
-                  ? (db.variants.find((v) => v.id === item.variantId) ?? null)
-                  : null;
-                itemOut.variant = variant
-                  ? pickSelected(
-                      variant,
-                      (itemsSpec.select.variant as { select?: Record<string, unknown> }).select
-                    )
-                  : null;
-              }
-              return itemOut;
-            });
+          try {
+            const matched = db.users.filter((u) => matches(u, where));
+            for (const u of matched) {
+              Object.assign(u, data, { updatedAt: new Date() });
+            }
+            return { count: matched.length };
+          } finally {
+            releases.forEach((rel) => rel());
           }
-          return base;
-        });
-      },
-    },
-    listHistory: {
-      findMany: async ({
-        where,
-        select,
-      }: {
-        where: Record<string, unknown>;
-        select?: Record<string, unknown>;
-      }) => {
-        const histories = db.histories.filter((h) => matches(h, where));
-        return histories.map((history) => {
-          const base = pickSelected(history, select);
-          const itemsSpec = select?.items as { select?: Record<string, unknown> } | undefined;
-          if (itemsSpec) {
-            base.items = db.historyItems
-              .filter((hi) => hi.historyId === history.id)
-              .map((hi) => pickSelected(hi, itemsSpec.select));
+        },
+        delete: async ({ where }: { where: { id: string } }) => {
+          recordOp('users', 'delete');
+          const release = await acquireUserLock(where.id, txId, txReleases);
+          try {
+            const user = db.users.find((u) => u.id === where.id);
+            if (!user) throw new Error('User not found');
+            deleteUserCascade(user.id);
+            return user;
+          } finally {
+            release?.();
           }
-          return base;
-        });
+        },
+        deleteMany: async ({ where }: { where: Record<string, unknown> }) => {
+          recordOp('users', 'deleteMany');
+          await doubles.onBeforeUserDeleteMany();
+          const lockId = typeof where.id === 'string' ? where.id : undefined;
+          const release = lockId ? await acquireUserLock(lockId, txId, txReleases) : undefined;
+          try {
+            const matched = db.users.filter((u) => matches(u, where));
+            for (const u of matched) {
+              deleteUserCascade(u.id);
+            }
+            return { count: matched.length };
+          } finally {
+            release?.();
+          }
+        },
       },
-    },
-    favorite: {
-      findMany: async ({
-        where,
-        select,
-      }: {
-        where: Record<string, unknown>;
-        select?: Record<string, unknown>;
-      }) => {
-        const rows = db.favorites.filter((f) => matches(f, where));
-        return rows.map((fav) => {
-          const base = pickSelected(fav, select);
-          if (select?.product) {
-            const prod = db.products.find((p) => p.id === fav.productId)!;
-            const prodSelect = (select.product as { select?: Record<string, unknown> }).select;
-            const prodOut = pickSelected(prod, prodSelect);
-            if (prodSelect?.category) {
-              const cat = db.categories.find((c) => c.id === prod.categoryId)!;
-              prodOut.category = pickSelected(
+      emailVerificationToken: {
+        deleteMany: async ({ where }: { where: Record<string, unknown> }) => {
+          recordOp('emailVerificationToken', 'deleteMany');
+          const before = db.emailTokens.length;
+          db.emailTokens = db.emailTokens.filter((row) => !matches(row, where));
+          return { count: before - db.emailTokens.length };
+        },
+      },
+      passwordResetToken: {
+        findFirst: async ({ where }: { where: Record<string, unknown> }) => {
+          recordOp('passwordResetToken', 'findFirst');
+          return db.resetTokens.find((row) => matches(row, where)) ?? null;
+        },
+        deleteMany: async ({ where }: { where: Record<string, unknown> }) => {
+          recordOp('passwordResetToken', 'deleteMany');
+          const before = db.resetTokens.length;
+          db.resetTokens = db.resetTokens.filter((row) => !matches(row, where));
+          return { count: before - db.resetTokens.length };
+        },
+      },
+      product: {
+        findMany: async ({
+          where,
+          select,
+        }: {
+          where: Record<string, unknown>;
+          select?: Record<string, unknown>;
+        }) => {
+          const rows = db.products.filter((p) => matches(p, where));
+          return rows.map((p) => {
+            const base = pickSelected(p, select);
+            if (select?.category) {
+              const cat = db.categories.find((c) => c.id === p.categoryId)!;
+              base.category = pickSelected(
                 cat,
-                (prodSelect.category as { select?: Record<string, unknown> }).select
+                (select.category as { select?: Record<string, unknown> }).select
               );
             }
-            base.product = prodOut;
-          }
-          return base;
-        });
+            if (select?.variants) {
+              const vars = db.variants.filter((v) => v.productId === p.id);
+              base.variants = vars.map((v) =>
+                pickSelected(v, (select.variants as { select?: Record<string, unknown> }).select)
+              );
+            }
+            return base;
+          });
+        },
+        deleteMany: async ({ where }: { where: Record<string, unknown> }) => {
+          recordOp('product', 'deleteMany');
+          const toDelete = db.products.filter((p) => matches(p, where)).map((p) => p.id);
+          cascadeDeleteProducts(toDelete);
+          return { count: toDelete.length };
+        },
       },
-    },
-    variantFavorite: {
-      findMany: async ({
-        where,
-        select,
-      }: {
-        where: Record<string, unknown>;
-        select?: Record<string, unknown>;
-      }) => {
-        const rows = db.variantFavorites.filter((vf) => matches(vf, where));
-        return rows.map((vf) => {
-          const base = pickSelected(vf, select);
-          if (select?.variant) {
-            const variant = db.variants.find((v) => v.id === vf.variantId)!;
-            const varSelect = (select.variant as { select?: Record<string, unknown> }).select;
-            const varOut = pickSelected(variant, varSelect);
-            if (varSelect?.product) {
-              const prod = db.products.find((p) => p.id === variant.productId)!;
-              const prodSelect = (varSelect.product as { select?: Record<string, unknown> }).select;
+      list: {
+        findMany: async ({
+          where,
+          select,
+        }: {
+          where: Record<string, unknown>;
+          select?: Record<string, unknown>;
+        }) => {
+          const lists = db.lists.filter((l) => matches(l, where));
+          return lists.map((list) => {
+            const base = pickSelected(list, select);
+            const itemsSpec = select?.items as
+              { where?: Record<string, unknown>; select?: Record<string, unknown> } | undefined;
+            if (itemsSpec) {
+              const listItems = db.items.filter(
+                (item) =>
+                  item.listId === list.id &&
+                  (!itemsSpec.where ||
+                    matches(item as unknown as Record<string, unknown>, itemsSpec.where))
+              );
+              base.items = listItems.map((item) => {
+                const itemOut = pickSelected(item, itemsSpec.select);
+                if (itemsSpec.select?.product) {
+                  const prod = db.products.find((p) => p.id === item.productId)!;
+                  const prodSelect = (
+                    itemsSpec.select.product as { select?: Record<string, unknown> }
+                  ).select;
+                  const prodOut = pickSelected(prod, prodSelect);
+                  if (prodSelect?.category) {
+                    const cat = db.categories.find((c) => c.id === prod.categoryId)!;
+                    prodOut.category = pickSelected(
+                      cat,
+                      (prodSelect.category as { select?: Record<string, unknown> }).select
+                    );
+                  }
+                  itemOut.product = prodOut;
+                }
+                if (itemsSpec.select?.variant) {
+                  const variant = item.variantId
+                    ? (db.variants.find((v) => v.id === item.variantId) ?? null)
+                    : null;
+                  itemOut.variant = variant
+                    ? pickSelected(
+                        variant,
+                        (itemsSpec.select.variant as { select?: Record<string, unknown> }).select
+                      )
+                    : null;
+                }
+                return itemOut;
+              });
+            }
+            return base;
+          });
+        },
+      },
+      listHistory: {
+        findMany: async ({
+          where,
+          select,
+        }: {
+          where: Record<string, unknown>;
+          select?: Record<string, unknown>;
+        }) => {
+          const histories = db.histories.filter((h) => matches(h, where));
+          return histories.map((history) => {
+            const base = pickSelected(history, select);
+            const itemsSpec = select?.items as { select?: Record<string, unknown> } | undefined;
+            if (itemsSpec) {
+              base.items = db.historyItems
+                .filter((hi) => hi.historyId === history.id)
+                .map((hi) => pickSelected(hi, itemsSpec.select));
+            }
+            return base;
+          });
+        },
+      },
+      favorite: {
+        findMany: async ({
+          where,
+          select,
+        }: {
+          where: Record<string, unknown>;
+          select?: Record<string, unknown>;
+        }) => {
+          const rows = db.favorites.filter((f) => matches(f, where));
+          return rows.map((fav) => {
+            const base = pickSelected(fav, select);
+            if (select?.product) {
+              const prod = db.products.find((p) => p.id === fav.productId)!;
+              const prodSelect = (select.product as { select?: Record<string, unknown> }).select;
               const prodOut = pickSelected(prod, prodSelect);
               if (prodSelect?.category) {
                 const cat = db.categories.find((c) => c.id === prod.categoryId)!;
@@ -457,18 +566,88 @@ vi.mock('@/lib/prisma', () => {
                   (prodSelect.category as { select?: Record<string, unknown> }).select
                 );
               }
-              varOut.product = prodOut;
+              base.product = prodOut;
             }
-            base.variant = varOut;
-          }
-          return base;
-        });
+            return base;
+          });
+        },
       },
-    },
-    $transaction: async <T>(run: (tx: unknown) => Promise<T>): Promise<T> => run(prisma),
-  };
+      variantFavorite: {
+        findMany: async ({
+          where,
+          select,
+        }: {
+          where: Record<string, unknown>;
+          select?: Record<string, unknown>;
+        }) => {
+          const rows = db.variantFavorites.filter((vf) => matches(vf, where));
+          return rows.map((vf) => {
+            const base = pickSelected(vf, select);
+            if (select?.variant) {
+              const variant = db.variants.find((v) => v.id === vf.variantId)!;
+              const varSelect = (select.variant as { select?: Record<string, unknown> }).select;
+              const varOut = pickSelected(variant, varSelect);
+              if (varSelect?.product) {
+                const prod = db.products.find((p) => p.id === variant.productId)!;
+                const prodSelect = (varSelect.product as { select?: Record<string, unknown> })
+                  .select;
+                const prodOut = pickSelected(prod, prodSelect);
+                if (prodSelect?.category) {
+                  const cat = db.categories.find((c) => c.id === prod.categoryId)!;
+                  prodOut.category = pickSelected(
+                    cat,
+                    (prodSelect.category as { select?: Record<string, unknown> }).select
+                  );
+                }
+                varOut.product = prodOut;
+              }
+              base.variant = varOut;
+            }
+            return base;
+          });
+        },
+      },
+      $queryRaw: async (strings: TemplateStringsArray, ...values: unknown[]) => {
+        const sql = strings.join('?');
+        if (/FROM\s+users\s+WHERE\s+id\s*=\s*\?\s+FOR\s+UPDATE/i.test(sql)) {
+          recordOp('users', 'forUpdate');
+          await doubles.onBeforeDeleteLock();
+          const userId = String(values[0]);
+          await acquireUserLock(userId, txId, txReleases);
+          await doubles.onAfterDeleteLock();
+          const user = db.users.find((u) => u.id === userId);
+          return user ? [{ id: user.id, email: user.email, password: user.password }] : [];
+        }
+        if (/FROM\s+users\s+WHERE\s+email\s*=\s*\?\s+FOR\s+UPDATE/i.test(sql)) {
+          recordOp('users', 'forUpdate');
+          const email = String(values[0]);
+          const candidate = db.users.find((u) => u.email === email);
+          await acquireUserLock(candidate?.id ?? `email:${email}`, txId, txReleases);
+          await doubles.onAfterResetLock();
+          const user = db.users.find((u) => u.email === email);
+          return user ? [{ id: user.id, emailVerified: user.emailVerified }] : [];
+        }
+        throw new Error(`Unsupported $queryRaw in test fake: ${sql}`);
+      },
+      $transaction: async <T>(run: (tx: unknown) => Promise<T>): Promise<T> => {
+        const nextTxId = ++txSeq;
+        const snapshot = snapshotDb();
+        const releases: Array<() => void> = [];
+        try {
+          const result = await run(makeClient(nextTxId, releases));
+          return result;
+        } catch (error) {
+          restoreDb(snapshot);
+          throw error;
+        } finally {
+          releases.forEach((release) => release());
+        }
+      },
+    };
+    return client;
+  }
 
-  return { prisma };
+  return { prisma: makeClient() };
 });
 
 const accountRoute = await import('@/app/api/account/route');
@@ -847,6 +1026,11 @@ beforeEach(async () => {
   vi.clearAllMocks();
   vi.spyOn(console, 'error').mockImplementation(() => undefined);
   doubles.onBeforePasswordUpdateTx.mockImplementation(() => undefined);
+  doubles.onBeforeDeleteLock.mockImplementation(() => undefined);
+  doubles.onAfterDeleteLock.mockImplementation(() => undefined);
+  doubles.onAfterResetLock.mockImplementation(() => undefined);
+  doubles.onBeforeUserDeleteMany.mockImplementation(() => undefined);
+  txTrace.length = 0;
   await seedDatabase();
   doubles.requireUser.mockResolvedValue({
     session: { user: { id: 'user-a', email: 'alice@example.com', role: 'ADMIN' } },
@@ -1058,6 +1242,74 @@ describe('GET /api/account/export', () => {
       expect(rawText).not.toContain(forbidden);
     }
   });
+
+  it('preserves own history snapshots after product deletion (productId=null via SetNull) without leaking foreign private products', async () => {
+    // Simulate a global/own catalog product that was deleted earlier (SetNull nulled productId/variantId
+    // while keeping snapshot columns) alongside Alice's product deletion via cascadeDeleteProducts,
+    // while hi-a-legacy-foreign still points to Bob's existing private product.
+    const now = new Date('2026-11-20T10:00:00.000Z');
+    db.historyItems.push({
+      id: 'hi-a-deleted-catalog',
+      historyId: 'hist-a',
+      productId: null,
+      variantId: null,
+      productName: 'Удалённый товар',
+      productNameEn: 'Deleted Product',
+      productEmoji: '🥫',
+      productImageUrl: null,
+      productImageUrlEn: null,
+      categoryName: 'Бакалея',
+      categoryNameEn: 'Pantry',
+      isCustom: false,
+      variantName: 'Большая банка',
+      variantNameEn: 'Large jar',
+      variantEmoji: '🥫',
+      note: '2 шт',
+      isPurchased: true,
+      addedAt: now,
+      createdAt: now,
+    });
+    // Also delete Alice's own private product (onDelete: SetNull on ListHistoryItem.productId).
+    cascadeDeleteProducts(['prod-private-a']);
+
+    const res = await exportRoute.GET(
+      jsonRequest('http://localhost/api/account/export', 'GET', undefined, 'en')
+    );
+    expect(res.status).toBe(200);
+
+    const rawText = await res.text();
+    const payload = JSON.parse(rawText);
+
+    // Boundary 1: Both SetNull own history snapshots (productId === null) are preserved in full.
+    expect(payload.history).toHaveLength(1);
+    expect(payload.history[0].items).toHaveLength(2);
+    expect(payload.history[0].items.map((item: { id: string }) => item.id)).toEqual([
+      'hi-a-own',
+      'hi-a-deleted-catalog',
+    ]);
+    expect(payload.history[0].items[0]).toMatchObject({
+      id: 'hi-a-own',
+      productId: null,
+      variantId: null,
+      productName: 'Секрет Алисы',
+      productNameEn: 'Alice Secret',
+    });
+    expect(payload.history[0].items[1]).toMatchObject({
+      id: 'hi-a-deleted-catalog',
+      productId: null,
+      variantId: null,
+      productName: 'Удалённый товар',
+      productNameEn: 'Deleted Product',
+      variantName: 'Большая банка',
+      note: '2 шт',
+    });
+
+    // Boundary 2: Foreign private product snapshot (hi-a-legacy-foreign) remains excluded.
+    expect(rawText).not.toContain('hi-a-legacy-foreign');
+    expect(rawText).not.toContain('prod-private-b');
+    expect(rawText).not.toContain('Секрет Боба');
+    expect(rawText).not.toContain('Bob Secret');
+  });
 });
 
 describe('DELETE /api/account', () => {
@@ -1119,5 +1371,165 @@ describe('DELETE /api/account', () => {
     );
     expect(ok.status).toBe(200);
     expect(db.users.map((u) => u.id)).not.toContain('user-google');
+  });
+
+  it('returns 409 and leaves user and data intact when password changes before delete transaction locks row', async () => {
+    const newHash = await bcrypt.hash('ConcurrentReset1', 4);
+    doubles.onBeforeDeleteLock.mockImplementationOnce(() => {
+      db.users[0].password = newHash;
+    });
+
+    const res = await accountRoute.DELETE(
+      jsonRequest('http://localhost/api/account', 'DELETE', { password: 'Password123' }, 'en')
+    );
+
+    expect(res.status).toBe(409);
+    expect(db.users.find((u) => u.id === 'user-a')?.password).toBe(newHash);
+    expect(db.emailTokens.map((t) => t.email)).toEqual(['alice@example.com', 'bob@example.com']);
+    expect(db.resetTokens.map((t) => t.email)).toEqual(['alice@example.com', 'bob@example.com']);
+    expect(db.products.map((p) => p.id)).toContain('prod-private-a');
+    expect(db.lists.map((l) => l.id)).toContain('list-a');
+  });
+
+  it('rolls back deleted tokens and private products when user.deleteMany CAS sees concurrent password change', async () => {
+    const originalHash = db.users[0].password;
+    const newHash = await bcrypt.hash('MidTxChange1', 4);
+    doubles.onBeforeUserDeleteMany.mockImplementationOnce(() => {
+      db.users[0].password = newHash;
+    });
+
+    const res = await accountRoute.DELETE(
+      jsonRequest('http://localhost/api/account', 'DELETE', { password: 'Password123' }, 'en')
+    );
+
+    expect(res.status).toBe(409);
+    // All deletions performed earlier inside the transaction must be rolled back.
+    expect(db.users.find((u) => u.id === 'user-a')?.password).toBe(originalHash);
+    expect(db.emailTokens.map((t) => t.id)).toEqual(['et-a', 'et-b']);
+    expect(db.resetTokens.map((t) => t.id)).toEqual(['rt-a', 'rt-b']);
+    expect(db.products.map((p) => p.id)).toEqual([
+      'prod-global-by-a',
+      'prod-private-a',
+      'prod-private-b',
+    ]);
+    expect(db.lists.map((l) => l.id)).toEqual(['list-a', 'list-b']);
+    expect(db.histories.map((h) => h.id)).toEqual(['hist-a', 'hist-b']);
+  });
+
+  it('returns 409 for passwordless Google user if a password is set concurrently before deletion', async () => {
+    doubles.requireUser.mockResolvedValue({
+      session: { user: { id: 'user-google', email: 'google@example.com', role: 'USER' } },
+    });
+    const setHash = await bcrypt.hash('NewResetPass1', 4);
+    doubles.onBeforeDeleteLock.mockImplementationOnce(() => {
+      db.users.find((u) => u.id === 'user-google')!.password = setHash;
+    });
+
+    const res = await accountRoute.DELETE(
+      jsonRequest('http://localhost/api/account', 'DELETE', { confirmation: 'DELETE' }, 'en')
+    );
+
+    expect(res.status).toBe(409);
+    expect(db.users.find((u) => u.id === 'user-google')?.password).toBe(setHash);
+  });
+
+  it('serializes concurrent deleteAccount and reset-password when delete locks user first without deadlock or 500', async () => {
+    let resetPromise: Promise<Response> | undefined;
+    doubles.onAfterDeleteLock.mockImplementationOnce(() => {
+      resetPromise = resetPasswordRoute.POST(
+        jsonRequest(
+          'http://localhost/api/auth/reset-password',
+          'POST',
+          { email: 'alice@example.com', token: 'raw-reset-token-a', password: 'ResetWinner1' },
+          'en'
+        )
+      );
+    });
+
+    const deleteRes = await accountRoute.DELETE(
+      jsonRequest('http://localhost/api/account', 'DELETE', { password: 'Password123' }, 'en')
+    );
+    const resetRes = await resetPromise!;
+
+    expect(deleteRes.status).toBe(200);
+    expect(resetRes.status).toBe(400);
+    expect(db.users.find((u) => u.id === 'user-a')).toBeUndefined();
+    expect(db.resetTokens.map((t) => t.email)).toEqual(['bob@example.com']);
+  });
+
+  it('serializes concurrent reset-password and deleteAccount when reset locks user first and rejects delete with 409', async () => {
+    let deletePromise: Promise<Response> | undefined;
+    let releaseReset!: () => void;
+    const resetCanContinue = new Promise<void>((resolve) => {
+      releaseReset = resolve;
+    });
+
+    doubles.onBeforeDeleteLock.mockImplementationOnce(() => {
+      releaseReset();
+    });
+    doubles.onAfterResetLock.mockImplementationOnce(async () => {
+      // Launch deleteAccount while reset-password holds the user lock and before it updates the
+      // password hash, then wait until deleteAccount has passed bcrypt.compare and reached its lock.
+      deletePromise = accountRoute.DELETE(
+        jsonRequest('http://localhost/api/account', 'DELETE', { password: 'Password123' }, 'en')
+      );
+      await resetCanContinue;
+    });
+
+    const resetRes = await resetPasswordRoute.POST(
+      jsonRequest(
+        'http://localhost/api/auth/reset-password',
+        'POST',
+        { email: 'alice@example.com', token: 'raw-reset-token-a', password: 'ResetWinner1' },
+        'en'
+      )
+    );
+    const deleteRes = await deletePromise!;
+
+    expect(resetRes.status).toBe(200);
+    expect(deleteRes.status).toBe(409);
+    const alice = db.users.find((u) => u.id === 'user-a')!;
+    expect(alice).toBeDefined();
+    expect(await bcrypt.compare('ResetWinner1', alice.password!)).toBe(true);
+    expect(db.products.map((p) => p.id)).toContain('prod-private-a');
+    expect(db.lists.map((l) => l.id)).toContain('list-a');
+  });
+
+  it('acquires users lock before passwordResetToken across password change, reset-password, and deleteAccount', async () => {
+    await passwordRoute.POST(
+      jsonRequest(
+        'http://localhost/api/account/password',
+        'POST',
+        { currentPassword: 'Password123', newPassword: 'NewPassword456' },
+        'en'
+      )
+    );
+    await seedDatabase();
+    await resetPasswordRoute.POST(
+      jsonRequest(
+        'http://localhost/api/auth/reset-password',
+        'POST',
+        { email: 'alice@example.com', token: 'raw-reset-token-a', password: 'ResetPassword1' },
+        'en'
+      )
+    );
+    await seedDatabase();
+    await accountRoute.DELETE(
+      jsonRequest('http://localhost/api/account', 'DELETE', { password: 'Password123' }, 'en')
+    );
+
+    const tablesByTx = new Map<number, string[]>();
+    for (const entry of txTrace) {
+      const list = tablesByTx.get(entry.tx) ?? [];
+      list.push(entry.table);
+      tablesByTx.set(entry.tx, list);
+    }
+
+    expect(tablesByTx.size).toBe(3);
+    for (const tables of tablesByTx.values()) {
+      expect(tables[0]).toBe('users');
+      const tokenIdx = tables.indexOf('passwordResetToken');
+      expect(tokenIdx).toBeGreaterThan(0);
+    }
   });
 });
