@@ -16,6 +16,9 @@ model User {
   role                 UserRole  @default(USER)
   emailVerified        DateTime?
   createdProductsCount Int       @default(0)
+  // Server-backed anonymous guest account state (AGE-1667); ordinary users default to false/null.
+  isGuest              Boolean   @default(false)
+  guestLastActiveAt    DateTime?
 
   lists            List[]
   favorites        Favorite[]
@@ -28,6 +31,7 @@ model User {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  @@index([isGuest, guestLastActiveAt])
   @@map("users")
 }
 
