@@ -202,10 +202,25 @@ const fakeUploader = () => {
     `${UPLOADS}${++n}-${encodeURIComponent(name)}.webp`;
 };
 
-function authFor(cells: ManifestCell[]) {
+// The authorisation for the seeded old state: the old URL and the old isCustom flag (seeded true).
+function authFor(cells: ManifestCell[], expectedIsCustom = true) {
   return new Map(
-    cells.map((cell) => [normalizeCatalogName(cell.name), { expectedImageUrl: OLD(cell.name) }])
+    cells.map((cell) => [
+      normalizeCatalogName(cell.name),
+      { expectedImageUrl: OLD(cell.name), expectedIsCustom },
+    ])
   );
+}
+
+// A fake uploader that also records the category name each upload was for.
+function recordingUploader() {
+  const inner = fakeUploader();
+  const names: string[] = [];
+  const upload = async (image: Buffer, name: string) => {
+    names.push(name);
+    return inner(image, name);
+  };
+  return { upload, names };
 }
 
 describe.skipIf(!url)(
@@ -408,6 +423,7 @@ describe.skipIf(!url)(
           replacements: replaceCells.map((cell) => ({
             category: cell.name,
             expectedImageUrl: OLD(cell.name),
+            expectedIsCustom: true,
           })),
         })
       );
@@ -440,7 +456,9 @@ describe.skipIf(!url)(
       writeFileSync(
         authPath,
         JSON.stringify({
-          replacements: [{ category: 'Напитки', expectedImageUrl: OLD('Напитки') }],
+          replacements: [
+            { category: 'Напитки', expectedImageUrl: OLD('Напитки'), expectedIsCustom: true },
+          ],
         })
       );
       const result = runCli(
@@ -454,6 +472,103 @@ describe.skipIf(!url)(
       expect(result.stderr).toContain('--replace-auth: нет записей для замены');
       expect(result.stdout).not.toContain('Preview:');
       expect(await db.emojiLibraryItem.count()).toBe(0);
+    });
+
+    it('replaces a category whose authorised original is isCustom false, and turns the mode on', async () => {
+      await db.category.updateMany({
+        where: { name: { in: replaceCells.map((c) => c.name) } },
+        data: { isCustom: false },
+      });
+      const dir = await syntheticSheets(manifest);
+      const batch = manifest.filter((b) => b.batch === 'queue-011');
+      const { results } = await importBatches(
+        db,
+        dir,
+        batch,
+        authFor(replaceCells, false),
+        fakeUploader()
+      );
+
+      expect(results.map((r) => r.result.conflict)).toEqual(Array(5).fill(undefined));
+      for (const cell of replaceCells) {
+        const row = await db.category.findUniqueOrThrow({ where: { name: cell.name } });
+        const library = await db.emojiLibraryItem.findUniqueOrThrow({
+          where: { sourceRef: `queue-011#${cell.cell}` },
+        });
+        expect(row.isCustom).toBe(true);
+        expect(row.imageUrl).toBe(library.imageUrl);
+      }
+    });
+
+    it('leaves a mode switched off by hand alone when the old URL still matches', async () => {
+      await db.category.update({ where: { name: 'Напитки' }, data: { isCustom: false } });
+      const dir = await syntheticSheets(manifest);
+      const batch = manifest.filter((b) => b.batch === 'queue-011');
+      const { results } = await importBatches(db, dir, batch, replaceAuth(), fakeUploader());
+
+      const drinks = results.find((r) => r.cell.name === 'Напитки')!;
+      expect(drinks.result.product).toBe('conflict');
+      expect(drinks.result.conflict).toContain('не содержит ожидаемую старую картинку и режим');
+      expect(
+        await db.emojiLibraryItem.findUnique({ where: { sourceRef: 'queue-011#1' } })
+      ).toBeNull();
+      const row = await db.category.findUniqueOrThrow({ where: { name: 'Напитки' } });
+      expect(row).toMatchObject({ imageUrl: OLD('Напитки'), isCustom: false });
+    });
+
+    it('keeps a mode switched off by hand while the run uploads, same URL', async () => {
+      const dir = await syntheticSheets(manifest);
+      const batch = manifest.filter((b) => b.batch === 'queue-011');
+      // The other writer switches the mode off for this category while this run uploads its picture.
+      const upload = async (_image: Buffer, name: string) => {
+        if (name === 'Напитки') {
+          await db.category.update({ where: { name: 'Напитки' }, data: { isCustom: false } });
+        }
+        return `${UPLOADS}mode-race-${encodeURIComponent(name)}.webp`;
+      };
+      const { results } = await importBatches(db, dir, batch, replaceAuth(), upload);
+
+      const drinks = results.find((r) => r.cell.name === 'Напитки')!;
+      expect(drinks.result.product).toBe('conflict');
+      expect(drinks.result.conflict).toContain('изменилась после проверки');
+      const row = await db.category.findUniqueOrThrow({ where: { name: 'Напитки' } });
+      expect(row).toMatchObject({ imageUrl: OLD('Напитки'), isCustom: false });
+    });
+
+    it('does not replay a finished replacement once its mode was switched off by hand', async () => {
+      const dir = await syntheticSheets(manifest);
+      const batch = manifest.filter((b) => b.batch === 'queue-011');
+      const first = await importBatches(db, dir, batch, replaceAuth(), fakeUploader());
+      expect(first.results.filter((r) => r.result.product === 'conflict')).toEqual([]);
+
+      await db.category.update({ where: { name: 'Напитки' }, data: { isCustom: false } });
+      const { upload, names } = recordingUploader();
+      const replay = await importBatches(db, dir, batch, replaceAuth(), upload);
+
+      const drinks = replay.results.find((r) => r.cell.name === 'Напитки')!;
+      expect(drinks.result.product).toBe('conflict');
+      expect(names).not.toContain('Напитки');
+      const row = await db.category.findUniqueOrThrow({ where: { name: 'Напитки' } });
+      expect(row.isCustom).toBe(false);
+    });
+
+    it('refuses a null picture with no library record as a replay, before any upload or library write', async () => {
+      await db.category.update({ where: { name: 'Напитки' }, data: { imageUrl: null } });
+      const dir = await syntheticSheets(manifest);
+      const batch = manifest.filter((b) => b.batch === 'queue-011');
+      const { upload, names } = recordingUploader();
+      const { results } = await importBatches(db, dir, batch, replaceAuth(), upload);
+
+      const drinks = results.find((r) => r.cell.name === 'Напитки')!;
+      expect(drinks.result.product).toBe('conflict');
+      expect(drinks.result.conflict).toContain('не содержит ожидаемую старую картинку');
+      expect(names).not.toContain('Напитки');
+      expect(
+        await db.emojiLibraryItem.findUnique({ where: { sourceRef: 'queue-011#1' } })
+      ).toBeNull();
+      expect(
+        (await db.category.findUniqueOrThrow({ where: { name: 'Напитки' } })).imageUrl
+      ).toBeNull();
     });
   }
 );

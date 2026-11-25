@@ -2134,7 +2134,7 @@ describe('replacing a category picture (AGE-1667 C6)', () => {
     images: { ru: Buffer.from('ru') },
     stored: {},
     product: { kind: 'category', categoryId: 'c-drinks', categoryName: 'Напитки' },
-    replacement: { expectedImageUrl: OLD },
+    replacement: { expectedImageUrl: OLD, expectedIsCustom: true },
     ...overrides,
   });
   // Category reads come in order: the pre-upload check, then the read after a failed write.
@@ -2172,7 +2172,7 @@ describe('replacing a category picture (AGE-1667 C6)', () => {
 
     expect(result).toMatchObject({ product: 'category', changed: true, uploaded: 1 });
     expect(prisma.category.updateMany).toHaveBeenCalledWith({
-      where: { id: 'c-drinks', imageUrl: OLD },
+      where: { id: 'c-drinks', imageUrl: OLD, isCustom: true },
       data: { isCustom: true, imageUrl: NEW },
     });
   });
@@ -2209,7 +2209,7 @@ describe('replacing a category picture (AGE-1667 C6)', () => {
     expect(result).toMatchObject({ product: 'category', changed: true, uploaded: 0 });
     expect(upload).not.toHaveBeenCalled();
     expect(prisma.category.updateMany).toHaveBeenCalledWith({
-      where: { id: 'c-drinks', imageUrl: OLD },
+      where: { id: 'c-drinks', imageUrl: OLD, isCustom: true },
       data: { isCustom: true, imageUrl: NEW },
     });
   });
@@ -2246,7 +2246,7 @@ describe('replacing a category picture (AGE-1667 C6)', () => {
     const upload = vi.fn().mockResolvedValue(NEW);
     const result = await applyCell(
       prisma as unknown as PrismaClient,
-      planFor({ replacement: { expectedImageUrl: OLD } }),
+      planFor({ replacement: { expectedImageUrl: OLD, expectedIsCustom: true } }),
       upload
     );
 
@@ -2287,6 +2287,91 @@ describe('replacing a category picture (AGE-1667 C6)', () => {
     );
     // A new URL without the custom flag is not the applied state: it is refused, not overwritten.
     expect(result.product).toBe('conflict');
+  });
+
+  it('swaps an authorised original with isCustom false and sets the flag with the picture', async () => {
+    const prisma = prismaWith([{ imageUrl: OLD, isCustom: false }]);
+    const upload = vi.fn().mockResolvedValue(NEW);
+    const result = await applyCell(
+      prisma as unknown as PrismaClient,
+      planFor({ replacement: { expectedImageUrl: OLD, expectedIsCustom: false } }),
+      upload
+    );
+
+    expect(result).toMatchObject({ product: 'category', changed: true, uploaded: 1 });
+    expect(prisma.category.updateMany).toHaveBeenCalledWith({
+      where: { id: 'c-drinks', imageUrl: OLD, isCustom: false },
+      data: { isCustom: true, imageUrl: NEW },
+    });
+  });
+
+  it('leaves a manual mode change made before the run alone when the URL still matches', async () => {
+    const prisma = prismaWith([{ imageUrl: OLD, isCustom: false }]);
+    const upload = vi.fn().mockResolvedValue(NEW);
+    const result = await applyCell(prisma as unknown as PrismaClient, planFor(), upload);
+
+    expect(result.product).toBe('conflict');
+    expect(result.conflict).toContain('не содержит ожидаемую старую картинку и режим');
+    expect(upload).not.toHaveBeenCalled();
+    expect(prisma.emojiLibraryItem.create).not.toHaveBeenCalled();
+    expect(prisma.category.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('keeps a manual mode change that lands between the read and the update', async () => {
+    const prisma = prismaWith(
+      [
+        { imageUrl: OLD, isCustom: true },
+        { imageUrl: OLD, isCustom: false },
+      ],
+      0
+    );
+    // Same URL, mode switched off by hand while this run uploads: the conditional write must not match.
+    const upload = vi.fn(async () => NEW);
+    const result = await applyCell(prisma as unknown as PrismaClient, planFor(), upload);
+
+    expect(result.product).toBe('conflict');
+    expect(result.conflict).toContain('изменилась после проверки');
+    expect(prisma.category.updateMany).toHaveBeenCalledWith({
+      where: { id: 'c-drinks', imageUrl: OLD, isCustom: true },
+      data: { isCustom: true, imageUrl: NEW },
+    });
+  });
+
+  it('does not treat a replay as applied once the mode was switched off by hand', async () => {
+    const prisma = prismaWith([{ imageUrl: NEW, isCustom: false }], 1, LIBRARY);
+    const upload = vi.fn().mockResolvedValue(NEW);
+    const result = await applyCell(
+      prisma as unknown as PrismaClient,
+      planFor({ replacement: { expectedImageUrl: OLD, expectedIsCustom: true } }),
+      upload
+    );
+
+    expect(result.product).toBe('conflict');
+    expect(upload).not.toHaveBeenCalled();
+    expect(prisma.category.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('refuses a null URL with no library record before any upload or library write', async () => {
+    const prisma = prismaWith([{ imageUrl: null, isCustom: true }]);
+    const upload = vi.fn().mockResolvedValue(NEW);
+    const result = await applyCell(prisma as unknown as PrismaClient, planFor(), upload);
+
+    expect(result.product).toBe('conflict');
+    expect(result.conflict).toContain('не содержит ожидаемую старую картинку');
+    expect(upload).not.toHaveBeenCalled();
+    expect(prisma.emojiLibraryItem.create).not.toHaveBeenCalled();
+    expect(prisma.emojiLibraryItem.upsert).not.toHaveBeenCalled();
+    expect(prisma.category.updateMany).not.toHaveBeenCalled();
+  });
+
+  it("does not treat an unowned URL that merely equals the new one as this cell's replay", async () => {
+    const prisma = prismaWith([{ imageUrl: NEW, isCustom: true }]);
+    const upload = vi.fn().mockResolvedValue(NEW);
+    const result = await applyCell(prisma as unknown as PrismaClient, planFor(), upload);
+
+    expect(result.product).toBe('conflict');
+    expect(upload).not.toHaveBeenCalled();
+    expect(prisma.category.updateMany).not.toHaveBeenCalled();
   });
 
   it('never replaces a category picture for an ambiguous or missing category', async () => {
@@ -2342,9 +2427,14 @@ describe('the replacement authorisation file (AGE-1667 C6)', () => {
     },
   ];
   const selected = [manifest[1]];
-  const entry = (category: string, expectedImageUrl = 'https://cdn.example.test/old.webp') => ({
+  const entry = (
+    category: string,
+    expectedImageUrl = 'https://cdn.example.test/old.webp',
+    expectedIsCustom: unknown = true
+  ) => ({
     category,
     expectedImageUrl,
+    expectedIsCustom,
   });
   const file = (...replacements: unknown[]) => ({ replacements });
 
@@ -2355,7 +2445,42 @@ describe('the replacement authorisation file (AGE-1667 C6)', () => {
       selected
     );
     expect([...map.keys()]).toEqual(['напитки', 'рыба и морепродукты']);
-    expect(map.get('напитки')).toEqual({ expectedImageUrl: 'https://cdn.example.test/old.webp' });
+    expect(map.get('напитки')).toEqual({
+      expectedImageUrl: 'https://cdn.example.test/old.webp',
+      expectedIsCustom: true,
+    });
+  });
+
+  it('keeps the authorised isCustom flag, false as well as true', () => {
+    const map = parseReplacementAuthorization(
+      file(entry('Напитки', undefined, false), entry('Рыба и морепродукты', undefined, true)),
+      manifest,
+      selected
+    );
+    expect(map.get('напитки')?.expectedIsCustom).toBe(false);
+    expect(map.get('рыба и морепродукты')?.expectedIsCustom).toBe(true);
+  });
+
+  it('refuses an entry without expectedIsCustom or with a non-boolean one', () => {
+    expect(() =>
+      parseReplacementAuthorization(
+        file(
+          { category: 'Напитки', expectedImageUrl: 'https://cdn.example.test/a.webp' },
+          entry('Рыба и морепродукты')
+        ),
+        manifest,
+        selected
+      )
+    ).toThrow('ровно поля "category", "expectedImageUrl" и "expectedIsCustom"');
+    for (const bad of ['true', 1, null]) {
+      expect(() =>
+        parseReplacementAuthorization(
+          file(entry('Напитки', undefined, bad), entry('Рыба и морепродукты')),
+          manifest,
+          selected
+        )
+      ).toThrow('expectedIsCustom должен быть true или false');
+    }
   });
 
   it('refuses a missing replacement before anything is read', () => {

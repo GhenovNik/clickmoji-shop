@@ -86,7 +86,7 @@ function describeAction(cell: ManifestCell, product: ProductPlan | null) {
   if (cell.action === 'replace') {
     if (!product) return `замена картинки категории «${cell.name}» (каталог не проверялся)`;
     if (product.kind === 'category')
-      return `замена картинки категории «${product.categoryName}»: записывается, только если категория всё ещё содержит старую картинку из --replace-auth; иначе конфликт, ничего не перезаписывается`;
+      return `замена картинки категории «${product.categoryName}»: записывается, только если категория всё ещё содержит старую картинку и флаг isCustom из --replace-auth; иначе конфликт, ничего не перезаписывается`;
   }
   if (!product) {
     if (cell.target === 'variant')
@@ -191,7 +191,7 @@ async function main() {
     authorization = parseReplacementAuthorization(json, manifest, batches);
   } else if (apply && replaceCount(batches) > 0) {
     throw new Error(
-      `--apply: ${replaceCount(batches)} замен(ы) картинок категорий требуют --replace-auth <файл> с прежним URL каждой категории (см. docs/emoji-batches/README.md)`
+      `--apply: ${replaceCount(batches)} замен(ы) картинок категорий требуют --replace-auth <файл> с прежним URL и флагом isCustom каждой категории (см. docs/emoji-batches/README.md)`
     );
   }
   const prisma = process.env.DATABASE_URL
