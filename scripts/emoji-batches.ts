@@ -23,7 +23,8 @@ export type Candidate = {
   // Enclosed white regions of the picture were checked to be gaps (herb stems, a bunch, a donut
   // hole): the import may clear them. Never set on labelled products.
   gaps?: boolean;
-  action: 'create' | 'update-image';
+  // replace: a picture that is already there is swapped (AGE-1667 C6); only queue categories.
+  action: 'create' | 'update-image' | 'replace';
 };
 
 type Snapshot = {
@@ -157,26 +158,35 @@ function emptyCells(items: Candidate[]) {
   return `\nOnly cells 1–${items.length} hold an icon. Every other cell stays completely empty white: do not repeat, copy or add any icon there.`;
 }
 
-const STYLE = `Style: One object viewed from the front at a slight angle, filling 70–80% of the cell; simplified smooth forms, 3–5 saturated colors, soft upper-left light and one soft highlight. No texture, pores, fibres, grains or photographic reflections; no outlines or background shadows. Labels are flat, single-color, with up to two large words. Recognizable at 32px.
-Category cells: Compose two or three items of the same group with the same lighting and simplification.
+// The category rule of the historical batches (001–014 and text-001…004): two or three items.
+export const CATEGORY_RULE_TWO_OR_THREE =
+  'Category cells: Compose two or three items of the same group with the same lighting and simplification.';
+// The queue (AGE-1667 C6): a category cell shows exactly three of its most recognizable items.
+export const CATEGORY_RULE_EXACTLY_THREE =
+  'Category cells: Compose exactly three of the most recognizable items of the same group, in one single composition, with the same lighting and simplification as the other cells.';
+
+const style = (
+  categoryRule: string
+) => `Style: One object viewed from the front at a slight angle, filling 70–80% of the cell; simplified smooth forms, 3–5 saturated colors, soft upper-left light and one soft highlight. No texture, pores, fibres, grains or photographic reflections; no outlines or background shadows. Labels are flat, single-color, with up to two large words. Recognizable at 32px.
+${categoryRule}
 NOT photorealistic, NOT a cartoon sticker: no thick dark outlines. NO shadows or drop shadows. NO grid lines, cell borders, frames or dividers. NO captions under the icons.
 Every icon is centered in its own cell with generous white space around it; no icon touches or crosses its cell edge.`;
 
 // A text-free picture serves every language.
-export function universalPrompt(items: Candidate[]) {
+export function universalPrompt(items: Candidate[], categoryRule = CATEGORY_RULE_TWO_OR_THREE) {
   return `Create ONE square image: a 3×3 grid of separate product emoji on a pure white background (#FFFFFF).
 
-${STYLE}${emptyCells(items)}
+${style(categoryRule)}${emptyCells(items)}
 NO text at all: no letters, words, numbers or logos anywhere, not even on packaging.
 
 Cells, left to right, top to bottom:
 ${cells(items, (item) => `«${item.name}»`)}`;
 }
 
-export function textPrompt(items: Candidate[]) {
+export function textPrompt(items: Candidate[], categoryRule = CATEGORY_RULE_TWO_OR_THREE) {
   return `Create ONE square image: a 3×3 grid of separate product emoji on a pure white background (#FFFFFF).
 
-${STYLE}${emptyCells(items)}
+${style(categoryRule)}${emptyCells(items)}
 Each product is shown in its typical packaging with ONE short label in Russian, exactly the quoted word(s) below, large, spelled correctly. No other text, no brand names.
 
 Cells, left to right, top to bottom (label in quotes):
@@ -191,7 +201,11 @@ export function englishFollowUpPrompt(items: Candidate[]) {
 ${names}`;
 }
 
-const ACTION = { create: 'новый', 'update-image': 'картинка для существующего' } as const;
+const ACTION = {
+  create: 'новый',
+  'update-image': 'картинка для существующего',
+  replace: 'замена картинки категории (нужен старый URL в --replace-auth)',
+} as const;
 
 function table(items: Candidate[], supersededBy?: Map<number, string>) {
   const rows = items.map((item, i) => {
