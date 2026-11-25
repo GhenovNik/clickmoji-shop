@@ -35,9 +35,13 @@ export const META_DIR = 'meta';
 export const LOCK_NAME = '.backup.lock';
 // Containers started by a run that the daemon has not yet been seen to remove (the recovery marker).
 export const LEDGER_NAME = '.backup.ledger';
+// Operator confirmation state for the first restored encrypted copy before purging plaintext dumps.
+export const ENCRYPTED_CONFIRM_STATE_NAME = '.encrypted-restore-confirmed.json';
 export const TEMP_PREFIX = 'clickmoji-backup-';
 // Written into every temporary directory first; removed last, and never by a container's cleanup.
 export const TEMP_MARKER = 'owner.json';
+export const WAITING_CONFIRMATION_NOTE =
+  'шифрование включено, открытые копии ждут подтверждения восстановления';
 
 // Process exit codes.
 export const EXIT = Object.freeze({
@@ -65,6 +69,11 @@ export const MESSAGES = Object.freeze({
   drop: 'сбой: число строк упало более чем на 20%',
   encrypt: 'сбой: шифрование не удалось',
   publish: 'сбой: публикация не удалась',
+  confirmTarget: 'сбой: копия для подтверждения отсутствует или не подходит',
+  confirmCorrupt: 'сбой: копия для подтверждения повреждена или подменена',
+  confirmStale: 'сбой: копия устарела для текущего перехода к шифрованию',
+  confirmState: 'сбой: состояние подтверждения повреждено',
+  confirmStatusSaved: 'сбой: подтверждение сохранено, статус не записан',
   busy: 'сбой: уже выполняется другое снятие',
   cleanup: 'сбой: очистка временной папки не удалась',
   containers: 'сбой: не удалось подтвердить остановку контейнера',

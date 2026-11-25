@@ -1,9 +1,11 @@
 #!/usr/bin/env node
-// Entry point: node scripts/backup/cli.mjs [--allow-row-drop]
+// Entry point:
+//   node scripts/backup/cli.mjs [--allow-row-drop]
+//   node scripts/backup/cli.mjs --confirm-encrypted-restore <file.dump.age>
 // Required environment (values are never printed):
-//   DATABASE_URL                  source database (postgres://), forwarded to containers by name
 //   BACKUP_DIR                    explicit absolute directory (e.g. main checkout's gitignored backups/)
 //   BACKUP_STATUS_FILE            absolute status file outside the repository and backup directory
+//   DATABASE_URL                  source database (postgres://), required for backup runs only
 // Optional:
 //   BACKUP_ENCRYPT                0/false (default, unencrypted pg_dump -Fc) or 1/true (age encryption)
 //   BACKUP_AGE_RECIPIENT_FILE     required when BACKUP_ENCRYPT=1; file holding one public age key (age1...)
@@ -11,22 +13,30 @@
 //   BACKUP_DOCKER_BIN             docker binary (default "docker")
 //   BACKUP_GIT_BIN                git binary (default "git")
 //   BACKUP_DOCKER_TIMEOUT_MS      ms a management docker/git call may take before kill (default 20000)
-// Single-run flag:
+// Single-run flags:
 //   --allow-row-drop              accepts >20% table row drop for this run only and updates baseline
+//   --confirm-encrypted-restore   records operator confirmation after decrypting/restoring <file.dump.age>
 // Exit codes: 0 ok, 1 failed (old copies intact), 2 rejected (>20% row drop without --allow-row-drop),
-// 3 busy, 4 docker, image or git unavailable, 5 copy published but its status line could not be written,
+// 3 busy, 4 docker, image or git unavailable, 5 copy or confirmation saved but its status line could not be written,
 // 130 interrupted.
 // Configuration is read only from the environment (see config.mjs). The database address
 // is never printed, passed in argv, or written to the status file.
 //
-// Two processes run for one backup. The one started by the user holds no lock: it starts this
+// Two processes run for one operation. The one started by the user holds no lock: it starts this
 // same file under the lock launcher (lock.mjs), which execs the writer in place. The writer is the
 // process that does the work, and it owns the locked descriptor (BACKUP_LOCK_FD) for its whole run.
 // Signals sent to the starter are forwarded to the writer; the starter returns the writer's status.
 import os from 'node:os';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { ConfigError, loadBaseConfig, loadConfig, parseCliArgs } from './config.mjs';
-import { MESSAGES } from './constants.mjs';
+import {
+  ConfigError,
+  loadBaseConfig,
+  loadConfig,
+  loadConfirmConfig,
+  parseCliArgs,
+} from './config.mjs';
+import { confirmEncryptedRestore, confirmationTargetPaths } from './confirm.mjs';
+import { MESSAGES, WAITING_CONFIRMATION_NOTE } from './constants.mjs';
 import { DockerRunner } from './docker.mjs';
 import { canonicalPath, isInsidePath, verifyBackupDirGitIgnored } from './git.mjs';
 import { heldLock, LAUNCH_BUSY, LAUNCH_FAILED, LOCK_FD_ENV, launchLocked } from './lock.mjs';
@@ -68,12 +78,18 @@ export async function main(env = process.env, argv = process.argv.slice(2)) {
     return 1;
   }
 
+  const isConfirmMode = cliOptions.confirmEncryptedRestore !== undefined;
+
   let config;
   try {
-    config = loadConfig(env);
+    config = isConfirmMode ? loadConfirmConfig(env) : loadConfig(env);
   } catch (error) {
     const message = error instanceof ConfigError ? error.message : 'ошибка конфигурации';
-    if (error instanceof ConfigError && message.startsWith('BACKUP_AGE_RECIPIENT_FILE')) {
+    if (
+      !isConfirmMode &&
+      error instanceof ConfigError &&
+      message.startsWith('BACKUP_AGE_RECIPIENT_FILE')
+    ) {
       tryRecordConfigFailure(env, message);
     }
     process.stderr.write(`backup: ${message}\n`);
@@ -88,6 +104,7 @@ export async function main(env = process.env, argv = process.argv.slice(2)) {
       gitBin: config.gitBin,
       env,
       timeoutMs: config.dockerTimeoutMs,
+      targetPaths: confirmationTargetPaths(config.backupDir),
     });
     if (
       (gitCheck.repoRoot && isInsidePath(canonicalPath(config.statusFile), gitCheck.repoRoot)) ||
@@ -112,6 +129,23 @@ export async function main(env = process.env, argv = process.argv.slice(2)) {
     return 1;
   }
 
+  if (isConfirmMode) {
+    const result = confirmEncryptedRestore({
+      config,
+      lock,
+      fileName: cliOptions.confirmEncryptedRestore,
+      env,
+    });
+    const summary = result.ok
+      ? `backup: confirmed encrypted restore ${result.file} at ${result.confirmedAt}`
+      : `backup: ${MESSAGES[result.key]}`;
+    process.stdout.write(`${summary}\n`);
+    if (!result.statusWritten) {
+      process.stdout.write(`backup: ${MESSAGES[result.saved ? 'confirmStatusSaved' : 'status']}\n`);
+    }
+    return result.exit;
+  }
+
   const docker = new DockerRunner({
     bin: config.dockerBin,
     containerEnv: config.containerEnv,
@@ -134,7 +168,9 @@ export async function main(env = process.env, argv = process.argv.slice(2)) {
     env,
   });
   const summary = result.ok
-    ? `backup: ok ${result.name} verify=${result.verify}`
+    ? result.waitingForConfirmation
+      ? `backup: ok ${result.name} verify=${result.verify} decrypt=unconfirmed (${WAITING_CONFIRMATION_NOTE})`
+      : `backup: ok ${result.name} verify=${result.verify}`
     : `backup: ${MESSAGES[result.key]}`;
   process.stdout.write(`${summary}\n`);
   if (!result.statusWritten) {

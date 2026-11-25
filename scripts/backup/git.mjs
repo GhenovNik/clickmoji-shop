@@ -10,6 +10,7 @@ import {
   BACKUP_PLAIN_SUFFIX,
   BACKUP_PREFIX,
   DOCKER_TIMEOUT_MS,
+  ENCRYPTED_CONFIRM_STATE_NAME,
   EXIT,
   LEDGER_NAME,
   LOCK_NAME,
@@ -382,6 +383,8 @@ export function verifyBackupDirGitIgnored({
     `${physicalPath}/${META_DIR}/${BACKUP_PREFIX}probe${BACKUP_ENCRYPTED_SUFFIX}.json`,
     `${physicalPath}/${META_DIR}/.partial-${BACKUP_PREFIX}probe${BACKUP_PLAIN_SUFFIX}.json`,
     `${physicalPath}/${META_DIR}/.partial-${BACKUP_PREFIX}probe${BACKUP_ENCRYPTED_SUFFIX}.json`,
+    `${physicalPath}/${META_DIR}/${ENCRYPTED_CONFIRM_STATE_NAME}`,
+    `${physicalPath}/${META_DIR}/.partial-${ENCRYPTED_CONFIRM_STATE_NAME}`,
   ];
 
   for (const target of targetPaths) {

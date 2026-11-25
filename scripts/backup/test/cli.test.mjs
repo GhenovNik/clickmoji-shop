@@ -32,7 +32,12 @@ import {
   spawnLockHolder,
   syntheticDatabase,
 } from './helpers.mjs';
-import { EXIT, MESSAGES } from '../constants.mjs';
+import {
+  ENCRYPTED_CONFIRM_STATE_NAME,
+  EXIT,
+  MESSAGES,
+  WAITING_CONFIRMATION_NOTE,
+} from '../constants.mjs';
 
 let sandbox;
 let db;
@@ -550,6 +555,172 @@ globalThis.Date = class extends RealDate {
       statSync(path.join(sandbox.backupDir, 'meta', `${copy}.json`)).mode & 0o777,
       0o600
     );
+  });
+});
+
+describe('B2 CLI explicit confirmation and transition flow', () => {
+  it('end-to-end CLI flow: unconfirmed encrypted runs keep plain dumps with waiting note; --confirm-encrypted-restore works without DB/keys and deletes nothing; next encrypted run purges plain dumps', async () => {
+    const oldPlain = seedBackups(sandbox.backupDir, 2, {
+      startDay: 2,
+      encrypted: false,
+      counts: { a: 10, b: 20 },
+    });
+
+    // First encrypted run via CLI keeps oldPlain and prints waiting reminder
+    const first = await runCli(envFor(sandbox, db), [], { cli: sandbox.cli });
+    assert.equal(first.code, EXIT.ok, first.stderr + first.stdout);
+    assert.match(first.stdout, new RegExp(WAITING_CONFIRMATION_NOTE));
+    assert.match(readStatus(sandbox), new RegExp(WAITING_CONFIRMATION_NOTE));
+    const afterFirst = listCopies(sandbox.backupDir);
+    assert.equal(afterFirst.length, 3);
+    const enc1 = afterFirst.find((name) => name.endsWith('.dump.age'));
+    assert.ok(enc1);
+
+    // Explicit confirmation without DATABASE_URL, BACKUP_ENCRYPT, or BACKUP_AGE_RECIPIENT_FILE
+    const confirmEnv = {
+      PATH: process.env.PATH,
+      BACKUP_DIR: sandbox.backupDir,
+      BACKUP_STATUS_FILE: sandbox.statusFile,
+    };
+    const dockerCallsBefore = readDockerCalls();
+    const confirmed = await runCli(confirmEnv, ['--confirm-encrypted-restore', enc1], {
+      cli: sandbox.cli,
+    });
+    assert.equal(confirmed.code, EXIT.ok, confirmed.stderr + confirmed.stdout);
+    assert.match(confirmed.stdout, new RegExp(`confirmed encrypted restore ${enc1}`));
+    assert.equal(readDockerCalls(), dockerCallsBefore, 'no docker called during confirmation');
+    assert.deepEqual(
+      listCopies(sandbox.backupDir).sort(),
+      [...oldPlain, enc1].sort(),
+      'confirmation deletes nothing'
+    );
+    const statePath = path.join(sandbox.backupDir, 'meta', ENCRYPTED_CONFIRM_STATE_NAME);
+    assert.equal(existsSync(statePath), true);
+    assert.equal(statSync(statePath).mode & 0o777, 0o600);
+    const state = JSON.parse(readFileSync(statePath, 'utf8'));
+    assert.equal(state.file, enc1);
+    assert.match(state.confirmedAt, /^\d{4}-\d{2}-\d{2}T/);
+
+    // Wait 1.1s so next CLI run gets a distinct second timestamp
+    await new Promise((resolve) => setTimeout(resolve, 1100));
+    const second = await runCli(envFor(sandbox, db), [], { cli: sandbox.cli });
+    assert.equal(second.code, EXIT.ok, second.stderr + second.stdout);
+    assert.doesNotMatch(second.stdout, new RegExp(WAITING_CONFIRMATION_NOTE));
+    const finalCopies = listCopies(sandbox.backupDir);
+    assert.equal(finalCopies.length, 2, 'returned to retention limit N=2');
+    assert.ok(finalCopies.every((name) => name.endsWith('.dump.age')));
+    for (const p of oldPlain) assert.equal(existsSync(path.join(sandbox.backupDir, p)), false);
+    assert.equal(existsSync(statePath), false);
+  });
+
+  it('rejects missing, unencrypted, foreign, incomplete, tampered, and symlinked artifacts without writing confirmation or deleting anything', async () => {
+    const oldPlain = seedBackups(sandbox.backupDir, 1, { startDay: 3, encrypted: false });
+    const [validEnc] = seedBackups(sandbox.backupDir, 1, { startDay: 1, encrypted: true });
+    const orphanEnc = 'clickmoji-20261124T010000Z.dump.age';
+    writeFileSync(path.join(sandbox.backupDir, orphanEnc), 'ORPHAN');
+    const tamperedEnc = 'clickmoji-20261124T020000Z.dump.age';
+    writeFileSync(path.join(sandbox.backupDir, tamperedEnc), 'ACTUAL');
+    writeFileSync(
+      path.join(sandbox.backupDir, 'meta', `${tamperedEnc}.json`),
+      JSON.stringify({
+        name: tamperedEnc,
+        encrypted: true,
+        sizeBytes: 6,
+        sha256: '0'.repeat(64),
+        verify: 'ok',
+        counts: {},
+      })
+    );
+    const symlinkEnc = 'clickmoji-20261124T030000Z.dump.age';
+    symlinkSync(path.join(sandbox.backupDir, validEnc), path.join(sandbox.backupDir, symlinkEnc));
+
+    const confirmEnv = {
+      PATH: process.env.PATH,
+      BACKUP_DIR: sandbox.backupDir,
+      BACKUP_STATUS_FILE: sandbox.statusFile,
+    };
+    const statePath = path.join(sandbox.backupDir, 'meta', ENCRYPTED_CONFIRM_STATE_NAME);
+
+    for (const badTarget of [
+      'clickmoji-20261124T099999Z.dump.age', // missing / bad stamp
+      'clickmoji-20261120T000000Z.dump.age', // missing
+      oldPlain[0], // unencrypted .dump
+      `../${validEnc}`, // path traversal / foreign
+      path.join(sandbox.backupDir, validEnc), // absolute path instead of filename
+      orphanEnc, // incomplete (no meta)
+      tamperedEnc, // sha256 mismatch
+      symlinkEnc, // symlink
+    ]) {
+      const res = await runCli(confirmEnv, ['--confirm-encrypted-restore', badTarget], {
+        cli: sandbox.cli,
+      });
+      assert.equal(res.code, EXIT.failed, `must reject ${badTarget}`);
+      assert.equal(existsSync(statePath), false, `no state written for ${badTarget}`);
+      assert.equal(existsSync(path.join(sandbox.backupDir, oldPlain[0])), true);
+    }
+  });
+
+  it('enforces early Git guard (disabled git, non-ignored state path, non-main backups) and shared lock on --confirm-encrypted-restore', async () => {
+    const [enc] = seedBackups(sandbox.backupDir, 1, { startDay: 1, encrypted: true });
+    const confirmEnv = {
+      PATH: process.env.PATH,
+      BACKUP_DIR: sandbox.backupDir,
+      BACKUP_STATUS_FILE: sandbox.statusFile,
+    };
+    const statePath = path.join(sandbox.backupDir, 'meta', ENCRYPTED_CONFIRM_STATE_NAME);
+
+    // 1. Git unavailable -> exit 4, writes status, no state file
+    const noGit = await runCli(
+      { ...confirmEnv, BACKUP_GIT_BIN: '/nonexistent/git-bin' },
+      ['--confirm-encrypted-restore', enc],
+      { cli: sandbox.cli }
+    );
+    assert.equal(noGit.code, EXIT.unavailable);
+    assert.match(readStatus(sandbox), /\tfailed\tсбой: git недоступен\n$/);
+    assert.equal(existsSync(statePath), false);
+
+    // 2. Targeted negation on confirmation state file -> exit 1, writes status, clean git status
+    writeFileSync(
+      path.join(sandbox.repo, '.gitignore'),
+      `/backups/*\n!/backups/meta/\n!/backups/meta/${ENCRYPTED_CONFIRM_STATE_NAME}\n`
+    );
+    assert.equal(spawnSync('git', ['-C', sandbox.repo, 'add', '.gitignore']).status, 0);
+    assert.equal(
+      spawnSync('git', [
+        '-C',
+        sandbox.repo,
+        '-c',
+        'user.name=t',
+        '-c',
+        'user.email=t@e.invalid',
+        'commit',
+        '-q',
+        '-m',
+        'negate confirm state',
+      ]).status,
+      0
+    );
+    const notIgnored = await runCli(confirmEnv, ['--confirm-encrypted-restore', enc], {
+      cli: sandbox.cli,
+    });
+    assert.equal(notIgnored.code, EXIT.failed);
+    assert.match(notIgnored.stdout, /не игнорируется git/);
+    assert.equal(existsSync(statePath), false);
+
+    // Restore /backups/ ignore and test busy lock -> exit 3
+    writeFileSync(path.join(sandbox.repo, '.gitignore'), '/backups/\n');
+    const holder = spawnLockHolder(sandbox.backupDir, path.join(sandbox.root, 'gate'));
+    assert.equal(await holder.acquired, true);
+    try {
+      const busy = await runCli(confirmEnv, ['--confirm-encrypted-restore', enc], {
+        cli: sandbox.cli,
+      });
+      assert.equal(busy.code, EXIT.busy);
+      assert.equal(existsSync(statePath), false);
+    } finally {
+      holder.child.kill('SIGKILL');
+      await holder.exited;
+    }
   });
 });
 

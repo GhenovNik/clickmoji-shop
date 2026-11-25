@@ -179,11 +179,13 @@ export function daemonLog(sandbox) {
 // it). `child` is the writer; `done` resolves to the run's result. A run that finds the lock held
 // reports busy, exactly as cli.mjs does.
 export function startLockedRun({
+  mode = 'backup',
   backupDir,
   env,
   now = NOW,
   tempRoot,
   allowRowDrop = false,
+  confirmFile = null,
   projectRoot,
 }) {
   const child = launchLocked(backupDir, [process.execPath, RUN_LOCKED], {
@@ -197,7 +199,15 @@ export function startLockedRun({
   });
   child.stderr.on('data', () => {});
   child.stdin.end(
-    JSON.stringify({ env, now: now.toISOString(), tempRoot, allowRowDrop, projectRoot })
+    JSON.stringify({
+      mode,
+      env,
+      now: now.toISOString(),
+      tempRoot,
+      allowRowDrop,
+      confirmFile,
+      projectRoot,
+    })
   );
   const done = new Promise((resolve, reject) => {
     child.on('error', reject);
@@ -229,6 +239,29 @@ export function runWithFake(
     now,
     tempRoot: sandbox.tmp,
     allowRowDrop,
+    projectRoot,
+  }).done;
+}
+
+export function runConfirmWithFake(
+  sandbox,
+  confirmFile,
+  extra = {},
+  now = NOW,
+  { projectRoot = sandbox.repo } = {}
+) {
+  const env = {
+    PATH: process.env.PATH,
+    BACKUP_DIR: sandbox.backupDir,
+    BACKUP_STATUS_FILE: sandbox.statusFile,
+    ...extra,
+  };
+  return startLockedRun({
+    mode: 'confirm',
+    backupDir: env.BACKUP_DIR,
+    env,
+    now,
+    confirmFile,
     projectRoot,
   }).done;
 }
@@ -276,12 +309,14 @@ export function seedBackups(
     writeFileSync(path.join(backupDir, name), body, { mode: 0o600 });
     names.push(name);
     const rowCounts = i === 0 && counts ? counts : {};
+    const sizeBytes = Buffer.byteLength(body);
+    const hash = crypto.createHash('sha256').update(body).digest('hex');
     const meta = legacy
       ? {
           name,
           createdAt: when.toISOString(),
-          sizeBytes: Buffer.byteLength(body),
-          sha256: crypto.createHash('sha256').update(body).digest('hex'),
+          sizeBytes,
+          sha256: hash,
           verify: 'ok',
           migration: '20261101000000_init',
           counts: rowCounts,
@@ -290,6 +325,8 @@ export function seedBackups(
       : {
           name,
           encrypted,
+          sizeBytes,
+          sha256: hash,
           verify: 'ok',
           counts: rowCounts,
         };

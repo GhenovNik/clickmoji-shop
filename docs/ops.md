@@ -160,23 +160,71 @@ models (e.g. `gemini-3.1-flash-lite-image`, `imagen-4.0-*`) also fail closed bef
 
 Verified production backups run via `npm run db:backup:verified` (`node scripts/backup/cli.mjs`) inside pinned PostgreSQL 17 containers.
 
+- **What automated verification proves (and does not prove):**
+  - Every run dumps the source database (`pg_dump --format=custom`), restores that plaintext `dump.custom` into a disposable PostgreSQL 17 cluster, and verifies schema identities, applied Prisma migration, and row counts (`verifyScope: "plaintext"` in `meta/<copy>.json`).
+  - When `BACKUP_ENCRYPT=1`, the script then encrypts `dump.custom` with `age` (`BACKUP_AGE_RECIPIENT_FILE`) and verifies non-empty ciphertext output before atomic publication.
+  - Automated runs hold **no private key** and therefore **do not prove decryption** of `.dump.age` with the operator's `age` identity. Proving `.dump.age` decryption and restore requires an explicit operator restore test and confirmation before old unencrypted `.dump` copies are deleted.
+
 - **Destination and Git guard (`BACKUP_DIR`):**
   - Store copies in `backups/` of the **main repository checkout** on the Mac mini (for example, `~/Projects/clickmoji-shop/backups/`), which is gitignored via `/backups/` in `.gitignore`.
   - `BACKUP_DIR` **must** be explicitly configured as an **absolute path** to that main checkout's `backups/` directory (no default; relative or missing `BACKUP_DIR` fails even when run outside any repository or from a worktree). This prevents runs from temporary worktrees or other checkouts from creating a separate backup history.
-  - Before creating or writing anything—and again immediately before atomic publication—the script resolves the physical path of `BACKUP_DIR` and runs `git check-ignore` in the destination repository regardless of the caller's working directory. If Git is unavailable or the physical path inside a repository is not ignored, the script fails with a status reason and writes nothing.
+  - Before creating or writing anything—and again immediately before atomic publication—the script resolves the physical path of `BACKUP_DIR` and runs `git check-ignore` in the destination repository regardless of the caller's working directory (covering dump files, `.partial-*` temporaries, `meta/*.json`, and confirmation state). If Git is unavailable or any physical path inside a repository is not ignored, the script fails with a status reason and writes nothing.
   - The directory is maintained at mode `0700`, and both temporary `.partial-*` files and final published copies are created with mode `0600` from creation.
   - Intermediate plaintext dumps (`dump.custom`) and temporary PostgreSQL 17 clusters exist only inside a private temporary directory outside any repository (`TMPDIR` / `os.tmpdir()`) and are deleted on completion, failure, and interruption. Storing a verified unencrypted `clickmoji-<UTC>.dump` inside protected `backups/` when `BACKUP_ENCRYPT` is off is an explicit operator exception (B35).
   - Published files are written under a `.partial-*` temporary name and atomically renamed after full write and `fsync`, prior to pruning. An interrupted write is never counted as a completed copy.
   - **Warning:** Never run `git clean -x` (or `git clean -fdx`) in the main checkout and never delete `backups/`, or all retained copies and their `meta/` records will be lost.
 
-- **Settings, modes, and transition:**
+- **Settings, modes, and step-by-step cutover to production:**
   - Three explicit settings govern retention, schedule interval, and encryption (scheduler/launchd configuration stays in task Г):
     1. `BACKUP_RETENTION_COUNT`: number of newest successful copies to keep across `.dump` and `.dump.age` formats (integer >= 1, default `2`; no weekly or monthly tiers).
     2. Job interval (configured in the scheduler): determines how often backups run.
     3. `BACKUP_ENCRYPT`: `0`/unset (default, unencrypted `clickmoji-<UTC>.dump`, `BACKUP_AGE_RECIPIENT_FILE` not required) or `1` (explicit `age` encryption to `clickmoji-<UTC>.dump.age`, requiring `BACKUP_AGE_RECIPIENT_FILE`; missing/invalid key when enabled fails early with a status reason).
   - **Development (current):** `BACKUP_ENCRYPT=0` (default), `BACKUP_RETENTION_COUNT=2`, scheduled once every **3 days**. With successful runs, the 2 retained copies cover roughly **3–6 days** back.
-  - **Production (at first users):** switch to **daily** interval, `BACKUP_ENCRYPT=1` (with `BACKUP_AGE_RECIPIENT_FILE`), and **more than 2** retained copies; the exact copy count is chosen by the operator at switchover (not predetermined; `7` is only a suggestion). Switching changes only those settings—no code changes.
-  - **First switch to encryption:** Immediately after the first encrypted `.dump.age` copy is verified and atomically published, the script deletes all prior recognized unencrypted `.dump` copies and then applies `BACKUP_RETENTION_COUNT` pruning. Because old unencrypted copies are purged on that first encrypted publish, **fewer than `BACKUP_RETENTION_COUNT` copies** (for example, a single `.dump.age` copy) may temporarily remain until subsequent runs fill the limit. If that first encrypted run fails before publish or is rejected by the row-drop guard, existing unencrypted copies stay intact.
+  - **Production (at first users):** switch to **daily** interval, `BACKUP_ENCRYPT=1` (with `BACKUP_AGE_RECIPIENT_FILE`), and **more than 2** retained copies; the exact copy count `N` is determined by the operator at cutover (not predetermined; no fixed production number is hard-coded here). Switching changes only those settings—no code changes.
+  - **Step-by-step cutover from unencrypted mode to encrypted production:**
+    1. **Enable production settings:** set daily scheduler interval (task Г), `BACKUP_ENCRYPT=1`, `BACKUP_AGE_RECIPIENT_FILE` pointing to the public `age1...` recipient file, and `BACKUP_RETENTION_COUNT` to the operator-chosen production `N`.
+    2. **Run the first encrypted backup (no plaintext deletion yet):**
+
+       ```sh
+       npm run db:backup:verified
+       ```
+
+       - Existing accepted unencrypted `.dump` copies (up to `N`) are **not** deleted by normal pruning while waiting for confirmation.
+       - **Temporary limit exception:** with a full set of `N` unencrypted `.dump` copies, **one** additional `.dump.age` copy is temporarily permitted for operator verification (`N + 1`). If further unencrypted-waiting runs execute before confirmation, the first `.dump.age` copy of the transition remains preserved alongside the newest `.dump.age` copy (intermediate encrypted copies are pruned so disk usage stays bounded to at most `N + 2`).
+       - The status line and CLI output carry the reminder:
+         `decrypt=unconfirmed (шифрование включено, открытые копии ждут подтверждения восстановления)`.
+
+    3. **Decrypt and restore the first `.dump.age` copy into a separate empty PostgreSQL 17 database (never production):**
+
+       ```sh
+       # Set BACKUP_FILE to the first clickmoji-<UTC>.dump.age name and PGHOST/PGPORT/PGDATABASE/PGUSER/PGPASSWORD/PGSSLMODE
+       # to the disposable test target, and enter AGE_IDENTITY without shell echo:
+       printf '%s\n' "$AGE_IDENTITY" | pg_run -i -v "$BACKUP_DIR:/backup:ro" -e BACKUP_FILE "$IMAGE" sh -c '
+         set -eu
+         set -o pipefail
+         apk add --no-cache age >/dev/null
+         age -d -i /dev/stdin "/backup/$BACKUP_FILE" | pg_restore --no-owner --no-privileges --exit-on-error --dbname "$PGDATABASE"
+       '
+       ```
+
+       Confirm the restored tables and data in that separate test database before proceeding.
+
+    4. **Record explicit operator confirmation (connects to no DB, requires no private key, deletes nothing):**
+
+       ```sh
+       npm run db:backup:verified -- --confirm-encrypted-restore clickmoji-<UTC>.dump.age
+       ```
+
+       (or `node scripts/backup/cli.mjs --confirm-encrypted-restore clickmoji-<UTC>.dump.age` with `BACKUP_DIR` and `BACKUP_STATUS_FILE` set). Under the shared `.backup.lock` and Git guard, this records the confirmation timestamp, filename, and exact ciphertext `sha256` into `backups/meta/.encrypted-restore-confirmed.json` (`0600`). Missing, incomplete, foreign, corrupted/substituted, or stale files (older than a newer `.dump`) are rejected without deleting anything.
+
+    5. **Run the next successful encrypted backup to complete the cutover:**
+
+       ```sh
+       npm run db:backup:verified
+       ```
+
+       Only **after** the new `.dump.age` copy is verified and atomically published does the script verify the confirmed ciphertext fingerprint, automatically purge all prior unencrypted `.dump` copies, return to the unified retention limit `N` across encrypted copies, and clear the consumed confirmation state. If that run fails before publication (or is rejected by the row-drop guard), existing unencrypted `.dump` copies and the confirmation state remain intact.
+
   - **Freshness threshold:** Computed as **interval + 1 day** (no separate threshold setting): `4 days` in development (`3 days + 1 day`), `2 days` once switched to daily production (`1 day + 1 day`).
 
 - **Row-count drop guard (>20%) and single-run confirmation:**

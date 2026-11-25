@@ -9,6 +9,7 @@ import {
   libpqEnv,
   LIBPQ_ENV_NAMES,
   loadConfig,
+  loadConfirmConfig,
   parseCliArgs,
   parseDockerTimeout,
   parseEncryptFlag,
@@ -26,6 +27,7 @@ import {
   TOOLS_IMAGE,
   DROP_THRESHOLD_PERCENT,
   DEFAULT_RETENTION_COUNT,
+  ENCRYPTED_CONFIRM_STATE_NAME,
   EXIT,
 } from '../constants.mjs';
 import { verifyBackupDirGitIgnored } from '../git.mjs';
@@ -49,7 +51,7 @@ import {
   ReportError,
 } from '../compare.mjs';
 import { formatStatusLine } from '../status.mjs';
-import { selectRetention } from '../retention.mjs';
+import { selectRetention, selectTransitionRetention } from '../retention.mjs';
 import { HERE, makeProjectRepo, makeSandbox, syntheticDatabase } from './helpers.mjs';
 
 const VALID_RECIPIENT = `age1${'q'.repeat(58)}`;
@@ -137,7 +139,50 @@ describe('config', () => {
 
     assert.deepEqual(parseCliArgs([]), { allowRowDrop: false });
     assert.deepEqual(parseCliArgs(['--allow-row-drop']), { allowRowDrop: true });
-    assert.throws(() => parseCliArgs(['--unknown']), ConfigError);
+    assert.deepEqual(
+      parseCliArgs(['--confirm-encrypted-restore', 'clickmoji-20261124T120000Z.dump.age']),
+      { allowRowDrop: false, confirmEncryptedRestore: 'clickmoji-20261124T120000Z.dump.age' }
+    );
+    assert.deepEqual(
+      parseCliArgs(['--confirm-encrypted-restore=clickmoji-20261124T120000Z.dump.age']),
+      { allowRowDrop: false, confirmEncryptedRestore: 'clickmoji-20261124T120000Z.dump.age' }
+    );
+    for (const badArgs of [
+      ['--unknown'],
+      ['--confirm-encrypted-restore'],
+      ['--confirm-encrypted-restore', ''],
+      ['--confirm-encrypted-restore='],
+      ['--confirm-encrypted-restore', '--allow-row-drop'],
+      ['--allow-row-drop', '--confirm-encrypted-restore', 'clickmoji-20261124T120000Z.dump.age'],
+      ['--confirm-encrypted-restore', 'a.dump.age', '--confirm-encrypted-restore', 'b.dump.age'],
+    ]) {
+      assert.throws(() => parseCliArgs(badArgs), ConfigError, `rejects ${badArgs.join(' ')}`);
+    }
+  });
+
+  it('loadConfirmConfig requires only BACKUP_DIR and BACKUP_STATUS_FILE, not DATABASE_URL or age keys', () => {
+    const confirm = loadConfirmConfig({
+      BACKUP_DIR: sandbox.backupDir,
+      BACKUP_STATUS_FILE: sandbox.statusFile,
+    });
+    assert.equal(confirm.backupDir, sandbox.backupDir);
+    assert.equal(confirm.statusFile, sandbox.statusFile);
+    assert.throws(
+      () =>
+        loadConfirmConfig({
+          BACKUP_DIR: 'relative/backups',
+          BACKUP_STATUS_FILE: sandbox.statusFile,
+        }),
+      /BACKUP_DIR: нужен абсолютный путь/
+    );
+    assert.throws(
+      () =>
+        loadConfirmConfig({
+          BACKUP_DIR: sandbox.backupDir,
+          BACKUP_STATUS_FILE: path.join(REPO_ROOT, 'status.log'),
+        }),
+      /BACKUP_STATUS_FILE: путь внутри репозитория/
+    );
   });
 
   it('refuses paths that docker --mount cannot carry', () => {
@@ -226,6 +271,7 @@ describe('retention', () => {
     return {
       name: `clickmoji-${stamp}${encrypted ? '.dump.age' : '.dump'}`,
       time,
+      encrypted,
     };
   };
 
@@ -307,6 +353,70 @@ describe('retention', () => {
     assert.equal(DEFAULT_RETENTION_COUNT, 2);
     const entries = Array.from({ length: 10 }, (_, i) => day(i));
     assert.equal(selectRetention(entries, 5).keep.length, 5);
+  });
+
+  it('B2 transition retention: preserves N plain copies + first and newest encrypted until confirmed, then returns to N', () => {
+    const p2 = day(5, false); // older plain
+    const p1 = day(4, false); // newer plain
+    const e1 = day(3, true); // first encrypted of transition
+    const e2 = day(2, true); // intermediate encrypted
+    const e3 = day(1, true); // newest encrypted
+
+    // First encrypted run (unconfirmed): N plain + 1 encrypted (N+1)
+    const first = selectTransitionRetention({
+      entries: [p2, p1, e1],
+      keepCount: 2,
+      encrypt: true,
+      confirmed: false,
+    });
+    assert.equal(first.waitingForConfirmation, true);
+    assert.deepEqual(first.keep.sort(), [p2.name, p1.name, e1.name].sort());
+    assert.deepEqual(first.remove, []);
+
+    // Repeated unconfirmed runs: keep N plain + first encrypted (e1) + newest encrypted (e3), prune e2 (bounded to N+2)
+    const repeated = selectTransitionRetention({
+      entries: [p2, p1, e1, e2, e3],
+      keepCount: 2,
+      encrypt: true,
+      confirmed: false,
+    });
+    assert.equal(repeated.waitingForConfirmation, true);
+    assert.deepEqual(repeated.keep.sort(), [p2.name, p1.name, e1.name, e3.name].sort());
+    assert.deepEqual(repeated.remove, [e2.name]);
+
+    // Excess plaintext (>N) still caps plaintext at N without deleting the newest N plaintext copies
+    const p3 = day(6, false);
+    const excessPlain = selectTransitionRetention({
+      entries: [p3, p2, p1, e1],
+      keepCount: 2,
+      encrypt: true,
+      confirmed: false,
+    });
+    assert.deepEqual(excessPlain.keep.sort(), [p2.name, p1.name, e1.name].sort());
+    assert.deepEqual(excessPlain.remove, [p3.name]);
+
+    // Pre-transition encrypted copy older than newest plain is pruned so e1 remains first of transition
+    const eOld = day(7, true);
+    const withOldEnc = selectTransitionRetention({
+      entries: [eOld, p2, p1, e1, e2],
+      keepCount: 2,
+      encrypt: true,
+      confirmed: false,
+    });
+    assert.deepEqual(withOldEnc.keep.sort(), [p2.name, p1.name, e1.name, e2.name].sort());
+    assert.deepEqual(withOldEnc.remove, [eOld.name]);
+
+    // Confirmed: removes all plain copies and returns to N newest encrypted copies
+    const e4 = day(0, true);
+    const afterConfirm = selectTransitionRetention({
+      entries: [p2, p1, e1, e3, e4],
+      keepCount: 2,
+      encrypt: true,
+      confirmed: true,
+    });
+    assert.equal(afterConfirm.waitingForConfirmation, false);
+    assert.deepEqual(afterConfirm.keep.sort(), [e3.name, e4.name].sort());
+    assert.deepEqual(afterConfirm.remove.sort(), [p2.name, p1.name, e1.name].sort());
   });
 });
 
@@ -440,6 +550,24 @@ describe('git check-ignore and main-checkout destination guard', () => {
             path.join(ignored, 'meta', '.partial-clickmoji-20261125T034003Z.dump.json'),
           ],
         }).key,
+        'notIgnored'
+      );
+
+      // Exact check catches negated rules targeting confirmation state files under /backups/meta/
+      writeFileSync(
+        path.join(mainRepo, '.gitignore'),
+        `/backups/*\n!/backups/meta/\n!/backups/meta/${ENCRYPTED_CONFIRM_STATE_NAME}\n`
+      );
+      assert.equal(
+        verifyBackupDirGitIgnored({ backupDir: ignored, projectRoot: mainRepo }).key,
+        'notIgnored'
+      );
+      writeFileSync(
+        path.join(mainRepo, '.gitignore'),
+        `/backups/*\n!/backups/meta/\n!/backups/meta/.partial-${ENCRYPTED_CONFIRM_STATE_NAME}\n`
+      );
+      assert.equal(
+        verifyBackupDirGitIgnored({ backupDir: ignored, projectRoot: mainRepo }).key,
         'notIgnored'
       );
 

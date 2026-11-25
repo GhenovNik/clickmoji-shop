@@ -146,14 +146,69 @@ export function parseDockerTimeout(raw) {
 
 export function parseCliArgs(argv = []) {
   let allowRowDrop = false;
-  for (const arg of argv) {
+  let confirmEncryptedRestore = null;
+  for (let i = 0; i < argv.length; i += 1) {
+    const arg = argv[i];
     if (arg === '--allow-row-drop') {
       allowRowDrop = true;
+    } else if (arg === '--confirm-encrypted-restore') {
+      if (confirmEncryptedRestore !== null) {
+        throw new ConfigError('повторный параметр --confirm-encrypted-restore');
+      }
+      const next = argv[i + 1];
+      if (!next || next.startsWith('--')) {
+        throw new ConfigError('--confirm-encrypted-restore: укажите имя файла копии');
+      }
+      confirmEncryptedRestore = next.trim();
+      if (!confirmEncryptedRestore) {
+        throw new ConfigError('--confirm-encrypted-restore: укажите имя файла копии');
+      }
+      i += 1;
+    } else if (arg.startsWith('--confirm-encrypted-restore=')) {
+      if (confirmEncryptedRestore !== null) {
+        throw new ConfigError('повторный параметр --confirm-encrypted-restore');
+      }
+      const value = arg.slice('--confirm-encrypted-restore='.length).trim();
+      if (!value) {
+        throw new ConfigError('--confirm-encrypted-restore: укажите имя файла копии');
+      }
+      confirmEncryptedRestore = value;
     } else {
       throw new ConfigError(`неизвестный параметр запуска: ${arg}`);
     }
   }
-  return { allowRowDrop };
+  if (confirmEncryptedRestore !== null && allowRowDrop) {
+    throw new ConfigError('--confirm-encrypted-restore нельзя совмещать с --allow-row-drop');
+  }
+  return confirmEncryptedRestore !== null
+    ? { allowRowDrop: false, confirmEncryptedRestore }
+    : { allowRowDrop };
+}
+
+function loadTargetPaths(env = process.env, { repoRoot = REPO_ROOT } = {}) {
+  const backupDir = requireAbsolute(env, 'BACKUP_DIR');
+  const statusFile = requireAbsolute(env, 'BACKUP_STATUS_FILE');
+
+  checkStatusTarget(statusFile, backupDir);
+  const resolvedRepoRoot = canonicalPath(repoRoot);
+  if (
+    isInsidePath(statusFile, repoRoot) ||
+    isInsidePath(canonicalPath(statusFile), resolvedRepoRoot)
+  ) {
+    throw new ConfigError('BACKUP_STATUS_FILE: путь внутри репозитория');
+  }
+
+  return {
+    backupDir,
+    statusFile,
+    gitBin: env.BACKUP_GIT_BIN?.trim() || 'git',
+    dockerTimeoutMs: parseDockerTimeout(env.BACKUP_DOCKER_TIMEOUT_MS),
+  };
+}
+
+// Confirmation does not connect to the database and requires neither DATABASE_URL nor age keys.
+export function loadConfirmConfig(env = process.env, { repoRoot = REPO_ROOT } = {}) {
+  return loadTargetPaths(env, { repoRoot });
 }
 
 // Loads status/backup target metadata before recipient validation so that when encryption
@@ -174,26 +229,16 @@ export function loadBaseConfig(env = process.env, { repoRoot = REPO_ROOT } = {})
   // DATABASE_URL is forwarded by name to the dump and verify containers; the libpq variables
   // are derived from this same value, so both describe one connection.
   const containerEnv = { ...libpqEnv(rawUrl), DATABASE_URL: rawUrl };
-
-  const backupDir = requireAbsolute(env, 'BACKUP_DIR');
-  const statusFile = requireAbsolute(env, 'BACKUP_STATUS_FILE');
-
-  checkStatusTarget(statusFile, backupDir);
-  const resolvedRepoRoot = canonicalPath(repoRoot);
-  if (
-    isInsidePath(statusFile, repoRoot) ||
-    isInsidePath(canonicalPath(statusFile), resolvedRepoRoot)
-  ) {
-    throw new ConfigError('BACKUP_STATUS_FILE: путь внутри репозитория');
-  }
+  const targets = loadTargetPaths(env, { repoRoot });
 
   const rawTmp = env.TMPDIR?.trim();
   if (rawTmp) {
     if (!path.isAbsolute(rawTmp)) throw new ConfigError('TMPDIR: нужен абсолютный путь');
     const resolvedTmp = canonicalPath(rawTmp);
+    const resolvedRepoRoot = canonicalPath(repoRoot);
     if (
       isInsidePath(resolvedTmp, resolvedRepoRoot) ||
-      isInsidePath(resolvedTmp, canonicalPath(backupDir))
+      isInsidePath(resolvedTmp, canonicalPath(targets.backupDir))
     ) {
       throw new ConfigError('TMPDIR: путь внутри репозитория или каталога резервных копий');
     }
@@ -201,13 +246,10 @@ export function loadBaseConfig(env = process.env, { repoRoot = REPO_ROOT } = {})
 
   return {
     containerEnv,
-    backupDir,
-    statusFile,
+    ...targets,
     encrypt: parseEncryptFlag(env.BACKUP_ENCRYPT),
     keepCount: parseRetentionCount(env.BACKUP_RETENTION_COUNT),
     dockerBin: env.BACKUP_DOCKER_BIN?.trim() || 'docker',
-    gitBin: env.BACKUP_GIT_BIN?.trim() || 'git',
-    dockerTimeoutMs: parseDockerTimeout(env.BACKUP_DOCKER_TIMEOUT_MS),
   };
 }
 
