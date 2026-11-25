@@ -156,6 +156,25 @@ models (e.g. `gemini-3.1-flash-lite-image`, `imagen-4.0-*`) also fail closed bef
 - Before a production migration, create and verify a fresh backup, run `prisma migrate deploy` with
   a direct/unpooled database URL, and confirm `prisma migrate status` afterwards.
 
+### Deploy schema changes before dependent code
+
+Vercel deploys `master` on merge. A Prisma Client generated from a new schema can select new
+scalar columns immediately, including from existing queries. Use this order for migrations:
+
+1. Open a SQL-only PR under `prisma/migrations/`. Keep `schema.prisma` and application code
+   on the old contract. The SQL must remain compatible with the deployed release. For a
+   destructive change, stage the rollout so every running release stops using the affected
+   objects before the contract migration is merged.
+2. After merging the SQL-only PR, the curator runs **Production migration** from `master`
+   with its existing confirmation and waits for the backup, isolated restore check, migration
+   and `prisma migrate status` to succeed. Confirm the expected database objects before
+   advancing. The workflow uses a temporary runner-local copy for the restore check.
+3. Merge the follow-up PR with the Prisma schema and dependent code only after the migration
+   is applied. Run any task-specific backfill in its documented order.
+
+The SQL-only stage can intentionally put compatible additive migrations ahead of the Prisma
+schema. Keep checks for unrelated drift and verify the complete schema once the follow-up lands.
+
 ### Production recovery
 
 Never restore into the live database. Restore to a separate target, check it against expectations written down
