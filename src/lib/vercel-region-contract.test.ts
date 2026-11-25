@@ -37,7 +37,9 @@ describe('vercel.json region contract', () => {
     }
     expect(Object.values(enabled).every((value) => value === false)).toBe(true);
     for (const key of Object.keys(enabled)) {
-      expect(key.endsWith('/**'), `${key} names a branch prefix, never master or develop`).toBe(true);
+      expect(key.endsWith('/**'), `${key} names a branch prefix, never master or develop`).toBe(
+        true
+      );
     }
   });
 });
