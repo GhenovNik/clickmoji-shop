@@ -2385,9 +2385,10 @@ describe('the replacement authorisation file (AGE-1667 C6)', () => {
   });
 
   it('refuses a URL that is not an absolute https address, and extra or missing fields', () => {
+    const insecureUrl = 'http://cdn.example.test/a.webp';
     expect(() =>
       parseReplacementAuthorization(
-        file(entry('Напитки', 'http://cdn.example.test/a.webp'), entry('Рыба и морепродукты')),
+        file(entry('Напитки', insecureUrl), entry('Рыба и морепродукты')),
         manifest,
         selected
       )
