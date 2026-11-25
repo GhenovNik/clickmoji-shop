@@ -582,6 +582,42 @@ describe.skipIf(!url)('account deletion guards on disposable PostgreSQL', () => 
       expect(JSON.stringify(body)).not.toContain('Ханикрисп');
     });
 
+    it('updating a note hides the foreign variant id and keeps the consistent id', async () => {
+      const [legacy, consistent] = await Promise.all([
+        db.item.create({
+          data: { listId: 'bob-list', productId: 'milk-global', variantId: 'alice-variant' },
+        }),
+        db.item.create({
+          data: { listId: 'bob-list', productId: 'milk-global', variantId: 'milk-variant' },
+        }),
+      ]);
+      expect(await deleteAccount({ userId: 'alice', password })).toEqual({ status: 'deleted' });
+
+      const { PUT } = await import('@/app/api/lists/[listId]/items/[itemId]/route');
+      for (const [item, visibleVariantId] of [
+        [legacy, null],
+        [consistent, 'milk-variant'],
+      ] as const) {
+        const note = 'Updated note';
+        const response = await PUT(
+          bobRequest(`/api/lists/bob-list/items/${item.id}`, {
+            method: 'PUT',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ note }),
+          }),
+          { params: Promise.resolve({ listId: 'bob-list', itemId: item.id }) }
+        );
+        expect(response.status).toBe(200);
+        const body = await response.json();
+        expect(body).toMatchObject({ id: item.id, note, variantId: visibleVariantId });
+        expect(JSON.stringify(body)).not.toContain('alice-variant');
+        expect(await db.item.findUnique({ where: { id: item.id } })).toMatchObject({
+          note,
+          variantId: item.variantId,
+        });
+      }
+    });
+
     it('the account export drops the same foreign variant from Bob list items', async () => {
       await db.item.create({
         data: { listId: 'bob-list', productId: 'milk-global', variantId: 'alice-variant' },

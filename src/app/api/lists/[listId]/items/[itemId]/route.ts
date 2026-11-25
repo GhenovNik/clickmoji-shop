@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { apiText } from '@/lib/api-messages';
 import { prisma } from '@/lib/prisma';
 import { requireUser } from '@/lib/auth-guards';
-import { visibleItemsWhere } from '@/lib/product-visibility';
+import { variantOfItemProduct, visibleItemsWhere } from '@/lib/product-visibility';
 import { lockOwnedList } from '@/lib/list-lock';
 import { getGuestIdFromRequest, recordFunnelEvent } from '@/lib/funnel';
 
@@ -47,6 +47,7 @@ export async function PUT(
           ...(note !== undefined && { note }),
         },
         include: {
+          variant: { select: { id: true, productId: true } },
           product: {
             include: {
               category: true,
@@ -55,9 +56,10 @@ export async function PUT(
         },
       });
 
+      const { variant, ...item } = updatedItem;
       return {
         status: 'updated' as const,
-        item: updatedItem,
+        item: { ...item, variantId: variantOfItemProduct(variant, item.productId)?.id ?? null },
         transitionedToPurchased: !existingItem.isPurchased && Boolean(updatedItem.isPurchased),
       };
     });
