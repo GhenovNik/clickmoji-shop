@@ -9,6 +9,10 @@ import { normalizeEmojiImage } from '@/lib/services/emoji-image-normalize';
 // in the library and on catalogue records. Every cell has a stable reference ("batch-007#3"), so
 // a second run reuses what is stored instead of uploading again, and writes nothing that is
 // already in place.
+//
+// A queue cell (AGE-1667) has a `target`. Its catalogue record is found by category and parent,
+// its library record remembers the target it was written for, and its catalogue write only
+// happens while the record still has no picture. Historical cells (no `target`) keep the old rules.
 
 // What a cell's picture is for. Historical batches (no `target`) mean a product.
 export type ManifestTarget = 'product' | 'variant' | 'category';
@@ -57,6 +61,8 @@ export type ProductPlan =
   | { kind: 'superseded'; by: string }
   // Several catalogue products share the name: nothing is linked, the operator decides.
   | { kind: 'ambiguous'; productNames: string[] }
+  // Two catalogue categories have the same normalized name: the cell's category is unknown.
+  | { kind: 'ambiguous-category'; categoryNames: string[] }
   // A queue target that is not in the catalogue: nothing is created, the picture stays in the library.
   | { kind: 'not-found'; reason: string }
   | { kind: 'variant'; variantId: string; productName: string; variantName: string }
@@ -166,27 +172,42 @@ export async function readBatchImages(
   return result;
 }
 
-type CatalogIndex = {
+export type CatalogProduct = { id: string; name: string; categoryId: string; categoryName: string };
+export type CatalogCategory = { id: string; name: string; emoji: string };
+
+export type CatalogIndex = {
   // Global products by normalized name.
-  products: Map<string, { id: string; name: string }[]>;
+  products: Map<string, CatalogProduct[]>;
   // Variants of global products, by product id.
   variants: Map<string, { id: string; name: string }[]>;
-  categories: Map<string, { id: string; name: string; emoji: string }>;
+  // Historical lookup by normalized name; on a collision the last category wins, as before.
+  categories: Map<string, CatalogCategory>;
+  // Every category by normalized name: more than one entry is a collision that cannot be resolved.
+  categoriesByKey: Map<string, CatalogCategory[]>;
 };
 
 export async function loadCatalogIndex(prisma: PrismaClient): Promise<CatalogIndex> {
   const [products, variants, categories] = await Promise.all([
-    prisma.product.findMany({ where: { isGlobal: true }, select: { id: true, name: true } }),
+    prisma.product.findMany({
+      where: { isGlobal: true },
+      select: { id: true, name: true, categoryId: true, category: { select: { name: true } } },
+    }),
     prisma.productVariant.findMany({
       where: { product: { isGlobal: true } },
       select: { id: true, name: true, productId: true },
     }),
     prisma.category.findMany({ select: { id: true, name: true, emoji: true } }),
   ]);
-  const byName = new Map<string, { id: string; name: string }[]>();
+  const byName = new Map<string, CatalogProduct[]>();
   for (const product of products) {
     const key = normalizeCatalogName(product.name);
-    byName.set(key, [...(byName.get(key) ?? []), product]);
+    const entry = {
+      id: product.id,
+      name: product.name,
+      categoryId: product.categoryId,
+      categoryName: product.category.name,
+    };
+    byName.set(key, [...(byName.get(key) ?? []), entry]);
   }
   const byProduct = new Map<string, { id: string; name: string }[]>();
   for (const variant of variants) {
@@ -195,19 +216,58 @@ export async function loadCatalogIndex(prisma: PrismaClient): Promise<CatalogInd
       { id: variant.id, name: variant.name },
     ]);
   }
+  const byCategory = new Map<string, CatalogCategory[]>();
+  for (const category of categories) {
+    const key = normalizeCatalogName(category.name);
+    byCategory.set(key, [...(byCategory.get(key) ?? []), category]);
+  }
   return {
     products: byName,
     variants: byProduct,
     categories: new Map(categories.map((c) => [normalizeCatalogName(c.name), c])),
+    categoriesByKey: byCategory,
+  };
+}
+
+// Queue targets are identified by their category: a product of the same name in another category
+// is another product, and a variant belongs to its parent's category. Two categories whose names
+// collide after normalization cannot be told apart, so nothing in them is matched.
+function productsInCategory(
+  cell: ManifestCell,
+  name: string,
+  index: CatalogIndex,
+  label: string
+): { products: CatalogProduct[] } | { plan: ProductPlan } {
+  const categories = index.categoriesByKey.get(normalizeCatalogName(cell.category)) ?? [];
+  if (categories.length > 1) {
+    return { plan: { kind: 'ambiguous-category', categoryNames: categories.map((c) => c.name) } };
+  }
+  const [category] = categories;
+  if (!category) {
+    return { plan: { kind: 'not-found', reason: `нет категории «${cell.category}»` } };
+  }
+  const named = index.products.get(normalizeCatalogName(name)) ?? [];
+  const products = named.filter((product) => product.categoryId === category.id);
+  if (products.length > 0) return { products };
+
+  const elsewhere = [...new Set(named.map((product) => product.categoryName))];
+  return {
+    plan: {
+      kind: 'not-found',
+      reason:
+        elsewhere.length === 0
+          ? `нет ${label} «${name}»`
+          : `нет ${label} «${name}» в категории «${category.name}» (есть в «${elsewhere.join('», «')}»)`,
+    },
   };
 }
 
 // A variant is looked up under its product only: the same variant name under another product is
 // not a match.
 function planVariant(cell: ManifestCell, index: CatalogIndex): ProductPlan {
-  const parentName = cell.parent ?? '';
-  const parents = index.products.get(normalizeCatalogName(parentName)) ?? [];
-  if (parents.length === 0) return { kind: 'not-found', reason: `нет товара «${parentName}»` };
+  const scope = productsInCategory(cell, cell.parent ?? '', index, 'товара');
+  if ('plan' in scope) return scope.plan;
+  const { products: parents } = scope;
   if (parents.length > 1) {
     return { kind: 'ambiguous', productNames: parents.map((product) => product.name) };
   }
@@ -240,10 +300,23 @@ export function planProduct(cell: ManifestCell, index: CatalogIndex): ProductPla
   if (cell.supersededBy) return { kind: 'superseded', by: cell.supersededBy };
   if (cell.target === 'variant') return planVariant(cell, index);
   if (cell.target === 'category') {
-    const category = index.categories.get(normalizeCatalogName(cell.name));
+    const categories = index.categoriesByKey.get(normalizeCatalogName(cell.name)) ?? [];
+    if (categories.length > 1) {
+      return { kind: 'ambiguous-category', categoryNames: categories.map((c) => c.name) };
+    }
+    const [category] = categories;
     return category
       ? { kind: 'category', categoryId: category.id, categoryName: category.name }
       : { kind: 'not-found', reason: `нет категории «${cell.name}»` };
+  }
+  if (cell.target === 'product') {
+    const scope = productsInCategory(cell, cell.name, index, 'товара');
+    if ('plan' in scope) return scope.plan;
+    if (scope.products.length > 1) {
+      return { kind: 'ambiguous', productNames: scope.products.map((product) => product.name) };
+    }
+    const [product] = scope.products;
+    return { kind: 'link', productId: product.id, productName: product.name };
   }
 
   const matches = index.products.get(normalizeCatalogName(cell.name)) ?? [];
@@ -252,8 +325,6 @@ export function planProduct(cell: ManifestCell, index: CatalogIndex): ProductPla
   }
   const [product] = matches;
   if (product) return { kind: 'link', productId: product.id, productName: product.name };
-  // A queue product must already exist: an update never creates a product.
-  if (cell.target === 'product') return { kind: 'not-found', reason: `нет товара «${cell.name}»` };
 
   const category = index.categories.get(normalizeCatalogName(cell.category));
   return category
@@ -261,12 +332,41 @@ export function planProduct(cell: ManifestCell, index: CatalogIndex): ProductPla
     : { kind: 'no-category' };
 }
 
+// The target a library record was written for: its category and, for a queue cell, its kind and
+// parent. A reordered queue puts another target under the same reference; its record then carries
+// different tags and is refused instead of being reused.
+export function libraryTags(cell: ManifestCell): string[] {
+  const category = normalizeCatalogName(cell.category);
+  if (cell.target === undefined) return [category];
+  return [
+    category,
+    `queue:${cell.target}`,
+    ...(cell.target === 'variant' ? [`parent:${normalizeCatalogName(cell.parent ?? '')}`] : []),
+  ];
+}
+
+export function ownsLibraryItem(item: { name: string; tags: string[] }, cell: ManifestCell) {
+  const tags = libraryTags(cell);
+  return (
+    item.name === cell.name &&
+    item.tags.length === tags.length &&
+    item.tags.every((tag, i) => tag === tags[i])
+  );
+}
+
+export type StoredPicture = { imageUrl: string; name: string; tags: string[] };
+
 export async function storedPictures(prisma: PrismaClient, refs: string[]) {
   const items = await prisma.emojiLibraryItem.findMany({
     where: { sourceRef: { in: refs.flatMap((ref) => [ref, `${ref}:en`]) } },
-    select: { sourceRef: true, imageUrl: true },
+    select: { sourceRef: true, imageUrl: true, name: true, tags: true },
   });
-  return new Map(items.map((item) => [item.sourceRef ?? '', item.imageUrl]));
+  return new Map<string, StoredPicture>(
+    items.map((item) => [
+      item.sourceRef ?? '',
+      { imageUrl: item.imageUrl, name: item.name, tags: item.tags },
+    ])
+  );
 }
 
 export type Uploader = (image: Buffer, name: string) => Promise<string>;
@@ -288,8 +388,11 @@ export type AppliedCell = {
     | 'superseded'
     | 'ambiguous'
     | 'ambiguous-variant'
-    | 'not-found';
+    | 'not-found'
+    | 'conflict';
   productName?: string;
+  // Set when a queue cell was left unwritten because the records changed since they were read.
+  conflict?: string;
 };
 
 type LibraryData = {
@@ -323,6 +426,24 @@ function holds(current: Record<string, unknown> | null, picture: Record<string, 
   );
 }
 
+// A queue write changes a record only while it holds no picture. The emptiness check is made on
+// the read, and `writeIfEmpty` repeats it in the database condition, so a picture attached by hand
+// between the read and the write is never replaced.
+async function writeQueuePicture(
+  current: { imageUrl: string | null; imageUrlEn?: string | null } | null,
+  data: Record<string, unknown>,
+  writeIfEmpty: () => Promise<{ count: number }>
+): Promise<{ changed: boolean; conflict?: string }> {
+  if (current !== null && holds(current, data)) return { changed: false };
+  if (current !== null && (current.imageUrl !== null || (current.imageUrlEn ?? null) !== null)) {
+    return { changed: false, conflict: 'уже есть картинка, которую эта пачка не записывает' };
+  }
+  const { count } = await writeIfEmpty();
+  return count === 1
+    ? { changed: true }
+    : { changed: false, conflict: 'запись изменилась после чтения или её нет' };
+}
+
 // Writes one cell. Pictures already stored under the cell reference are reused, so a re-run
 // uploads nothing, and a record that already holds the picture is left untouched.
 export async function applyCell(
@@ -333,10 +454,33 @@ export async function applyCell(
 ): Promise<AppliedCell> {
   const { cell, ref, images } = plan;
   const textBatch = plan.batchKind === 'text';
+  const queue = cell.target !== undefined;
   // A category has no English picture, so a label on its picture cannot be shown anywhere.
   if (textBatch && plan.product.kind === 'category') {
     throw new Error(`${ref}: a category picture must be text-free`);
   }
+
+  // Every library read comes before the first upload, so a failed read has nothing to clean up.
+  const enRef = `${ref}:en`;
+  const ruCurrent = await prisma.emojiLibraryItem.findUnique({ where: { sourceRef: ref } });
+  const enCurrent =
+    textBatch && images.en
+      ? await prisma.emojiLibraryItem.findUnique({ where: { sourceRef: enRef } })
+      : null;
+  // A queue cell never reuses a record written for another target (AGE-1667).
+  for (const row of [ruCurrent, enCurrent]) {
+    if (queue && row && !ownsLibraryItem(row, cell)) {
+      return {
+        ref,
+        name: cell.name,
+        uploaded: 0,
+        changed: false,
+        product: 'conflict',
+        conflict: `картинка ${ref} записана для другой цели («${row.name}»)`,
+      };
+    }
+  }
+
   let uploaded = 0;
   let changed = false;
 
@@ -344,22 +488,24 @@ export async function applyCell(
     locale: 'ru' | 'en' | null,
     image: Buffer,
     sourceRef: string,
-    existing?: string
+    current: EmojiLibraryItem | null,
+    existing: string | undefined
   ) => {
-    const imageUrl = existing ?? (await upload(image, locale === 'en' ? cell.nameEn : cell.name));
-    const fresh = !existing;
-    if (fresh) uploaded++;
-    const data: LibraryData = {
-      imageUrl,
+    const meta = {
       name: cell.name,
       nameEn: cell.nameEn,
-      tags: [normalizeCatalogName(cell.category)],
+      tags: libraryTags(cell),
       source: 'batch',
       locale,
       groupKey: ref,
     };
-    const current = await prisma.emojiLibraryItem.findUnique({ where: { sourceRef } });
-    if (sameLibraryItem(current, data)) return imageUrl;
+    if (existing !== undefined && sameLibraryItem(current, { ...meta, imageUrl: existing })) {
+      return existing;
+    }
+    const imageUrl = existing ?? (await upload(image, locale === 'en' ? cell.nameEn : cell.name));
+    const fresh = existing === undefined;
+    if (fresh) uploaded++;
+    const data: LibraryData = { ...meta, imageUrl };
     try {
       await prisma.emojiLibraryItem.upsert({
         where: { sourceRef },
@@ -376,9 +522,19 @@ export async function applyCell(
     return imageUrl;
   };
 
-  const imageUrl = await store(textBatch ? 'ru' : null, images.ru, ref, plan.stored.ru);
+  // A queue cell reuses the URL the record read above holds; a historical cell reuses the one the
+  // prefetch found.
+  const imageUrl = await store(
+    textBatch ? 'ru' : null,
+    images.ru,
+    ref,
+    ruCurrent,
+    queue ? ruCurrent?.imageUrl : plan.stored.ru
+  );
   const imageUrlEn =
-    textBatch && images.en ? await store('en', images.en, `${ref}:en`, plan.stored.en) : null;
+    textBatch && images.en
+      ? await store('en', images.en, enRef, enCurrent, queue ? enCurrent?.imageUrl : plan.stored.en)
+      : null;
 
   // A text-free picture serves both languages, so it clears a stale English one. A Russian
   // label imported before its English sheet leaves an English picture already stored alone.
@@ -395,6 +551,24 @@ export async function applyCell(
       where: { id: productId },
       select: { imageUrl: true, imageUrlEn: true, isCustom: true },
     });
+    if (queue) {
+      const write = await writeQueuePicture(current, data, () =>
+        prisma.product.updateMany({
+          where: { id: productId, imageUrl: null, imageUrlEn: null },
+          data,
+        })
+      );
+      if (write.changed) changed = true;
+      return {
+        ref,
+        name: cell.name,
+        uploaded,
+        changed,
+        product: write.conflict ? 'conflict' : 'linked',
+        productName,
+        conflict: write.conflict,
+      };
+    }
     if (!holds(current, data)) {
       await prisma.product.update({ where: { id: productId }, data });
       changed = true;
@@ -421,18 +595,30 @@ export async function applyCell(
       where: { id: variantId },
       select: { imageUrl: true, imageUrlEn: true },
     });
+    const name = `${productName} / ${variantName}`;
+    if (queue) {
+      const write = await writeQueuePicture(current, picture, () =>
+        prisma.productVariant.updateMany({
+          where: { id: variantId, imageUrl: null, imageUrlEn: null },
+          data: picture,
+        })
+      );
+      if (write.changed) changed = true;
+      return {
+        ref,
+        name: cell.name,
+        uploaded,
+        changed,
+        product: write.conflict ? 'conflict' : 'variant',
+        productName: name,
+        conflict: write.conflict,
+      };
+    }
     if (!holds(current, picture)) {
       await prisma.productVariant.update({ where: { id: variantId }, data: picture });
       changed = true;
     }
-    return {
-      ref,
-      name: cell.name,
-      uploaded,
-      changed,
-      product: 'variant',
-      productName: `${productName} / ${variantName}`,
-    };
+    return { ref, name: cell.name, uploaded, changed, product: 'variant', productName: name };
   }
   if (kind === 'category') {
     const { categoryId, categoryName } = plan.product;
@@ -442,6 +628,21 @@ export async function applyCell(
       where: { id: categoryId },
       select: { imageUrl: true, isCustom: true },
     });
+    if (queue) {
+      const write = await writeQueuePicture(current, data, () =>
+        prisma.category.updateMany({ where: { id: categoryId, imageUrl: null }, data })
+      );
+      if (write.changed) changed = true;
+      return {
+        ref,
+        name: cell.name,
+        uploaded,
+        changed,
+        product: write.conflict ? 'conflict' : 'category',
+        productName: categoryName,
+        conflict: write.conflict,
+      };
+    }
     if (!holds(current, data)) {
       await prisma.category.update({ where: { id: categoryId }, data });
       changed = true;
@@ -455,7 +656,7 @@ export async function applyCell(
       productName: categoryName,
     };
   }
-  if (kind === 'ambiguous') {
+  if (kind === 'ambiguous' || kind === 'ambiguous-category') {
     return { ref, name: cell.name, uploaded, changed, product: 'ambiguous' };
   }
   if (kind === 'ambiguous-variant') {

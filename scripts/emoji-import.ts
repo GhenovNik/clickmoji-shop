@@ -8,6 +8,7 @@ import {
   cellRef,
   findBatchFiles,
   loadCatalogIndex,
+  ownsLibraryItem,
   planProduct,
   readBatchImages,
   storedPictures,
@@ -15,6 +16,7 @@ import {
   type ManifestBatch,
   type ManifestCell,
   type ProductPlan,
+  type StoredPicture,
 } from '../src/lib/services/emoji-batch-import';
 
 // Imports the operator's emoji sheets (AGE-1465 item 2, AGE-1667 queue).
@@ -101,6 +103,8 @@ function describeAction(cell: ManifestCell, product: ProductPlan | null) {
       return `только в библиотеку: несколько товаров с этим названием (${product.productNames.join(', ')}) — выберите в админке`;
     case 'ambiguous-variant':
       return `только в библиотеку: несколько вариантов «${cell.name}» у товара «${product.productName}» (${product.variantNames.join(', ')}) — выберите в админке`;
+    case 'ambiguous-category':
+      return `только в библиотеку: похожие названия категорий (${product.categoryNames.join(', ')}) — уточните каталог`;
     case 'not-found':
       return `только в библиотеку: не найдено — ${product.reason}`;
     case 'no-category':
@@ -116,7 +120,10 @@ function summarize(targets: { cell: ManifestCell; product: ProductPlan | null }[
   );
   const notFound = targets.filter(({ product }) => product?.kind === 'not-found');
   const ambiguous = targets.filter(
-    ({ product }) => product?.kind === 'ambiguous' || product?.kind === 'ambiguous-variant'
+    ({ product }) =>
+      product?.kind === 'ambiguous' ||
+      product?.kind === 'ambiguous-variant' ||
+      product?.kind === 'ambiguous-category'
   );
   const lines = [
     `Целей: ${targets.length}; найдено в каталоге: ${found.length}; ненайденных: ${notFound.length}; неоднозначных: ${ambiguous.length}.`,
@@ -175,7 +182,7 @@ async function main() {
       continue;
     }
     const images = await readBatchImages(batch, files, (path) => readFileSync(path));
-    const stored = prisma ? await storedPictures(prisma, refs) : new Map<string, string>();
+    const stored = prisma ? await storedPictures(prisma, refs) : new Map<string, StoredPicture>();
 
     for (const cell of batch.cells) {
       const picture = images.get(cell.cell);
@@ -190,6 +197,9 @@ async function main() {
       if (enFile && picture.en) writeFileSync(join(out, enFile), picture.en);
 
       const product = index ? planProduct(cell, index) : null;
+      // A queue cell whose library record belongs to another target is refused at apply time.
+      const owner = stored.get(ref);
+      const clash = cell.target !== undefined && owner && !ownsLibraryItem(owner, cell);
       rows.push({
         ref,
         name: cell.name,
@@ -197,7 +207,9 @@ async function main() {
         category: cell.category,
         ru: ruFile,
         en: enFile,
-        action: describeAction(cell, product),
+        action: clash
+          ? `конфликт: картинка записана для другой цели («${owner?.name}») — не будет записана`
+          : describeAction(cell, product),
         stored: stored.has(ref),
       });
       if (product) {
@@ -207,7 +219,7 @@ async function main() {
           batchKind: batch.kind ?? 'universal',
           cell,
           images: picture,
-          stored: { ru: stored.get(ref), en: stored.get(`${ref}:en`) },
+          stored: { ru: owner?.imageUrl, en: stored.get(`${ref}:en`)?.imageUrl },
           product,
         });
       }
@@ -235,33 +247,39 @@ async function main() {
     };
     let uploaded = 0;
     let changed = 0;
+    let conflicts = 0;
     for (const plan of plans) {
       const result = await applyCell(prisma, plan, upload, discard);
       uploaded += result.uploaded;
       if (result.changed) changed++;
+      if (result.product === 'conflict') conflicts++;
       const target =
-        result.product === 'linked'
-          ? `→ ${result.productName}`
-          : result.product === 'variant' || result.product === 'category'
+        result.product === 'conflict'
+          ? `→ конфликт: ${result.conflict}`
+          : result.product === 'linked'
             ? `→ ${result.productName}`
-            : result.product === 'created'
-              ? '→ новый товар'
-              : result.product === 'superseded'
-                ? '→ только библиотека (перерисован в текстовой пачке)'
-                : result.product === 'ambiguous'
-                  ? '→ только библиотека (неоднозначное название, выберите товар в админке)'
-                  : result.product === 'ambiguous-variant'
-                    ? '→ только библиотека (неоднозначный вариант, выберите в админке)'
-                    : result.product === 'not-found'
-                      ? '→ только библиотека (цель не найдена в каталоге)'
-                      : '→ только библиотека';
+            : result.product === 'variant' || result.product === 'category'
+              ? `→ ${result.productName}`
+              : result.product === 'created'
+                ? '→ новый товар'
+                : result.product === 'superseded'
+                  ? '→ только библиотека (перерисован в текстовой пачке)'
+                  : result.product === 'ambiguous'
+                    ? '→ только библиотека (неоднозначное название или категория, уточните каталог)'
+                    : result.product === 'ambiguous-variant'
+                      ? '→ только библиотека (неоднозначный вариант, выберите в админке)'
+                      : result.product === 'not-found'
+                        ? '→ только библиотека (цель не найдена в каталоге)'
+                        : '→ только библиотека';
       console.log(
         `${result.ref} ${result.name} ${target}${result.changed ? '' : ' (без изменений)'}${
           result.uploaded ? ` (загружено ${result.uploaded})` : ''
         }`
       );
     }
-    console.log(`Applied ${plans.length} cells, uploaded ${uploaded} files, changed ${changed}.`);
+    console.log(
+      `Applied ${plans.length} cells, uploaded ${uploaded} files, changed ${changed}, conflicts ${conflicts}.`
+    );
   } else if (apply) {
     console.log('Nothing applied.');
   }

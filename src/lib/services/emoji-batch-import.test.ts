@@ -151,24 +151,24 @@ describe('sliceSheet', () => {
 });
 
 describe('planProduct', () => {
+  const dairy = { id: 'c1', name: 'Молочные продукты', emoji: '🥛' };
   const index = {
     products: new Map([
-      [normalizeCatalogName('Сгущённое молоко'), [{ id: 'p1', name: 'Сгущенное молоко' }]],
+      [
+        normalizeCatalogName('Сгущённое молоко'),
+        [{ id: 'p1', name: 'Сгущенное молоко', categoryId: 'c1', categoryName: dairy.name }],
+      ],
       [
         normalizeCatalogName('Чай'),
         [
-          { id: 'a', name: 'Чай' },
-          { id: 'b', name: ' чай ' },
+          { id: 'a', name: 'Чай', categoryId: 'c1', categoryName: dairy.name },
+          { id: 'b', name: ' чай ', categoryId: 'c1', categoryName: dairy.name },
         ],
       ],
     ]),
     variants: new Map(),
-    categories: new Map([
-      [
-        normalizeCatalogName('Молочные продукты'),
-        { id: 'c1', name: 'Молочные продукты', emoji: '🥛' },
-      ],
-    ]),
+    categories: new Map([[normalizeCatalogName('Молочные продукты'), dairy]]),
+    categoriesByKey: new Map([[normalizeCatalogName('Молочные продукты'), [dairy]]]),
   };
 
   it('links an existing product by name, ё and case aside', () => {
@@ -209,17 +209,24 @@ describe('planProduct', () => {
 });
 
 describe('planProduct for queue targets', () => {
-  const apple = { id: 'apple', name: 'Яблоко' };
+  const apple = { id: 'apple', name: 'Яблоко', categoryId: 'c2', categoryName: 'Фрукты' };
   const index = {
     products: new Map([
       [normalizeCatalogName('Яблоко'), [apple]],
-      [normalizeCatalogName('Хлеб'), [{ id: 'bread', name: 'Хлеб' }]],
+      [
+        normalizeCatalogName('Хлеб'),
+        [{ id: 'bread', name: 'Хлеб', categoryId: 'c4', categoryName: 'Выпечка' }],
+      ],
       [
         normalizeCatalogName('Дубль'),
         [
-          { id: 'd1', name: 'Дубль' },
-          { id: 'd2', name: 'Дубль' },
+          { id: 'd1', name: 'Дубль', categoryId: 'c2', categoryName: 'Фрукты' },
+          { id: 'd2', name: 'Дубль', categoryId: 'c2', categoryName: 'Фрукты' },
         ],
+      ],
+      [
+        normalizeCatalogName('Тыква'),
+        [{ id: 'pumpkin', name: 'Тыква', categoryId: 'c3', categoryName: 'Овощи' }],
       ],
     ]),
     variants: new Map([
@@ -240,6 +247,13 @@ describe('planProduct for queue targets', () => {
     ]),
     categories: new Map([
       [normalizeCatalogName('Фрукты'), { id: 'c2', name: 'Фрукты', emoji: '🍎' }],
+      [normalizeCatalogName('Овощи'), { id: 'c3', name: 'Овощи', emoji: '🥕' }],
+      [normalizeCatalogName('Выпечка'), { id: 'c4', name: 'Выпечка', emoji: '🍞' }],
+    ]),
+    categoriesByKey: new Map([
+      [normalizeCatalogName('Фрукты'), [{ id: 'c2', name: 'Фрукты', emoji: '🍎' }]],
+      [normalizeCatalogName('Овощи'), [{ id: 'c3', name: 'Овощи', emoji: '🥕' }]],
+      [normalizeCatalogName('Выпечка'), [{ id: 'c4', name: 'Выпечка', emoji: '🍞' }]],
     ]),
   };
   const target = (overrides: Partial<ManifestCell>): ManifestCell => ({
@@ -294,7 +308,10 @@ describe('planProduct for queue targets', () => {
 
   it('lists the variants when one parent has two variants of that name', () => {
     expect(
-      planProduct(target({ target: 'variant', parent: 'Хлеб', name: 'Хлеб белый' }), index)
+      planProduct(
+        target({ target: 'variant', parent: 'Хлеб', name: 'Хлеб белый', category: 'Выпечка' }),
+        index
+      )
     ).toEqual({
       kind: 'ambiguous-variant',
       productName: 'Хлеб',
@@ -308,9 +325,9 @@ describe('planProduct for queue targets', () => {
       categoryId: 'c2',
       categoryName: 'Фрукты',
     });
-    expect(planProduct(target({ target: 'category', name: 'Овощи' }), index)).toEqual({
+    expect(planProduct(target({ target: 'category', name: 'Мясо' }), index)).toEqual({
       kind: 'not-found',
-      reason: 'нет категории «Овощи»',
+      reason: 'нет категории «Мясо»',
     });
   });
 
@@ -541,15 +558,18 @@ describe('applyCell for variants and categories', () => {
       },
       product: {
         update: vi.fn().mockResolvedValue({}),
+        updateMany: vi.fn().mockResolvedValue({ count: 1 }),
         create: vi.fn(),
         findUnique: vi.fn().mockResolvedValue(null),
       },
       productVariant: {
         update: vi.fn().mockResolvedValue({}),
+        updateMany: vi.fn().mockResolvedValue({ count: 1 }),
         findUnique: vi.fn().mockResolvedValue(null),
       },
       category: {
         update: vi.fn().mockResolvedValue({}),
+        updateMany: vi.fn().mockResolvedValue({ count: 1 }),
         findUnique: vi.fn().mockResolvedValue(null),
       },
     };
@@ -582,8 +602,9 @@ describe('applyCell for variants and categories', () => {
     );
 
     expect(result).toMatchObject({ product: 'variant', changed: true, uploaded: 1 });
-    expect(prisma.productVariant.update).toHaveBeenCalledWith({
-      where: { id: 'v1' },
+    expect(prisma.productVariant.updateMany).toHaveBeenCalledWith({
+      // Written only while the variant still has no picture: a manual one is never replaced.
+      where: { id: 'v1', imageUrl: null, imageUrlEn: null },
       // A text-free picture serves both languages, so a stale English one is cleared.
       data: { imageUrl: 'https://utfs.io/f/variant.webp', imageUrlEn: null },
     });
@@ -603,8 +624,8 @@ describe('applyCell for variants and categories', () => {
       vi.fn(async () => 'https://utfs.io/f/cat.webp')
     );
 
-    expect(prisma.category.update).toHaveBeenCalledWith({
-      where: { id: 'c2' },
+    expect(prisma.category.updateMany).toHaveBeenCalledWith({
+      where: { id: 'c2', imageUrl: null },
       data: { isCustom: true, imageUrl: 'https://utfs.io/f/cat.webp' },
     });
   });
@@ -647,7 +668,7 @@ describe('applyCell for variants and categories', () => {
       imageUrl: stored,
       name: 'Яблоко Ханикрисп',
       nameEn: 'Honeycrisp apple',
-      tags: ['фрукты'],
+      tags: ['фрукты', 'queue:variant', 'parent:яблоко'],
       source: 'batch',
       locale: null,
       groupKey: 'queue-001#1',
@@ -665,6 +686,501 @@ describe('applyCell for variants and categories', () => {
     expect(upload).not.toHaveBeenCalled();
     expect(prisma.emojiLibraryItem.upsert).not.toHaveBeenCalled();
     expect(prisma.productVariant.update).not.toHaveBeenCalled();
+  });
+});
+
+const KEY = normalizeCatalogName;
+const FRUIT = { id: 'c2', name: 'Фрукты', emoji: '🍎' };
+const VEG = { id: 'c3', name: 'Овощи', emoji: '🥕' };
+
+describe('queue targets are matched by category and parent (AGE-1667 B1)', () => {
+  const index = {
+    products: new Map([
+      [KEY('Тыква'), [{ id: 'pumpkin', name: 'Тыква', categoryId: 'c3', categoryName: 'Овощи' }]],
+      [KEY('Яблоко'), [{ id: 'apple', name: 'Яблоко', categoryId: 'c2', categoryName: 'Фрукты' }]],
+      [
+        KEY('Сок'),
+        [
+          { id: 'sok-fruit', name: 'Сок', categoryId: 'c2', categoryName: 'Фрукты' },
+          { id: 'sok-veg', name: 'Сок', categoryId: 'c3', categoryName: 'Овощи' },
+        ],
+      ],
+    ]),
+    variants: new Map(),
+    categories: new Map([
+      [KEY('Фрукты'), FRUIT],
+      [KEY('Овощи'), VEG],
+    ]),
+    categoriesByKey: new Map([
+      [KEY('Фрукты'), [FRUIT]],
+      [KEY('Овощи'), [VEG]],
+    ]),
+  };
+  const cell = (overrides: Partial<ManifestCell>): ManifestCell => ({
+    cell: 1,
+    category: 'Фрукты',
+    name: 'Тыква',
+    nameEn: 'Pumpkin',
+    action: 'update-image',
+    target: 'product',
+    ...overrides,
+  });
+
+  it('does not take a sole product of the same name from another category', () => {
+    expect(planProduct(cell({ name: 'Тыква', category: 'Фрукты' }), index)).toEqual({
+      kind: 'not-found',
+      reason: 'нет товара «Тыква» в категории «Фрукты» (есть в «Овощи»)',
+    });
+  });
+
+  it('does not take a variant whose parent sits in another category', () => {
+    expect(
+      planProduct(
+        cell({ target: 'variant', parent: 'Тыква', name: 'Тыква белая', category: 'Фрукты' }),
+        index
+      )
+    ).toEqual({
+      kind: 'not-found',
+      reason: 'нет товара «Тыква» в категории «Фрукты» (есть в «Овощи»)',
+    });
+  });
+
+  it('links the product of the named category when the name is shared', () => {
+    expect(planProduct(cell({ name: 'Сок', category: 'Овощи' }), index)).toEqual({
+      kind: 'link',
+      productId: 'sok-veg',
+      productName: 'Сок',
+    });
+    expect(planProduct(cell({ name: 'Сок', category: 'Фрукты' }), index)).toEqual({
+      kind: 'link',
+      productId: 'sok-fruit',
+      productName: 'Сок',
+    });
+  });
+
+  it('is ambiguous, naming both categories, when normalized category names collide', () => {
+    const colliding = {
+      ...index,
+      categoriesByKey: new Map([
+        [KEY('Фрукты'), [FRUIT, { id: 'c9', name: 'фрукты ', emoji: '🍐' }]],
+      ]),
+    };
+    expect(planProduct(cell({ name: 'Яблоко', category: 'Фрукты' }), colliding)).toEqual({
+      kind: 'ambiguous-category',
+      categoryNames: ['Фрукты', 'фрукты '],
+    });
+  });
+
+  it('is ambiguous for a category target when normalized category names collide', () => {
+    const colliding = {
+      ...index,
+      categoriesByKey: new Map([
+        [KEY('Фрукты'), [FRUIT, { id: 'c9', name: 'фрукты ', emoji: '🍐' }]],
+      ]),
+    };
+    expect(
+      planProduct(cell({ target: 'category', name: 'Фрукты', category: 'Фрукты' }), colliding)
+    ).toEqual({ kind: 'ambiguous-category', categoryNames: ['Фрукты', 'фрукты '] });
+  });
+});
+
+describe('queue writes are conditional on the state at write time (AGE-1667 B2)', () => {
+  const PNG = Buffer.from('ru');
+  const QUEUED = 'https://utfs.io/f/queued.webp';
+  const MANUAL = 'https://utfs.io/f/manual.webp';
+  type Row = { id: string } & Record<string, unknown>;
+
+  // A record whose conditional write checks the row as it stands when the write runs.
+  function liveRow<T extends Row>(row: T) {
+    return {
+      findUnique: vi.fn(async () => ({ ...row })),
+      update: vi.fn(async ({ data }: { data: Row }) => Object.assign(row, data)),
+      updateMany: vi.fn(async ({ where, data }: { where: Row; data: Row }) => {
+        const holds = Object.entries(where).every(([key, value]) => row[key] === value);
+        if (!holds) return { count: 0 };
+        Object.assign(row, data);
+        return { count: 1 };
+      }),
+    };
+  }
+  const libraryNone = () => ({
+    upsert: vi.fn().mockResolvedValue({}),
+    findUnique: vi.fn().mockResolvedValue(null),
+  });
+  const queueCell = (overrides: Partial<ManifestCell> = {}): ManifestCell => ({
+    cell: 1,
+    target: 'product',
+    category: 'Молочные продукты',
+    name: 'Кефир',
+    nameEn: 'Kefir',
+    action: 'update-image',
+    ...overrides,
+  });
+  const queuePlan = (product: CellPlan['product'], overrides: Partial<CellPlan> = {}) =>
+    ({
+      ref: 'queue-001#1',
+      batch: 'queue-001',
+      batchKind: 'universal',
+      cell: queueCell(),
+      images: { ru: PNG },
+      stored: {},
+      product,
+      ...overrides,
+    }) as CellPlan;
+
+  it('does not overwrite a picture attached by hand between the preview and the apply', async () => {
+    const product: {
+      id: string;
+      imageUrl: string | null;
+      imageUrlEn: string | null;
+      isCustom: boolean;
+    } = { id: 'p1', imageUrl: null, imageUrlEn: null, isCustom: false };
+    const row = liveRow(product);
+    // The picture is attached by hand after this run has read the product.
+    row.findUnique.mockImplementationOnce(async () => {
+      const seen = { ...product };
+      product.imageUrl = MANUAL;
+      return seen;
+    });
+    const prisma = { emojiLibraryItem: libraryNone(), product: row };
+
+    const result = await applyCell(
+      prisma as unknown as PrismaClient,
+      queuePlan({ kind: 'link', productId: 'p1', productName: 'Кефир' }),
+      vi.fn(async () => QUEUED)
+    );
+
+    expect(result).toMatchObject({ product: 'conflict', changed: true });
+    expect(row.updateMany).toHaveBeenCalledWith({
+      where: { id: 'p1', imageUrl: null, imageUrlEn: null },
+      data: { isCustom: true, imageUrl: QUEUED, imageUrlEn: null },
+    });
+    expect(row.update).not.toHaveBeenCalled();
+    expect(product.imageUrl).toBe(MANUAL);
+  });
+
+  it('keeps an English picture set by hand when a text-free picture is queued', async () => {
+    const variant = { id: 'v1', imageUrl: null, imageUrlEn: 'https://utfs.io/f/manual-en.webp' };
+    const row = liveRow(variant);
+    const prisma = { emojiLibraryItem: libraryNone(), productVariant: row };
+
+    const result = await applyCell(
+      prisma as unknown as PrismaClient,
+      queuePlan(
+        { kind: 'variant', variantId: 'v1', productName: 'Яблоко', variantName: 'Яблоко Гала' },
+        {
+          cell: queueCell({
+            target: 'variant',
+            parent: 'Яблоко',
+            name: 'Яблоко Гала',
+            category: 'Фрукты',
+          }),
+        }
+      ),
+      vi.fn(async () => QUEUED)
+    );
+
+    expect(result).toMatchObject({ product: 'conflict' });
+    expect(variant.imageUrlEn).toBe('https://utfs.io/f/manual-en.webp');
+    expect(row.updateMany).not.toHaveBeenCalled();
+    expect(row.update).not.toHaveBeenCalled();
+  });
+
+  it('reports a conflict and writes nothing on a re-run after a manual replacement', async () => {
+    const product = { id: 'p1', imageUrl: MANUAL, imageUrlEn: null, isCustom: true };
+    const row = liveRow(product);
+    const library = libraryNone();
+    library.findUnique.mockResolvedValue({
+      id: 'lib1',
+      imageUrl: QUEUED,
+      name: 'Кефир',
+      nameEn: 'Kefir',
+      tags: ['молочные продукты', 'queue:product'],
+      source: 'batch',
+      locale: null,
+      groupKey: 'queue-001#1',
+    });
+    const upload = vi.fn();
+
+    const result = await applyCell(
+      { emojiLibraryItem: library, product: row } as unknown as PrismaClient,
+      queuePlan(
+        { kind: 'link', productId: 'p1', productName: 'Кефир' },
+        { stored: { ru: QUEUED } }
+      ),
+      upload
+    );
+
+    expect(result).toMatchObject({ product: 'conflict', uploaded: 0 });
+    expect(upload).not.toHaveBeenCalled();
+    expect(row.updateMany).not.toHaveBeenCalled();
+    expect(row.update).not.toHaveBeenCalled();
+    expect(product.imageUrl).toBe(MANUAL);
+  });
+
+  it('leaves a product that already holds the queued picture unchanged on a re-run', async () => {
+    const product = { id: 'p1', imageUrl: QUEUED, imageUrlEn: null, isCustom: true };
+    const row = liveRow(product);
+    const library = libraryNone();
+    library.findUnique.mockResolvedValue({
+      id: 'lib1',
+      imageUrl: QUEUED,
+      name: 'Кефир',
+      nameEn: 'Kefir',
+      tags: ['молочные продукты', 'queue:product'],
+      source: 'batch',
+      locale: null,
+      groupKey: 'queue-001#1',
+    });
+
+    const result = await applyCell(
+      { emojiLibraryItem: library, product: row } as unknown as PrismaClient,
+      queuePlan(
+        { kind: 'link', productId: 'p1', productName: 'Кефир' },
+        { stored: { ru: QUEUED } }
+      ),
+      vi.fn()
+    );
+
+    expect(result).toMatchObject({ product: 'linked', changed: false, uploaded: 0 });
+    expect(row.updateMany).not.toHaveBeenCalled();
+    expect(row.update).not.toHaveBeenCalled();
+  });
+
+  it('keeps the historical overwrite of an existing picture for cells without a target', async () => {
+    const product = { id: 'p1', imageUrl: MANUAL, imageUrlEn: null, isCustom: true };
+    const row = liveRow(product);
+    const prisma = { emojiLibraryItem: libraryNone(), product: row };
+
+    const result = await applyCell(
+      prisma as unknown as PrismaClient,
+      { ...queuePlan({ kind: 'link', productId: 'p1', productName: 'Кефир' }), cell: KEFIR },
+      vi.fn(async () => QUEUED)
+    );
+
+    expect(result).toMatchObject({ product: 'linked', changed: true });
+    expect(row.update).toHaveBeenCalledWith({
+      where: { id: 'p1' },
+      data: { isCustom: true, imageUrl: QUEUED, imageUrlEn: null },
+    });
+    expect(row.updateMany).not.toHaveBeenCalled();
+    expect(product.imageUrl).toBe(QUEUED);
+  });
+
+  it('writes nothing to the catalogue for an ambiguous category', async () => {
+    const product = liveRow({ id: 'p1', imageUrl: null, imageUrlEn: null });
+    const prisma = { emojiLibraryItem: libraryNone(), product };
+
+    const result = await applyCell(
+      prisma as unknown as PrismaClient,
+      queuePlan({ kind: 'ambiguous-category', categoryNames: ['Фрукты', 'фрукты '] }),
+      vi.fn(async () => QUEUED)
+    );
+
+    expect(result).toMatchObject({ product: 'ambiguous' });
+    expect(product.updateMany).not.toHaveBeenCalled();
+    expect(product.update).not.toHaveBeenCalled();
+  });
+});
+
+describe('library reuse is bound to the target that wrote it (AGE-1667 B3)', () => {
+  const APPLE = 'https://utfs.io/f/apple.webp';
+  const libraryRow = (name: string, tags: string[]) => ({
+    id: 'lib1',
+    imageUrl: APPLE,
+    name,
+    nameEn: 'Apple',
+    tags,
+    source: 'batch',
+    locale: null,
+    groupKey: 'queue-001#1',
+  });
+  const cellAt = (overrides: Partial<ManifestCell>): ManifestCell => ({
+    cell: 1,
+    target: 'product',
+    category: 'Фрукты',
+    name: 'Груша',
+    nameEn: 'Pear',
+    action: 'update-image',
+    ...overrides,
+  });
+
+  it('refuses a stored picture whose record belongs to another target, with no upload or write', async () => {
+    const library = {
+      upsert: vi.fn().mockResolvedValue({}),
+      findUnique: vi.fn().mockResolvedValue(libraryRow('Яблоко', ['фрукты', 'queue:product'])),
+    };
+    const pear = { update: vi.fn(), updateMany: vi.fn(), findUnique: vi.fn() };
+    const upload = vi.fn();
+
+    const result = await applyCell(
+      { emojiLibraryItem: library, product: pear } as unknown as PrismaClient,
+      {
+        ref: 'queue-001#1',
+        batch: 'queue-001',
+        batchKind: 'universal',
+        cell: cellAt({}),
+        images: { ru: Buffer.from('ru') },
+        stored: { ru: APPLE },
+        product: { kind: 'link', productId: 'pear', productName: 'Груша' },
+      },
+      upload
+    );
+
+    expect(result).toMatchObject({ product: 'conflict', uploaded: 0 });
+    expect(upload).not.toHaveBeenCalled();
+    expect(library.upsert).not.toHaveBeenCalled();
+    expect(pear.updateMany).not.toHaveBeenCalled();
+    expect(pear.update).not.toHaveBeenCalled();
+  });
+
+  it('refuses a stored picture of a product when the cell now names a variant', async () => {
+    const library = {
+      upsert: vi.fn().mockResolvedValue({}),
+      findUnique: vi.fn().mockResolvedValue(libraryRow('Яблоко', ['фрукты', 'queue:product'])),
+    };
+    const variant = { update: vi.fn(), updateMany: vi.fn(), findUnique: vi.fn() };
+    const upload = vi.fn();
+
+    const result = await applyCell(
+      { emojiLibraryItem: library, productVariant: variant } as unknown as PrismaClient,
+      {
+        ref: 'queue-001#1',
+        batch: 'queue-001',
+        batchKind: 'universal',
+        cell: cellAt({ name: 'Яблоко', nameEn: 'Apple', target: 'variant', parent: 'Яблоко' }),
+        images: { ru: Buffer.from('ru') },
+        stored: { ru: APPLE },
+        product: { kind: 'variant', variantId: 'v1', productName: 'Яблоко', variantName: 'Яблоко' },
+      },
+      upload
+    );
+
+    expect(result).toMatchObject({ product: 'conflict', uploaded: 0 });
+    expect(upload).not.toHaveBeenCalled();
+    expect(variant.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('reuses the stored picture of the same target without an upload', async () => {
+    const product = { id: 'pear', imageUrl: null, imageUrlEn: null };
+    const library = {
+      upsert: vi.fn().mockResolvedValue({}),
+      findUnique: vi.fn().mockResolvedValue(libraryRow('Груша', ['фрукты', 'queue:product'])),
+    };
+    const row = {
+      findUnique: vi.fn(async () => ({ ...product })),
+      update: vi.fn(),
+      updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+    };
+    const upload = vi.fn();
+
+    const result = await applyCell(
+      { emojiLibraryItem: library, product: row } as unknown as PrismaClient,
+      {
+        ref: 'queue-001#1',
+        batch: 'queue-001',
+        batchKind: 'universal',
+        cell: cellAt({}),
+        images: { ru: Buffer.from('ru') },
+        stored: { ru: APPLE },
+        product: { kind: 'link', productId: 'pear', productName: 'Груша' },
+      },
+      upload
+    );
+
+    expect(result).toMatchObject({ product: 'linked', uploaded: 0 });
+    expect(upload).not.toHaveBeenCalled();
+    expect(row.updateMany).toHaveBeenCalledWith({
+      where: { id: 'pear', imageUrl: null, imageUrlEn: null },
+      data: { isCustom: true, imageUrl: APPLE, imageUrlEn: null },
+    });
+  });
+});
+
+describe('a failed read after or before an upload never orphans a file (AGE-1667 B4)', () => {
+  const PNG = Buffer.from('ru');
+  const cell: ManifestCell = {
+    cell: 1,
+    target: 'product',
+    category: 'Молочные продукты',
+    name: 'Кефир',
+    nameEn: 'Kefir',
+    action: 'update-image',
+  };
+  const plan = (stored: CellPlan['stored'] = {}): CellPlan => ({
+    ref: 'queue-001#1',
+    batch: 'queue-001',
+    batchKind: 'universal',
+    cell,
+    images: { ru: PNG },
+    stored,
+    product: { kind: 'link', productId: 'p1', productName: 'Кефир' },
+  });
+
+  function fake() {
+    return {
+      emojiLibraryItem: {
+        upsert: vi.fn().mockResolvedValue({}),
+        findUnique: vi.fn().mockResolvedValue(null),
+      },
+      product: {
+        findUnique: vi
+          .fn()
+          .mockResolvedValue({ imageUrl: null, imageUrlEn: null, isCustom: false }),
+        update: vi.fn(),
+        updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+      },
+    };
+  }
+
+  it('reads the library record before uploading, so a failed read uploads nothing', async () => {
+    const prisma = fake();
+    prisma.emojiLibraryItem.findUnique.mockRejectedValueOnce(new Error('db read'));
+    const upload = vi.fn(async () => 'https://utfs.io/f/fresh.webp');
+    const discard = vi.fn(async () => undefined);
+
+    await expect(
+      applyCell(prisma as unknown as PrismaClient, plan(), upload, discard)
+    ).rejects.toThrow('db read');
+
+    expect(upload).not.toHaveBeenCalled();
+    expect(discard).not.toHaveBeenCalled();
+  });
+
+  it('never deletes a stored picture when a read fails', async () => {
+    const prisma = fake();
+    prisma.emojiLibraryItem.findUnique.mockRejectedValueOnce(new Error('db read'));
+    const discard = vi.fn(async () => undefined);
+
+    await expect(
+      applyCell(
+        prisma as unknown as PrismaClient,
+        plan({ ru: 'https://utfs.io/f/old.webp' }),
+        vi.fn(),
+        discard
+      )
+    ).rejects.toThrow('db read');
+
+    expect(discard).not.toHaveBeenCalled();
+  });
+
+  it('keeps a fresh upload that its library record already references when a later read fails', async () => {
+    const prisma = fake();
+    prisma.product.findUnique.mockRejectedValueOnce(new Error('db read'));
+    const upload = vi.fn(async () => 'https://utfs.io/f/fresh.webp');
+    const discard = vi.fn(async () => undefined);
+
+    await expect(
+      applyCell(prisma as unknown as PrismaClient, plan(), upload, discard)
+    ).rejects.toThrow('db read');
+
+    expect(upload).toHaveBeenCalledTimes(1);
+    expect(prisma.emojiLibraryItem.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        create: expect.objectContaining({ imageUrl: 'https://utfs.io/f/fresh.webp' }),
+      })
+    );
+    expect(discard).not.toHaveBeenCalled();
   });
 });
 
