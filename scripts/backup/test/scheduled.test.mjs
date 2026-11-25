@@ -151,8 +151,10 @@ describe('run-scheduled.sh', () => {
     const result = run(WRAPPER, [], env);
 
     assert.equal(result.status, 0, result.stderr);
-    assert.equal(readText(path.join(sandbox.record, 'security-argv')).trim(),
-      'find-generic-password -s clickmoji-backup-readonly -w');
+    assert.equal(
+      readText(path.join(sandbox.record, 'security-argv')).trim(),
+      'find-generic-password -s clickmoji-backup-readonly -w'
+    );
     assert.equal(readText(path.join(sandbox.record, 'npm-argv')).trim(), 'run db:backup:verified');
     assert.equal(readText(path.join(sandbox.record, 'npm-url')).trim(), 'match');
     assert.match(result.stdout, /backup: ok/);
@@ -161,12 +163,16 @@ describe('run-scheduled.sh', () => {
     const mainBackups = path.join(sandbox.home, 'Projects', 'clickmoji-shop', 'backups');
     assert.ok(npmEnv.includes(`BACKUP_DIR=${mainBackups}\n`), npmEnv);
     assert.ok(
-      npmEnv.includes(`TMPDIR=${path.join(sandbox.home, 'Library', 'Caches', 'clickmoji-backup', 'tmp')}\n`),
-      npmEnv,
+      npmEnv.includes(
+        `TMPDIR=${path.join(sandbox.home, 'Library', 'Caches', 'clickmoji-backup', 'tmp')}\n`
+      ),
+      npmEnv
     );
     assert.ok(
-      npmEnv.includes(`BACKUP_STATUS_FILE=${path.join(sandbox.home, 'Library', 'Logs', 'clickmoji-backup', 'status.tsv')}\n`),
-      npmEnv,
+      npmEnv.includes(
+        `BACKUP_STATUS_FILE=${path.join(sandbox.home, 'Library', 'Logs', 'clickmoji-backup', 'status.tsv')}\n`
+      ),
+      npmEnv
     );
     assert.ok(npmEnv.includes('BACKUP_ENCRYPT=0\n'), npmEnv);
     assert.ok(npmEnv.includes('BACKUP_RETENTION_COUNT=2\n'), npmEnv);
@@ -178,7 +184,8 @@ describe('run-scheduled.sh', () => {
 
   it('records a failed Keychain lookup in the status format and never runs npm', () => {
     const sandbox = makeSandbox();
-    const diagnostic = 'security: SecKeychainSearchCopyNext: The specified item could not be found.';
+    const diagnostic =
+      'security: SecKeychainSearchCopyNext: The specified item could not be found.';
     const env = baseEnv(sandbox, {
       FAKE_SECURITY_EXIT: '44',
       FAKE_SECURITY_STDERR: diagnostic,
@@ -207,7 +214,9 @@ describe('run-scheduled.sh', () => {
 
     assert.equal(result.status, 1);
     assert.equal(existsSync(path.join(sandbox.record, 'npm-argv')), false, 'npm must not run');
-    const status = readText(path.join(sandbox.home, 'Library', 'Logs', 'clickmoji-backup', 'status.tsv'));
+    const status = readText(
+      path.join(sandbox.home, 'Library', 'Logs', 'clickmoji-backup', 'status.tsv')
+    );
     assert.match(status, STATUS_LINE);
   });
 
@@ -222,7 +231,10 @@ describe('run-scheduled.sh', () => {
     const result = run(WRAPPER, [], env);
 
     assert.equal(result.status, 3);
-    assert.equal(existsSync(path.join(sandbox.home, 'Library', 'Logs', 'clickmoji-backup', 'status.tsv')), false);
+    assert.equal(
+      existsSync(path.join(sandbox.home, 'Library', 'Logs', 'clickmoji-backup', 'status.tsv')),
+      false
+    );
   });
 
   it('does not append through a status file that is a symlink, and reports it', () => {
@@ -255,8 +267,15 @@ describe('launchd installer and remover', () => {
     assert.ok(plist.includes(`<string>${WRAPPER}</string>`));
     assert.ok(plist.includes(`<string>${REPO_ROOT}</string>`));
     assert.equal(/__[A-Z_]+__/.test(plist), false, 'every placeholder is replaced');
-    assert.ok(plist.includes(`<string>${path.join(sandbox.home, 'Library', 'Logs', 'clickmoji-backup', 'launchd.log')}</string>`));
-    assert.match(readText(path.join(sandbox.record, 'launchctl.log')), /^bootstrap gui\/\d+ .*\.plist$/m);
+    assert.ok(
+      plist.includes(
+        `<string>${path.join(sandbox.home, 'Library', 'Logs', 'clickmoji-backup', 'launchd.log')}</string>`
+      )
+    );
+    assert.match(
+      readText(path.join(sandbox.record, 'launchctl.log')),
+      /^bootstrap gui\/\d+ .*\.plist$/m
+    );
     assert.ok(existsSync(path.join(sandbox.record, 'loaded')));
   });
 
@@ -265,7 +284,11 @@ describe('launchd installer and remover', () => {
     linkMainCheckout(sandbox);
     assert.equal(run(INSTALL, [], baseEnv(sandbox)).status, 0);
 
-    const second = run(INSTALL, [], baseEnv(sandbox, { CLICKMOJI_BACKUP_INTERVAL_SECONDS: '3600' }));
+    const second = run(
+      INSTALL,
+      [],
+      baseEnv(sandbox, { CLICKMOJI_BACKUP_INTERVAL_SECONDS: '3600' })
+    );
     assert.equal(second.status, 0, second.stderr);
 
     const calls = readText(path.join(sandbox.record, 'launchctl.log')).trim().split('\n');
@@ -273,7 +296,10 @@ describe('launchd installer and remover', () => {
     const bootstrapAt = calls.findLastIndex((line) => line.startsWith('bootstrap'));
     assert.equal(calls.filter((line) => line.startsWith('bootout')).length, 1);
     assert.equal(calls.filter((line) => line.startsWith('bootstrap')).length, 2);
-    assert.ok(bootoutAt >= 0 && bootoutAt < bootstrapAt, 'bootout comes before the second bootstrap');
+    assert.ok(
+      bootoutAt >= 0 && bootoutAt < bootstrapAt,
+      'bootout comes before the second bootstrap'
+    );
     const plist = readText(path.join(sandbox.home, 'Library', 'LaunchAgents', `${LABEL}.plist`));
     assert.match(plist, /<key>StartInterval<\/key>\s*<integer>3600<\/integer>/);
     assert.ok(existsSync(path.join(sandbox.record, 'loaded')));
@@ -296,7 +322,10 @@ describe('launchd installer and remover', () => {
     const result = run(INSTALL, [], baseEnv(sandbox));
 
     assert.equal(result.status, 1);
-    assert.equal(existsSync(path.join(sandbox.home, 'Library', 'LaunchAgents', `${LABEL}.plist`)), false);
+    assert.equal(
+      existsSync(path.join(sandbox.home, 'Library', 'LaunchAgents', `${LABEL}.plist`)),
+      false
+    );
     assert.equal(existsSync(path.join(sandbox.record, 'launchctl.log')), false);
   });
 
@@ -307,7 +336,9 @@ describe('launchd installer and remover', () => {
 
     const result = run(INSTALL, [], baseEnv(sandbox, { FAKE_BOOTOUT_FAIL: '1' }));
     assert.equal(result.status, 1);
-    const bootstraps = readText(path.join(sandbox.record, 'launchctl.log')).split('\n').filter((l) => l.startsWith('bootstrap'));
+    const bootstraps = readText(path.join(sandbox.record, 'launchctl.log'))
+      .split('\n')
+      .filter((l) => l.startsWith('bootstrap'));
     assert.equal(bootstraps.length, 1, 'no second bootstrap');
   });
 
@@ -320,7 +351,10 @@ describe('launchd installer and remover', () => {
 
     const first = run(UNINSTALL, [], baseEnv(sandbox));
     assert.equal(first.status, 0, first.stderr);
-    assert.equal(existsSync(path.join(sandbox.home, 'Library', 'LaunchAgents', `${LABEL}.plist`)), false);
+    assert.equal(
+      existsSync(path.join(sandbox.home, 'Library', 'LaunchAgents', `${LABEL}.plist`)),
+      false
+    );
     assert.equal(existsSync(path.join(sandbox.record, 'loaded')), false);
 
     const second = run(UNINSTALL, [], baseEnv(sandbox));
