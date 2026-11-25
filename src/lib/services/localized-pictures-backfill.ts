@@ -1,12 +1,15 @@
-import type { Prisma, PrismaClient } from '@prisma/client';
+import { Prisma, type PrismaClient } from '@prisma/client';
 import { sanitizeDatabaseErrorMessage } from './emoji-legacy-ru-locales';
 
 // Fills the localized picture fields (AGE-1667) from the legacy columns, while the legacy
 // columns stay untouched and the previous release keeps working:
-//   - the English legacy URL is copied to localizedImages.en; other keys are kept;
+//   - the English legacy URL is copied to localizedImages.en; other keys are kept; when the legacy
+//     English URL is cleared, only en is removed and every other locale is kept;
 //   - the language of the text on the main picture comes from the library row with the exact
 //     same URL: a library row with locale null becomes "none", a library row with a locale keeps it;
-//     a picture that the library does not know stays null (unmarked).
+//     a main picture that the library does not know, or no main picture, has no language: a stale
+//     value is cleared to null (unmarked).
+// An empty dictionary is stored as SQL NULL, the same as a row that was never filled.
 // The plan is computed in memory from one read, then applied in one Serializable transaction and
 // verified by a re-read; a second run on unchanged data plans zero writes.
 
@@ -30,10 +33,11 @@ export type PictureRow = {
 // Exact library URL -> library locale (null = text-free picture).
 export type LibraryLocales = ReadonlyMap<string, string | null>;
 
+// undefined = leave the column alone; null = store SQL NULL.
 export type RowWrite = {
   id: string;
-  imageTextLocale?: string;
-  localizedImages?: JsonObject;
+  imageTextLocale?: string | null;
+  localizedImages?: JsonObject | null;
 };
 
 export type PictureCounts = {
@@ -71,8 +75,10 @@ type ModelAccess = {
   write: (db: BackfillDb, write: RowWrite) => Promise<unknown>;
 };
 
-function localizedToJsonField(localized: JsonObject | undefined): Prisma.InputJsonValue {
-  return (localized ?? {}) as Prisma.InputJsonValue;
+function localizedToJsonField(
+  localized: JsonObject | null
+): Prisma.InputJsonObject | typeof Prisma.DbNull {
+  return localized === null ? Prisma.DbNull : (localized as Prisma.InputJsonObject);
 }
 
 const MODEL_ACCESS: Record<BackfillModel, ModelAccess> = {
@@ -221,20 +227,28 @@ export function planRow(row: PictureRow, libraryLocales: LibraryLocales): RowWri
   const write: RowWrite = { id: row.id };
   let changed = false;
 
-  if (row.main !== null && libraryLocales.has(row.main)) {
-    const derived = libraryLocales.get(row.main) ?? TEXT_LOCALE_NONE;
-    if (row.textLocale !== derived) {
-      write.imageTextLocale = derived;
-      changed = true;
-    }
+  // A main picture that is absent or unknown to the library has no language: clear a stale value.
+  const derivedLocale =
+    row.main !== null && libraryLocales.has(row.main)
+      ? (libraryLocales.get(row.main) ?? TEXT_LOCALE_NONE)
+      : null;
+  if (row.textLocale !== derivedLocale) {
+    write.imageTextLocale = derivedLocale;
+    changed = true;
   }
 
+  const dictionary = dictionaryOf(row);
   if (row.en !== null) {
-    const dictionary = dictionaryOf(row);
     if (dictionary[ENGLISH_LOCALE_KEY] !== row.en) {
       write.localizedImages = { ...dictionary, [ENGLISH_LOCALE_KEY]: row.en };
       changed = true;
     }
+  } else if (Object.prototype.hasOwnProperty.call(dictionary, ENGLISH_LOCALE_KEY)) {
+    // The legacy English URL was cleared: drop the stale en and keep every other locale.
+    const rest: JsonObject = { ...dictionary };
+    delete rest[ENGLISH_LOCALE_KEY];
+    write.localizedImages = Object.keys(rest).length > 0 ? rest : null;
+    changed = true;
   }
 
   return changed ? write : null;
@@ -251,8 +265,8 @@ export function applyWrites(
     if (!write) return row;
     return {
       ...row,
-      textLocale: write.imageTextLocale ?? row.textLocale,
-      localized: write.localizedImages ?? row.localized,
+      textLocale: write.imageTextLocale !== undefined ? write.imageTextLocale : row.textLocale,
+      localized: write.localizedImages !== undefined ? write.localizedImages : row.localized,
     };
   });
 }

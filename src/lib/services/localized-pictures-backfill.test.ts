@@ -55,10 +55,32 @@ describe('planRow: English copy', () => {
     });
   });
 
-  it('leaves localizedImages alone when imageUrlEn is null, even if en is present', () => {
+  it('removes a stale en when the legacy English URL was cleared and keeps other locales', () => {
+    const write = planRow(
+      row({
+        id: 'a',
+        en: null,
+        localized: { en: 'https://en.example/old.webp', es: 'https://es.example/a.webp' },
+      }),
+      library
+    );
+    expect(write).toEqual({ id: 'a', localizedImages: { es: 'https://es.example/a.webp' } });
+  });
+
+  it('stores SQL Null when removing the last key leaves an empty dictionary', () => {
+    const write = planRow(
+      row({ id: 'a', en: null, localized: { en: 'https://en.example/old.webp' } }),
+      library
+    );
+    expect(write).toEqual({ id: 'a', localizedImages: null });
+  });
+
+  it('writes nothing when the legacy English URL is null and no en is stored', () => {
+    expect(planRow(row({ id: 'a', en: null, localized: null }), library)).toBeNull();
     expect(
-      planRow(row({ id: 'a', localized: { en: 'https://x.example/a.webp' } }), library)
+      planRow(row({ id: 'a', en: null, localized: { es: 'https://es.example/a.webp' } }), library)
     ).toBeNull();
+    expect(planRow(row({ id: 'a', en: null, localized: {} }), library)).toBeNull();
   });
 
   it('treats a null localizedImages as an empty dictionary', () => {
@@ -105,6 +127,35 @@ describe('planRow: text locale of the main picture', () => {
 
   it('does not invent a text locale when the main picture is null', () => {
     expect(planRow(row({ id: 'a', main: null, en: null }), library)).toBeNull();
+  });
+
+  it('clears a stale locale when the main URL was changed to an unknown address', () => {
+    expect(
+      planRow(
+        row({ id: 'a', main: 'https://elsewhere.example/new.webp', textLocale: 'ru' }),
+        library
+      )
+    ).toEqual({ id: 'a', imageTextLocale: null });
+  });
+
+  it('clears a stale locale when the main URL was removed', () => {
+    expect(planRow(row({ id: 'a', main: null, textLocale: 'none' }), library)).toEqual({
+      id: 'a',
+      imageTextLocale: null,
+    });
+  });
+
+  it('writes nothing for an unknown or absent main URL that is already unmarked', () => {
+    expect(
+      planRow(row({ id: 'a', main: 'https://elsewhere.example/x.webp', textLocale: null }), library)
+    ).toBeNull();
+    expect(planRow(row({ id: 'a', main: null, textLocale: null }), library)).toBeNull();
+  });
+
+  it('re-derives the locale when a changed URL moves to another library locale', () => {
+    expect(
+      planRow(row({ id: 'a', main: 'https://lib.example/en.webp', textLocale: 'ru' }), library)
+    ).toEqual({ id: 'a', imageTextLocale: 'en' });
   });
 
   it('writes nothing when the marking already matches the library', () => {
@@ -160,6 +211,47 @@ describe('planModel: counts and rerun', () => {
     const again = planModel('product', applyWrites(rows, plan.writes), library);
     expect(again.writes).toEqual([]);
     expect(again.projectedAfter).toEqual(plan.projectedAfter);
+  });
+
+  it('projects cleared values (null) instead of keeping the old ones', () => {
+    const stale = [
+      row({
+        id: 'edited',
+        main: 'https://elsewhere.example/new.webp',
+        en: null,
+        textLocale: 'ru',
+        localized: { en: 'https://en.example/old.webp', es: 'https://es.example/a.webp' },
+      }),
+    ];
+    const plan = planModel('product', stale, library);
+    expect(plan.writes).toEqual([
+      { id: 'edited', imageTextLocale: null, localizedImages: { es: 'https://es.example/a.webp' } },
+    ]);
+    expect(plan.projectedAfter).toMatchObject({
+      unmarked: 1,
+      englishCopyMissing: 0,
+      textLocale: 0,
+    });
+    expect(applyWrites(stale, plan.writes)[0]).toMatchObject({
+      textLocale: null,
+      localized: { es: 'https://es.example/a.webp' },
+    });
+  });
+
+  it('a rerun after legacy edits plans zero writes once the writes are applied', () => {
+    const edited = [
+      row({
+        id: 'edited',
+        main: 'https://elsewhere.example/new.webp',
+        en: null,
+        textLocale: 'ru',
+        localized: { en: 'https://en.example/old.webp' },
+      }),
+      row({ id: 'kept', main: 'https://lib.example/ru.webp', en: 'https://en.example/k.webp' }),
+    ];
+    const first = planModel('product', edited, library);
+    const second = planModel('product', applyWrites(edited, first.writes), library);
+    expect(second.writes).toEqual([]);
   });
 
   it('counts unmarked only where a main picture exists without a marking', () => {

@@ -63,38 +63,39 @@ describe.skipIf(!url)('localized picture backfill on disposable PostgreSQL', () 
       data: { id: 'c1', name: 'Test', nameEn: 'Test', emoji: 'x', order: 1 },
     });
     const base = { categoryId: 'c1', emoji: 'x' };
-    await db.product.createMany({
-      data: [
-        {
-          id: 'p1',
-          name: 'P1',
-          nameEn: 'P1',
-          ...base,
-          imageUrl: LIB_RU,
-          imageUrlEn: 'https://en.test/p1.webp',
-          localizedImages: { es: 'https://es.test/p1.webp' },
-        },
-        { id: 'p2', name: 'P2', nameEn: 'P2', ...base, imageUrl: LIB_NONE },
-        {
-          id: 'p3',
-          name: 'P3',
-          nameEn: 'P3',
-          ...base,
-          imageUrl: 'https://elsewhere.test/p3.webp',
-          imageUrlEn: 'https://en.test/p3.webp',
-        },
-        {
-          id: 'p4',
-          name: 'P4',
-          nameEn: 'P4',
-          ...base,
-          imageUrl: LIB_EN,
-          imageUrlEn: 'https://legacy.test/new.webp',
-          localizedImages: { en: 'https://legacy.test/old.webp' },
-        },
-        { id: 'p5', name: 'P5', nameEn: 'P5', ...base },
-      ],
-    });
+    // Product rows are created one by one: a createMany batch with Json values was rejected by
+    // Prisma 7.10 here ("Unknown argument localizedImages") while each row alone is accepted.
+    const productRows = [
+      {
+        id: 'p1',
+        name: 'P1',
+        nameEn: 'P1',
+        ...base,
+        imageUrl: LIB_RU,
+        imageUrlEn: 'https://en.test/p1.webp',
+        localizedImages: { es: 'https://es.test/p1.webp' },
+      },
+      { id: 'p2', name: 'P2', nameEn: 'P2', ...base, imageUrl: LIB_NONE },
+      {
+        id: 'p3',
+        name: 'P3',
+        nameEn: 'P3',
+        ...base,
+        imageUrl: 'https://elsewhere.test/p3.webp',
+        imageUrlEn: 'https://en.test/p3.webp',
+      },
+      {
+        id: 'p4',
+        name: 'P4',
+        nameEn: 'P4',
+        ...base,
+        imageUrl: LIB_EN,
+        imageUrlEn: 'https://legacy.test/new.webp',
+        localizedImages: { en: 'https://legacy.test/old.webp' },
+      },
+      { id: 'p5', name: 'P5', nameEn: 'P5', ...base },
+    ];
+    for (const data of productRows) await db.product.create({ data });
     await db.productVariant.createMany({
       data: [
         {
@@ -245,6 +246,64 @@ describe.skipIf(!url)('localized picture backfill on disposable PostgreSQL', () 
       orderBy: { id: 'asc' },
     });
     expect(after).toEqual(stamped);
+  });
+
+  it('reapplies after legacy edits: changed and cleared URLs, then zero writes', async () => {
+    await applyBackfill(db);
+
+    // Legacy app edits made after the first run (the legacy columns are the only thing it changes).
+    const UNKNOWN = 'https://elsewhere.test/p1-changed.webp';
+    await db.product.update({ where: { id: 'p1' }, data: { imageUrl: UNKNOWN, imageUrlEn: null } });
+    await db.product.update({ where: { id: 'p2' }, data: { imageUrl: LIB_RU } });
+    await db.product.update({ where: { id: 'p4' }, data: { imageUrlEn: null } });
+    await db.productVariant.update({ where: { id: 'v1' }, data: { imageUrl: null } });
+    await db.listHistoryItem.update({
+      where: { id: 'hi1' },
+      data: { productImageUrl: 'https://gone.test/h1.webp' },
+    });
+
+    const plan = await planBackfill(db);
+    expect(plan.models.map((m) => m.writeCounts.rows)).toEqual([3, 1, 1]);
+
+    const result = await applyBackfill(db);
+    expect(result.appliedWrites).toBe(5);
+
+    const after = await snapshot();
+    const p = Object.fromEntries(after.products.map((r) => [r.id, r]));
+    // Unknown main URL: the stale language is cleared; the other locale stays, the English copy goes.
+    expect(p.p1).toMatchObject({
+      imageTextLocale: null,
+      localizedImages: { es: 'https://es.test/p1.webp' },
+    });
+    // Changed to a library URL: the language follows the new picture.
+    expect(p.p2).toMatchObject({ imageTextLocale: 'ru', localizedImages: null });
+    // Cleared legacy English URL: the only stored locale was en, so the column is SQL Null.
+    expect(p.p4).toMatchObject({ imageTextLocale: 'en', localizedImages: null });
+    // Legacy columns still reflect the legacy edits.
+    expect(p.p1).toMatchObject({ imageUrl: UNKNOWN, imageUrlEn: null });
+
+    const v = Object.fromEntries(after.variants.map((r) => [r.id, r]));
+    expect(v.v1).toMatchObject({
+      imageTextLocale: null,
+      localizedImages: { en: 'https://en.test/v1.webp' },
+    });
+
+    const h = Object.fromEntries(after.history.map((r) => [r.id, r]));
+    expect(h.hi1).toMatchObject({
+      imageTextLocale: null,
+      localizedImages: { en: 'https://en.test/h1.webp' },
+    });
+
+    // The repeat after the correct reapply writes nothing and changes no timestamp.
+    const stamped = await db.product.findMany({
+      select: { id: true, updatedAt: true },
+      orderBy: { id: 'asc' },
+    });
+    const again = await applyBackfill(db);
+    expect(again.appliedWrites).toBe(0);
+    expect(
+      await db.product.findMany({ select: { id: true, updatedAt: true }, orderBy: { id: 'asc' } })
+    ).toEqual(stamped);
   });
 
   it('rolls back every write when a later write fails', async () => {
