@@ -193,8 +193,9 @@ Terms used below:
   commands of `scripts/db-*.ts` and `scripts/db-transfer.ts`); the GitHub workflow `Production migration`
   (`migrate-production.yml`) and any `prisma migrate deploy` run; database-side jobs (`pg_cron`, if installed); and
   any other client that holds a production URL or a role with write privileges. Preview deployments never hold a
-  production URL. The scheduled backup workflow (`db-backup.yml`) only reads, but it is paused for the window so that
-  the session check sees no unidentified connection.
+  production URL. A scheduled backup job only reads; none is scheduled on master since #159 removed
+  `.github/workflows/db-backup.yml` (commit 7b1076e08). Any backup job that is active is paused for the window (_Fence
+  production_, step 1), so that the session check sees no unidentified connection.
 - **Owner role** (`<owner-role>`): owns the restored target. Used for restore, verification and the grant checks. It
   is never the site's `DATABASE_URL`.
 - **Runtime role** (`<runtime-role>`): the role in the site's production `DATABASE_URL`. It is not an owner, not a
@@ -235,6 +236,15 @@ Terms used below:
 IMAGE='postgres:17-alpine@sha256:f9cf3e1f0066f0eb0c48707d864f0ac5941e9ff454a072077d97a4d278d07d73'
 NEON_PROJECT_ID='<neon-project-id>'
 PROD_BRANCH='<production-branch-name>'   # the project's default branch; confirmed in _Create the target_
+
+# Run start: one RUN_ID for this recovery attempt. Every private directory this attempt creates carries it in its marker,
+# and cleanup removes only directories whose marker holds it. The scratch paths are reset here, so a path left in this
+# shell by an earlier attempt (for example a point-in-time directory) is never removed by this attempt. Run this block
+# once per attempt, before the first directory block below.
+RUN_ID=$(openssl rand -hex 16)
+EXP_DIR=''
+RECOVERY_DIR=''
+DIFF_DIR=''
 
 # Runs the pinned image with the libpq variables forwarded by name. Add -i only when stdin carries SQL or
 # the age identity; without it a command that reads the terminal could hang.
@@ -474,7 +484,7 @@ mismatch blocks the recovery.
 
    ```sh
    REF_NAME="ref-$(date -u +%Y%m%d%H%M%S)"
-   EXP_DIR=$(mktemp -d "$HOME/recovery-expect-XXXXXX") && chmod 700 "$EXP_DIR" && : > "$EXP_DIR/.recovery-owned"
+   EXP_DIR=$(mktemp -d "$HOME/recovery-expect-XXXXXX") && chmod 700 "$EXP_DIR" && printf '%s\n' "$RUN_ID" > "$EXP_DIR/.recovery-owned"
    docker run -d --rm --log-driver none --name "$REF_NAME" \
      -e POSTGRES_HOST_AUTH_METHOD=trust -p 127.0.0.1:55432:5432 "$IMAGE" > /dev/null
    until docker exec "$REF_NAME" pg_isready -q -U postgres; do sleep 1; done
@@ -577,7 +587,7 @@ in its console before continuing.
    ```sh
    RECOVERY_TIME='<RFC 3339 UTC time before the bad change, e.g. 2026-11-24T10:00:00Z>'
    RECOVERY_BRANCH='recovery-<incident-id>'
-   RECOVERY_DIR=$(mktemp -d "$HOME/recovery-branch-XXXXXX") && chmod 700 "$RECOVERY_DIR" && : > "$RECOVERY_DIR/.recovery-owned"
+   RECOVERY_DIR=$(mktemp -d "$HOME/recovery-branch-XXXXXX") && chmod 700 "$RECOVERY_DIR" && printf '%s\n' "$RUN_ID" > "$RECOVERY_DIR/.recovery-owned"
    BRANCHES_BEFORE="$RECOVERY_DIR/branches-before.json"
    neon branches list --project-id "$NEON_PROJECT_ID" --output json > "$BRANCHES_BEFORE"
    # Prints the confirmed production branch id, or fails. Fails too if RECOVERY_BRANCH already exists.
@@ -922,19 +932,41 @@ reopen_barrier() {
 }
 
 # reclose_barrier OWNER_URL CLOSE_FILE LABEL: closes one barrier again, in one transaction, and prints `barrier LABEL: closed`
-# only when BARRIER_CHECK_SQL prints no row. Closing is always safe, so this is the recovery for an open or unknown barrier.
-# If that line does not print, the database is open or unknown: its writers stay stopped and the cutover is held.
+# only when BARRIER_CHECK_SQL prints no row. The check runs in a separate process after the close transaction has ended,
+# and for production it reads through the read-only role. Closing is always safe. If that line does not print, the
+# database is open or unknown: its writers stay stopped and the cutover is held.
 reclose_barrier() {
   load_libpq_env "$1" || return 1
   pg_run -i "$IMAGE" sh -c 'psql -X -q -1 -v ON_ERROR_STOP=1 -f -' < "$2" || return 1
-  prints_no_rows pg_run -i -e RUNTIME_ROLE "$IMAGE" sh -c "$BARRIER_PSQL" <<< "$BARRIER_CHECK_SQL" && echo "barrier $3: closed"
+  if [ "$3" = production ]; then
+    prints_no_rows prod_ro pg_run -i -e RUNTIME_ROLE "$IMAGE" sh -c "$BARRIER_PSQL" <<< "$BARRIER_CHECK_SQL"
+  else
+    prints_no_rows pg_run -i -e RUNTIME_ROLE "$IMAGE" sh -c "$BARRIER_PSQL" <<< "$BARRIER_CHECK_SQL"
+  fi && echo "barrier $3: closed"
+}
+
+# close_file_ok FILE: succeeds only for a non-empty saved close file that contains no GRANT statement.
+close_file_ok() {
+  [ -n "${DIFF_DIR:-}" ] && [ -s "$1" ] && ! grep -qi '^GRANT' "$1" \
+    || { echo "close-only refused: $1 is missing, empty or contains GRANT" >&2; return 1; }
+}
+
+# close_only_target and close_only_production: the ONLY retries for a barrier whose state is open or unknown, after a
+# close attempt failed or after any reopen attempt started. Each runs reclose_barrier on the close file saved by
+# _Write barrier_ and nothing else: no snapshot or open file is read or rewritten, reopen_barrier is never called, and no
+# GRANT statement can run. The writers of that database stay stopped until its `barrier LABEL: closed` line is printed.
+close_only_target() {
+  close_file_ok "$DIFF_DIR/barrier-target-close.sql" && reclose_barrier "$TARGET_URL" "$DIFF_DIR/barrier-target-close.sql" target
+}
+close_only_production() {
+  close_file_ok "$DIFF_DIR/barrier-prod-close.sql" && reclose_barrier "$PROD_OWNER_URL" "$DIFF_DIR/barrier-prod-close.sql" production
 }
 ```
 
 Before the first barrier step, in this shell, the procedure creates its private directory **once**, under the operator's home
 directory (the only trusted root). An inherited `DIFF_DIR` value is discarded, never reused and never cleaned up: the variable
-is unset first, and the directory is new, private (`chmod 700`), owned by the operator, not a link, and carries a marker file
-that the final cleanup checks. Run this block once per recovery; a second run creates another directory, and the snapshots of
+is unset first, and the directory is new, private (`chmod 700`), owned by the operator, not a link, and its marker file holds
+this attempt's `RUN_ID` (_Shell and prerequisites_), which the final cleanup checks. Run this block once per recovery; a second run creates another directory, and the snapshots of
 the first would then not be the ones compared. Every later step uses the same `DIFF_DIR`: the snapshots taken here are what the
 reopen steps of _Switch_ and _Rollback_ compare against (_Post-point changes_ uses it as it is).
 
@@ -942,7 +974,7 @@ reopen steps of _Switch_ and _Rollback_ compare against (_Post-point changes_ us
 # A new private directory for this recovery. An inherited DIFF_DIR is never used: it is unset before the directory is made.
 unset DIFF_DIR
 DIFF_DIR=$(mktemp -d "$HOME/recovery-diff-XXXXXX") && chmod 700 "$DIFF_DIR" && [ -O "$DIFF_DIR" ] && [ ! -L "$DIFF_DIR" ] \
-  && : > "$DIFF_DIR/.recovery-owned" || DIFF_DIR=''
+  && printf '%s\n' "$RUN_ID" > "$DIFF_DIR/.recovery-owned" || DIFF_DIR=''
 [ -n "$DIFF_DIR" ] && [ -d "$DIFF_DIR" ] && echo 'DIFF_DIR: ready'
 printf 'Owner URL of production (not echoed): '
 read -rs PROD_OWNER_URL
@@ -956,7 +988,7 @@ are reads through `prod_ro`; only the two changes use `PROD_OWNER_URL`. Each lin
 when one fails.
 
 ```sh
-# Production: close the runtime role's write barrier.
+# Production: close the runtime role's write barrier. Run once, before any reopen attempt; a retry uses close_only_production.
 checked_read "$DIFF_DIR/barrier-prod-open.sql" prod_ro pg_run -i -e RUNTIME_ROLE "$IMAGE" sh -c "$BARRIER_PSQL" <<< "$BARRIER_OPEN_SQL"
 checked_read "$DIFF_DIR/barrier-prod-close.sql" prod_ro pg_run -i -e RUNTIME_ROLE "$IMAGE" sh -c "$BARRIER_PSQL" <<< "$BARRIER_CLOSE_SQL"
 checked_read "$DIFF_DIR/grants-prod-pre-barrier.txt" prod_ro pg_run -i -e RUNTIME_ROLE "$IMAGE" sh -c "$BARRIER_PSQL" <<< "$GRANTS_SQL"
@@ -968,7 +1000,8 @@ The **target** is closed at the start of the switch (_Switch_, step 1), with the
 (`TARGET_URL`), before any Vercel change:
 
 ```sh
-# Target: close the runtime role's write barrier, with the owner URL in the main shell.
+# Target: close the runtime role's write barrier, with the owner URL in the main shell. Run once, before any reopen attempt.
+# This block rewrites the saved open file and snapshot, so it is never run again as a retry: use close_only_target.
 load_libpq_env "$TARGET_URL"
 checked_read "$DIFF_DIR/barrier-target-open.sql" pg_run -i -e RUNTIME_ROLE "$IMAGE" sh -c "$BARRIER_PSQL" <<< "$BARRIER_OPEN_SQL"
 checked_read "$DIFF_DIR/barrier-target-close.sql" pg_run -i -e RUNTIME_ROLE "$IMAGE" sh -c "$BARRIER_PSQL" <<< "$BARRIER_CLOSE_SQL"
@@ -987,8 +1020,15 @@ starts (a lost acknowledgement, a failed independent read, a grant mismatch) clo
 `reclose_barrier`, using the close file of _Write barrier_. Writers may use a database only after its line
 `... reopened, grants identical` is printed; that line is the routing condition, not the barrier.
 
+**Each reopen block below is run once per recovery.** Once a reopen attempt has started for a database, no reopen block and
+no `reopen_barrier` call is repeated for it in this recovery, whatever the outcome. Retries for that database use only
+`close_only_target` or `close_only_production`, which close the barrier and never grant anything. A database whose
+`barrier ...: closed` line has not printed keeps its writers stopped and the cutover held. A new reopen, if the operator
+decides one, is a new recovery with a fresh snapshot.
+
 ```sh
-# Reopen production (PROD_OWNER_URL), only when the routing proof allows it. Any failure closes the barrier again.
+# Reopen production (PROD_OWNER_URL), only when the routing proof allows it, once. Any failure closes the barrier again
+# with reclose_barrier. Retries: close_only_production.
 reopen_barrier "$PROD_OWNER_URL" "$DIFF_DIR/barrier-prod-open.sql" "$DIFF_DIR/grants-prod-pre-barrier.txt" production \
   && checked_read "$DIFF_DIR/grants-prod-after-open.txt" prod_ro pg_run -i -e RUNTIME_ROLE "$IMAGE" sh -c "$BARRIER_PSQL" <<< "$GRANTS_SQL" \
   && cmp -s "$DIFF_DIR/grants-prod-pre-barrier.txt" "$DIFF_DIR/grants-prod-after-open.txt" && echo "production barrier: reopened, grants identical" \
@@ -996,7 +1036,8 @@ reopen_barrier "$PROD_OWNER_URL" "$DIFF_DIR/barrier-prod-open.sql" "$DIFF_DIR/gr
 ```
 
 ```sh
-# Reopen target (TARGET_URL), only at the step of _Switch_ or _Rollback_ that allows it. Any failure closes the barrier again.
+# Reopen target (TARGET_URL), only at the step of _Switch_ or _Rollback_ that allows it, once. Any failure closes the barrier
+# again with reclose_barrier. Retries: close_only_target.
 reopen_barrier "$TARGET_URL" "$DIFF_DIR/barrier-target-open.sql" "$DIFF_DIR/grants-target-pre-barrier.txt" target \
   && checked_read "$DIFF_DIR/grants-target-after-open.txt" pg_run -i -e RUNTIME_ROLE "$IMAGE" sh -c "$BARRIER_PSQL" <<< "$GRANTS_SQL" \
   && cmp -s "$DIFF_DIR/grants-target-pre-barrier.txt" "$DIFF_DIR/grants-target-after-open.txt" && echo "target barrier: reopened, grants identical" \
@@ -1020,8 +1061,11 @@ in the terms above. The operator's methods, for example:
 - Vercel: put production into maintenance by the operator's method, and confirm that no older production deployment still
   serves requests or runs scheduled work. A maintenance deployment is not the barrier: the write barrier (_Write barrier_)
   is required in addition, because the domain can move;
-- GitHub: disable runs of `migrate-production.yml`, pause the scheduled `db-backup.yml` for the window, and confirm no
-  run is in progress;
+- GitHub: disable runs of `migrate-production.yml` and confirm no run is in progress. Backups: run
+  `gh workflow list --all` and check that no backup workflow is active. On master none is expected (`db-backup.yml` was
+  removed in #159), and that absence is recorded in the ticket. If a backup workflow is active, pause it for the window
+  and confirm no run is in progress. The backup copy for the recovery is the operator-approved, verified manual copy
+  (_Verify the encrypted copy_), when one is available; when none is, the ticket records that no copy was taken;
 - operator scripts: stop any running command that can write;
 - database-side jobs: if the `pg_cron` extension is installed, stop its jobs by the operator's method. Do not use an
   `UPDATE` on the job table to stop them, because that is itself a write.
@@ -1334,8 +1378,9 @@ Preconditions, all recorded in the ticket:
 nothing changes in Vercel, the target stays restore-ready, and the hold is recorded in the ticket with its time and reason.
 This procedure has no route around the hold; any other action is a separate operator decision outside this text.
 
-1. **Close the target's write barrier** (the target block of _Write barrier_), before any Vercel change. Nothing below runs
-   until `barrier target: closed` is printed.
+1. **Close the target's write barrier** (the target close block of _Write barrier_, run once), before any Vercel change.
+   Nothing below runs until `barrier target: closed` is printed. A retry is `close_only_target` and nothing else; the close
+   block is not run again.
 
 2. Record `TARGET_BASELINE` **before** any Vercel change, while the target has no writer. The content digest is the
    baseline that decides a rollback; the counters are recorded for the record only. All are read as the owner role.
@@ -1388,12 +1433,13 @@ This procedure has no route around the hold; any other action is a separate oper
    shows a session of `<runtime-role>`, and the old database shows no session from the site.
 
 7. **Reopen the target** only when `env update: 0; deploy: 0`, the routing proofs of steps 5 and 6 both passed, and the
-   target block of _Write barrier_ reopens it, printing `target barrier: reopened, grants identical`. Only after that line
+   target reopen block of _Write barrier_ reopens it, printing `target barrier: reopened, grants identical`. Only after that line
    does the operator sign in and read a test list as a smoke test; sign-in is a write, so it is not part of any routing
-   proof. A nonzero status or a failed proof keeps the cutover held. The target block of _Write barrier_ either prints
-   `target barrier: reopened, grants identical`, or it closes the barrier again and prints `barrier target: closed`. If
-   neither line prints, the target barrier state is unknown: writers stay stopped, and the target block is run again until
-   `barrier target: closed` prints, before anything else is done.
+   proof. A nonzero status or a failed proof keeps the cutover held. The target reopen block of _Write barrier_ (run once)
+   either prints `target barrier: reopened, grants identical`, or it closes the barrier again and prints
+   `barrier target: closed`. If neither line prints, the target barrier state is unknown: writers stay stopped, and only
+   `close_only_target` is run, again and again if needed, until `barrier target: closed` prints. The reopen block is not
+   run again, and nothing else is done before that line.
 
 8. Record the selected copy or time, the target name (not its URL), the checks that passed, the decision used, `FROZEN_AT`,
    the switch time, the parent of the branch and the deployment identifier (not its URL), without credentials. The old
@@ -1427,8 +1473,8 @@ Vercel. The simplest safe rollback is to abandon the switch and reopen the old d
 
 - the runtime role connects to the old database and returns the row of the runtime-role check.
 
-Then reopen the production barrier (the production block of _Write barrier_, printing `production barrier: reopened,
-grants identical`) and restore writers in the reverse order of the fence, recording the time. The target barrier stays
+Then run the production reopen block of _Write barrier_ (once; it prints `production barrier: reopened, grants identical`
+on success) and restore writers in the reverse order of the fence, recording the time. The target barrier stays
 closed: the target was abandoned before any traffic reached it. Any difference means a write may have reached the target or
 got past the fence: the path is then ambiguous, and the exposed path applies.
 
@@ -1436,8 +1482,8 @@ got past the fence: the path is then ambiguous, and the exposed path applies.
 There is **no automatic rollback** on this path: restoring the old URL would silently drop what was written to the target.
 Required steps:
 
-1. **Fence the target again.** If the target barrier is open, close it again (the target block of _Write barrier_, printing
-   `barrier target: closed`). Stop the writers of every deployment that holds the target URL by the methods of _Fence
+1. **Fence the target again.** Unless `barrier target: closed` has already printed in this recovery, run `close_only_target`
+   until it prints (_Write barrier_). Stop the writers of every deployment that holds the target URL by the methods of _Fence
    production_ step 1, and confirm that no deployment still serves requests or runs scheduled work with it. Terminate target
    sessions other than the operator's and the verifier's (`pg_terminate_backend` rolls back their open transactions only),
    then run the session and write-role checks, and `BARRIER_CHECK_SQL` on the target, twice, two minutes apart, as in
@@ -1471,29 +1517,39 @@ Required steps:
    the **old** database, and the target shows no session from the site. Then move the production domain as in _Switch_
    step 6, and repeat the same proof on the production domain.
 
-5. **Reopen the old database only when** `env update: 0; deploy: 0`, both proofs passed, and the production block of
-   _Write barrier_ printed `production barrier: reopened, grants identical`. Then reopen writers one at a time in the reverse
-   order of the fence, re-checking each. A nonzero status or a failed proof keeps every writer stopped. The production block of
-   _Write barrier_ either prints `production barrier: reopened, grants identical`, or it closes the old database again and
-   prints `barrier production: closed`. If neither line prints, its state is unknown and the production block is run again
-   until `barrier production: closed` prints. The target stays fenced and is kept for the ticket.
+5. **Reopen the old database only when** `env update: 0; deploy: 0`, both proofs passed, and the production reopen block of
+   _Write barrier_ (run once) printed `production barrier: reopened, grants identical`. Then reopen writers one at a time in
+   the reverse order of the fence, re-checking each. A nonzero status or a failed proof keeps every writer stopped. The
+   production reopen block either prints `production barrier: reopened, grants identical`, or it closes the old database
+   again and prints `barrier production: closed`. If neither line prints, its state is unknown: only `close_only_production`
+   is run, until `barrier production: closed` prints; the reopen block is not run again. The target stays fenced and is kept
+   for the ticket.
 
 Do not mark or delete the old target while a rollback is still possible. If any step fails, keep the old setting and
 investigate before any further change. Finally, unset the variables and remove temporary targets and files when they are no
-longer needed. A directory is removed only when this recovery created it: `remove_own_dir` refuses any other path, a link, a
-directory the operator does not own, and one without the `.recovery-owned` marker written at its creation. Directories of a
-failed or refused step are kept as evidence until the ticket records them; they are removed only by this step.
+longer needed. A directory is removed only when this attempt created it: `remove_own_dir` refuses any other path, a link, a
+directory the operator does not own, and any directory whose `.recovery-owned` marker does not hold this attempt's `RUN_ID`.
+A directory of an earlier attempt, including a point-in-time directory with a valid marker from that attempt, is refused and
+kept. Directories of a failed or refused step are kept as evidence until the ticket records them; they are removed only by
+this step.
 
 ```sh
-# remove_own_dir DIR: removes DIR only when this procedure created it (marker present, real directory, owned by the operator).
+# remove_own_dir DIR: removes DIR only when this attempt created it: a real directory owned by the operator, not a link,
+# whose marker holds this attempt's RUN_ID. Another attempt's directory, an unmarked one, or an unset RUN_ID is refused.
 remove_own_dir() {
-  [ -n "${1:-}" ] && [ -d "$1" ] && [ ! -L "$1" ] && [ -O "$1" ] && [ -f "$1/.recovery-owned" ] \
+  [ -n "${RUN_ID:-}" ] && [ -n "${1:-}" ] && [ -d "$1" ] && [ ! -L "$1" ] && [ -O "$1" ] \
+    && [ "$(cat -- "$1/.recovery-owned" 2>/dev/null)" = "$RUN_ID" ] \
     || { echo "remove_own_dir: refused $1" >&2; return 1; }
   rm -rf -- "$1"
 }
 unset TARGET_URL CUTOVER_URL PROD_READONLY_URL PROD_OWNER_URL OLD_URL RECOVERY_TIME RESTORE_DB AGE_IDENTITY PROBE_NONCE RUNTIME_NONCE
 unset PGHOST PGPORT PGDATABASE PGUSER PGPASSWORD PGSSLMODE PGCHANNELBINDING PGOPTIONS
-remove_own_dir "$DIFF_DIR" && remove_own_dir "$EXP_DIR" && remove_own_dir "$RECOVERY_DIR"
+# Each scratch path is removed only if this attempt set it; an empty path (the encrypted-only route never sets RECOVERY_DIR)
+# is skipped, and a refused path is kept and reported.
+for _scratch in "${DIFF_DIR:-}" "${EXP_DIR:-}" "${RECOVERY_DIR:-}"; do
+  [ -z "$_scratch" ] || remove_own_dir "$_scratch" || echo "kept for the ticket: $_scratch" >&2
+done
+unset _scratch RUN_ID
 ```
 
 Retain the selected encrypted copy, and the ticket's records, according to policy.
@@ -1575,9 +1631,33 @@ The synthetic drill must show these outcomes:
 - **Reopen with a failed independent read.** The reopen commits, then the independent read fails (an unreadable
   `PROD_READONLY_URL`). The block prints no `reopened` line, the barrier is closed again (`barrier production: closed`), and
   the runtime role's `INSERT` is `permission denied`.
+- **Close-only retry after a failed post-read, both directions.** For each database in turn (production first, then
+  target): the reopen block runs with its post-read made to fail (production: the unreadable `PROD_READONLY_URL` above;
+  target: `GRANTS_SQL` replaced by `SELECT 1/0;` for that one read). The block prints no `reopened` line and then
+  `barrier LABEL: closed`. Then, with the failure removed and **without running any reopen block**, `close_only_LABEL` is run.
+  The control records: its output has no `reopened` line; `type close_only_LABEL` lists only `close_file_ok` and
+  `reclose_barrier`; SHA-256 of the saved open file and of the pre-barrier snapshot are unchanged across the retry; the
+  runtime role's `INSERT` is `permission denied` before and after; and the retry prints `barrier LABEL: closed`.
+- **Close-only retry after the first failed reclose, both directions.** After a reopen commits, the close file of that
+  database is replaced by a copy that fails (`SELECT 1/0;`) for one reclose. The reclose prints no `barrier LABEL: closed`,
+  the runtime role's `INSERT` is `allowed` (the barrier is open), and the writers of that database are recorded as stopped.
+  The original close file is then restored from its recorded SHA-256, and only `close_only_LABEL` is run. The control
+  records that it prints `barrier LABEL: closed` only after its own check, that the `INSERT` is then `permission denied`,
+  that the reopen block was not run a second time, and that the snapshot files are unchanged. A second run of
+  `close_only_LABEL` is idempotent: it prints `barrier LABEL: closed` again and grants nothing.
+- **Close file with a GRANT.** A close file containing a `GRANT` line is refused by `close_only_LABEL` before any `psql`
+  call, and the barrier state is unchanged.
 - **Inherited DIFF_DIR.** With `DIFF_DIR` set to a directory holding a sentinel file, the directory block creates a new
   `recovery-diff-` directory, `DIFF_DIR` names the new one, the sentinel is unchanged, and `remove_own_dir` refuses the
   sentinel directory (no marker).
+- **Previous point-in-time scratch survives an encrypted-only cleanup.** A `recovery-branch-` directory with a valid marker
+  holding a different (earlier) `RUN_ID`, and a sentinel file, is left in place. A new shell runs _Shell and prerequisites_
+  (new `RUN_ID`), the encrypted-only route, and the final cleanup. `remove_own_dir` refuses the directory with
+  `remove_own_dir: refused`, and the sentinel is unchanged.
+- **Inherited RECOVERY_DIR in the same shell.** With `RECOVERY_DIR` set to that same directory in a shell, the run-start block
+  of _Shell and prerequisites_ runs first. It resets `RECOVERY_DIR` to empty, so the cleanup never names the directory; the
+  sentinel is unchanged. The marker check is the independent second guard: a directory of an earlier `RUN_ID` is refused
+  even if its path is named again.
 - **One directory.** A clean shell runs the production close, the fence and the post-point comparison in the order written,
   with one `DIFF_DIR` created once; the production reopen then compares with the snapshot taken before the close.
 
