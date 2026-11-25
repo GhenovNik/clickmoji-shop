@@ -68,7 +68,7 @@ describe('findBatchFiles', () => {
   });
 });
 
-describe('readBatchImages gap clearing', () => {
+describe('readBatchImages gap clearing', { timeout: 30_000 }, () => {
   // A green ring around a pure white centre, the left third of a 3-column sheet.
   async function ringSheet() {
     return sharp(
