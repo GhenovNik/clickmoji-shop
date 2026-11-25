@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import type { Prisma } from '@prisma/client';
 import { cookies } from 'next/headers';
 import { prisma } from '@/lib/prisma';
 
@@ -161,8 +162,8 @@ type FunnelEventDelegateLike = {
 const GUEST_MILESTONE_LOCK_NAMESPACE = 'clickmoji:funnel-guest-milestone:v1:';
 
 /**
- * Lock key of one funnel guest chain. Every writer of that chain's once-per-guest milestones, the
- * guest start that adopts them and the guest cleanup hand-off takes the same transaction-scoped
+ * Lock key of one funnel guest chain. Every writer of that chain's once-per-guest milestones, every
+ * guest start that joins the chain and the guest cleanup hand-off takes the same transaction-scoped
  * advisory lock, so they run in turn.
  */
 export function guestMilestoneLockKey(guestId: string): string {
@@ -171,6 +172,47 @@ export function guestMilestoneLockKey(guestId: string): string {
 
 /** Once-per-chain milestones that a guest owns and that the chain still needs after a replacement. */
 export const SHARED_MILESTONE_TYPES = ['VISIT', 'REGISTER', 'LIST_CREATE'] as const;
+
+/**
+ * Timestamp for the next row of a chain: the database clock, strictly after the newest row of that
+ * chain, so the chain's order is set by its writers. Call it while the chain lock is held.
+ */
+async function nextChainCreatedAt(tx: Prisma.TransactionClient, guestId: string): Promise<Date> {
+  // A transaction-start default could place a later row before an earlier one when two writers
+  // race, and equal times do not count as progression in the aggregator.
+  const newest = await tx.funnelEvent.findFirst({
+    where: { guestId },
+    orderBy: { createdAt: 'desc' },
+    select: { createdAt: true },
+  });
+  const [{ now }] = await tx.$queryRaw<{ now: Date }[]>`SELECT clock_timestamp() AS now`;
+  const floorMs = newest ? newest.createdAt.getTime() + 1 : 0;
+  return new Date(Math.max(now.getTime(), floorMs));
+}
+
+/**
+ * Records the VISIT of a new guest start on the funnel chain of the signed cookie. It runs inside
+ * the guest creation transaction, under the chain lock, and ties the new guest User to its chain:
+ * a cleanup of an older guest of that chain then hands the shared milestones to this guest.
+ *
+ * It is a genuine visit (a new server session entering the funnel), not a milestone. VISIT is a
+ * repeatable stage: the report counts each chain once per stage and ignores a VISIT that comes
+ * after the chain has progressed, so the extra row changes no count.
+ */
+export async function recordGuestStartVisit(
+  tx: Prisma.TransactionClient,
+  { userId, guestId }: { userId: string; guestId: string }
+): Promise<void> {
+  await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${guestMilestoneLockKey(guestId)}, 0))`;
+  await tx.funnelEvent.create({
+    data: {
+      type: 'VISIT',
+      userId,
+      guestId,
+      createdAt: await nextChainCreatedAt(tx, guestId),
+    },
+  });
+}
 
 /**
  * Writes a once-per-guest milestone (REGISTER, LIST_CREATE). The check and the insert run in one
@@ -202,18 +244,8 @@ async function recordGuestMilestoneOnce(
       return false;
     }
 
-    // The lock serializes the whole guest chain, so the milestone is stamped after it, from the
-    // database clock like every other funnel row, and strictly after the newest row of that chain.
-    // A transaction-start default could place a later milestone before an earlier one when two
-    // starts race, and equal times do not count as progression in the aggregator.
-    const newest = await tx.funnelEvent.findFirst({
-      where: { guestId },
-      orderBy: { createdAt: 'desc' },
-      select: { createdAt: true },
-    });
-    const [{ now }] = await tx.$queryRaw<{ now: Date }[]>`SELECT clock_timestamp() AS now`;
-    const floorMs = newest ? newest.createdAt.getTime() + 1 : 0;
-    const createdAt = new Date(Math.max(now.getTime(), floorMs));
+    // The lock serializes the whole guest chain, so the milestone is stamped after it.
+    const createdAt = await nextChainCreatedAt(tx, guestId);
 
     await tx.funnelEvent.create({
       data: { type, userId, guestId, createdAt },
