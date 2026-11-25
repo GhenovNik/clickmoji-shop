@@ -96,6 +96,7 @@
     "reloadFailed": "Could not refresh the list"
   },
   "importMutation": {
-    "failed": "Could not import the list"
+    "failed": "Could not import the list",
+    "network": "No connection to the server. Check your connection and try again."
   }
 }

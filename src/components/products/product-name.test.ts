@@ -22,6 +22,14 @@ describe('productNameClassName', () => {
     );
   });
 
+  it('takes at most two lines of text-xs when an English line sits under the name', () => {
+    expect(productNameClassName('Таблетки для посудомоечной машины', true)).toContain(
+      'text-xs md:text-sm line-clamp-2'
+    );
+    expect(productNameClassName('Кабачок', true)).toContain('text-xs md:text-sm line-clamp-2');
+    expect(productNameClassName('Кабачок', true)).not.toContain('line-clamp-3');
+  });
+
   it('breaks words with a hyphen instead of clipping them', () => {
     expect(productNameClassName('Кабачок')).toContain('hyphens-auto');
     expect(productNameClassName('Кабачок')).toContain('[overflow-wrap:anywhere]');

@@ -178,6 +178,7 @@
     "editUser": "Edit user",
     "newUser": "New user",
     "name": "Name",
+    "emailLabel": "Email",
     "password": "Password",
     "passwordKeepPlaceholder": "Leave empty to keep the current one",
     "passwordHint": "Fill in only to change the password",

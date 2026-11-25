@@ -3,7 +3,8 @@
 import Image from 'next/image';
 import { useState } from 'react';
 import { useLocale, useTranslations } from 'next-intl';
-import { localizedName } from '@/lib/catalog-name';
+import { localizedName, namesOf } from '@/lib/catalog-name';
+import { LocalizedName } from '@/components/ui/LocalizedName';
 import { productImageUrl } from '@/lib/product-image';
 import Modal, { ModalBody, ModalFooter } from '@/components/ui/Modal';
 
@@ -142,9 +143,13 @@ export default function ProductMoveModal({
                   ) : (
                     <div className="text-3xl mb-2">{product.emoji}</div>
                   )}
-                  <p className="text-xs font-medium text-gray-900 line-clamp-2">
-                    {localizedName(product, locale)}
-                  </p>
+                  <LocalizedName
+                    names={namesOf(product)}
+                    locale={locale}
+                    className="text-center"
+                    primaryClassName="text-xs font-medium text-gray-900 line-clamp-2"
+                    secondaryClassName="text-[10px] line-clamp-1"
+                  />
                 </div>
                 {selectedProductIds.includes(product.id) && (
                   <div className="mt-2 text-blue-600 text-sm font-semibold">

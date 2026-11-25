@@ -9,7 +9,7 @@ vi.mock('next/navigation', () => ({ useRouter: () => router }));
 vi.mock('next-auth/react', () => ({ signIn: auth.signIn }));
 
 function submit(password: string, confirmPassword = password) {
-  fireEvent.change(screen.getByLabelText(/Email/), { target: { value: 'user@example.com' } });
+  fireEvent.change(document.getElementById('email')!, { target: { value: 'user@example.com' } });
   fireEvent.change(document.getElementById('password')!, { target: { value: password } });
   fireEvent.change(document.getElementById('confirmPassword')!, {
     target: { value: confirmPassword },
@@ -41,6 +41,7 @@ describe('RegisterPage', () => {
     renderWithIntl(<RegisterPage />);
 
     expect(screen.getByRole('heading', { name: /Регистрация/ })).toBeTruthy();
+    expect(screen.getByLabelText('Электронная почта')).toBeTruthy();
     expect(screen.getByPlaceholderText('Минимум 8 символов')).toBeTruthy();
   });
 
@@ -48,6 +49,7 @@ describe('RegisterPage', () => {
     renderWithIntl(<RegisterPage />, { locale: 'en' });
 
     expect(screen.getByRole('heading', { name: /Sign up/ })).toBeTruthy();
+    expect(screen.getByLabelText('Email')).toBeTruthy();
     expect(screen.getByPlaceholderText('At least 8 characters')).toBeTruthy();
 
     submit('abc1');
@@ -129,5 +131,48 @@ describe('RegisterPage', () => {
         expect(storage.getItem(storage.key(i)!)).not.toContain('password1');
       }
     }
+  });
+});
+
+// The server answers in the request language (cookie), and the form shows that text as it is.
+// These texts are the same strings the register route returns; the route tests pin them.
+describe('RegisterPage server errors in both languages', () => {
+  function stubAnswer(status: number, body: Record<string, unknown>) {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => Response.json(body, { status }))
+    );
+  }
+
+  it.each([
+    ['ru', 400, 'Некорректная электронная почта'],
+    ['en', 400, 'Invalid email'],
+    ['ru', 409, 'Пользователь с такой электронной почтой уже существует'],
+    ['en', 409, 'A user with this email already exists'],
+    ['ru', 429, 'Слишком много попыток. Попробуйте позже.'],
+    ['en', 429, 'Too many attempts. Please try again later.'],
+  ] as const)('shows the %s %i answer as the server wrote it', async (locale, status, text) => {
+    stubAnswer(status, { error: text });
+
+    renderWithIntl(<RegisterPage />, { locale });
+    submit('password1');
+
+    expect(await screen.findByText(text)).toBeTruthy();
+    expect(router.push).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['ru', 'Ошибка сети'],
+    ['en', 'Network error'],
+  ] as const)('shows the %s network failure text', async (locale, text) => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => Promise.reject(new TypeError('offline')))
+    );
+
+    renderWithIntl(<RegisterPage />, { locale });
+    submit('password1');
+
+    expect(await screen.findByText(text)).toBeTruthy();
   });
 });
