@@ -254,11 +254,15 @@ describe('catalog-image-audit', () => {
   });
 
   it('handles redirects safely and flags credentialed or excessive redirect chains', async () => {
+    const credentialedImageUrl = new URL('https://cdn.example/a.webp');
+    credentialedImageUrl.username = 'user';
+    credentialedImageUrl.password = 'pass';
+
     const db = makeDb({
       products: [
         { name: 'ValidRedirect', isCustom: true, imageUrl: 'https://cdn.example/redir-ok' },
         { name: 'LoopRedirect', isCustom: true, imageUrl: 'https://cdn.example/redir-loop' },
-        { name: 'CredentialUrl', isCustom: true, imageUrl: 'https://user:pass@cdn.example/a.webp' },
+        { name: 'CredentialUrl', isCustom: true, imageUrl: credentialedImageUrl.toString() },
       ],
     });
 

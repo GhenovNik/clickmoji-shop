@@ -104,6 +104,10 @@ describe('catalog-image-repair', () => {
       })
     ).toThrowError(SafeOperationalError);
 
+    const credentialedNewUrl = new URL('https://utfs.io/f/a.webp');
+    credentialedNewUrl.username = 'user';
+    credentialedNewUrl.password = 'pass';
+
     const disallowedNewUrls = [
       'https://evil.example/f/a.webp',
       'https://utfs.io/x/a.webp',
@@ -112,7 +116,7 @@ describe('catalog-image-repair', () => {
       'https://utfs.io/f/a.webp?x=1',
       'https://utfs.io:8443/f/a.webp',
       'https://other.ufs.sh/f/a.webp',
-      'https://user:pass@utfs.io/f/a.webp',
+      credentialedNewUrl.toString(),
     ];
     for (const badUrl of disallowedNewUrls) {
       expect(() =>
