@@ -45,10 +45,9 @@ for (const locale of ['ru', 'en'] as const) {
 
         const main = page.getByRole('main');
         const startLabel = copy.home.actions.start;
-        const mainLinks = main.getByRole('link');
-        await expect(mainLinks).toHaveCount(1);
-        await expect(mainLinks.first()).toHaveAccessibleName(startLabel);
-        await expect(mainLinks.first()).toHaveAttribute('href', '/categories');
+        const startButton = main.getByRole('button', { name: startLabel, exact: true });
+        await expect(main.getByRole('link')).toHaveCount(0);
+        await expect(startButton).toBeVisible();
 
         // Keep normal login and registration links available in the header.
         const header = page.locator('header');
@@ -104,7 +103,7 @@ for (const locale of ['ru', 'en'] as const) {
           contentType: 'image/png',
         });
 
-        await mainLinks.first().click();
+        await startButton.click();
         await expect(page).toHaveURL(/\/categories$/);
       });
     });

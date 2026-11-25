@@ -93,6 +93,7 @@ export default async function proxy(request: NextRequest) {
 
   const hasE2EAuth = hasPlaywrightAuthBypass(request);
   const isLoggedIn = Boolean(token) || hasE2EAuth;
+  const isGuest = !hasE2EAuth && Boolean(token?.isGuest);
   const userRole = hasE2EAuth ? 'USER' : (token?.role as string | undefined);
   const isPublicRoute = publicRoutes.includes(pathname) || isPublicCatalogRoute(pathname);
 
@@ -102,7 +103,7 @@ export default async function proxy(request: NextRequest) {
       return NextResponse.redirect(loginUrl);
     }
 
-    if (userRole !== 'ADMIN') {
+    if (isGuest || userRole !== 'ADMIN') {
       return NextResponse.redirect(new URL('/', request.url));
     }
     return NextResponse.next();
@@ -112,7 +113,8 @@ export default async function proxy(request: NextRequest) {
     return NextResponse.redirect(new URL('/login', request.url));
   }
 
-  if (isLoggedIn && (pathname === '/login' || pathname === '/register')) {
+  // Guests can still visit /login and /register to sign into or create a regular account.
+  if (isLoggedIn && !isGuest && (pathname === '/login' || pathname === '/register')) {
     return NextResponse.redirect(new URL('/', request.url));
   }
 

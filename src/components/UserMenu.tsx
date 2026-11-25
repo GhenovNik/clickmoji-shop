@@ -35,6 +35,29 @@ export default function UserMenu() {
     );
   }
 
+  if (session.user?.isGuest) {
+    return (
+      <div className="flex items-center gap-2 sm:gap-3">
+        <LanguageSwitcher />
+        <span className="text-xs sm:text-sm font-medium text-gray-700 bg-gray-100 px-2.5 py-1 rounded-full whitespace-nowrap">
+          {t('nav.guest')}
+        </span>
+        <Link
+          href="/login"
+          className="text-sm text-gray-600 hover:text-gray-900 transition-colors whitespace-nowrap"
+        >
+          {t('nav.login')}
+        </Link>
+        <Link
+          href="/register"
+          className="hidden sm:inline-block text-sm bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded-lg transition-colors whitespace-nowrap"
+        >
+          {t('nav.register')}
+        </Link>
+      </div>
+    );
+  }
+
   const isAdmin = session.user?.role === 'ADMIN';
 
   return (

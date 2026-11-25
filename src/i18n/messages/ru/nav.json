@@ -7,6 +7,7 @@
   "history": "История",
   "login": "Войти",
   "register": "Регистрация",
+  "guest": "Гость",
   "logout": "Выйти",
   "admin": "Админ-панель",
   "switchLanguage": "Сменить язык"
