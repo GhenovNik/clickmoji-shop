@@ -9,6 +9,7 @@ import {
 } from './guest-cleanup';
 
 const NOW = new Date('2026-11-25T12:00:00.000Z');
+const noHandOff = async () => 0;
 const daysAgo = (days: number) => new Date(NOW.getTime() - days * 24 * 60 * 60 * 1000);
 
 type FakeUser = {
@@ -149,7 +150,12 @@ describe('cleanupInactiveGuests', () => {
     ];
     const { db, users } = createFakeDb(seed);
 
-    const result = await cleanupInactiveGuests({ db, inactiveDays: 14, now: NOW });
+    const result = await cleanupInactiveGuests({
+      db,
+      inactiveDays: 14,
+      now: NOW,
+      handOff: noHandOff,
+    });
 
     expect(result).toEqual({
       inactiveDays: 14,
@@ -178,7 +184,13 @@ describe('cleanupInactiveGuests', () => {
       },
     ]);
 
-    const result = await cleanupInactiveGuests({ db, inactiveDays: 30, dryRun: true, now: NOW });
+    const result = await cleanupInactiveGuests({
+      db,
+      inactiveDays: 30,
+      dryRun: true,
+      now: NOW,
+      handOff: noHandOff,
+    });
 
     expect(result.matchedCount).toBe(1);
     expect(result.deletedCount).toBe(0);
@@ -206,11 +218,66 @@ describe('cleanupInactiveGuests', () => {
       }
     );
 
-    const result = await cleanupInactiveGuests({ db, inactiveDays: 30, now: NOW });
+    const result = await cleanupInactiveGuests({
+      db,
+      inactiveDays: 30,
+      now: NOW,
+      handOff: noHandOff,
+    });
 
     expect(result.matchedCount).toBe(1);
     expect(result.deletedCount).toBe(0);
     expect(users).toHaveLength(1);
+  });
+
+  it('hands off shared milestones before each batch delete, and a failed hand-off keeps the guest', async () => {
+    const calls: string[] = [];
+    const { db, users } = createFakeDb(
+      [
+        {
+          id: 'guest-stale',
+          role: 'USER',
+          isGuest: true,
+          guestLastActiveAt: daysAgo(40),
+          createdAt: daysAgo(40),
+          updatedAt: daysAgo(40),
+        },
+      ],
+      { beforeDelete: () => calls.push('delete') }
+    );
+    const handOff = vi.fn(async ({ candidateIds }: { candidateIds: string[] }) => {
+      calls.push(`handOff:${candidateIds.join(',')}`);
+      return 0;
+    });
+
+    const result = await cleanupInactiveGuests({ db, inactiveDays: 30, now: NOW, handOff });
+
+    expect(result.deletedCount).toBe(1);
+    expect(calls).toEqual(['handOff:guest-stale', 'delete']);
+    expect(handOff).toHaveBeenCalledWith({ candidateIds: ['guest-stale'], cutoff: daysAgo(30) });
+
+    const failing = createFakeDb([
+      {
+        id: 'guest-kept',
+        role: 'USER',
+        isGuest: true,
+        guestLastActiveAt: daysAgo(40),
+        createdAt: daysAgo(40),
+        updatedAt: daysAgo(40),
+      },
+    ]);
+    await expect(
+      cleanupInactiveGuests({
+        db: failing.db,
+        inactiveDays: 30,
+        now: NOW,
+        handOff: async () => {
+          throw new Error('hand-off failed');
+        },
+      })
+    ).rejects.toThrow('hand-off failed');
+    expect(failing.users).toHaveLength(1);
+    expect(users).toHaveLength(0);
   });
 
   it('processes deletions across multiple batches', async () => {
@@ -224,7 +291,13 @@ describe('cleanupInactiveGuests', () => {
     }));
     const { db, users } = createFakeDb(seed);
 
-    const result = await cleanupInactiveGuests({ db, inactiveDays: 30, batchSize: 2, now: NOW });
+    const result = await cleanupInactiveGuests({
+      db,
+      inactiveDays: 30,
+      batchSize: 2,
+      now: NOW,
+      handOff: noHandOff,
+    });
 
     expect(result.matchedCount).toBe(5);
     expect(result.deletedCount).toBe(5);

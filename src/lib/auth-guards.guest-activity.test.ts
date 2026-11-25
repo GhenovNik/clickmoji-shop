@@ -201,6 +201,7 @@ describe('guest cleanup racing a guest request at the cutoff', () => {
       db: prisma as unknown as GuestCleanupDbClient,
       inactiveDays: CUTOFF_DAYS,
       now: NOW,
+      handOff: async () => 0,
     });
 
   it('a failed touch leaves the stale guest to cleanup, which removes it, and keeps the regular account', async () => {
