@@ -182,6 +182,9 @@ Terms used below:
   writers, closing sessions) and verified in the database by the checks in _Fence production_. It is not a grant
   change: revoking table privileges does not cover the owner role, grants through `PUBLIC` or inherited role
   memberships, other schemas, superusers, or background writers, so the procedure does not rely on it.
+- **Write barrier**: a database-side closing of the site's writes, on production and on the target, by revoking the
+  runtime role's write privileges. It is an addition to the fence, not a replacement for it, and it is the only stop that
+  holds whichever Vercel deployment serves the domain (see _Write barrier_).
 - **Frozen production**: production after the fence is verified. Its data no longer changes, so a comparison against
   it is complete, including deletes. `FROZEN_AT` is the time of the last passing fence check.
 - **Writers**: every process or person that can change production data: the production Vercel deployments of `master`
@@ -767,23 +770,151 @@ Pass only when **all** of these hold, all run on the branch:
 Inspect representative users, lists and products without exposing personal data, and test sign-in and reading a test
 list against the target in an isolated preview. Do not seed restored data.
 
+#### Write barrier (the runtime role, on both databases)
+
+A stop that rests on a deployment is not enough. Vercel can move the production domain to another deployment at any time,
+and a deployment that still holds a production URL can write. A maintenance deployment, even a promoted one, is therefore
+not a barrier by itself. The write barrier is enforced by the database instead: it removes the runtime role's write
+privileges, the only role that site deployments use, on production and on the target. It holds whichever deployment
+serves the domain. It removes direct INSERT, UPDATE, DELETE and TRUNCATE on tables and views, and UPDATE and USAGE on
+sequences. Reads stay allowed, so the routing proof can read without writing.
+
+The barrier counts only if, once closed, the runtime role has no effective write privilege from any source. Effective
+privileges include `PUBLIC` and role membership, which a revoke does not change. `BARRIER_CHECK_SQL` tests exactly that; if
+it prints any row, the barrier is not independent and the cutover is held. Reopening restores the direct grants saved
+before closing, and the effective grants must then equal the snapshot taken before closing. The barrier does not stop the
+other writers (see _Fence production_).
+
+```sh
+export RUNTIME_ROLE='<runtime-role>'
+BARRIER_PSQL='psql -X -q -A -t -v ON_ERROR_STOP=1 -v role="$RUNTIME_ROLE" -f -'
+
+# prints_no_rows: succeeds only when the query exits 0 and prints no rows. An empty output is valid only here.
+prints_no_rows() {
+  _pn_file=$(mktemp) || return 1
+  "$@" > "$_pn_file"
+  _pn_status=$?
+  [ "$_pn_status" -eq 0 ] && [ ! -s "$_pn_file" ]
+  _pn_result=$?
+  rm -f "$_pn_file"
+  return "$_pn_result"
+}
+
+# Direct write grants of the runtime role, as GRANT statements that restore them. Read-only; saved before closing.
+BARRIER_OPEN_SQL=$(cat <<'SQL'
+SELECT format('GRANT %s ON %s %I.%I TO %I;', a.privilege_type, CASE c.relkind WHEN 'S' THEN 'SEQUENCE' ELSE 'TABLE' END,
+              n.nspname, c.relname, g.rolname)
+FROM pg_class c
+JOIN pg_namespace n ON n.oid = c.relnamespace
+CROSS JOIN LATERAL aclexplode(c.relacl) a
+JOIN pg_roles g ON g.oid = a.grantee
+WHERE g.rolname = :'role'
+  AND n.nspname NOT IN ('pg_catalog', 'information_schema') AND n.nspname NOT LIKE 'pg_toast%' AND n.nspname NOT LIKE 'pg_temp%'
+  AND ((c.relkind IN ('r', 'p', 'v', 'f') AND a.privilege_type IN ('INSERT', 'UPDATE', 'DELETE', 'TRUNCATE'))
+    OR (c.relkind = 'S' AND a.privilege_type IN ('USAGE', 'UPDATE')))
+ORDER BY 1;
+SQL
+)
+
+# The same filter as BARRIER_OPEN_SQL, as REVOKE statements.
+BARRIER_CLOSE_SQL=$(cat <<'SQL'
+SELECT format('REVOKE %s ON %s %I.%I FROM %I;', a.privilege_type, CASE c.relkind WHEN 'S' THEN 'SEQUENCE' ELSE 'TABLE' END,
+              n.nspname, c.relname, g.rolname)
+FROM pg_class c
+JOIN pg_namespace n ON n.oid = c.relnamespace
+CROSS JOIN LATERAL aclexplode(c.relacl) a
+JOIN pg_roles g ON g.oid = a.grantee
+WHERE g.rolname = :'role'
+  AND n.nspname NOT IN ('pg_catalog', 'information_schema') AND n.nspname NOT LIKE 'pg_toast%' AND n.nspname NOT LIKE 'pg_temp%'
+  AND ((c.relkind IN ('r', 'p', 'v', 'f') AND a.privilege_type IN ('INSERT', 'UPDATE', 'DELETE', 'TRUNCATE'))
+    OR (c.relkind = 'S' AND a.privilege_type IN ('USAGE', 'UPDATE')))
+ORDER BY 1;
+SQL
+)
+
+# Effective write privileges of the runtime role, from any source. Must print no rows once the barrier is closed.
+BARRIER_CHECK_SQL=$(cat <<'SQL'
+SELECT n.nspname || '.' || c.relname || E'\t' || p.priv
+FROM pg_class c
+JOIN pg_namespace n ON n.oid = c.relnamespace
+CROSS JOIN (VALUES ('INSERT'), ('UPDATE'), ('DELETE'), ('TRUNCATE')) AS p(priv)
+WHERE c.relkind IN ('r', 'p', 'v', 'f') AND n.nspname NOT IN ('pg_catalog', 'information_schema')
+  AND n.nspname NOT LIKE 'pg_toast%' AND n.nspname NOT LIKE 'pg_temp%'
+  AND has_table_privilege(:'role', c.oid, p.priv)
+UNION ALL
+SELECT n.nspname || '.' || c.relname || E'\t' || p.priv
+FROM pg_class c
+JOIN pg_namespace n ON n.oid = c.relnamespace
+CROSS JOIN (VALUES ('UPDATE'), ('USAGE')) AS p(priv)
+WHERE c.relkind = 'S' AND n.nspname NOT IN ('pg_catalog', 'information_schema')
+  AND n.nspname NOT LIKE 'pg_toast%' AND n.nspname NOT LIKE 'pg_temp%'
+  AND has_sequence_privilege(:'role', c.oid, p.priv);
+SQL
+)
+```
+
+Close **production** while the fence is being established (step 1, after the writers are stopped). The save and the check
+are reads through `prod_ro`; only the two changes use `PROD_OWNER_URL`. Each line is a stop point: do not run the next line
+when one fails.
+
+```sh
+# Production: close the runtime role's write barrier.
+checked_read "$DIFF_DIR/barrier-prod-open.sql" prod_ro pg_run -i -e RUNTIME_ROLE "$IMAGE" sh -c "$BARRIER_PSQL" <<< "$BARRIER_OPEN_SQL"
+checked_read "$DIFF_DIR/barrier-prod-close.sql" prod_ro pg_run -i -e RUNTIME_ROLE "$IMAGE" sh -c "$BARRIER_PSQL" <<< "$BARRIER_CLOSE_SQL"
+checked_read "$DIFF_DIR/grants-prod-pre-barrier.txt" prod_ro pg_run -i -e RUNTIME_ROLE "$IMAGE" sh -c "$BARRIER_PSQL" <<< "$GRANTS_SQL"
+load_libpq_env "$PROD_OWNER_URL" && pg_run -i "$IMAGE" sh -c 'psql -X -q -1 -v ON_ERROR_STOP=1 -f -' < "$DIFF_DIR/barrier-prod-close.sql"
+prints_no_rows prod_ro pg_run -i -e RUNTIME_ROLE "$IMAGE" sh -c "$BARRIER_PSQL" <<< "$BARRIER_CHECK_SQL" && echo "barrier production: closed"
+```
+
+The **target** is closed at the start of the switch (_Switch_, step 1), with the same lines, against the target's owner URL
+(`TARGET_URL`), before any Vercel change:
+
+```sh
+# Target: close the runtime role's write barrier, with the owner URL in the main shell.
+load_libpq_env "$TARGET_URL"
+checked_read "$DIFF_DIR/barrier-target-open.sql" pg_run -i -e RUNTIME_ROLE "$IMAGE" sh -c "$BARRIER_PSQL" <<< "$BARRIER_OPEN_SQL"
+checked_read "$DIFF_DIR/barrier-target-close.sql" pg_run -i -e RUNTIME_ROLE "$IMAGE" sh -c "$BARRIER_PSQL" <<< "$BARRIER_CLOSE_SQL"
+checked_read "$DIFF_DIR/grants-target-pre-barrier.txt" pg_run -i -e RUNTIME_ROLE "$IMAGE" sh -c "$BARRIER_PSQL" <<< "$GRANTS_SQL"
+pg_run -i "$IMAGE" sh -c 'psql -X -q -1 -v ON_ERROR_STOP=1 -f -' < "$DIFF_DIR/barrier-target-close.sql"
+prints_no_rows pg_run -i -e RUNTIME_ROLE "$IMAGE" sh -c "$BARRIER_PSQL" <<< "$BARRIER_CHECK_SQL" && echo "barrier target: closed"
+```
+
+**Reopening** is done only at the step that allows it (_Switch_ step 7, or _Rollback_). Each database is reopened on its own
+and its effective grants are then compared with the snapshot taken before closing. Writers may use that database only after
+the line `... reopened, grants identical` is printed. Without it the barrier stays closed.
+
+```sh
+# Reopen production (PROD_OWNER_URL), only when the routing proof allows it.
+load_libpq_env "$PROD_OWNER_URL" && pg_run -i "$IMAGE" sh -c 'psql -X -q -1 -v ON_ERROR_STOP=1 -f -' < "$DIFF_DIR/barrier-prod-open.sql"
+checked_read "$DIFF_DIR/grants-prod-after-open.txt" prod_ro pg_run -i -e RUNTIME_ROLE "$IMAGE" sh -c "$BARRIER_PSQL" <<< "$GRANTS_SQL"
+cmp -s "$DIFF_DIR/grants-prod-pre-barrier.txt" "$DIFF_DIR/grants-prod-after-open.txt" && echo "production barrier: reopened, grants identical"
+```
+
+```sh
+# Reopen target (TARGET_URL), only at the step of _Switch_ or _Rollback_ that allows it.
+load_libpq_env "$TARGET_URL"
+pg_run -i "$IMAGE" sh -c 'psql -X -q -1 -v ON_ERROR_STOP=1 -f -' < "$DIFF_DIR/barrier-target-open.sql"
+checked_read "$DIFF_DIR/grants-target-after-open.txt" pg_run -i -e RUNTIME_ROLE "$IMAGE" sh -c "$BARRIER_PSQL" <<< "$GRANTS_SQL"
+cmp -s "$DIFF_DIR/grants-target-pre-barrier.txt" "$DIFF_DIR/grants-target-after-open.txt" && echo "target barrier: reopened, grants identical"
+```
+
 #### Fence production
 
 Order matters, and it is fixed:
 
 0. the identity probe of _Runtime role on the target_ has passed. It writes only to the target, so a failure is known
    before any writer is stopped;
-1. stop writers (step 1 below);
-2. verify the fence (step 2), until it passes;
+1. stop writers (step 1 below), then close the production write barrier (_Write barrier_);
+2. verify the fence (step 2), until it passes, with the barrier check at each run;
 3. record the counters from frozen production (step 3);
 4. only then deploy anything to Vercel, or let anything write to the target.
 
 Step 1: **stop every writer** and record each one in the ticket with the method used and the time. Writers are listed
 in the terms above. The operator's methods, for example:
 
-- Vercel: put production into maintenance by the operator's method (for example a promoted maintenance deployment that
-  has no database access), and confirm that no older production deployment still serves requests or runs scheduled
-  work;
+- Vercel: put production into maintenance by the operator's method, and confirm that no older production deployment still
+  serves requests or runs scheduled work. A maintenance deployment is not the barrier: the write barrier (_Write barrier_)
+  is required in addition, because the domain can move;
 - GitHub: disable runs of `migrate-production.yml`, pause the scheduled `db-backup.yml` for the window, and confirm no
   run is in progress;
 - operator scripts: stop any running command that can write;
@@ -836,6 +967,8 @@ Step 2: **verify the fence**. Run these checks at least two minutes apart. **All
   operator.
 
 - **Counters stable.** `WRITE_COUNTER_SQL` and `SEQUENCE_SQL` give the same output on both runs two minutes apart.
+- **Write barrier.** `BARRIER_CHECK_SQL` on production, read through `prod_ro`, prints no row on each run, and the line
+  `barrier production: closed` was printed after the barrier was closed (_Write barrier_).
 
 Step 3: **record the counters from frozen production**, read through `prod_ro`, after step 2 has passed on the run
 that defines `FROZEN_AT`:
@@ -880,38 +1013,59 @@ explicit operator decision; it is not reconciled automatically.
 
 ```sh
 DIFF_DIR=$(mktemp -d "$HOME/recovery-diff-XXXXXX") && chmod 700 "$DIFF_DIR"
-checked_read "$DIFF_DIR/identity-prod.txt" prod_ro psql_stdin <<< "$IDENTITY_SQL"
-load_libpq_env "$TARGET_URL"
-checked_read "$DIFF_DIR/identity-target.txt" psql_stdin <<< "$IDENTITY_SQL"
-echo 'schema differs:'
-LC_ALL=C comm -3 <(LC_ALL=C sort "$DIFF_DIR/identity-prod.txt") <(LC_ALL=C sort "$DIFF_DIR/identity-target.txt") \
-  | sed 's/^\t//' | cut -f1 | LC_ALL=C sort -u
-checked_read "$DIFF_DIR/prod.txt" prod_ro psql_stdin <<< "$ROWHASH_SQL"
-load_libpq_env "$TARGET_URL"
-checked_read "$DIFF_DIR/target.txt" psql_stdin <<< "$ROWHASH_SQL"
-LC_ALL=C sort "$DIFF_DIR/prod.txt" > "$DIFF_DIR/prod.sorted"
-LC_ALL=C sort "$DIFF_DIR/target.txt" > "$DIFF_DIR/target.sorted"
 
-echo 'created or changed after RP (only in production):'
-LC_ALL=C comm -23 "$DIFF_DIR/prod.sorted" "$DIFF_DIR/target.sorted" | cut -d'|' -f1 | LC_ALL=C sort | uniq -c
-echo 'deleted or changed after RP (only in target):'
-LC_ALL=C comm -13 "$DIFF_DIR/prod.sorted" "$DIFF_DIR/target.sorted" | cut -d'|' -f1 | LC_ALL=C sort | uniq -c
+# compare_post_point: every read, sort, comm and the sequence check runs in this function, in order. Each step returns
+# 1 when it fails, so no later step runs, and nothing is printed from it. The function first removes its own cmp-*
+# artifacts, so output left by an earlier run in the same DIFF_DIR can never be shown. Only the caller prints results,
+# and only after the function has returned 0.
+compare_post_point() {
+  find "$DIFF_DIR" -maxdepth 1 -name 'cmp-*' -type f -exec rm -f {} + || return 1
+  checked_read "$DIFF_DIR/cmp-identity-prod.txt" prod_ro psql_stdin <<< "$IDENTITY_SQL" || return 1
+  load_libpq_env "$TARGET_URL" || return 1
+  checked_read "$DIFF_DIR/cmp-identity-target.txt" psql_stdin <<< "$IDENTITY_SQL" || return 1
+  checked_read "$DIFF_DIR/cmp-prod.txt" prod_ro psql_stdin <<< "$ROWHASH_SQL" || return 1
+  load_libpq_env "$TARGET_URL" || return 1
+  checked_read "$DIFF_DIR/cmp-target.txt" psql_stdin <<< "$ROWHASH_SQL" || return 1
+  checked_read "$DIFF_DIR/cmp-target-seq.txt" pg_run "$IMAGE" psql -X -q -A -t -v ON_ERROR_STOP=1 -c "$SEQUENCE_SQL" || return 1
+  printf '%s\n' "$SEQUENCE_BASELINE" > "$DIFF_DIR/cmp-prod-seq.txt" || return 1
+  LC_ALL=C sort "$DIFF_DIR/cmp-identity-prod.txt" > "$DIFF_DIR/cmp-identity-prod.sorted" || return 1
+  LC_ALL=C sort "$DIFF_DIR/cmp-identity-target.txt" > "$DIFF_DIR/cmp-identity-target.sorted" || return 1
+  LC_ALL=C sort "$DIFF_DIR/cmp-prod.txt" > "$DIFF_DIR/cmp-prod.sorted" || return 1
+  LC_ALL=C sort "$DIFF_DIR/cmp-target.txt" > "$DIFF_DIR/cmp-target.sorted" || return 1
+  LC_ALL=C comm -3 "$DIFF_DIR/cmp-identity-prod.sorted" "$DIFF_DIR/cmp-identity-target.sorted" \
+    | sed 's/^\t//' | cut -f1 | LC_ALL=C sort -u > "$DIFF_DIR/cmp-schema.out" || return 1
+  LC_ALL=C comm -23 "$DIFF_DIR/cmp-prod.sorted" "$DIFF_DIR/cmp-target.sorted" \
+    | cut -d'|' -f1 | LC_ALL=C sort | uniq -c > "$DIFF_DIR/cmp-only-prod.out" || return 1
+  LC_ALL=C comm -13 "$DIFF_DIR/cmp-prod.sorted" "$DIFF_DIR/cmp-target.sorted" \
+    | cut -d'|' -f1 | LC_ALL=C sort | uniq -c > "$DIFF_DIR/cmp-only-target.out" || return 1
+  awk -F '\t' 'NR == FNR { tgt[$1] = $2; next } { if (!($1 in tgt)) print "missing in target: " $1; else if (tgt[$1] + 0 < $2 + 0) print "behind: " $1 }' \
+    "$DIFF_DIR/cmp-target-seq.txt" "$DIFF_DIR/cmp-prod-seq.txt" > "$DIFF_DIR/cmp-seq.out" || return 1
+  [ ! -s "$DIFF_DIR/cmp-seq.out" ] || return 1
+  return 0
+}
+
+if compare_post_point; then
+  echo 'schema differs:'
+  cat "$DIFF_DIR/cmp-schema.out"
+  echo 'created or changed after RP (only in production):'
+  cat "$DIFF_DIR/cmp-only-prod.out"
+  echo 'deleted or changed after RP (only in target):'
+  cat "$DIFF_DIR/cmp-only-target.out"
+  echo 'sequences: no missing or behind sequence'
+  echo 'post-point comparison: complete'
+else
+  echo 'post-point comparison FAILED: cutover held; no comparison result is evidence' >&2
+  cat "$DIFF_DIR/cmp-seq.out" 2>/dev/null >&2
+  false
+fi
 ```
 
-The `prod.txt` and `target.txt` files are rows of `table|md5`; they hold no row data. The `prod_ro` subshell loads the
-read-only production URL; the target then loads `TARGET_URL` in the main shell.
+The `cmp-prod.txt` and `cmp-target.txt` files are rows of `table|md5`; they hold no row data. The `prod_ro` subshell loads
+the read-only production URL; the target then loads `TARGET_URL` in the main shell.
 
-Also compare the sequence positions. Every sequence of frozen production must exist in the target with a `last_value` at
-least as large, so ids used by production rows are never reused after writes resume. The command prints nothing when
-the check passes:
-
-```sh
-TARGET_SEQUENCES=$(pg_run "$IMAGE" psql -X -q -A -t -v ON_ERROR_STOP=1 -c "$SEQUENCE_SQL")
-printf '%s\n' "$SEQUENCE_BASELINE" > "$DIFF_DIR/sequences-prod.txt"
-printf '%s\n' "$TARGET_SEQUENCES" > "$DIFF_DIR/sequences-target.txt"
-awk -F '\t' 'NR == FNR { tgt[$1] = $2; next } { if (!($1 in tgt)) print "missing in target: " $1; else if (tgt[$1] + 0 < $2 + 0) print "behind: " $1 }' \
-  "$DIFF_DIR/sequences-target.txt" "$DIFF_DIR/sequences-prod.txt"
-```
+The sequence positions are compared inside the same function. Every sequence of frozen production must exist in the target
+with a `last_value` at least as large, so ids used by production rows are never reused after writes resume. A missing or
+behind sequence is printed on failure (`cmp-seq.out`) and holds the cutover, like any other failed step.
 
 The counts in the two lists are the **decision input**. Write the decision in the ticket before any switch, with one of:
 
@@ -933,25 +1087,14 @@ by the operator with the provider's own method, and its password is set without 
 production's, across all user schemas (not only `public`), and it must own nothing.
 
 ```sh
-# The same GRANTS_SQL and OWNERSHIP_SQL run on production (read-only) and on the target (owner role):
-# the outputs must be identical, and OWNERSHIP_SQL must return no rows.
-export RUNTIME_ROLE='<runtime-role>'
+# The same GRANTS_SQL and OWNERSHIP_SQL run on production and on the target (owner role): the outputs must be identical,
+# and OWNERSHIP_SQL must return no rows. Production's side is the snapshot taken before its write barrier closed
+# (_Write barrier_), because a closed barrier changes its live grants. The target's barrier is still open here.
 ROLE_PSQL='psql -X -q -A -t -v ON_ERROR_STOP=1 -v role="$RUNTIME_ROLE" -f -'
-# ownership_none: succeeds only when the query exits 0 and prints no rows. An empty output is valid only here.
-ownership_none() {
-  _on_file=$(mktemp) || return 1
-  "$@" > "$_on_file"
-  _on_status=$?
-  [ "$_on_status" -eq 0 ] && [ ! -s "$_on_file" ]
-  _on_result=$?
-  rm -f "$_on_file"
-  return "$_on_result"
-}
-checked_read "$DIFF_DIR/grants-prod.txt" prod_ro pg_run -i -e RUNTIME_ROLE "$IMAGE" sh -c "$ROLE_PSQL" <<< "$GRANTS_SQL"
 load_libpq_env "$TARGET_URL"
 checked_read "$DIFF_DIR/grants-target.txt" pg_run -i -e RUNTIME_ROLE "$IMAGE" sh -c "$ROLE_PSQL" <<< "$GRANTS_SQL"
-cmp -s "$DIFF_DIR/grants-prod.txt" "$DIFF_DIR/grants-target.txt" && echo "grants: identical"
-ownership_none pg_run -i -e RUNTIME_ROLE "$IMAGE" sh -c "$ROLE_PSQL" <<< "$OWNERSHIP_SQL" && echo "ownership: none"
+cmp -s "$DIFF_DIR/grants-prod-pre-barrier.txt" "$DIFF_DIR/grants-target.txt" && echo "grants: identical"
+prints_no_rows pg_run -i -e RUNTIME_ROLE "$IMAGE" sh -c "$ROLE_PSQL" <<< "$OWNERSHIP_SQL" && echo "ownership: none"
 ```
 
 Then obtain the runtime URL and check that it reaches the target as the runtime role. Its attributes must be `f` for
@@ -1060,17 +1203,22 @@ from production's: stop, and the cutover is held.
 Preconditions, all recorded in the ticket:
 
 - **restore-ready** for the target (its copy or branch verification passed);
-- **old source reachable and fenced**: the fence passed on the run that defines `FROZEN_AT`, and the `prod_ro` reads of
-  the post-point comparison succeed. Without them the fence and the post-point changes cannot be established;
-- the post-point decision is written (reconcile or accept loss), and the sequence check printed nothing;
+- **old source reachable and fenced**: the fence passed on the run that defines `FROZEN_AT`, the production write barrier
+  printed `barrier production: closed`, and the `prod_ro` reads of the post-point comparison succeed. Without them the fence
+  and the post-point changes cannot be established;
+- the post-point decision is written (reconcile or accept loss), and `compare_post_point` completed: the line
+  `post-point comparison: complete` was printed;
 - the runtime identity and the migrate status passed on `CUTOVER_URL`, and the identity probe passed in full (see
-  _Identity probe_);
+  _Identity probe_).
 
 **Cutover is held** while any precondition is missing, in particular while the old source cannot be read or fenced. Then
-nothing changes in Vercel, the target stays restore-ready, and the hold is recorded in the ticket with its time and
-reason. This procedure has no route around the hold; any other action is a separate operator decision outside this text.
+nothing changes in Vercel, the target stays restore-ready, and the hold is recorded in the ticket with its time and reason.
+This procedure has no route around the hold; any other action is a separate operator decision outside this text.
 
-1. Record `TARGET_BASELINE` **before** any Vercel change, while the target has no writer. The content digest is the
+1. **Close the target's write barrier** (the target block of _Write barrier_), before any Vercel change. Nothing below runs
+   until `barrier target: closed` is printed.
+
+2. Record `TARGET_BASELINE` **before** any Vercel change, while the target has no writer. The content digest is the
    baseline that decides a rollback; the counters are recorded for the record only. All are read as the owner role.
    Confirm in the same session, with a role that can see all sessions, that the target has no client session other than
    the operator's (the sessions query from _Fence production_ with `datname` of the target):
@@ -1087,36 +1235,47 @@ reason. This procedure has no route around the hold; any other action is a separ
    Stop unless `TARGET_BASELINE_DIGEST` is a 64-character hash. The identity probe's probe table must already be removed
    (its verification is in _Identity probe_), so the baseline contains only the restored data.
 
-2. Store the current production `DATABASE_URL` value in the password manager (the value, not in a file or a ticket), so the
+3. Store the current production `DATABASE_URL` value in the password manager (the value, not in a file or a ticket), so the
    old target can be restored in one step.
-3. Update the existing Vercel production variable from the linked release checkout. The value comes from stdin, never from
-   argv. **From this command on the target counts as exposed, whatever the result of the update or of the deployment**,
-   so rollback follows the exposed path in _Rollback_. If the update or the deployment fails, keep writes stopped.
+
+4. Update the existing Vercel production variable and create the production deployment **without assigning the production
+   domain** (`--skip-domain`). The public domain keeps its current deployment until step 6. The value comes from stdin, never
+   from argv. **From this command on the target counts as exposed, whatever the result of the update or of the deployment**,
+   so rollback follows the exposed path in _Rollback_. While any status below is nonzero, the target barrier stays closed.
 
    ```sh
    printf '%s' "$CUTOVER_URL" | vercel env update DATABASE_URL production --yes
    UPDATE_STATUS=$?
    DEPLOY_STATUS=1
-   [ "$UPDATE_STATUS" -eq 0 ] && vercel deploy --prod && DEPLOY_STATUS=0
+   DEPLOY_URL=''
+   if [ "$UPDATE_STATUS" -eq 0 ]; then
+     DEPLOY_URL=$(vercel deploy --prod --skip-domain | tail -n 1) && DEPLOY_STATUS=0
+   fi
    printf 'env update: %s; deploy: %s\n' "$UPDATE_STATUS" "$DEPLOY_STATUS"
    ```
 
-   In the Vercel dashboard, edit the existing Production variable under Project Settings → Environment Variables, then
-   redeploy. Do not add a Preview or Development entry. The dashboard path has the same statuses: both steps must be
-   confirmed as successful.
+   Confirm that the installed CLI supports `--skip-domain` (`vercel deploy --help`) before the switch. In the dashboard the
+   same two results are needed, and the deployment must be created without assigning the production domain; otherwise the
+   routing proof in step 5 does not stand. Do not add a Preview or Development entry.
 
-4. Confirm the routing before any writer runs. Writers resume only when `env update: 0; deploy: 0` and all of these hold:
-   - the production domain's current deployment is the one deployed in step 3 (the deployment is listed as the production
-     alias in the dashboard, or `vercel inspect` on its URL shows it);
-   - a request to the site (sign-in and reading a test list) opens a session of `<runtime-role>` on the **target**, and
-     the old database shows no session from the site;
-   - sign-in, reading a test list and the runtime error view in Vercel are clean.
+5. **Routing proof before the domain moves.** Writers are still closed. Send a read-only `GET` of the test list to
+   `DEPLOY_URL`. Do not sign in and do not write. Pass only when the target shows a session of `<runtime-role>` opened by
+   that request (the sessions query with `datname` of the target, read as the owner role with `pg_read_all_stats`), the old
+   database shows no session from the site, and the runtime error view in Vercel for that deployment is clean.
 
-   Only then resume writes through the restored site. The old database stays fenced and receives no writes after the
-   switch. A nonzero status or a failed routing check keeps writes stopped and the cutover is held.
+6. **Move the production domain to that deployment**, with the operator's documented alias command (confirm it with
+   `vercel alias --help` before the switch), and repeat the routing proof on the **production domain**: `vercel inspect`
+   (or the dashboard) shows `DEPLOY_URL` as the production alias, a read-only `GET` of the test list succeeds, the target
+   shows a session of `<runtime-role>`, and the old database shows no session from the site.
 
-5. Record the selected copy or time, the target name (not its URL), the checks that passed, the decision used, `FROZEN_AT`,
-   the switch time and the parent of the branch, without credentials.
+7. **Reopen the target** only when `env update: 0; deploy: 0`, the routing proofs of steps 5 and 6 both passed, and the
+   target block of _Write barrier_ reopens it, printing `target barrier: reopened, grants identical`. Only after that line
+   does the operator sign in and read a test list as a smoke test; sign-in is a write, so it is not part of any routing
+   proof. A nonzero status, a failed proof or a missing line keeps the target barrier closed and the cutover held.
+
+8. Record the selected copy or time, the target name (not its URL), the checks that passed, the decision used, `FROZEN_AT`,
+   the switch time, the parent of the branch and the deployment identifier (not its URL), without credentials. The old
+   database stays fenced and its barrier stays closed after the switch.
 
 #### Rollback
 
@@ -1146,25 +1305,30 @@ Vercel. The simplest safe rollback is to abandon the switch and reopen the old d
 
 - the runtime role connects to the old database and returns the row of the runtime-role check.
 
-Then restore writers in the reverse order of the fence and record the time. Any difference means a write may have reached
-the target or got past the fence: the path is then ambiguous, and the exposed path applies.
+Then reopen the production barrier (the production block of _Write barrier_, printing `production barrier: reopened,
+grants identical`) and restore writers in the reverse order of the fence, recording the time. The target barrier stays
+closed: the target was abandoned before any traffic reached it. Any difference means a write may have reached the target or
+got past the fence: the path is then ambiguous, and the exposed path applies.
 
 **Exposed or ambiguous** (once `vercel env update` has been run, whatever its result, or once any check above differs).
 There is **no automatic rollback** on this path: restoring the old URL would silently drop what was written to the target.
 Required steps:
 
-1. **Fence the target again.** Stop the writers of every deployment that holds the target URL by the methods of
-   _Fence production_ step 1, and confirm that no deployment still serves requests or runs scheduled work with it.
-   Terminate target sessions other than the operator's (`pg_terminate_backend` rolls back their open transactions only),
-   then run the session and write-role checks twice, two minutes apart, as in _Fence production_ step 2.
+1. **Fence the target again.** If the target barrier is open, close it again (the target block of _Write barrier_, printing
+   `barrier target: closed`). Stop the writers of every deployment that holds the target URL by the methods of _Fence
+   production_ step 1, and confirm that no deployment still serves requests or runs scheduled work with it. Terminate target
+   sessions other than the operator's and the verifier's (`pg_terminate_backend` rolls back their open transactions only),
+   then run the session and write-role checks, and `BARRIER_CHECK_SQL` on the target, twice, two minutes apart, as in
+   _Fence production_ step 2.
 2. **Compare the two databases** with _Post-point changes_ in the opposite direction: the target is now the source of the
    changes and the old database the destination. Write the decision (reconcile or accept loss) in the ticket, as for the
    switch. Reconciliation applies the target's rows to the old database as the owner role.
 3. **Verify the old database independently**, from a fresh session with a second operator reading the outputs. Its
    `ROWHASH` digest must equal the target's digest (after reconciliation), its identity SHA-256 must equal
    `PRE_STOP_IDENTITY_SHA`, its sessions must be only the operator's and the verifier's, and the runtime role must return
-   its row.
-4. Only then put the old URL back and redeploy:
+   its row. Its write barrier stays closed while this is done.
+4. Only then put the old URL back, and prove routing before and after the domain moves. Writers of the old database stay
+   closed:
 
    ```sh
    printf 'Old production URL (not echoed): '
@@ -1174,22 +1338,28 @@ Required steps:
    UPDATE_STATUS=$?
    unset OLD_URL
    DEPLOY_STATUS=1
-   [ "$UPDATE_STATUS" -eq 0 ] && vercel deploy --prod && DEPLOY_STATUS=0
+   DEPLOY_URL=''
+   if [ "$UPDATE_STATUS" -eq 0 ]; then
+     DEPLOY_URL=$(vercel deploy --prod --skip-domain | tail -n 1) && DEPLOY_STATUS=0
+   fi
    printf 'env update: %s; deploy: %s\n' "$UPDATE_STATUS" "$DEPLOY_STATUS"
    ```
 
-   Writers reopen only when `env update: 0; deploy: 0` **and** the routing check passes: the production domain's current
-   deployment is the redeployed one, a request to the site opens a session of `<runtime-role>` on the old database, and
-   the target shows no session other than the operator's and the verifier's. Then reopen writers one at a time in the
-   reverse order of the fence, re-checking each. A nonzero status or a failed routing check keeps every writer stopped.
-   The target stays fenced and is kept for the ticket.
+   Proof before the domain moves: a read-only `GET` of the test list to `DEPLOY_URL` opens a session of `<runtime-role>` on
+   the **old** database, and the target shows no session from the site. Then move the production domain as in _Switch_
+   step 6, and repeat the same proof on the production domain.
+
+5. **Reopen the old database only when** `env update: 0; deploy: 0`, both proofs passed, and the production block of
+   _Write barrier_ printed `production barrier: reopened, grants identical`. Then reopen writers one at a time in the reverse
+   order of the fence, re-checking each. A nonzero status, a failed proof or a missing line keeps every barrier and every
+   writer stopped. The target stays fenced and is kept for the ticket.
 
 Do not mark or delete the old target while a rollback is still possible. If any step fails, keep the old setting and
-investigate before any further change. Finally, unset the variables and remove temporary targets and files when they
-are no longer needed:
+investigate before any further change. Finally, unset the variables and remove temporary targets and files when they are no
+longer needed:
 
 ```sh
-unset TARGET_URL CUTOVER_URL PROD_READONLY_URL OLD_URL RECOVERY_TIME RESTORE_DB AGE_IDENTITY PROBE_NONCE RUNTIME_NONCE
+unset TARGET_URL CUTOVER_URL PROD_READONLY_URL PROD_OWNER_URL OLD_URL RECOVERY_TIME RESTORE_DB AGE_IDENTITY PROBE_NONCE RUNTIME_NONCE
 unset PGHOST PGPORT PGDATABASE PGUSER PGPASSWORD PGSSLMODE PGCHANNELBINDING PGOPTIONS
 rm -rf "$DIFF_DIR" "$EXP_DIR" "$RECOVERY_DIR"
 ```
@@ -1236,6 +1406,20 @@ The synthetic drill must show these outcomes:
   rejected by `checked_digest`. A repeated full read reproduces the earlier digest exactly.
 - after an exposed rollback with a failed `vercel env update` or a failed `vercel deploy --prod`, every writer stays
   stopped. The drill checks that writers reopen only after the routing check passes.
+- **Write barrier, both databases.** The production and target barriers print `closed` only when `BARRIER_CHECK_SQL`
+  returns no row. As the runtime role, a write (INSERT, UPDATE, DELETE, TRUNCATE, nextval) fails with `permission denied`
+  and a read succeeds. Reopening prints `reopened, grants identical`. A write that reaches the runtime role through `PUBLIC`
+  or a role membership makes the close unconfirmed, and the cutover is held.
+- **Negative dry run, both directions.** A drill runs no Vercel command. Its inputs are a successful `env update` and
+  `deploy` (recorded as such) and a routing proof that fails: the domain still on another deployment, or the deployment
+  reading the other database. The target barrier then stays closed and a runtime write to the target is denied, with no
+  reopen line produced. In the rollback direction the old database stays closed and a runtime write to it is denied. The
+  drill records which proof failed.
+- **Post-point comparison under failure.** `compare_post_point` is run with a target read that prints rows and then exits
+  nonzero, with a target read that exits nonzero with full output, with an empty target read, with a failed target load,
+  with a failed sort, a failed `comm`, a missing or behind sequence, and with `cmp-*` artifacts left in the same `DIFF_DIR`
+  by an earlier successful run. Each failure prints no comparison result and holds the cutover; a complete run prints
+  `post-point comparison: complete`.
 
 The Clickmoji migration and application checks apply only to an actual Clickmoji copy.
 
