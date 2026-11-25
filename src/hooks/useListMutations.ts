@@ -2,6 +2,7 @@
 
 import { useMutation, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { useTranslations } from 'next-intl';
+import { LOCALIZED_API_ERROR_HEADER, LOCALIZED_API_ERROR_VALUE } from '@/lib/api-error-source';
 import { changedBy } from '@/lib/query-keys';
 import { refreshQueryCache } from '@/lib/refresh-query-cache';
 
@@ -24,18 +25,60 @@ function invalidate(queryClient: QueryClient, keys: ReadonlyArray<readonly unkno
   }
 }
 
-function apiErrorMessage(body: unknown): string | null {
-  if (!body || typeof body !== 'object' || !('error' in body)) return null;
-  const message = (body as { error: unknown }).error;
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+// Only an error the app marked as its own (see api-error-source) carries text in the request
+// language; a gateway's JSON `error` is not shown.
+function localizedApiErrorMessage(res: Response, body: unknown): string | null {
+  if (res.headers.get(LOCALIZED_API_ERROR_HEADER) !== LOCALIZED_API_ERROR_VALUE) return null;
+  if (!isRecord(body)) return null;
+  const message = body.error;
   return typeof message === 'string' && message.trim() ? message : null;
 }
 
-function isImportResponse(body: unknown): body is { results: ImportResults } {
-  if (!body || typeof body !== 'object' || !('results' in body)) return false;
-  const results = (body as { results: unknown }).results;
-  if (!results || typeof results !== 'object') return false;
-  const fields = results as Record<string, unknown>;
-  return ['added', 'created', 'skipped', 'failed'].every((key) => Array.isArray(fields[key]));
+function isImportResponse(body: unknown): body is { results: Record<string, unknown> } {
+  return isRecord(body) && isRecord(body.results);
+}
+
+const textOf = (value: unknown) => (typeof value === 'string' ? value : '');
+
+// Turns the route's report into the shapes the window renders. Every entry is checked before it
+// is shown: a non-object entry is dropped from the lists of successes, but a failed entry is kept
+// (with fallback text) so the failure count stays honest.
+function normalizeImportResults(
+  report: Record<string, unknown>,
+  fallbacks: { failedReason: string }
+): ImportResults {
+  const entries = (value: unknown) =>
+    Array.isArray(value)
+      ? value.filter((item): item is Record<string, unknown> => isRecord(item))
+      : [];
+  const added = (value: unknown) =>
+    entries(value).map((item) => ({
+      name: textOf(item.name),
+      category: textOf(item.category),
+      ...(typeof item.note === 'string' ? { note: item.note } : {}),
+    }));
+  return {
+    added: added(report.added),
+    created: added(report.created),
+    skipped: entries(report.skipped).map((item) => ({
+      name: textOf(item.name),
+      reason: textOf(item.reason),
+    })),
+    failed: Array.isArray(report.failed)
+      ? report.failed.map((item) => {
+          const row = isRecord(item) ? item : {};
+          const product = isRecord(row.product) ? row.product : {};
+          return {
+            product: { nameRu: textOf(product.nameRu), nameEn: textOf(product.nameEn) },
+            reason: textOf(row.reason) || fallbacks.failedReason,
+          };
+        })
+      : [],
+  };
 }
 
 export function useImportListText() {
@@ -58,13 +101,16 @@ export function useImportListText() {
       // A body that is not JSON (a gateway page, an empty body) is treated as an unknown body.
       const data: unknown = await res.json().catch(() => null);
       if (!res.ok) {
-        // The API's own error text is already in the request language; anything else is generic.
-        throw new Error(apiErrorMessage(data) ?? t('importMutation.failed'));
+        throw new Error(localizedApiErrorMessage(res, data) ?? t('importMutation.failed'));
       }
       if (!isImportResponse(data)) {
         throw new Error(t('importMutation.failed'));
       }
-      return data;
+      return {
+        results: normalizeImportResults(data.results, {
+          failedReason: t('importMutation.failed'),
+        }),
+      };
     },
     onSuccess: (data, { listId }) => {
       // Preserve the import endpoint's real added/created/failed report even if refetch fails.

@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { LOCALIZED_API_ERROR_HEADER, LOCALIZED_API_ERROR_VALUE } from '@/lib/api-error-source';
 
 // Owner report: pasting products that all exist in the catalog does not fill the list. The route
 // and the AI response parsing run for real here; only the @google/genai SDK and the database are
@@ -448,6 +449,8 @@ describe('import messages follow the request language', () => {
     );
     expect(oversizedRes.status).toBe(413);
     expect(await oversizedRes.json()).toEqual({ error: 'Request payload is too large' });
+    expect(oversizedRes.headers.get(LOCALIZED_API_ERROR_HEADER)).toBe(LOCALIZED_API_ERROR_VALUE);
+    expect(invalidJsonRes.headers.get(LOCALIZED_API_ERROR_HEADER)).toBe(LOCALIZED_API_ERROR_VALUE);
     expect(state.prompts).toEqual([]);
   });
 });

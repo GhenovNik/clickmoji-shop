@@ -17,6 +17,7 @@ import {
   getServerTranslator,
   rateLimitResponse,
 } from '@/lib/auth-security';
+import { markLocalizedApiError } from '@/lib/api-error-source';
 import { runTextAiCall } from '@/lib/text-ai-call';
 import { textAiErrorCode } from '@/lib/services/text-ai-errors';
 import {
@@ -36,7 +37,13 @@ export const maxDuration = 60;
 
 type CatalogProduct = CatalogProductPromptEntry & { categoryId: string };
 
+// Every error this handler returns (guard, body limits, rate limit, AI quota, its own checks) is
+// marked, so the import window can tell them from a gateway's JSON error.
 export async function POST(request: Request) {
+  return markLocalizedApiError(await importListText(request));
+}
+
+async function importListText(request: Request) {
   const locale = getRequestLocale(request);
   // Every message the import window shows is in the request's language.
   const t = getServerTranslator(locale);
