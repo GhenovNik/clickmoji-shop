@@ -108,7 +108,7 @@ describe('repo root and canonical outside-repo guard (AGE-1667 C3 B3)', () => {
     });
     const entry = { url } as CatalogImageEntry;
     await expect(loadImage(entry)).rejects.toThrow('inside repository');
-    expect(fetched).toBe(1);
+    expect(fetched).toBe(0);
     expect(existsSync(join(TOOL_REPO_ROOT, 'guard-loader-never'))).toBe(false);
   });
 
