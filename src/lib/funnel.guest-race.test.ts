@@ -20,7 +20,14 @@ const doubles = vi.hoisted(() => ({
   locks: new Map<string, Promise<void>>(),
   updateMany: vi.fn(),
   lockKeys: [] as string[],
+  /** Users whose row has isGuest = true. Every other userId is an ordinary account. */
+  guestUserIds: new Set<string>(['user-a', 'user-b', 'user-c']),
 }));
+
+/** Owner filter as Prisma applies `user: { isGuest }` to a funnel row. */
+function ownedBy(userId: string | null, isGuest: boolean): boolean {
+  return userId !== null && doubles.guestUserIds.has(userId) === isGuest;
+}
 
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -42,7 +49,7 @@ function makeDelegate() {
       where,
       orderBy,
     }: {
-      where: { type?: string; guestId: string };
+      where: { type?: string; guestId: string; user?: { isGuest: boolean } };
       orderBy?: { createdAt: 'desc' };
     }) => {
       if (orderBy) {
@@ -53,8 +60,12 @@ function makeDelegate() {
         return newest ? { createdAt: newest.createdAt } : null;
       }
       const snapshot =
-        doubles.rows.find((row) => row.type === where.type && row.guestId === where.guestId) ??
-        null;
+        doubles.rows.find(
+          (row) =>
+            row.type === where.type &&
+            row.guestId === where.guestId &&
+            (where.user === undefined || ownedBy(row.userId, where.user.isGuest))
+        ) ?? null;
       await wait(5);
       return snapshot ? { id: snapshot.id } : null;
     },
@@ -242,5 +253,65 @@ describe('funnel guest milestones under concurrent first starts', () => {
 
     const milestone = doubles.rows.find((row) => row.type === 'REGISTER');
     expect(milestone?.createdAt?.getTime()).toBe(doubles.dbNow.getTime());
+  });
+
+  it('lets the first guest milestones through when ordinary milestones share the same funnel guestId', async () => {
+    // An ordinary registration with the guest cookie writes REGISTER and LIST_CREATE for its own User.
+    doubles.rows.push(
+      { id: 'evt-ord-reg', type: 'REGISTER', guestId: GUEST_ID, userId: 'user-ordinary' },
+      { id: 'evt-ord-list', type: 'LIST_CREATE', guestId: GUEST_ID, userId: 'user-ordinary' }
+    );
+
+    const register = await recordFunnelEvent({
+      type: 'REGISTER',
+      userId: 'user-a',
+      guestId: GUEST_ID,
+      dedupeByGuest: true,
+    });
+    const listCreate = await recordFunnelEvent({
+      type: 'LIST_CREATE',
+      userId: 'user-a',
+      guestId: GUEST_ID,
+      dedupeByGuest: true,
+    });
+
+    expect(register).toBe(true);
+    expect(listCreate).toBe(true);
+    expect(
+      doubles.rows.filter((row) => row.type === 'REGISTER' && row.userId === 'user-a')
+    ).toHaveLength(1);
+    expect(
+      doubles.rows.filter((row) => row.type === 'LIST_CREATE' && row.userId === 'user-a')
+    ).toHaveLength(1);
+  });
+
+  it('still records one guest REGISTER on repeated starts after an ordinary registration', async () => {
+    doubles.rows.push({
+      id: 'evt-ord-reg',
+      type: 'REGISTER',
+      guestId: GUEST_ID,
+      userId: 'user-ordinary',
+    });
+
+    await Promise.all([
+      recordFunnelEvent({
+        type: 'REGISTER',
+        userId: 'user-a',
+        guestId: GUEST_ID,
+        dedupeByGuest: true,
+      }),
+      recordFunnelEvent({
+        type: 'REGISTER',
+        userId: 'user-b',
+        guestId: GUEST_ID,
+        dedupeByGuest: true,
+      }),
+    ]);
+
+    const guestRegisters = doubles.rows.filter(
+      (row) =>
+        row.type === 'REGISTER' && row.userId !== null && doubles.guestUserIds.has(row.userId)
+    );
+    expect(guestRegisters).toHaveLength(1);
   });
 });

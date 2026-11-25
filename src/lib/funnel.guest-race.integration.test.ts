@@ -37,9 +37,11 @@ describe.skipIf(!url || !isLocal)('funnel once-per-guest milestones on PostgreSQ
     admin = new PrismaClient({ adapter: createPrismaPgAdapter(url) });
     ({ recordFunnelEvent } = await import('./funnel'));
 
+    // Starts come from guest Users, as POST /api/auth/guest creates them. Milestone dedupe only
+    // counts guest-owned rows, so these must carry isGuest = true.
     for (let index = 0; index < 2; index += 1) {
       const user = await admin.user.create({
-        data: { email: `race-${randomUUID()}@example.test`, isGuest: false },
+        data: { email: `race-${randomUUID()}@example.test`, isGuest: true },
         select: { id: true },
       });
       userIds.push(user.id);

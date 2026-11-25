@@ -166,6 +166,12 @@ const GUEST_MILESTONE_LOCK_NAMESPACE = 'clickmoji:funnel-guest-milestone:v1:';
  * guestId. Concurrent starts from the same browser therefore run one after another: the second
  * one's check sees the committed row. The lock is released at commit or rollback, and no schema
  * change is needed.
+ *
+ * The check only counts rows owned by a guest User. An ordinary registration with the same signed
+ * cookie writes its own REGISTER and LIST_CREATE under the same funnel guestId; those belong to an
+ * ordinary person's chain and must not block the guest's first milestones. The owner is read from
+ * the User row the event points to, so no new column is needed. Ordinary-user events keep their
+ * User.id key in the report (see funnel-analytics.ts), so the two chains stay separate.
  */
 async function recordGuestMilestoneOnce(
   type: FunnelEventType,
@@ -177,7 +183,7 @@ async function recordGuestMilestoneOnce(
     await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
 
     const alreadyRecorded = await tx.funnelEvent.findFirst({
-      where: { type, guestId },
+      where: { type, guestId, user: { isGuest: true } },
       select: { id: true },
     });
     if (alreadyRecorded) {
