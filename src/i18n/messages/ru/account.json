@@ -27,7 +27,7 @@
     "success": "Пароль обновлён.",
     "currentRequired": "Введите текущий пароль",
     "googleNoticeTitle": "Вход через Google",
-    "googleNoticeBody": "Вы входите через Google, отдельный пароль для Clickmoji не нужен."
+    "googleNoticeBody": "Вы входите через Google, отдельный пароль для ClickMoji не нужен."
   },
   "delete": {
     "title": "Удаление аккаунта",
@@ -41,7 +41,7 @@
     "submit": "Удалить аккаунт навсегда",
     "submitting": "Удаляем...",
     "deletedTitle": "Аккаунт удалён",
-    "deletedBody": "Аккаунт и ваши данные удалены. Вы вышли из Clickmoji.",
+    "deletedBody": "Аккаунт и ваши данные удалены. Вы вышли из ClickMoji.",
     "toHome": "На главную",
     "toLogin": "Войти снова"
   }

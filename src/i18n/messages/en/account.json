@@ -27,7 +27,7 @@
     "success": "Password updated.",
     "currentRequired": "Enter your current password",
     "googleNoticeTitle": "Google sign-in",
-    "googleNoticeBody": "You sign in with Google, so there is no separate Clickmoji password."
+    "googleNoticeBody": "You sign in with Google, so there is no separate ClickMoji password."
   },
   "delete": {
     "title": "Delete account",
