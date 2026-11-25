@@ -18,7 +18,7 @@ import {
 import { recordGuestActivity } from '@/lib/guest-activity';
 import {
   GUEST_UPGRADE_INTENT_COOKIE,
-  GUEST_UPGRADE_INTENT_VALUE,
+  GUEST_UPGRADE_INTENT_MAX_AGE_SECONDS,
 } from '@/lib/guest-upgrade-intent';
 
 /**
@@ -326,23 +326,68 @@ export async function promoteGuestWithGoogleIdentity(input: {
   });
 }
 
+type UpgradeIntentClaims = { kind?: unknown; guestUserId?: unknown; issuedAt?: unknown };
+
 /**
- * Explicit upgrade intent (AGE-1667). The register page sets this short-lived, non-secret cookie
- * right before it starts Google sign-in from the guest's "save account" action. Only a request that
- * carries it may promote a guest through Google. Ordinary Google sign-in never reads it and keeps its
- * own behaviour (sign into the matching account or create one), so a guest's Google login cannot
- * silently convert the guest row.
- *
- * A forged cookie can only select the stricter explicit path: it never grants a promotion the guest
- * session does not already hold.
+ * Mints the explicit-upgrade intent for a guest the caller has already verified as live (AGE-1667).
+ * The value is signed with the auth secret, bound to that guest's User.id and stamped with its issue
+ * time. It lives in an httpOnly cookie for five minutes; the register page never sees it.
  */
-export async function readGuestUpgradeIntent(): Promise<boolean> {
+export async function mintGuestUpgradeIntent(
+  guestUserId: string,
+  nowSeconds: number = currentSessionIssuedAtSeconds()
+): Promise<string> {
+  const secret = getAuthSecret();
+  if (!secret) throw new Error('Auth secret is missing');
+  const claims: UpgradeIntentClaims = {
+    kind: 'guest-upgrade',
+    guestUserId,
+    issuedAt: nowSeconds,
+  };
+  return encode({
+    token: claims as unknown as Parameters<typeof encode>[0]['token'],
+    secret,
+    maxAge: GUEST_UPGRADE_INTENT_MAX_AGE_SECONDS,
+    salt: GUEST_UPGRADE_INTENT_COOKIE,
+  });
+}
+
+/**
+ * Reads the explicit-upgrade intent of the current request (AGE-1667). Returns the bound guest id
+ * only for a signed, fresh intent of this kind; a missing, forged, malformed or old value returns
+ * null. Ordinary Google sign-in never calls this, so a leftover intent cannot change its path.
+ */
+export async function readGuestUpgradeIntent(
+  nowSeconds: number = currentSessionIssuedAtSeconds()
+): Promise<{ guestUserId: string } | null> {
+  const secret = getAuthSecret();
+  if (!secret) return null;
+  let store: Awaited<ReturnType<typeof cookies>>;
   try {
-    const store = await cookies();
-    return store.get(GUEST_UPGRADE_INTENT_COOKIE)?.value === GUEST_UPGRADE_INTENT_VALUE;
+    store = await cookies();
   } catch {
-    return false;
+    return null;
   }
+  const value = store.get(GUEST_UPGRADE_INTENT_COOKIE)?.value;
+  if (!value) return null;
+  let claims: UpgradeIntentClaims | null;
+  try {
+    claims = (await decode({
+      token: value,
+      secret,
+      salt: GUEST_UPGRADE_INTENT_COOKIE,
+    })) as UpgradeIntentClaims | null;
+  } catch {
+    return null;
+  }
+  if (!claims || claims.kind !== 'guest-upgrade') return null;
+  const { guestUserId, issuedAt } = claims;
+  if (typeof guestUserId !== 'string' || guestUserId.length === 0) return null;
+  if (typeof issuedAt !== 'number' || !Number.isInteger(issuedAt)) return null;
+  // Checked against the issue time as well as the cookie's own expiry, and not accepted from the future.
+  if (issuedAt > nowSeconds + 30) return null;
+  if (nowSeconds - issuedAt >= GUEST_UPGRADE_INTENT_MAX_AGE_SECONDS) return null;
+  return { guestUserId };
 }
 
 /**
@@ -364,7 +409,7 @@ export type GoogleUpgradeOutcome =
 /**
  * Runs an explicit guest upgrade for a Google identity. Every refusal leaves the guest row untouched
  * and creates no user. `guest` must come from resolveGuestFromCookieStore(); an anonymous caller never
- * reaches this function (the auth callback falls back to ordinary sign-in for it).
+ * reaches this function (the upgrade callback refuses with `expired` for it, never ordinary sign-in).
  */
 export async function upgradeGuestWithGoogle(input: {
   guest: RegistrationGuestState;

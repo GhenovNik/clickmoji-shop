@@ -4,7 +4,7 @@ import { auth } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
 import { apiText } from '@/lib/api-messages';
 import { recordGuestActivity } from '@/lib/guest-activity';
-import { GUEST_ACTIVITY_TOUCH_INTERVAL_MS, isSessionTokenFreshForUser } from '@/lib/guest';
+import { GUEST_ACTIVITY_TOUCH_INTERVAL_MS, isSessionTokenValidForRow } from '@/lib/guest';
 
 type GuardResult = { session: Session } | NextResponse;
 
@@ -36,7 +36,13 @@ export async function requireUser(): Promise<GuardResult> {
     },
   });
 
-  if (!dbUser || !isSessionTokenFreshForUser(session.sessionIssuedAt, dbUser.createdAt)) {
+  if (
+    !dbUser ||
+    !isSessionTokenValidForRow(
+      { sessionIssuedAt: session.sessionIssuedAt, isGuest: session.user.isGuest },
+      dbUser
+    )
+  ) {
     return NextResponse.json({ error: await apiText(undefined, 'unauthorized') }, { status: 401 });
   }
 

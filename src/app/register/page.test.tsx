@@ -6,7 +6,10 @@ import RegisterPage from './page';
 const router = vi.hoisted(() => ({ push: vi.fn(), refresh: vi.fn() }));
 const auth = vi.hoisted(() => ({
   signIn: vi.fn(),
-  getProviders: vi.fn(async () => ({ google: { id: 'google' } })),
+  getProviders: vi.fn(async () => ({
+    google: { id: 'google' },
+    'google-upgrade': { id: 'google-upgrade' },
+  })),
   session: null as null | { user: { isGuest: boolean } },
 }));
 vi.mock('next/navigation', () => ({ useRouter: () => router }));
@@ -37,9 +40,11 @@ function stubRegister(response: Record<string, unknown>, ok = true) {
 
 beforeEach(() => {
   auth.getProviders.mockReset();
-  auth.getProviders.mockResolvedValue({ google: { id: 'google' } });
+  auth.getProviders.mockResolvedValue({
+    google: { id: 'google' },
+    'google-upgrade': { id: 'google-upgrade' },
+  });
   window.history.replaceState({}, '', '/register');
-  document.cookie = 'clickmoji_guest_upgrade=; Max-Age=0; Path=/';
   router.push.mockReset();
   router.refresh.mockReset();
   auth.signIn.mockReset();
@@ -225,14 +230,34 @@ describe('RegisterPage guest upgrade (AGE-1667)', () => {
     expect(screen.queryByRole('button', { name: 'Сохранить аккаунт через Google' })).toBeNull();
   });
 
-  it('starts Google upgrade only with the short-lived intent cookie set', async () => {
+  it('arms the server-side upgrade first, then starts the google-upgrade provider', async () => {
     auth.session = { user: { isGuest: true } };
+    const fetchMock = vi.fn(async () => Response.json({ ok: true }));
+    vi.stubGlobal('fetch', fetchMock);
     renderWithIntl(<RegisterPage />, { locale: 'en' });
 
     fireEvent.click(await screen.findByRole('button', { name: 'Save account with Google' }));
 
-    expect(document.cookie).toContain('clickmoji_guest_upgrade=google');
-    expect(auth.signIn).toHaveBeenCalledWith('google', { callbackUrl: '/' });
+    await waitFor(() => expect(auth.signIn).toHaveBeenCalledTimes(1));
+    expect(fetchMock).toHaveBeenCalledWith('/api/auth/guest-upgrade', { method: 'POST' });
+    expect(auth.signIn).toHaveBeenCalledWith('google-upgrade', { callbackUrl: '/' });
+    expect(auth.signIn).not.toHaveBeenCalledWith('google', expect.anything());
+    // The intent lives only in the server's httpOnly cookie; the page never sets a browser flag.
+    expect(document.cookie).not.toContain('clickmoji_guest_upgrade');
+  });
+
+  it('does not start Google when the guest is no longer live, and shows the expired notice', async () => {
+    auth.session = { user: { isGuest: true } };
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => Response.json({ error: 'guestSessionExpired' }, { status: 409 }))
+    );
+    renderWithIntl(<RegisterPage />, { locale: 'en' });
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Save account with Google' }));
+
+    expect(await screen.findByText(/Your guest session has expired/)).toBeTruthy();
+    expect(auth.signIn).not.toHaveBeenCalled();
   });
 
   it('shows no Google upgrade button when Google is not configured', async () => {
@@ -249,16 +274,11 @@ describe('RegisterPage guest upgrade (AGE-1667)', () => {
     ['email-taken', 'en', 'This email is already registered — sign in'],
     ['unverified', 'ru', 'Google не подтвердил эту почту'],
     ['expired', 'en', 'Your guest session has expired. Start shopping again.'],
-  ] as const)(
-    'shows the %s refusal from Google in %s and clears the intent cookie',
-    (reason, locale, text) => {
-      window.history.replaceState({}, '', `/register?upgrade=${reason}`);
-      document.cookie = 'clickmoji_guest_upgrade=google; Path=/';
+  ] as const)('shows the %s refusal from Google in %s', (reason, locale, text) => {
+    window.history.replaceState({}, '', `/register?upgrade=${reason}`);
 
-      renderWithIntl(<RegisterPage />, { locale });
+    renderWithIntl(<RegisterPage />, { locale });
 
-      expect(screen.getByText(text, { exact: false })).toBeTruthy();
-      expect(document.cookie).not.toContain('clickmoji_guest_upgrade=google');
-    }
-  );
+    expect(screen.getByText(text, { exact: false })).toBeTruthy();
+  });
 });

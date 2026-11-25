@@ -1,29 +1,15 @@
 /**
- * Explicit guest-upgrade intent for Google sign-in (AGE-1667). Client and server share the name.
+ * Explicit guest upgrade through Google (AGE-1667). Client-safe: no server imports.
  *
- * The register page sets this short-lived cookie right before it starts Google sign-in from a guest
- * session. The Google callback reads it (see guest-promotion.ts). Ordinary sign-in never sets it.
+ * An upgrade is its own NextAuth provider, `google-upgrade`, with the same Google client. Its OAuth
+ * round trip returns to `/api/auth/callback/google-upgrade`, and NextAuth binds that round trip to
+ * the provider id inside its signed state and PKCE cookies (`provider`). So the callback knows the
+ * round trip was started as an upgrade by NextAuth itself, not by a browser-set flag or a shared
+ * callback URL. An ordinary Google sign-in uses provider `google` and never reaches the upgrade path.
+ *
+ * The server-side intent that names the guest (guest-promotion.ts) is a signed, httpOnly cookie
+ * minted by POST /api/auth/guest-upgrade for the live guest only.
  */
+export const GUEST_UPGRADE_PROVIDER_ID = 'google-upgrade';
 export const GUEST_UPGRADE_INTENT_COOKIE = 'clickmoji_guest_upgrade';
-export const GUEST_UPGRADE_INTENT_VALUE = 'google';
 export const GUEST_UPGRADE_INTENT_MAX_AGE_SECONDS = 300;
-
-export function setGuestUpgradeIntent(): void {
-  try {
-    const secure = typeof window !== 'undefined' && window.location.protocol === 'https:';
-    document.cookie =
-      `${GUEST_UPGRADE_INTENT_COOKIE}=${GUEST_UPGRADE_INTENT_VALUE}; Path=/; ` +
-      `Max-Age=${GUEST_UPGRADE_INTENT_MAX_AGE_SECONDS}; SameSite=Lax` +
-      (secure ? '; Secure' : '');
-  } catch {
-    // Without cookies the Google button falls back to ordinary sign-in on the server side.
-  }
-}
-
-export function clearGuestUpgradeIntent(): void {
-  try {
-    document.cookie = `${GUEST_UPGRADE_INTENT_COOKIE}=; Path=/; Max-Age=0; SameSite=Lax`;
-  } catch {
-    // Expiry is best effort; the cookie also expires on its own after a few minutes.
-  }
-}

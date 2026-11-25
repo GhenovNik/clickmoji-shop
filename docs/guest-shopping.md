@@ -101,11 +101,20 @@ after promotion the ordinary AI and email behaviour applies with no extra switch
 
 ### Google sign-in from a guest session
 
-Google has two paths, chosen by explicit intent and never by the guest cookie alone.
+Google has two paths, and they are separate NextAuth providers that share one Google client. The
+path is chosen by the provider whose OAuth round trip returned, never by a cookie or a callback URL:
 
-**Explicit upgrade.** The register page sets `clickmoji_guest_upgrade=google` (Max-Age 300,
-SameSite Lax, not a secret) right before Google sign-in from the guest's "Save account with Google"
-button. Only a callback that carries this cookie and a live guest session runs the upgrade:
+- `google` is the ordinary sign-in. It never reads the upgrade intent and never promotes a guest.
+- `google-upgrade` is the explicit upgrade (AGE-1667). NextAuth binds its signed state and PKCE
+  cookies to the provider id, so the `google` callback refuses an upgrade round trip and the
+  `google-upgrade` callback refuses an ordinary one. A canceled or concurrent flow therefore cannot
+  be completed by the other path.
+
+**Explicit upgrade.** The register page first calls `POST /api/auth/guest-upgrade`. For a live guest
+only, that route sets `clickmoji_guest_upgrade`: a signed (auth secret), httpOnly, SameSite Lax
+cookie bound to the guest's `User.id`, valid for 300 seconds. The page then starts Google with
+`signIn('google-upgrade')`. The callback runs the upgrade only with this intent and a live guest
+session that is the same guest:
 
 - **Live guest, verified Google address, no account holds it**: the guest is promoted in place with
   `promoteGuestWithGoogleIdentity` (same `User.id`, no password, verified now, `GUEST_REGISTERED`).
@@ -113,14 +122,22 @@ button. Only a callback that carries this cookie and a live guest session runs t
   switch, no merge; the page shows "Эта почта уже зарегистрирована — войдите" (EN: "This email is
   already registered — sign in").
 - **Address not verified by Google**: refused with `/register?upgrade=unverified`. No account is
-  created and the guest stays a guest.
-- **Stale, removed or already-promoted guest**: refused with `/register?upgrade=expired`. This is
-  the guest-side equivalent of `guestSessionExpired`: no second user is created.
-- **No guest session behind the cookie**: the intent is ignored and the ordinary path below runs.
+  created and the guest stays a guest. A Google response without an email is refused the same way.
+- **Stale, removed, already-promoted or different guest, missing, forged or old intent, or no guest
+  session**: refused with `/register?upgrade=expired`. No second user is created, and the explicit
+  upgrade never falls back to ordinary sign-up.
+- **Replay**: the first promotion makes the guest an account, so a second callback for the same
+  guest is `expired`. The promotion itself is one conditional update (`where { id, isGuest: true }`),
+  which is the durable, multi-instance-safe single use; the intent cookie is not consumed in memory.
 
-**Ordinary sign-in** (no intent cookie): unchanged from #167. The browser signs into the account
-that holds the address, or a new account is created. A guest row is never promoted, merged or
-removed by this path, so a guest's own Google login cannot silently convert the guest.
+**Ordinary sign-in** (`google`): unchanged from #167. The browser signs into the account that holds
+the address, or a new account is created. A guest row is never promoted, merged or removed by this
+path, whatever cookies the browser carries, so a guest's own Google login cannot silently convert
+the guest.
+
+Deployment: the Google OAuth client must list `<origin>/api/auth/callback/google-upgrade` as an
+authorized redirect URI in addition to `/api/auth/callback/google`. Until it does, the upgrade
+round trip fails at Google, and nothing is promoted.
 
 Decisions:
 

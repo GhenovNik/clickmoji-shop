@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   GUEST_UPGRADE_INTENT_COOKIE as UPGRADE_INTENT_COOKIE,
-  GUEST_UPGRADE_INTENT_VALUE as UPGRADE_INTENT_VALUE,
+  GUEST_UPGRADE_PROVIDER_ID,
 } from './guest-upgrade-intent';
 
 /**
@@ -79,6 +79,7 @@ describe.skipIf(!url || !isLocal)('guest upgrade on PostgreSQL', () => {
     account?: unknown;
   }) => Promise<Record<string, unknown>>;
   let signGuestId: typeof import('./funnel').signGuestId;
+  let mintGuestUpgradeIntent: typeof import('./guest-promotion').mintGuestUpgradeIntent;
 
   function uniqueEmail(label: string) {
     const address = `${label}-${randomUUID().slice(0, 8)}-${tag}@example.test`;
@@ -152,20 +153,28 @@ describe.skipIf(!url || !isLocal)('guest upgrade on PostgreSQL', () => {
     );
   }
 
-  /** Explicit upgrade intent, as the register page sets it before Google sign-in (AGE-1667). */
-  function setUpgradeIntent() {
-    jar.cookies.set(UPGRADE_INTENT_COOKIE, UPGRADE_INTENT_VALUE);
+  /**
+   * Arms an explicit upgrade for one guest, as POST /api/auth/guest-upgrade does (AGE-1667): the
+   * signed intent cookie names the guest's User.id. The Google round trip is then the
+   * `google-upgrade` provider, as the register page starts it.
+   */
+  async function setUpgradeIntent(guestUserId: string) {
+    jar.cookies.set(UPGRADE_INTENT_COOKIE, await mintGuestUpgradeIntent(guestUserId));
   }
 
   function googleSignIn(
     email: string,
-    options: { verified?: boolean; sub?: string; explicit?: boolean } = {}
+    options: { verified?: boolean; sub?: string; explicit?: string } = {}
   ) {
-    if (options.explicit) setUpgradeIntent();
     const sub = options.sub ?? `google-${randomUUID()}`;
+    if (options.explicit) setUpgradeIntent(options.explicit);
     return signInCallback({
       user: { id: sub, email, name: 'Google Name', image: 'https://img.example.test/a.png' },
-      account: { provider: 'google', type: 'oauth', providerAccountId: sub },
+      account: {
+        provider: options.explicit ? GUEST_UPGRADE_PROVIDER_ID : 'google',
+        type: 'oauth',
+        providerAccountId: sub,
+      },
       profile: { sub, email, email_verified: options.verified ?? true, name: 'Google Name' },
     });
   }
@@ -180,6 +189,7 @@ describe.skipIf(!url || !isLocal)('guest upgrade on PostgreSQL', () => {
     signInCallback = authOptions.callbacks!.signIn as unknown as typeof signInCallback;
     jwtCallback = authOptions.callbacks!.jwt as unknown as typeof jwtCallback;
     ({ signGuestId } = await import('./funnel'));
+    ({ mintGuestUpgradeIntent } = await import('./guest-promotion'));
   });
 
   beforeEach(() => {
@@ -208,7 +218,7 @@ describe.skipIf(!url || !isLocal)('guest upgrade on PostgreSQL', () => {
       const email = uniqueEmail('google-promote');
       await holdGuest(guest.id, guest.createdAt, `funnel-${tag}-g1`);
 
-      const allowed = await googleSignIn(email, { explicit: true });
+      const allowed = await googleSignIn(email, { explicit: guest.id });
       expect(allowed).toBe(true);
 
       const row = await prisma.user.findUniqueOrThrow({
@@ -226,11 +236,16 @@ describe.skipIf(!url || !isLocal)('guest upgrade on PostgreSQL', () => {
       const email = uniqueEmail('google-token');
       await holdGuest(guest.id, guest.createdAt);
       const user = { id: 'google-sub-raw', email, name: 'G', image: null } as SignInArgs['user'];
-      setUpgradeIntent();
+      await setUpgradeIntent(guest.id);
+      const account = {
+        provider: GUEST_UPGRADE_PROVIDER_ID,
+        type: 'oauth',
+        providerAccountId: 'raw',
+      };
 
       const allowed = await signInCallback({
         user,
-        account: { provider: 'google', type: 'oauth', providerAccountId: 'raw' },
+        account,
         profile: { email, email_verified: true },
       });
       expect(allowed).toBe(true);
@@ -239,7 +254,7 @@ describe.skipIf(!url || !isLocal)('guest upgrade on PostgreSQL', () => {
       const token = await jwtCallback({
         token: {},
         user,
-        account: { provider: 'google', type: 'oauth', providerAccountId: 'raw' },
+        account,
       });
       expect(token).toMatchObject({ id: guest.id, sub: guest.id, isGuest: false });
     });
@@ -256,7 +271,7 @@ describe.skipIf(!url || !isLocal)('guest upgrade on PostgreSQL', () => {
         isGuest: true,
         sessionIssuedAt: Math.floor(guest.createdAt.getTime() / 1000),
       };
-      expect(await googleSignIn(email, { explicit: true })).toBe(true);
+      expect(await googleSignIn(email, { explicit: guest.id })).toBe(true);
 
       await expect(jwtCallback({ token: oldToken })).rejects.toThrow(
         'Guest session superseded by account'
@@ -268,7 +283,7 @@ describe.skipIf(!url || !isLocal)('guest upgrade on PostgreSQL', () => {
       const email = uniqueEmail('google-unverified');
       await holdGuest(guest.id, guest.createdAt);
 
-      expect(await googleSignIn(email, { verified: false, explicit: true })).toBe(
+      expect(await googleSignIn(email, { verified: false, explicit: guest.id })).toBe(
         '/register?upgrade=unverified'
       );
 
@@ -286,7 +301,7 @@ describe.skipIf(!url || !isLocal)('guest upgrade on PostgreSQL', () => {
       });
       createdIds.push(existing.id);
       await holdGuest(guest.id, guest.createdAt);
-      setUpgradeIntent();
+      await setUpgradeIntent(guest.id);
 
       const user = {
         id: 'g-sub-collide',
@@ -297,7 +312,11 @@ describe.skipIf(!url || !isLocal)('guest upgrade on PostgreSQL', () => {
       expect(
         await signInCallback({
           user,
-          account: { provider: 'google', type: 'oauth', providerAccountId: 'collide' },
+          account: {
+            provider: GUEST_UPGRADE_PROVIDER_ID,
+            type: 'oauth',
+            providerAccountId: 'collide',
+          },
           profile: { email: existing.email, email_verified: true },
         })
       ).toBe('/register?upgrade=email-taken');
@@ -340,10 +359,11 @@ describe.skipIf(!url || !isLocal)('guest upgrade on PostgreSQL', () => {
       expect(await prisma.list.count({ where: { userId: guest.id } })).toBe(5);
     });
 
-    it('ordinary Google sign-in with a live guest cookie never promotes the guest', async () => {
+    it('ordinary Google sign-in with a live guest cookie never promotes the guest, even with an armed intent', async () => {
       const guest = await insertGuest('g-ordinary');
       const email = uniqueEmail('google-ordinary');
       await holdGuest(guest.id, guest.createdAt);
+      await setUpgradeIntent(guest.id);
 
       expect(await googleSignIn(email)).toBe(true);
 
@@ -364,7 +384,7 @@ describe.skipIf(!url || !isLocal)('guest upgrade on PostgreSQL', () => {
       const email = uniqueEmail('google-gone');
       await holdGuest(gone.id, gone.createdAt);
 
-      expect(await googleSignIn(email, { explicit: true })).toBe('/register?upgrade=expired');
+      expect(await googleSignIn(email, { explicit: gone.id })).toBe('/register?upgrade=expired');
       expect(await prisma.user.count({ where: { email } })).toBe(0);
     });
 
@@ -388,7 +408,7 @@ describe.skipIf(!url || !isLocal)('guest upgrade on PostgreSQL', () => {
       const email = uniqueEmail('google-funnel');
       await holdGuest(guest.id, guest.createdAt);
 
-      expect(await googleSignIn(email, { explicit: true })).toBe(true);
+      expect(await googleSignIn(email, { explicit: guest.id })).toBe(true);
 
       const events = await prisma.funnelEvent.findMany({
         where: { userId: guest.id, type: 'GUEST_REGISTERED' },
