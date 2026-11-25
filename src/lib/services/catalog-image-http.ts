@@ -1,3 +1,4 @@
+import sharp from 'sharp';
 import { matchRemotePattern } from 'next/dist/shared/lib/match-remote-pattern';
 import nextConfig from '../../../next.config';
 
@@ -358,6 +359,17 @@ async function readBoundedImageBody(
 
   const format = detectImageFormat(combined);
   if (!format) {
+    return { ok: false, kind: 'NOT_AN_IMAGE' };
+  }
+
+  // Cap decode work independently of the HTTP deadline: 16 MP and 5 seconds.
+  // Decode all pages so a corrupt animated frame cannot pass on metadata alone.
+  try {
+    await sharp(combined, { limitInputPixels: 16_000_000, failOn: 'warning', animated: true })
+      .timeout({ seconds: 5 })
+      .raw()
+      .toBuffer();
+  } catch {
     return { ok: false, kind: 'NOT_AN_IMAGE' };
   }
 

@@ -1,3 +1,4 @@
+import sharp from 'sharp';
 import { describe, expect, it, vi } from 'vitest';
 import {
   auditCatalogPrimaryImages,
@@ -11,13 +12,6 @@ const VALID_WEBP_BYTES = Buffer.from(
   'UklGRkAAAABXRUJQVlA4WAoAAAAQAAAAAAAAAAAAQUxQSAIAAAAAAFZQOCAYAAAAMAEAnQEqAQABAAFAJiWkAANwAP79NmgA',
   'base64'
 );
-const VALID_PNG_BYTES = Buffer.from(
-  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
-  'base64'
-);
-const VALID_JPEG_BYTES = Uint8Array.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10]);
-const VALID_GIF_BYTES = Buffer.from('GIF89a\x01\x00\x01\x00', 'ascii');
-const VALID_AVIF_BYTES = Buffer.from('\x00\x00\x00\x18ftypavif\x00\x00\x00\x00avifmif1', 'latin1');
 
 function webpOkResponse(init?: { method?: string; url?: string }) {
   const body = init?.method === 'HEAD' ? null : VALID_WEBP_BYTES;
@@ -104,6 +98,13 @@ describe('catalog-image-audit', () => {
   });
 
   it('supports existing raster formats (WebP, PNG, JPEG, GIF, AVIF) and HEAD 405/501 fallback to GET', async () => {
+    const image = sharp({ create: { width: 1, height: 1, channels: 3, background: '#fff' } });
+    const [png, jpeg, gif, avif] = await Promise.all([
+      image.clone().png().toBuffer(),
+      image.clone().jpeg().toBuffer(),
+      image.clone().gif().toBuffer(),
+      image.clone().avif().toBuffer(),
+    ]);
     const db = makeDb({
       products: [
         { name: 'Брынза', isCustom: true, imageUrl: 'https://cdn.example/feta.webp' },
@@ -120,24 +121,24 @@ describe('catalog-image-audit', () => {
         return webpOkResponse();
       }
       if (url.endsWith('.png')) {
-        return new Response(init?.method === 'HEAD' ? null : VALID_PNG_BYTES, {
+        return new Response(init?.method === 'HEAD' ? null : png, {
           status: 200,
           headers: { 'content-type': 'image/png' },
         });
       }
       if (url.endsWith('.jpg')) {
-        return new Response(init?.method === 'HEAD' ? null : VALID_JPEG_BYTES, {
+        return new Response(init?.method === 'HEAD' ? null : jpeg, {
           status: 200,
           headers: { 'content-type': 'image/jpeg' },
         });
       }
       if (url.endsWith('.gif')) {
-        return new Response(init?.method === 'HEAD' ? null : VALID_GIF_BYTES, {
+        return new Response(init?.method === 'HEAD' ? null : gif, {
           status: 200,
           headers: { 'content-type': 'image/gif' },
         });
       }
-      return new Response(init?.method === 'HEAD' ? null : VALID_AVIF_BYTES, {
+      return new Response(init?.method === 'HEAD' ? null : avif, {
         status: 200,
         headers: { 'content-type': 'image/avif' },
       });
@@ -148,6 +149,22 @@ describe('catalog-image-audit', () => {
     expect(report.exitCode).toBe(0);
     expect(report.okCount).toBe(5);
     expect(report.failedCount).toBe(0);
+  });
+
+  it('rejects a truncated real WebP instead of passing the audit', async () => {
+    const db = makeDb({
+      products: [{ name: 'Image', isCustom: true, imageUrl: 'https://cdn.example/a.webp' }],
+    });
+    const fetchImpl = vi.fn(
+      async (_input: string | URL | Request, init?: RequestInit) =>
+        new Response(init?.method === 'HEAD' ? null : VALID_WEBP_BYTES.subarray(0, 12), {
+          status: 200,
+          headers: { 'content-type': 'image/webp' },
+        })
+    ) as typeof fetch;
+    const report = await auditCatalogPrimaryImages(db, { fetchImpl });
+    expect(report.exitCode).toBe(1);
+    expect(report.failedCount).toBe(1);
   });
 
   it('rejects HEAD/GET mismatches, HTML 200, fake-MIME HTML, SVG, empty bodies, oversized responses, and stalled GET streams (B2)', async () => {

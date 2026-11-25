@@ -258,6 +258,25 @@ describe('catalog-image-repair', () => {
       },
     ]);
 
+    const truncatedFetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      if (String(input).includes('old-sour-cream')) return new Response(null, { status: 404 });
+      return new Response(init?.method === 'HEAD' ? null : VALID_WEBP_BYTES.subarray(0, 12), {
+        status: 200,
+        headers: { 'content-type': 'image/webp' },
+      });
+    }) as typeof fetch;
+    const truncatedTransaction = vi.fn();
+    const truncated = await applyCatalogImageRepairs(
+      { $transaction: truncatedTransaction } as unknown as Parameters<
+        typeof applyCatalogImageRepairs
+      >[0],
+      [SAMPLE_ENTRY],
+      { fetchImpl: truncatedFetch }
+    );
+    expect(truncated.exitCode).toBe(1);
+    expect(truncated.updatedCount).toBe(0);
+    expect(truncatedTransaction).not.toHaveBeenCalled();
+
     const head200Get404Fetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
       if (String(input).includes('old-sour-cream')) return new Response(null, { status: 404 });
       if (init?.method === 'HEAD') {
