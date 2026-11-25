@@ -246,13 +246,17 @@ describe('normalizeEmojiImage', { timeout: 30_000 }, () => {
     const rawDimensions: Array<{ width: number; height: number }> = [];
     const prototype = Object.getPrototypeOf(sharp());
     const originalRaw = prototype.raw;
-    const rawSpy = vi.spyOn(prototype, 'raw').mockImplementation(function (this: sharp.Sharp, ...args: unknown[]) {
+    const rawSpy = vi.spyOn(prototype, 'raw').mockImplementation(function (
+      this: sharp.Sharp,
+      ...args: unknown[]
+    ) {
       const pipeline = originalRaw.apply(this, args);
       const originalToBuffer = pipeline.toBuffer;
       pipeline.toBuffer = function (this: sharp.Sharp, ...bufferArgs: unknown[]) {
         const result = originalToBuffer.apply(this, bufferArgs);
         return result.then((output: { info?: { width: number; height: number } }) => {
-          if (output.info) rawDimensions.push({ width: output.info.width, height: output.info.height });
+          if (output.info)
+            rawDimensions.push({ width: output.info.width, height: output.info.height });
           return output;
         });
       };
