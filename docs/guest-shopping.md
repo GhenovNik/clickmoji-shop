@@ -21,8 +21,9 @@ can build lists, add products, purchase, and read history, without registering.
   `isGuestEmail` identifies it. Nothing is ever sent to it: `send()` in `src/lib/email.ts`
   refuses guest addresses, and password reset, resend and verification skip guest rows.
 - **Session validation.** The NextAuth `jwt` callback and `requireUser` resolve the user by
-  `User.id` only (never by email) and reject a token whose `iat` (whole seconds) is older than
-  the row's `createdAt`. A deleted guest, or a guest recreated under the same email, cannot
+  `User.id` only (never by email) and reject a token whose immutable `sessionIssuedAt` claim
+  (whole seconds, stamped once at issuance and copied unchanged on refresh) is older than the
+  row's `createdAt`. NextAuth's `iat` is not used, because it is rewritten on every refresh. A deleted guest, or a guest recreated under the same email, cannot
   be revived by an old cookie. This rule is shared with the account-session work and must be
   kept when the two branches are merged.
 - **Guest AI is off.** `aiDailyLimit(role, isGuest)` returns `0` for guests, so the common quota
@@ -36,6 +37,12 @@ can build lists, add products, purchase, and read history, without registering.
   per live `guestId`, so a retry or a recreated guest from the same browser does not inflate the
   funnel. The new `User.id` is still correlated to the funnel rows. Guest funnel rows are
   deleted with the guest by the existing `onDelete: Cascade`.
+- **Guest funnel identity.** One browser's guest chain is one funnel person: every event whose
+  `User` is a guest is keyed by the funnel `guestId`, whichever guest row wrote it. A restarted
+  or concurrent start creates another guest row, but it does not start a new person. Ordinary
+  users stay keyed by `User.id`. The analytics cookie never authenticates or recovers an account.
+  Milestones are stamped under the same per-guest lock, after the chain's newest row, so the
+  chain's order holds under concurrent starts.
 
 ## Not in this change: guest to regular account
 
@@ -70,4 +77,6 @@ npm run db:cleanup-guests -- --inactive-days 45   # delete guests idle for 45+ d
 - Regular users, admins and recent guests are never matched. Deletion cascades to the guest's
   lists, items, history, favorites, AI counters and funnel rows.
 - `guestLastActiveAt` is refreshed by `requireUser` at most once a minute, and by the guest
-  start route when it reuses a session.
+  start route when it reuses a session. A refresh must succeed before the request is served:
+  a write failure returns `503` (`api.errors.guestActivityFailed`) and a guest row that is already
+  gone returns `401`, so cleanup at the cutoff never races a served request.

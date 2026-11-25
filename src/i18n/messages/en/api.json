@@ -165,6 +165,7 @@
     "categoryImageRequired": "Either emoji or custom image (imageUrl) is required",
     "createCategoryFailed": "Failed to create category",
     "fetchFunnelFailed": "Failed to load funnel analytics",
-    "guestSessionFailed": "Could not start a guest session. Please try again."
+    "guestSessionFailed": "Could not start a guest session. Please try again.",
+    "guestActivityFailed": "Could not save guest activity. Please try again."
   }
 }

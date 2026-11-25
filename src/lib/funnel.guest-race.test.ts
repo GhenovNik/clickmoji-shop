@@ -8,7 +8,15 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  * behaviour `pg_advisory_xact_lock` gives inside one PostgreSQL transaction.
  */
 const doubles = vi.hoisted(() => ({
-  rows: [] as Array<{ id: string; type: string; guestId: string | null; userId: string | null }>,
+  rows: [] as Array<{
+    id: string;
+    type: string;
+    guestId: string | null;
+    userId: string | null;
+    createdAt?: Date;
+  }>,
+  /** Database clock returned to the milestone write under the lock. */
+  dbNow: new Date('2026-11-25T12:00:00.000Z'),
   locks: new Map<string, Promise<void>>(),
   updateMany: vi.fn(),
   lockKeys: [] as string[],
@@ -30,7 +38,20 @@ async function acquire(key: string): Promise<() => void> {
 
 function makeDelegate() {
   return {
-    findFirst: async ({ where }: { where: { type: string; guestId: string } }) => {
+    findFirst: async ({
+      where,
+      orderBy,
+    }: {
+      where: { type?: string; guestId: string };
+      orderBy?: { createdAt: 'desc' };
+    }) => {
+      if (orderBy) {
+        // Newest row of the guest chain, as the milestone write reads it under the lock.
+        const newest = doubles.rows
+          .filter((row) => row.guestId === where.guestId && row.createdAt)
+          .sort((a, b) => (b.createdAt?.getTime() ?? 0) - (a.createdAt?.getTime() ?? 0))[0];
+        return newest ? { createdAt: newest.createdAt } : null;
+      }
       const snapshot =
         doubles.rows.find((row) => row.type === where.type && row.guestId === where.guestId) ??
         null;
@@ -54,6 +75,7 @@ vi.mock('@/lib/prisma', () => {
   const delegate = makeDelegate();
   const tx = {
     funnelEvent: { ...delegate, updateMany: doubles.updateMany },
+    $queryRaw: async () => [{ now: doubles.dbNow }],
     $executeRaw: async (_strings: TemplateStringsArray, lockKey: string) => {
       doubles.lockKeys.push(lockKey);
       const release = await acquire(lockKey);
@@ -88,6 +110,7 @@ const OTHER_GUEST_ID = 'guest_race_other_0987654321';
 
 beforeEach(() => {
   doubles.rows.length = 0;
+  doubles.dbNow = new Date('2026-11-25T12:00:00.000Z');
   doubles.locks.clear();
   doubles.lockKeys.length = 0;
   doubles.updateMany.mockReset().mockResolvedValue({ count: 0 });
@@ -186,5 +209,38 @@ describe('funnel guest milestones under concurrent first starts', () => {
 
     expect(doubles.rows.filter((row) => row.type === 'ITEM_ADD')).toHaveLength(2);
     expect(doubles.lockKeys).toHaveLength(0);
+  });
+
+  it('stamps a milestone after the newest row of its chain, even when the database clock is behind it', async () => {
+    const newerRowAt = new Date(doubles.dbNow.getTime() + 10_000);
+    doubles.rows.push({
+      id: 'evt-newer',
+      type: 'VISIT',
+      guestId: GUEST_ID,
+      userId: null,
+      createdAt: newerRowAt,
+    });
+
+    await recordFunnelEvent({
+      type: 'LIST_CREATE',
+      userId: 'user-a',
+      guestId: GUEST_ID,
+      dedupeByGuest: true,
+    });
+
+    const milestone = doubles.rows.find((row) => row.type === 'LIST_CREATE');
+    expect(milestone?.createdAt?.getTime()).toBe(newerRowAt.getTime() + 1);
+  });
+
+  it('stamps a milestone from the database clock when the chain has no earlier row', async () => {
+    await recordFunnelEvent({
+      type: 'REGISTER',
+      userId: 'user-a',
+      guestId: GUEST_ID,
+      dedupeByGuest: true,
+    });
+
+    const milestone = doubles.rows.find((row) => row.type === 'REGISTER');
+    expect(milestone?.createdAt?.getTime()).toBe(doubles.dbNow.getTime());
   });
 });

@@ -11,6 +11,7 @@ import {
   rateLimitResponse,
 } from '@/lib/auth-security';
 import { getGuestIdFromRequest, recordFunnelEvent } from '@/lib/funnel';
+import { recordGuestActivity } from '@/lib/guest-activity';
 import {
   buildGuestPlaceholderEmail,
   currentSessionIssuedAtSeconds,
@@ -42,22 +43,21 @@ export async function POST(request: Request) {
         existingUser &&
         isSessionTokenFreshForUser(existingSession.sessionIssuedAt, existingUser.createdAt)
       ) {
-        if (existingUser.isGuest) {
-          await prisma.user
-            .updateMany({
-              where: { id: existingUser.id, isGuest: true },
-              data: { guestLastActiveAt: new Date() },
-            })
-            .catch(() => undefined);
+        // A repeated start reuses the guest only after its activity is persisted. A write failure
+        // throws to the 500 handler below. A guest row already gone is not reused: a new one is minted.
+        const activityRecorded = existingUser.isGuest
+          ? await recordGuestActivity(existingUser.id)
+          : true;
+        if (activityRecorded) {
+          return NextResponse.json({
+            user: {
+              id: existingUser.id,
+              role: existingUser.role,
+              isGuest: existingUser.isGuest,
+            },
+            reused: true,
+          });
         }
-        return NextResponse.json({
-          user: {
-            id: existingUser.id,
-            role: existingUser.role,
-            isGuest: existingUser.isGuest,
-          },
-          reused: true,
-        });
       }
     }
 

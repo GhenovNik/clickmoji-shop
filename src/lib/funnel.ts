@@ -184,8 +184,21 @@ async function recordGuestMilestoneOnce(
       return false;
     }
 
+    // The lock serializes the whole guest chain, so the milestone is stamped after it, from the
+    // database clock like every other funnel row, and strictly after the newest row of that chain.
+    // A transaction-start default could place a later milestone before an earlier one when two
+    // starts race, and equal times do not count as progression in the aggregator.
+    const newest = await tx.funnelEvent.findFirst({
+      where: { guestId },
+      orderBy: { createdAt: 'desc' },
+      select: { createdAt: true },
+    });
+    const [{ now }] = await tx.$queryRaw<{ now: Date }[]>`SELECT clock_timestamp() AS now`;
+    const floorMs = newest ? newest.createdAt.getTime() + 1 : 0;
+    const createdAt = new Date(Math.max(now.getTime(), floorMs));
+
     await tx.funnelEvent.create({
-      data: { type, userId, guestId },
+      data: { type, userId, guestId, createdAt },
     });
     return true;
   });

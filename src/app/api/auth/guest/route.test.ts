@@ -35,6 +35,7 @@ vi.mock('@/lib/prisma', () => {
     },
     // Advisory lock taken before the once-per-guest milestone check (funnel.ts).
     $executeRaw: async () => 0,
+    $queryRaw: async () => [{ now: new Date() }],
     $transaction: async <T>(run: (tx: unknown) => Promise<T>) => run(prisma),
   };
   return { prisma };
@@ -132,7 +133,13 @@ describe('POST /api/auth/guest', () => {
       ],
     });
 
-    expect(doubles.funnelCreate.mock.calls.map(([arg]) => arg.data)).toEqual([
+    expect(
+      doubles.funnelCreate.mock.calls.map(([arg]) => {
+        const { createdAt, ...data } = arg.data as { createdAt: Date } & Record<string, unknown>;
+        expect(createdAt).toBeInstanceOf(Date);
+        return data;
+      })
+    ).toEqual([
       { type: 'REGISTER', userId: 'guest-user-1', guestId: visitGuestId },
       { type: 'LIST_CREATE', userId: 'guest-user-1', guestId: visitGuestId },
     ]);
@@ -197,6 +204,51 @@ describe('POST /api/auth/guest', () => {
     expect(response.headers.get('set-cookie') ?? '').toContain(
       `${NEXTAUTH_SECURE_SESSION_COOKIE}=`
     );
+  });
+
+  it('does not reuse a guest session when its activity write fails, and returns 500', async () => {
+    const nowSec = Math.floor(Date.now() / 1000);
+    doubles.auth.mockResolvedValue({
+      sessionIssuedAt: nowSec,
+      user: { id: 'existing-guest', role: 'USER', isGuest: true },
+    });
+    doubles.findUniqueUser.mockResolvedValue({
+      id: 'existing-guest',
+      role: 'USER',
+      isGuest: true,
+      createdAt: new Date(nowSec * 1000),
+    });
+    doubles.updateManyUser.mockRejectedValueOnce(new Error('write failed'));
+
+    const response = await POST(
+      new Request('http://localhost:3000/api/auth/guest', { method: 'POST' })
+    );
+
+    expect(response.status).toBe(500);
+    expect(doubles.createUser).not.toHaveBeenCalled();
+    expect(response.headers.get('set-cookie')).toBeNull();
+  });
+
+  it('mints a fresh guest when the reused guest row is already gone (activity count 0)', async () => {
+    const nowSec = Math.floor(Date.now() / 1000);
+    doubles.auth.mockResolvedValue({
+      sessionIssuedAt: nowSec,
+      user: { id: 'cleaned-guest', role: 'USER', isGuest: true },
+    });
+    doubles.findUniqueUser.mockResolvedValue({
+      id: 'cleaned-guest',
+      role: 'USER',
+      isGuest: true,
+      createdAt: new Date(nowSec * 1000),
+    });
+    doubles.updateManyUser.mockResolvedValueOnce({ count: 0 });
+
+    const response = await POST(
+      new Request('http://localhost:3000/api/auth/guest', { method: 'POST' })
+    );
+
+    expect(response.status).toBe(201);
+    expect(doubles.createUser).toHaveBeenCalledTimes(1);
   });
 
   it('reuses an existing active guest session without minting a second guest', async () => {
