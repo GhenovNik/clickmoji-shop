@@ -112,6 +112,10 @@ model Product {
   imageUrl   String? // для кастомных emoji
   // English variant of a picture with text on it; the app shows it when the UI is English.
   imageUrlEn String?
+  // Language of the text on imageUrl: null = not yet marked, "none" = no text, otherwise a locale.
+  imageTextLocale String?
+  // Localized pictures by locale, e.g. {"en": "https://…"}; filled from imageUrlEn by the backfill.
+  localizedImages Json?
 
   categoryId String
   category   Category @relation(fields: [categoryId], references: [id], onDelete: Cascade)
@@ -168,6 +172,10 @@ model ProductVariant {
   // A variant may have its own picture (Honeycrisp apple); English twin like Product.imageUrlEn.
   imageUrl   String?
   imageUrlEn String?
+  // Same meaning as on Product: language of the text on imageUrl (null | "none" | locale).
+  imageTextLocale String?
+  // Same meaning as on Product: {"<locale>": "<url>"}; the backfill copies imageUrlEn to "en".
+  localizedImages Json?
 
   productId String
   product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
@@ -240,6 +248,9 @@ model ListHistoryItem {
   productEmoji      String
   productImageUrl   String?
   productImageUrlEn String?
+  // Snapshot of the Product picture metadata taken with the history row (same prefix as productImageUrl).
+  imageTextLocale String?
+  localizedImages Json?
   categoryName      String
   categoryNameEn    String?
   isCustom          Boolean @default(false)
