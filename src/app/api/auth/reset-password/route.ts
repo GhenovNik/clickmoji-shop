@@ -3,6 +3,7 @@ import bcrypt from 'bcryptjs';
 import { prisma } from '@/lib/prisma';
 import { consumePasswordResetToken } from '@/lib/auth-tokens';
 import { getPasswordValidationError } from '@/lib/validation/password';
+import { isGuestEmail } from '@/lib/guest';
 import {
   checkRateLimit,
   getClientIp,
@@ -34,7 +35,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: t('api.auth.resetFieldsRequired') }, { status: 400 });
     }
 
-    if (!isValidEmail(normalizedEmail)) {
+    if (!isValidEmail(normalizedEmail) || isGuestEmail(normalizedEmail)) {
       return NextResponse.json({ error: t('api.auth.resetLinkInvalid') }, { status: 400 });
     }
 
@@ -49,7 +50,7 @@ export async function POST(request: Request) {
     }
 
     const user = await prisma.user.findUnique({ where: { email: normalizedEmail } });
-    if (!user) {
+    if (!user || user.isGuest) {
       return NextResponse.json({ error: t('api.auth.resetLinkInvalid') }, { status: 400 });
     }
 
