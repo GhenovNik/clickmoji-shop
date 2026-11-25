@@ -784,28 +784,114 @@ describe('queue targets are matched by category and parent (AGE-1667 B1)', () =>
   });
 });
 
+type Row = { id: string } & Record<string, unknown>;
+
+// A record whose conditional write checks the row as it stands when the write runs.
+function liveRow<T extends Row>(row: T) {
+  return {
+    findUnique: vi.fn(async () => ({ ...row })),
+    update: vi.fn(async ({ data }: { data: Row }) => Object.assign(row, data)),
+    updateMany: vi.fn(async ({ where, data }: { where: Row; data: Row }) => {
+      const holds = Object.entries(where).every(([key, value]) => row[key] === value);
+      if (!holds) return { count: 0 };
+      Object.assign(row, data);
+      return { count: 1 };
+    }),
+  };
+}
+
+type LibraryRow = {
+  id: string;
+  sourceRef: string;
+  imageUrl: string;
+  name: string;
+  nameEn: string | null;
+  tags: string[];
+  source: string;
+  locale: string | null;
+  groupKey: string | null;
+};
+type LibraryData = Omit<LibraryRow, 'id'>;
+
+function uniqueViolation() {
+  return Object.assign(new Error('Unique constraint failed on the fields: (`sourceRef`)'), {
+    code: 'P2002',
+  });
+}
+
+// An emoji library table with the schema's unique key (sourceRef). `afterRead` runs after a read has
+// taken its snapshot and `afterCreate` after an insert, so a test can order two runs.
+function memoryLibrary(
+  seed: LibraryData[] = [],
+  hooks: { afterRead?: () => Promise<void>; afterCreate?: (data: LibraryData) => void } = {}
+) {
+  const rows = new Map<string, LibraryRow>();
+  let next = 1;
+  const copy = (row: LibraryRow | undefined) => (row ? { ...row, tags: [...row.tags] } : null);
+  for (const data of seed) rows.set(data.sourceRef, { ...data, id: `lib${next++}` });
+  return {
+    rows,
+    findUnique: vi.fn(async ({ where }: { where: { sourceRef: string } }) => {
+      const row = copy(rows.get(where.sourceRef));
+      await hooks.afterRead?.();
+      return row;
+    }),
+    create: vi.fn(async ({ data }: { data: LibraryData }) => {
+      if (rows.has(data.sourceRef)) throw uniqueViolation();
+      const row = { ...data, id: `lib${next++}` };
+      rows.set(data.sourceRef, row);
+      hooks.afterCreate?.(data);
+      return copy(row);
+    }),
+    updateMany: vi.fn(
+      async ({
+        where,
+        data,
+      }: {
+        where: { id: string; name: string; tags: { equals: string[] } };
+        data: Partial<LibraryData>;
+      }) => {
+        const row = [...rows.values()].find((r) => r.id === where.id);
+        if (!row || row.name !== where.name || row.tags.join('|') !== where.tags.equals.join('|')) {
+          return { count: 0 };
+        }
+        Object.assign(row, data);
+        return { count: 1 };
+      }
+    ),
+    upsert: vi.fn(
+      async ({
+        where,
+        create,
+        update,
+      }: {
+        where: { sourceRef: string };
+        create: LibraryData;
+        update: Partial<LibraryData>;
+      }) => {
+        const row = rows.get(where.sourceRef);
+        if (row) {
+          Object.assign(row, update);
+          return copy(row);
+        }
+        const inserted = { ...create, id: `lib${next++}` };
+        rows.set(create.sourceRef, inserted);
+        hooks.afterCreate?.(create);
+        return copy(inserted);
+      }
+    ),
+  };
+}
+
 describe('queue writes are conditional on the state at write time (AGE-1667 B2)', () => {
   const PNG = Buffer.from('ru');
   const QUEUED = 'https://utfs.io/f/queued.webp';
   const MANUAL = 'https://utfs.io/f/manual.webp';
-  type Row = { id: string } & Record<string, unknown>;
 
-  // A record whose conditional write checks the row as it stands when the write runs.
-  function liveRow<T extends Row>(row: T) {
-    return {
-      findUnique: vi.fn(async () => ({ ...row })),
-      update: vi.fn(async ({ data }: { data: Row }) => Object.assign(row, data)),
-      updateMany: vi.fn(async ({ where, data }: { where: Row; data: Row }) => {
-        const holds = Object.entries(where).every(([key, value]) => row[key] === value);
-        if (!holds) return { count: 0 };
-        Object.assign(row, data);
-        return { count: 1 };
-      }),
-    };
-  }
   const libraryNone = () => ({
     upsert: vi.fn().mockResolvedValue({}),
     findUnique: vi.fn().mockResolvedValue(null),
+    create: vi.fn().mockResolvedValue({}),
   });
   const queueCell = (overrides: Partial<ManifestCell> = {}): ManifestCell => ({
     cell: 1,
@@ -981,6 +1067,122 @@ describe('queue writes are conditional on the state at write time (AGE-1667 B2)'
     expect(product.updateMany).not.toHaveBeenCalled();
     expect(product.update).not.toHaveBeenCalled();
   });
+
+  // A Russian sheet first, the English sheet of the same queue later (AGE-1667 B2, round 3). Only an
+  // empty English slot is filled, and only while the Russian picture is the one this cell stored.
+  describe.each([
+    {
+      label: 'product',
+      key: 'product',
+      start: { id: 'p1', imageUrl: null, imageUrlEn: null, isCustom: false } as Row,
+      cell: queueCell(),
+      plan: { kind: 'link', productId: 'p1', productName: 'Кефир' } as CellPlan['product'],
+      kind: 'linked',
+    },
+    {
+      label: 'variant',
+      key: 'productVariant',
+      start: { id: 'v1', imageUrl: null, imageUrlEn: null } as Row,
+      cell: queueCell({
+        target: 'variant',
+        parent: 'Молоко',
+        name: 'Кефир 2,5%',
+        nameEn: 'Kefir 2.5%',
+      }),
+      plan: {
+        kind: 'variant',
+        variantId: 'v1',
+        productName: 'Молоко',
+        variantName: 'Кефир 2,5%',
+      } as CellPlan['product'],
+      kind: 'variant',
+    },
+  ])('a Russian picture queued before its English one: $label', (path) => {
+    const RU = 'https://utfs.io/f/staged-ru.webp';
+    const EN = 'https://utfs.io/f/staged-en.webp';
+    const MANUAL_RU = 'https://utfs.io/f/manual-ru.webp';
+    const MANUAL_EN = 'https://utfs.io/f/manual-en.webp';
+
+    const run = (withEn: boolean) =>
+      queuePlan(path.plan, {
+        batchKind: 'text',
+        cell: path.cell,
+        images: withEn
+          ? { ru: Buffer.from('ru'), en: Buffer.from('en') }
+          : { ru: Buffer.from('ru') },
+      });
+    const catalogRow = () => {
+      const data: Row = { ...path.start };
+      return { data, row: liveRow(data) };
+    };
+    const prismaWith = (library: unknown, row: unknown) =>
+      ({ emojiLibraryItem: library, [path.key]: row }) as unknown as PrismaClient;
+
+    it('fills in the English picture and leaves the Russian one as it is', async () => {
+      const library = memoryLibrary();
+      const { data, row } = catalogRow();
+      const prisma = prismaWith(library, row);
+      const upload = vi.fn(async (image: Buffer) => (image.toString() === 'en' ? EN : RU));
+
+      const first = await applyCell(prisma, run(false), upload);
+      expect(first).toMatchObject({ product: path.kind, changed: true, uploaded: 1 });
+      expect(data).toMatchObject({ imageUrl: RU, imageUrlEn: null });
+
+      const second = await applyCell(prisma, run(true), upload);
+      expect(second).toMatchObject({ product: path.kind, changed: true, uploaded: 1 });
+      expect(second.conflict).toBeUndefined();
+      expect(data).toMatchObject({ imageUrl: RU, imageUrlEn: EN });
+      expect(row.updateMany).toHaveBeenLastCalledWith({
+        where: { id: path.start.id, imageUrl: RU, imageUrlEn: null },
+        data: expect.objectContaining({ imageUrl: RU, imageUrlEn: EN }),
+      });
+      expect(library.rows.get('queue-001#1')).toMatchObject({ imageUrl: RU, locale: 'ru' });
+      expect(library.rows.get('queue-001#1:en')).toMatchObject({ imageUrl: EN, locale: 'en' });
+
+      const third = await applyCell(prisma, run(true), upload);
+      expect(third).toMatchObject({ product: path.kind, changed: false, uploaded: 0 });
+      expect(upload).toHaveBeenCalledTimes(2);
+      expect(row.updateMany).toHaveBeenCalledTimes(2);
+    });
+
+    it('reports a conflict and keeps a Russian picture replaced by hand', async () => {
+      const library = memoryLibrary();
+      const { data, row } = catalogRow();
+      const prisma = prismaWith(library, row);
+      await applyCell(prisma, run(false), vi.fn(async () => RU));
+      data.imageUrl = MANUAL_RU;
+
+      const result = await applyCell(
+        prisma,
+        run(true),
+        vi.fn(async (image: Buffer) => (image.toString() === 'en' ? EN : RU))
+      );
+
+      expect(result).toMatchObject({ product: 'conflict', changed: false });
+      expect(result.conflict).toBeDefined();
+      expect(data).toMatchObject({ imageUrl: MANUAL_RU, imageUrlEn: null });
+      expect(row.updateMany).toHaveBeenCalledTimes(1);
+    });
+
+    it('reports a conflict and keeps an English picture set by hand', async () => {
+      const library = memoryLibrary();
+      const { data, row } = catalogRow();
+      const prisma = prismaWith(library, row);
+      await applyCell(prisma, run(false), vi.fn(async () => RU));
+      data.imageUrlEn = MANUAL_EN;
+
+      const result = await applyCell(
+        prisma,
+        run(true),
+        vi.fn(async (image: Buffer) => (image.toString() === 'en' ? EN : RU))
+      );
+
+      expect(result).toMatchObject({ product: 'conflict', changed: false });
+      expect(result.conflict).toBeDefined();
+      expect(data).toMatchObject({ imageUrl: RU, imageUrlEn: MANUAL_EN });
+      expect(row.updateMany).toHaveBeenCalledTimes(1);
+    });
+  });
 });
 
 describe('library reuse is bound to the target that wrote it (AGE-1667 B3)', () => {
@@ -1066,6 +1268,7 @@ describe('library reuse is bound to the target that wrote it (AGE-1667 B3)', () 
     const library = {
       upsert: vi.fn().mockResolvedValue({}),
       findUnique: vi.fn().mockResolvedValue(libraryRow('Груша', ['фрукты', 'queue:product'])),
+      updateMany: vi.fn().mockResolvedValue({ count: 1 }),
     };
     const row = {
       findUnique: vi.fn(async () => ({ ...product })),
@@ -1097,6 +1300,190 @@ describe('library reuse is bound to the target that wrote it (AGE-1667 B3)', () 
   });
 });
 
+// AGE-1667 B3, round 3: the reference is bound to its owner at write. Each test orders two runs so
+// that both read the reference while it is still empty, then both reach the write.
+describe('a reference is bound to one owner at write (AGE-1667 B3, round 3)', () => {
+  const APPLE_NEW = 'https://utfs.io/f/apple-new.webp';
+  const PEAR_FIRST = 'https://utfs.io/f/pear-first.webp';
+  const PEAR_SECOND = 'https://utfs.io/f/pear-second.webp';
+
+  // A catalogue record that is still empty when read and accepts the conditional write.
+  const catalogStub = () => ({
+    findUnique: vi.fn().mockResolvedValue({ imageUrl: null, imageUrlEn: null, isCustom: false }),
+    update: vi.fn().mockResolvedValue({}),
+    updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+  });
+
+  const cellOf =(overrides: Partial<ManifestCell>): ManifestCell => ({
+    cell: 1,
+    target: 'product',
+    category: 'Фрукты',
+    name: 'Груша',
+    nameEn: 'Pear',
+    action: 'update-image',
+    ...overrides,
+  });
+  const planOf = (cell: ManifestCell, product: CellPlan['product']): CellPlan => ({
+    ref: 'queue-001#1',
+    batch: 'queue-001',
+    batchKind: 'universal',
+    cell,
+    images: { ru: Buffer.from('ru') },
+    stored: {},
+    product,
+  });
+  // Both reads wait until each run has read; the first insert opens the write of the second run.
+  function racing() {
+    let reads = 0;
+    let bothRead!: () => void;
+    const readsDone = new Promise<void>((resolve) => {
+      bothRead = resolve;
+    });
+    let firstWritten!: () => void;
+    const written = new Promise<void>((resolve) => {
+      firstWritten = resolve;
+    });
+    const library = memoryLibrary([], {
+      afterRead: async () => {
+        if (++reads === 2) bothRead();
+        await readsDone;
+      },
+      afterCreate: () => firstWritten(),
+    });
+    return { library, written };
+  }
+
+  it('keeps the first owner and its picture when another target races for the same reference', async () => {
+    const { library, written } = racing();
+    const apple = { id: 'apple', imageUrl: null, imageUrlEn: null, isCustom: false } as Row;
+    const appleRow = liveRow(apple);
+    const pear = catalogStub();
+    const discard = vi.fn(async () => undefined);
+
+    const [first, second] = await Promise.all([
+      applyCell(
+        { emojiLibraryItem: library, product: appleRow } as unknown as PrismaClient,
+        planOf(cellOf({ name: 'Яблоко', nameEn: 'Apple' }), {
+          kind: 'link',
+          productId: 'apple',
+          productName: 'Яблоко',
+        }),
+        vi.fn(async () => APPLE_NEW),
+        discard
+      ),
+      applyCell(
+        { emojiLibraryItem: library, productVariant: pear } as unknown as PrismaClient,
+        planOf(cellOf({ name: 'Груша', nameEn: 'Pear', target: 'variant', parent: 'Яблоко' }), {
+          kind: 'variant',
+          variantId: 'v-pear',
+          productName: 'Яблоко',
+          variantName: 'Груша',
+        }),
+        vi.fn(async () => {
+          await written;
+          return PEAR_FIRST;
+        }),
+        discard
+      ),
+    ]);
+
+    expect(first).toMatchObject({ product: 'linked', changed: true, uploaded: 1 });
+    expect(second).toMatchObject({ product: 'conflict', changed: false, uploaded: 1 });
+    expect(second.conflict).toContain('записана для другой цели');
+    expect(library.rows.get('queue-001#1')).toMatchObject({ imageUrl: APPLE_NEW, name: 'Яблоко' });
+    expect(discard.mock.calls).toEqual([[PEAR_FIRST]]);
+    expect(apple).toMatchObject({ imageUrl: APPLE_NEW });
+    expect(pear.updateMany).not.toHaveBeenCalled();
+    expect(pear.update).not.toHaveBeenCalled();
+  });
+
+  it('reuses the winning picture when the same cell is written by two runs at once', async () => {
+    const { library, written } = racing();
+    const pear = { id: 'pear', imageUrl: null, imageUrlEn: null, isCustom: false } as Row;
+    const pearRow = liveRow(pear);
+    const discard = vi.fn(async () => undefined);
+    const plan = planOf(cellOf({}), { kind: 'link', productId: 'pear', productName: 'Груша' });
+    const prisma = { emojiLibraryItem: library, product: pearRow } as unknown as PrismaClient;
+
+    const [first, second] = await Promise.all([
+      applyCell(prisma, plan, vi.fn(async () => PEAR_FIRST), discard),
+      applyCell(
+        prisma,
+        plan,
+        vi.fn(async () => {
+          await written;
+          return PEAR_SECOND;
+        }),
+        discard
+      ),
+    ]);
+
+    // The second run's picture is refused by the reference and its own upload removed; the catalogue
+    // only ever receives the winner's URL, whichever run reaches the catalogue first.
+    for (const result of [first, second]) {
+      expect(result).toMatchObject({ product: 'linked', uploaded: 1 });
+      expect(result.conflict).toBeUndefined();
+    }
+    expect(library.create).toHaveBeenCalledTimes(2);
+    expect(library.rows.get('queue-001#1')).toMatchObject({ imageUrl: PEAR_FIRST });
+    expect(discard.mock.calls).toEqual([[PEAR_SECOND]]);
+    expect(pear.imageUrl).toBe(PEAR_FIRST);
+    expect(pearRow.updateMany.mock.calls.map(([args]) => args.data.imageUrl)).not.toContain(
+      PEAR_SECOND
+    );
+  });
+
+  it('discards only its own fresh upload when the winner cannot be read after a collision', async () => {
+    const library = memoryLibrary([
+      {
+        sourceRef: 'queue-001#1',
+        imageUrl: APPLE_NEW,
+        name: 'Яблоко',
+        nameEn: 'Apple',
+        tags: ['фрукты', 'queue:product'],
+        source: 'batch',
+        locale: null,
+        groupKey: 'queue-001#1',
+      },
+    ]);
+    library.findUnique.mockResolvedValueOnce(null).mockRejectedValueOnce(new Error('db read'));
+    const pear = catalogStub();
+    const discard = vi.fn(async () => undefined);
+
+    await expect(
+      applyCell(
+        { emojiLibraryItem: library, product: pear } as unknown as PrismaClient,
+        planOf(cellOf({}), { kind: 'link', productId: 'pear', productName: 'Груша' }),
+        vi.fn(async () => PEAR_FIRST),
+        discard
+      )
+    ).rejects.toThrow('db read');
+
+    expect(discard.mock.calls).toEqual([[PEAR_FIRST]]);
+    expect(library.rows.get('queue-001#1')).toMatchObject({ imageUrl: APPLE_NEW });
+    expect(pear.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('discards its fresh upload when the insert fails for another reason', async () => {
+    const library = memoryLibrary();
+    library.create.mockRejectedValueOnce(new Error('db write'));
+    const pear = catalogStub();
+    const discard = vi.fn(async () => undefined);
+
+    await expect(
+      applyCell(
+        { emojiLibraryItem: library, product: pear } as unknown as PrismaClient,
+        planOf(cellOf({}), { kind: 'link', productId: 'pear', productName: 'Груша' }),
+        vi.fn(async () => PEAR_FIRST),
+        discard
+      )
+    ).rejects.toThrow('db write');
+
+    expect(discard.mock.calls).toEqual([[PEAR_FIRST]]);
+    expect(pear.updateMany).not.toHaveBeenCalled();
+  });
+});
+
 describe('a failed read after or before an upload never orphans a file (AGE-1667 B4)', () => {
   const PNG = Buffer.from('ru');
   const cell: ManifestCell = {
@@ -1121,6 +1508,7 @@ describe('a failed read after or before an upload never orphans a file (AGE-1667
     return {
       emojiLibraryItem: {
         upsert: vi.fn().mockResolvedValue({}),
+        create: vi.fn().mockResolvedValue({}),
         findUnique: vi.fn().mockResolvedValue(null),
       },
       product: {
@@ -1175,11 +1563,12 @@ describe('a failed read after or before an upload never orphans a file (AGE-1667
     ).rejects.toThrow('db read');
 
     expect(upload).toHaveBeenCalledTimes(1);
-    expect(prisma.emojiLibraryItem.upsert).toHaveBeenCalledWith(
-      expect.objectContaining({
-        create: expect.objectContaining({ imageUrl: 'https://utfs.io/f/fresh.webp' }),
-      })
-    );
+    expect(prisma.emojiLibraryItem.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        sourceRef: 'queue-001#1',
+        imageUrl: 'https://utfs.io/f/fresh.webp',
+      }),
+    });
     expect(discard).not.toHaveBeenCalled();
   });
 });
