@@ -72,7 +72,7 @@ const milk = {
 const products = [
   milk,
   { ...milk, id: 'e2e-bread', name: 'Хлеб бородинский', nameEn: '', emoji: '🍞' },
-  { ...milk, id: 'e2e-ketchup', name: 'Кетчуп', nameEn: 'Кетчуп', emoji: '🥫' },
+  { ...milk, id: 'e2e-ketchup', name: 'Кетчуп', nameEn: 'Ketchup', emoji: '🥫' },
   { ...milk, id: 'e2e-cheese', name: 'Сыр', nameEn: 'Cheese', emoji: '🧀' },
   {
     ...milk,
@@ -187,7 +187,7 @@ function historyFixture() {
           productImageUrl: null,
           productImageUrlEn: null,
           categoryName: 'Молочные продукты',
-          categoryNameEn: null,
+          categoryNameEn: 'Dairy',
           isCustom: false,
           variantName: null,
           variantNameEn: null,
@@ -345,6 +345,16 @@ async function setup(page: Page, context: BrowserContext, locale: Locale, scenar
   });
 }
 
+// Russian fixture names that must not appear on English screens (each has an English name above).
+const RUSSIAN_NAMES_NOT_ALLOWED_IN_EN = [
+  'Молочные продукты',
+  'Молоко',
+  'Кетчуп',
+  'Сыр',
+  'Йогурт',
+  'Клубничный',
+];
+
 // Error screens wait out the query client retries before the snapshot, so the final state is seen.
 async function capture(page: Page, screen: string, locale: Locale, problems: string[]) {
   // Some screens keep a connection open, so network idle is a bounded wait, not a requirement.
@@ -358,6 +368,14 @@ async function capture(page: Page, screen: string, locale: Locale, problems: str
       (node) => (node as HTMLElement).innerText
     ),
   }));
+  // English screens must not show the fixture's Russian catalogue names. Bread is the only allowed
+  // Russian name (no English name in the fixture), so it is not in this list.
+  if (locale === 'en') {
+    const visible = [snapshot.text, ...snapshot.dialogs].join('\n');
+    for (const word of RUSSIAN_NAMES_NOT_ALLOWED_IN_EN) {
+      if (visible.includes(word)) problems.push(`leak: "${word}" shown in English`);
+    }
+  }
   mkdirSync(outDir, { recursive: true });
   await page.screenshot({ path: path.join(outDir, `${screen}.${locale}.png`), fullPage: true });
   writeFileSync(
@@ -500,6 +518,15 @@ const screens: Screen[] = [
     scenario: { auth: true, favorites: 'error' },
   },
   { id: 'history', path: '/history', scenario: { auth: true } },
+  {
+    // The list group starts collapsed; expanding it shows the product and category names.
+    id: 'history-expanded',
+    path: '/history',
+    scenario: { auth: true },
+    steps: async (page) => {
+      await page.getByRole('button', { name: 'Завтрак' }).first().click({ timeout: 10_000 });
+    },
+  },
   { id: 'history-empty', path: '/history', scenario: { auth: true, history: 'empty' } },
   { id: 'history-error', path: '/history', scenario: { auth: true, history: 'error' } },
   {

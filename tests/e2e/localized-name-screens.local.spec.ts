@@ -19,37 +19,62 @@ import {
 const outDir =
   process.env.LOCALIZED_NAME_SCREENS_DIR ?? path.join('test-results', 'localized-name-screens');
 
-// Names exercise each branch of the rule: a different English name, a missing English name and
-// an English name equal to the Russian one.
+// The category as the API returns it: both names. The shared fixture has no English name, which
+// would show the Russian heading in English.
+const dairy = { ...e2eCategory, nameEn: 'Dairy' };
+
+// Every name has its English translation except one deliberate legacy fallback: 'Хлеб бородинский'
+// has no English name, so it stays Russian in English (the only allowed Russian name there).
 const products = [
-  { ...e2eMilkProduct, id: 'e2e-milk', name: 'Молоко', nameEn: 'Milk', variants: [] },
+  {
+    ...e2eMilkProduct,
+    id: 'e2e-milk',
+    name: 'Молоко',
+    nameEn: 'Milk',
+    category: dairy,
+    variants: [],
+  },
   {
     ...e2eMilkProduct,
     id: 'e2e-bread',
     name: 'Хлеб бородинский',
     nameEn: '',
     emoji: '🍞',
+    category: dairy,
     variants: [],
   },
   {
     ...e2eMilkProduct,
     id: 'e2e-ketchup',
     name: 'Кетчуп',
-    nameEn: 'Кетчуп',
+    nameEn: 'Ketchup',
     emoji: '🥫',
+    category: dairy,
     variants: [],
   },
-  { ...e2eMilkProduct, id: 'e2e-cheese', name: 'Сыр', nameEn: 'Cheese', emoji: '🧀', variants: [] },
+  {
+    ...e2eMilkProduct,
+    id: 'e2e-cheese',
+    name: 'Сыр',
+    nameEn: 'Cheese',
+    emoji: '🧀',
+    category: dairy,
+    variants: [],
+  },
 ];
 
-// The shopping list shows the same products; the fixture's list item has no English name, so the
-// English name is added here.
+// The shopping list shows the same products. The fixture's list item has no English names, so the
+// English names of the product and its category are added here.
 function listItems(): E2EShoppingItem[] {
   return products.map((product, index) => {
     const base = createShoppingItem(`e2e-item-${index}`, product);
     return {
       ...base,
-      product: { ...base.product, nameEn: product.nameEn },
+      product: {
+        ...base.product,
+        nameEn: product.nameEn,
+        category: { ...base.product.category, nameEn: product.category.nameEn },
+      },
     } as E2EShoppingItem;
   });
 }
@@ -67,7 +92,7 @@ async function mockCatalog(page: Page) {
       route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) });
 
     if (url.pathname === '/api/auth/session') return json({});
-    if (url.pathname === '/api/categories') return json([e2eCategory]);
+    if (url.pathname === '/api/categories') return json([dairy]);
     if (url.pathname === '/api/products') {
       const categoryId = url.searchParams.get('categoryId');
       return json(products.filter((product) => !categoryId || product.category.id === categoryId));
@@ -101,6 +126,10 @@ test.describe('catalogue names by interface language', () => {
 
     await expect(page.getByText('Milk', { exact: true })).toBeVisible();
     await expect(page.getByText('Молоко', { exact: true })).toBeVisible();
+    // Category heading: Russian big, English small under it.
+    await expect(page.getByText('Молочные продукты', { exact: true })).toBeVisible();
+    await expect(page.getByText('Dairy', { exact: true })).toBeVisible();
+    await expect(page.getByText('Ketchup', { exact: true })).toBeVisible();
     await screenshot(page, 'catalog-ru.png');
   });
 
@@ -111,7 +140,11 @@ test.describe('catalogue names by interface language', () => {
 
     await expect(page.getByText('Milk', { exact: true })).toBeVisible();
     await expect(page.getByText('Молоко', { exact: true })).toHaveCount(0);
-    // No English name for bread: the Russian one is the only name, which is allowed.
+    await expect(page.getByText('Кетчуп', { exact: true })).toHaveCount(0);
+    await expect(page.getByText('Молочные продукты', { exact: true })).toHaveCount(0);
+    await expect(page.getByText('Dairy', { exact: true })).toBeVisible();
+    await expect(page.getByText('Ketchup', { exact: true })).toBeVisible();
+    // Explicit exception: no English name for bread, so the Russian one is the only name.
     await expect(page.getByText('Хлеб бородинский', { exact: true })).toBeVisible();
     await screenshot(page, 'catalog-en.png');
   });
@@ -126,6 +159,9 @@ test.describe('catalogue names by interface language', () => {
 
     await expect(page.getByTestId('shopping-item')).toHaveCount(products.length);
     await expect(page.getByText('Milk', { exact: true })).toBeVisible();
+    // Group heading (the category, with its count): Russian big, English small under it.
+    await expect(page.locator('h3', { hasText: 'Молочные продукты' })).toBeVisible();
+    await expect(page.locator('h3', { hasText: 'Dairy' })).toBeVisible();
     await screenshot(page, 'list-ru.png');
   });
 
@@ -141,6 +177,12 @@ test.describe('catalogue names by interface language', () => {
     await expect(page.getByText('Milk', { exact: true })).toBeVisible();
     await expect(page.getByText('Молоко', { exact: true })).toHaveCount(0);
     await expect(page.getByText('Сыр', { exact: true })).toHaveCount(0);
+    await expect(page.getByText('Кетчуп', { exact: true })).toHaveCount(0);
+    await expect(page.locator('h3', { hasText: 'Молочные продукты' })).toHaveCount(0);
+    await expect(page.locator('h3', { hasText: 'Dairy' })).toBeVisible();
+    await expect(page.getByText('Ketchup', { exact: true })).toBeVisible();
+    // Explicit exception: bread has no English name and stays Russian.
+    await expect(page.getByText('Хлеб бородинский', { exact: true })).toBeVisible();
     await screenshot(page, 'list-en.png');
   });
 });
