@@ -8,7 +8,7 @@ import { runBackup } from '../pipeline.mjs';
 
 let input = '';
 for await (const chunk of process.stdin) input += chunk;
-const { env, now, tempRoot, allowRowDrop = false } = JSON.parse(input);
+const { env, now, tempRoot, allowRowDrop = false, projectRoot } = JSON.parse(input);
 
 const config = loadConfig(env);
 const lock = heldLock(config.backupDir, process.env);
@@ -32,5 +32,6 @@ const result = await runBackup({
   tempRoot,
   allowRowDrop,
   env,
+  projectRoot,
 });
 process.stdout.write(`${JSON.stringify(result)}\n`);

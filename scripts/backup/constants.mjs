@@ -1,4 +1,9 @@
 // Shared constants for the verified PostgreSQL backup (AGE-1669).
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+export const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
+export const PROJECT_NAME = 'clickmoji-shop';
 
 // Index digest of the official postgres:17-alpine tag, read from the registry on
 // 2026-11-24. Dump, restore, describe and encrypt all run from one image built on it.
@@ -53,6 +58,7 @@ export const MESSAGES = Object.freeze({
   docker: 'сбой: docker недоступен',
   image: 'сбой: не удалось получить образ',
   git: 'сбой: git недоступен',
+  notMainBackups: 'сбой: каталог резервных копий должен быть backups/ основной копии проекта',
   notIgnored: 'сбой: каталог резервных копий не игнорируется git',
   dump: 'сбой: снятие не удалось',
   verify: 'сбой: проверка не пройдена',

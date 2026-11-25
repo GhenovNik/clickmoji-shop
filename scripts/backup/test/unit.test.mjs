@@ -50,7 +50,7 @@ import {
 } from '../compare.mjs';
 import { formatStatusLine } from '../status.mjs';
 import { selectRetention } from '../retention.mjs';
-import { HERE, syntheticDatabase, makeSandbox } from './helpers.mjs';
+import { HERE, makeProjectRepo, makeSandbox, syntheticDatabase } from './helpers.mjs';
 
 const VALID_RECIPIENT = `age1${'q'.repeat(58)}`;
 
@@ -241,22 +241,54 @@ describe('retention', () => {
     assert.deepEqual(selectRetention(entries).remove, []);
   });
 
-  it('recognizes both .dump and .dump.age across multiple copies per day and excludes temp names', () => {
+  it('recognizes both .dump and .dump.age across multiple copies per day, excludes temp/orphans, and keeps prior-version meta compatibility', () => {
     const dir = mkdtempSync(path.join(os.tmpdir(), 'clickmoji-mixed-ret-'));
     try {
-      const files = [
+      mkdirSync(path.join(dir, 'meta'), { recursive: true });
+      const completed = [
         'clickmoji-20261124T120000Z.dump',
         'clickmoji-20261124T090000Z.dump.age',
         'clickmoji-20261123T120000Z.dump',
         'clickmoji-20261122T120000Z.dump.age',
+      ];
+      for (const f of completed) {
+        writeFileSync(path.join(dir, f), 'x');
+        // Omit `encrypted` on one legacy .dump.age entry to confirm prior-version compatibility.
+        const meta =
+          f === 'clickmoji-20261122T120000Z.dump.age'
+            ? {
+                name: f,
+                createdAt: '2026-11-22T12:00:00.000Z',
+                sizeBytes: 1,
+                sha256: '0'.repeat(64),
+                verify: 'ok',
+                migration: '20261101000000_init',
+                counts: { a: 1 },
+                flagged: [],
+              }
+            : { name: f, verify: 'ok', counts: { a: 1 } };
+        writeFileSync(path.join(dir, 'meta', `${f}.json`), JSON.stringify(meta));
+      }
+      const unaccepted = [
         '.partial-clickmoji-20261125T120000Z.dump.age',
         '.partial-clickmoji-20261125T120000Z.dump',
         'dump.custom',
         'clickmoji-20261125T120000Z.dump.tmp',
+        'clickmoji-20261124T060000Z.dump', // orphaned dump without meta/*.json
+        'clickmoji-20261124T030000Z.dump.age', // legacy suspicious copy
       ];
-      for (const f of files) writeFileSync(path.join(dir, f), 'x');
+      for (const f of unaccepted) writeFileSync(path.join(dir, f), 'x');
+      writeFileSync(
+        path.join(dir, 'meta', 'clickmoji-20261124T030000Z.dump.age.json'),
+        JSON.stringify({
+          name: 'clickmoji-20261124T030000Z.dump.age',
+          verify: 'suspicious',
+          counts: { a: 1 },
+        })
+      );
+
       const listed = listBackups(dir);
-      assert.equal(listed.length, 4, 'only recognized completed formats are listed');
+      assert.equal(listed.length, 4, 'only recognized completed and accepted copies are listed');
       const { keep, remove } = selectRetention(listed, 2);
       assert.deepEqual(keep.sort(), [
         'clickmoji-20261124T090000Z.dump.age',
@@ -278,60 +310,150 @@ describe('retention', () => {
   });
 });
 
-describe('git check-ignore destination guard', () => {
-  it('accepts gitignored path and refuses non-ignored, .git, symlinked-unignored and unavailable git', () => {
+describe('git check-ignore and main-checkout destination guard', () => {
+  it('accepts main checkout backups/ (also from worktree) and refuses non-ignored, worktree, foreign repo, external, symlink, and unavailable git', () => {
     const tmp = mkdtempSync(path.join(os.tmpdir(), 'clickmoji-git-guard-'));
     try {
-      const repo = path.join(tmp, 'repo');
-      mkdirSync(repo);
-      assert.equal(spawnSync('git', ['init', '-q', repo]).status, 0);
-      writeFileSync(path.join(repo, '.gitignore'), '/backups/\n');
-      assert.equal(spawnSync('git', ['-C', repo, 'add', '.gitignore']).status, 0);
+      const { repo: mainRepo, backupDir: ignored } = makeProjectRepo(path.join(tmp, 'main-repo'), {
+        copyScripts: false,
+      });
+      const worktree = path.join(tmp, 'linked-wt');
       assert.equal(
-        spawnSync('git', [
-          '-C',
-          repo,
-          '-c',
-          'user.name=t',
-          '-c',
-          'user.email=t@e.invalid',
-          'commit',
-          '-q',
-          '-m',
-          'init',
-        ]).status,
+        spawnSync('git', ['-C', mainRepo, 'worktree', 'add', '-q', worktree, '-b', 'wt']).status,
         0
       );
+      const { backupDir: foreignBackups } = makeProjectRepo(path.join(tmp, 'foreign-repo'), {
+        copyScripts: false,
+      });
+      const { backupDir: wrongNameBackups } = makeProjectRepo(path.join(tmp, 'wrong-name-repo'), {
+        projectName: 'other-project',
+        copyScripts: false,
+      });
+      const outside = path.join(tmp, 'outside-backups');
 
-      // Ignored directory (even before creation) passes
-      const ignored = path.join(repo, 'backups');
-      const ok = verifyBackupDirGitIgnored({ backupDir: ignored });
+      // Main checkout backups/ passes from both mainRepo and linked worktree
+      const ok = verifyBackupDirGitIgnored({ backupDir: ignored, projectRoot: mainRepo });
       assert.equal(ok.ok, true);
       assert.equal(ok.inRepo, true);
+      const okFromWt = verifyBackupDirGitIgnored({ backupDir: ignored, projectRoot: worktree });
+      assert.equal(okFromWt.ok, true);
 
-      // Non-ignored directory fails
-      const bad = verifyBackupDirGitIgnored({ backupDir: path.join(repo, 'plain-backups') });
+      // Linked worktree's own backups/ fails even though it has .gitignore /backups/
+      const wtOwn = verifyBackupDirGitIgnored({
+        backupDir: path.join(worktree, 'backups'),
+        projectRoot: worktree,
+      });
+      assert.equal(wtOwn.ok, false);
+      assert.equal(wtOwn.key, 'notMainBackups');
+      assert.equal(wtOwn.exit, EXIT.failed);
+
+      // Foreign repo, wrong project identity, external path, and non-backups subdir fail
+      assert.equal(
+        verifyBackupDirGitIgnored({ backupDir: foreignBackups, projectRoot: worktree }).key,
+        'notMainBackups'
+      );
+      assert.equal(
+        verifyBackupDirGitIgnored({
+          backupDir: wrongNameBackups,
+          projectRoot: path.dirname(wrongNameBackups),
+        }).key,
+        'notMainBackups'
+      );
+      assert.equal(
+        verifyBackupDirGitIgnored({ backupDir: outside, projectRoot: worktree }).key,
+        'notMainBackups'
+      );
+      assert.equal(
+        verifyBackupDirGitIgnored({
+          backupDir: path.join(mainRepo, 'plain-backups'),
+          projectRoot: mainRepo,
+        }).key,
+        'notMainBackups'
+      );
+
+      // Repo root and .git directory fail
+      assert.equal(
+        verifyBackupDirGitIgnored({ backupDir: mainRepo, projectRoot: mainRepo }).key,
+        'notMainBackups'
+      );
+      assert.equal(
+        verifyBackupDirGitIgnored({
+          backupDir: path.join(mainRepo, '.git', 'backups'),
+          projectRoot: mainRepo,
+        }).key,
+        'notIgnored'
+      );
+
+      // Symlink pointing to backups or unignored directory fails
+      const unignoredTarget = path.join(mainRepo, 'exposed');
+      mkdirSync(unignoredTarget);
+      const link = path.join(tmp, 'alias-backups');
+      symlinkSync(unignoredTarget, link);
+      assert.equal(
+        verifyBackupDirGitIgnored({ backupDir: link, projectRoot: mainRepo }).key,
+        'notMainBackups'
+      );
+
+      // Symlinked meta/ inside mainRepo/backups fails
+      mkdirSync(ignored, { recursive: true });
+      symlinkSync(unignoredTarget, path.join(ignored, 'meta'));
+      assert.equal(
+        verifyBackupDirGitIgnored({ backupDir: ignored, projectRoot: mainRepo }).key,
+        'notIgnored'
+      );
+      rmSync(path.join(ignored, 'meta'));
+
+      // Exact targetPaths catch negated rules under /backups/*
+      writeFileSync(
+        path.join(mainRepo, '.gitignore'),
+        '/backups/*\n!/backups/clickmoji-20261125T034000Z.dump\n!/backups/.partial-clickmoji-20261125T034001Z.dump\n!/backups/meta/\n!/backups/meta/clickmoji-20261125T034002Z.dump.json\n!/backups/meta/.partial-clickmoji-20261125T034003Z.dump.json\n'
+      );
+      assert.equal(
+        verifyBackupDirGitIgnored({
+          backupDir: ignored,
+          projectRoot: mainRepo,
+          targetPaths: [path.join(ignored, 'clickmoji-20261125T034000Z.dump')],
+        }).key,
+        'notIgnored'
+      );
+      assert.equal(
+        verifyBackupDirGitIgnored({
+          backupDir: ignored,
+          projectRoot: mainRepo,
+          targetPaths: [path.join(ignored, '.partial-clickmoji-20261125T034001Z.dump')],
+        }).key,
+        'notIgnored'
+      );
+      assert.equal(
+        verifyBackupDirGitIgnored({
+          backupDir: ignored,
+          projectRoot: mainRepo,
+          targetPaths: [path.join(ignored, 'meta', 'clickmoji-20261125T034002Z.dump.json')],
+        }).key,
+        'notIgnored'
+      );
+      assert.equal(
+        verifyBackupDirGitIgnored({
+          backupDir: ignored,
+          projectRoot: mainRepo,
+          targetPaths: [
+            path.join(ignored, 'meta', '.partial-clickmoji-20261125T034003Z.dump.json'),
+          ],
+        }).key,
+        'notIgnored'
+      );
+
+      // Non-ignored mainRepo/backups fails with notIgnored
+      writeFileSync(path.join(mainRepo, '.gitignore'), '');
+      const bad = verifyBackupDirGitIgnored({ backupDir: ignored, projectRoot: mainRepo });
       assert.equal(bad.ok, false);
       assert.equal(bad.key, 'notIgnored');
       assert.equal(bad.exit, EXIT.failed);
 
-      // Repo root and .git directory fail
-      assert.equal(verifyBackupDirGitIgnored({ backupDir: repo }).key, 'notIgnored');
-      assert.equal(
-        verifyBackupDirGitIgnored({ backupDir: path.join(repo, '.git', 'backups') }).key,
-        'notIgnored'
-      );
-
-      // Symlink pointing to an unignored directory inside the repo fails on its physical path
-      const unignoredTarget = path.join(repo, 'exposed');
-      mkdirSync(unignoredTarget);
-      const link = path.join(tmp, 'alias-backups');
-      symlinkSync(unignoredTarget, link);
-      assert.equal(verifyBackupDirGitIgnored({ backupDir: link }).key, 'notIgnored');
-
       // Unavailable git fails closed
       const missingGit = verifyBackupDirGitIgnored({
         backupDir: ignored,
+        projectRoot: mainRepo,
         gitBin: '/nonexistent/git-bin',
       });
       assert.equal(missingGit.ok, false);

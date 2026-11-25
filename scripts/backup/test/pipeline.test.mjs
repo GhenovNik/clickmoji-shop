@@ -33,6 +33,7 @@ import {
   NEW_NAME,
   NOW,
   listCopies,
+  makeProjectRepo,
   makeSandbox,
   readDockerLog,
   readStatus,
@@ -104,6 +105,7 @@ describe('successful run', () => {
       backupDir: sandbox.backupDir,
       env,
       tempRoot: sandbox.tmp,
+      projectRoot: sandbox.repo,
     }).done;
 
     assert.equal(result.ok, true);
@@ -364,6 +366,7 @@ describe('encryption transition and atomic temp publish', () => {
         const res = await runBackup({
           config, docker, lock, now: () => new Date(${JSON.stringify(NOW.toISOString())}),
           tempRoot: ${JSON.stringify(sandbox.tmp)},
+          projectRoot: ${JSON.stringify(sandbox.repo)},
           publishCopy: (_src, dest) => { writeFileSync(dest, 'partial'); throw new Error('disk full'); },
         });
         console.log(JSON.stringify(res));
@@ -409,6 +412,7 @@ describe('encryption transition and atomic temp publish', () => {
         const res = await runBackup({
           config, docker, lock, now: () => new Date(${JSON.stringify(NOW.toISOString())}),
           tempRoot: ${JSON.stringify(sandbox.tmp)},
+          projectRoot: ${JSON.stringify(sandbox.repo)},
           publishCopy: (src, dest) => { writePrivateCopy(src, dest); partialMode = statSync(dest).mode & 0o777; },
         });
         console.log(JSON.stringify({ res, partialMode }));
@@ -442,28 +446,10 @@ describe('encryption transition and atomic temp publish', () => {
   });
 
   it('re-checks git check-ignore right before publish and aborts if .gitignore drops backups mid-run', async () => {
-    const repo = path.join(sandbox.root, 'midrun-repo');
-    mkdirSync(repo);
-    assert.equal(spawnSync('git', ['init', '-q', repo]).status, 0);
-    writeFileSync(path.join(repo, '.gitignore'), '/backups/\n');
-    assert.equal(spawnSync('git', ['-C', repo, 'add', '.gitignore']).status, 0);
-    assert.equal(
-      spawnSync('git', [
-        '-C',
-        repo,
-        '-c',
-        'user.name=t',
-        '-c',
-        'user.email=t@e.invalid',
-        'commit',
-        '-q',
-        '-m',
-        'init',
-      ]).status,
-      0
+    const { repo, backupDir: targetBackups } = makeProjectRepo(
+      path.join(sandbox.root, 'midrun-repo'),
+      { copyScripts: false }
     );
-
-    const targetBackups = path.join(repo, 'backups');
     // Flip .gitignore during the encrypt step (right before pre-publish git check-ignore).
     const gitWrapper = path.join(sandbox.root, 'git-flip.mjs');
     const flipState = path.join(sandbox.root, 'flipped');
@@ -493,10 +479,16 @@ process.exit(r.status ?? 1);
     );
     chmodSync(gitWrapper, 0o755);
 
-    const result = await runWithFake(sandbox, db, {
-      BACKUP_DIR: targetBackups,
-      BACKUP_GIT_BIN: gitWrapper,
-    });
+    const result = await runWithFake(
+      sandbox,
+      db,
+      {
+        BACKUP_DIR: targetBackups,
+        BACKUP_GIT_BIN: gitWrapper,
+      },
+      NOW,
+      { projectRoot: repo }
+    );
     assert.equal(result.ok, false);
     assert.equal(result.key, 'notIgnored');
     assert.equal(result.exit, EXIT.failed);
@@ -505,6 +497,183 @@ process.exit(r.status ?? 1);
       readStatus(sandbox),
       /\tfailed\tсбой: каталог резервных копий не игнорируется git\n$/
     );
+  });
+
+  it('SIGKILL between the two renames leaves orphaned C that does not count for baseline or displace A/B; next run D keeps D and B (B1)', async () => {
+    const old = seedBackups(sandbox.backupDir, 2, {
+      startDay: 2,
+      counts: { a: 100, b: 100 },
+    });
+    const [bName, aName] = old; // old[0] is day-2 (B, newer), old[1] is day-3 (A, older)
+    const crashTime = new Date(NOW.getTime() - 86_400_000); // day-1 (C)
+    const crashName = 'clickmoji-20261123T120000Z.dump.age';
+    const env = envFor(sandbox, db, { FAKE_COUNTS: '{"a":100,"b":100}' });
+
+    const writer = launchLocked(
+      sandbox.backupDir,
+      [
+        process.execPath,
+        '--input-type=module',
+        '-e',
+        `
+        import { loadConfig } from ${JSON.stringify(path.resolve('scripts/backup/config.mjs'))};
+        import { DockerRunner } from ${JSON.stringify(path.resolve('scripts/backup/docker.mjs'))};
+        import { heldLock } from ${JSON.stringify(path.resolve('scripts/backup/lock.mjs'))};
+        import { runBackup } from ${JSON.stringify(path.resolve('scripts/backup/pipeline.mjs'))};
+        const env = ${JSON.stringify(env)};
+        const config = loadConfig(env);
+        const lock = heldLock(config.backupDir, process.env);
+        const docker = new DockerRunner({ bin: config.dockerBin, containerEnv: config.containerEnv, timeoutMs: config.dockerTimeoutMs, env });
+        await runBackup({
+          config, docker, lock,
+          now: () => new Date(${JSON.stringify(crashTime.toISOString())}),
+          tempRoot: ${JSON.stringify(sandbox.tmp)},
+          projectRoot: ${JSON.stringify(sandbox.repo)},
+          onBeforeMetaRename: () => process.kill(process.pid, 'SIGKILL'),
+        });
+        `,
+      ],
+      { env, stdio: ['ignore', 'pipe', 'pipe'] }
+    );
+    const signal = await new Promise((resolve) => writer.on('close', (_code, sig) => resolve(sig)));
+    assert.equal(signal, 'SIGKILL', 'crashed hard between the two renames');
+    assert.equal(await lockIsFree(sandbox.backupDir), true, 'lock released on SIGKILL');
+
+    // Verify exact crash-between-renames state: C dump exists, partial meta exists, final meta does NOT exist.
+    assert.equal(existsSync(path.join(sandbox.backupDir, crashName)), true);
+    assert.equal(
+      existsSync(path.join(sandbox.backupDir, 'meta', `.partial-${crashName}.json`)),
+      true
+    );
+    assert.equal(existsSync(path.join(sandbox.backupDir, 'meta', `${crashName}.json`)), false);
+    assert.deepEqual(
+      listBackups(sandbox.backupDir)
+        .map((e) => e.name)
+        .sort(),
+      [aName, bName].sort(),
+      'orphaned C is not counted as an accepted copy'
+    );
+
+    // A row-drop run compares against B (100 rows), not C, and rejects while keeping A and B intact.
+    const rejected = await runWithFake(sandbox, db, { FAKE_COUNTS: '{"a":10,"b":100}' }, NOW);
+    assert.equal(rejected.ok, false);
+    assert.equal(rejected.exit, EXIT.suspicious);
+    assert.equal(existsSync(path.join(sandbox.backupDir, aName)), true);
+    assert.equal(existsSync(path.join(sandbox.backupDir, bName)), true);
+
+    // Next healthy run D succeeds: retention keeps D and B, prunes A, and C does not displace B.
+    const next = await runWithFake(sandbox, db, { FAKE_COUNTS: '{"a":100,"b":100}' }, NOW);
+    assert.equal(next.ok, true);
+    assert.equal(next.name, NEW_NAME);
+    assert.deepEqual(
+      listBackups(sandbox.backupDir)
+        .map((e) => e.name)
+        .sort(),
+      [bName, NEW_NAME].sort()
+    );
+    assert.deepEqual(listCopies(sandbox.backupDir).sort(), [bName, NEW_NAME].sort());
+    assert.equal(existsSync(path.join(sandbox.backupDir, aName)), false, 'A pruned');
+    assert.equal(existsSync(path.join(sandbox.backupDir, crashName)), false, 'orphaned C cleared');
+    assert.equal(
+      existsSync(path.join(sandbox.backupDir, 'meta', `.partial-${crashName}.json`)),
+      false,
+      'leftover partial meta cleared'
+    );
+  });
+
+  it('keeps compatibility with prior-version accepted metadata (without encrypted field) for baseline, retention, and purge (B1)', async () => {
+    const oldLegacy = seedBackups(sandbox.backupDir, 2, {
+      startDay: 2,
+      counts: { a: 100, b: 100 },
+      encrypted: true,
+      legacy: true,
+    });
+    const [bName, aName] = oldLegacy;
+
+    // Baseline check reads legacy B metadata without `encrypted` field and flags >20% drop.
+    const rejected = await runWithFake(sandbox, db, { FAKE_COUNTS: '{"a":10,"b":100}' }, NOW);
+    assert.equal(rejected.ok, false);
+    assert.equal(rejected.exit, EXIT.suspicious);
+
+    // Normal run accepts D and prunes legacy A while keeping legacy B.
+    const ok = await runWithFake(sandbox, db, { FAKE_COUNTS: '{"a":100,"b":100}' }, NOW);
+    assert.equal(ok.ok, true);
+    assert.deepEqual(listCopies(sandbox.backupDir).sort(), [bName, NEW_NAME].sort());
+    assert.equal(existsSync(path.join(sandbox.backupDir, aName)), false);
+  });
+
+  it('encryption transition purges accepted unencrypted copies and orphaned unencrypted dumps (B1)', async () => {
+    const oldPlain = seedBackups(sandbox.backupDir, 2, {
+      startDay: 2,
+      encrypted: false,
+      counts: { a: 100, b: 100 },
+    });
+    const orphanPlain = 'clickmoji-20261123T120000Z.dump';
+    writeFileSync(path.join(sandbox.backupDir, orphanPlain), 'ORPHAN');
+
+    const res = await runWithFake(sandbox, db, {
+      BACKUP_ENCRYPT: '1',
+      FAKE_COUNTS: '{"a":100,"b":100}',
+    });
+    assert.equal(res.ok, true);
+    assert.deepEqual(listCopies(sandbox.backupDir), [NEW_NAME]);
+    for (const old of [...oldPlain, orphanPlain]) {
+      assert.equal(existsSync(path.join(sandbox.backupDir, old)), false);
+    }
+  });
+
+  it('B3: checks exact physical temporary and final paths (including metadata) against /backups/* with targeted negations', async () => {
+    const old = seedBackups(sandbox.backupDir, 2, { encrypted: false });
+    const plainName = 'clickmoji-20261124T120000Z.dump';
+    const cases = [
+      `/backups/*\n!/backups/${plainName}\n`,
+      `/backups/*\n!/backups/.partial-${plainName}\n`,
+      `/backups/*\n!/backups/meta/\n!/backups/meta/${plainName}.json\n`,
+      `/backups/*\n!/backups/meta/\n!/backups/meta/.partial-${plainName}.json\n`,
+    ];
+
+    for (const gi of cases) {
+      writeFileSync(path.join(sandbox.repo, '.gitignore'), gi);
+      const env = envFor(sandbox, db);
+      delete env.BACKUP_ENCRYPT;
+      delete env.BACKUP_AGE_RECIPIENT_FILE;
+      const result = await startLockedRun({
+        backupDir: sandbox.backupDir,
+        env,
+        now: NOW,
+        tempRoot: sandbox.tmp,
+        projectRoot: sandbox.repo,
+      }).done;
+      assert.equal(result.ok, false, `must reject rule:\n${gi}`);
+      assert.equal(result.key, 'notIgnored');
+      assert.equal(result.exit, EXIT.failed);
+      assert.deepEqual(listCopies(sandbox.backupDir).sort(), [...old].sort());
+      assert.equal(existsSync(path.join(sandbox.backupDir, plainName)), false);
+      assert.equal(existsSync(path.join(sandbox.backupDir, `.partial-${plainName}`)), false);
+      assert.equal(existsSync(path.join(sandbox.backupDir, 'meta', `${plainName}.json`)), false);
+      assert.equal(
+        existsSync(path.join(sandbox.backupDir, 'meta', `.partial-${plainName}.json`)),
+        false
+      );
+      assert.match(
+        readStatus(sandbox),
+        /\tfailed\tсбой: каталог резервных копий не игнорируется git\n$/
+      );
+      const status = spawnSync(
+        'git',
+        ['-C', sandbox.repo, 'status', '--porcelain', '--untracked-files=all'],
+        { encoding: 'utf8' }
+      );
+      if (gi.includes('/backups/meta/')) {
+        assert.equal(status.stdout.includes(plainName), false, 'new copy/meta never untracked');
+      } else {
+        assert.equal(
+          status.stdout.trim(),
+          'M .gitignore',
+          'no backup or metadata files leaked to git status'
+        );
+      }
+    }
   });
 });
 
@@ -557,7 +726,12 @@ describe('interruption stops containers before anything is removed', () => {
   it('a stop with a dump in progress removes its container, then plaintext and lock; copies intact', async () => {
     const old = seedBackups(sandbox.backupDir, 20);
     const env = envFor(sandbox, db, { FAKE_DOCKER_MODE: 'interrupt' });
-    const run = startLockedRun({ backupDir: sandbox.backupDir, env, tempRoot: sandbox.tmp });
+    const run = startLockedRun({
+      backupDir: sandbox.backupDir,
+      env,
+      tempRoot: sandbox.tmp,
+      projectRoot: sandbox.repo,
+    });
     const started = Date.now();
     while (containersLeft(sandbox).length === 0 && Date.now() - started < 15_000) {
       await new Promise((resolve) => setTimeout(resolve, 20));
@@ -579,7 +753,12 @@ describe('interruption stops containers before anything is removed', () => {
 
   it('a container that cannot be proven gone stays in the ledger: later runs do nothing until it is proven gone', async () => {
     const env = envFor(sandbox, db, { FAKE_DOCKER_MODE: 'interrupt', FAKE_DOCKER_RM: 'fail' });
-    const run = startLockedRun({ backupDir: sandbox.backupDir, env, tempRoot: sandbox.tmp });
+    const run = startLockedRun({
+      backupDir: sandbox.backupDir,
+      env,
+      tempRoot: sandbox.tmp,
+      projectRoot: sandbox.repo,
+    });
     const started = Date.now();
     while (containersLeft(sandbox).length === 0 && Date.now() - started < 15_000) {
       await new Promise((resolve) => setTimeout(resolve, 20));
@@ -734,10 +913,17 @@ describe('temporary directories', () => {
   it('two backup directories sharing one temp root run concurrently without touching each other', async () => {
     const tmpRoot = sandbox.tmp;
     const makeConfigRun = (label) => {
-      const backupDir = path.join(sandbox.root, `backups-${label}`);
+      const repoInfo = makeProjectRepo(path.join(sandbox.root, `repo-${label}`), {
+        copyScripts: false,
+      });
       const statusFile = path.join(sandbox.root, `status-${label}.log`);
-      const env = envFor({ ...sandbox, backupDir, statusFile }, db);
-      return startLockedRun({ backupDir, env, tempRoot: tmpRoot }).done;
+      const env = envFor({ ...sandbox, backupDir: repoInfo.backupDir, statusFile }, db);
+      return startLockedRun({
+        backupDir: repoInfo.backupDir,
+        env,
+        tempRoot: tmpRoot,
+        projectRoot: repoInfo.repo,
+      }).done;
     };
     const [first, second] = await Promise.all([makeConfigRun('a'), makeConfigRun('b')]);
     assert.equal(first.ok, true);
@@ -858,6 +1044,7 @@ describe('the cleanup fallback is a tracked container too (B1b)', () => {
         backupDir: sandbox.backupDir,
         env: envFor(sandbox, db, { FAKE_DOCKER_MODE: 'cleanup-hang' }),
         tempRoot: sandbox.tmp,
+        projectRoot: sandbox.repo,
       });
       const fallbackName = () =>
         containersLeft(sandbox).find((name) => name.startsWith('clickmoji-backup-cleanup-'));
@@ -890,6 +1077,7 @@ describe('the cleanup fallback is a tracked container too (B1b)', () => {
         backupDir: sandbox.backupDir,
         env: envFor(sandbox, db, { FAKE_DOCKER_MODE: 'cleanup-hang' }),
         tempRoot: sandbox.tmp,
+        projectRoot: sandbox.repo,
       });
       assert.ok(
         await until(
@@ -945,7 +1133,9 @@ describe('the status line can fail after the copy is saved', () => {
   });
 
   it('the CLI prints the distinction, exits 5 and prints no secret', async () => {
-    const result = await runCli(envFor(sandbox, db, { FAKE_SWAP_STATUS: sandbox.statusFile }));
+    const result = await runCli(envFor(sandbox, db, { FAKE_SWAP_STATUS: sandbox.statusFile }), [], {
+      cli: sandbox.cli,
+    });
     assert.equal(result.code, EXIT.statusFailed);
     assert.match(result.stdout, /^backup: ok clickmoji-/m);
     assert.ok(result.stdout.includes(`backup: ${MESSAGES.statusSaved}`));
@@ -1105,7 +1295,12 @@ describe('a create whose answer is pending is never cleared by an empty listing 
         });
 
         // The create client is sent and never answers. The run is stopped while the create is in flight.
-        const run = startLockedRun({ backupDir: sandbox.backupDir, env, tempRoot: sandbox.tmp });
+        const run = startLockedRun({
+          backupDir: sandbox.backupDir,
+          env,
+          tempRoot: sandbox.tmp,
+          projectRoot: sandbox.repo,
+        });
         assert.equal(await waitForCreate(), true, 'the dump create was sent');
         if (failure === 'signal') run.child.kill('SIGTERM');
         const result = await run.done;
@@ -1249,7 +1444,12 @@ describe('docker management calls are bounded, and a hung call is a failure (B2,
         ...bounded,
         FAKE_DOCKER_HANG: 'rm',
       });
-      const run = startLockedRun({ backupDir: sandbox.backupDir, env, tempRoot: sandbox.tmp });
+      const run = startLockedRun({
+        backupDir: sandbox.backupDir,
+        env,
+        tempRoot: sandbox.tmp,
+        projectRoot: sandbox.repo,
+      });
       assert.equal(
         await until(() => containersLeft(sandbox).length === 1, 15_000),
         true,

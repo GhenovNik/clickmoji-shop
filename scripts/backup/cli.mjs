@@ -48,7 +48,11 @@ function tryRecordConfigFailure(env, message) {
     env,
     timeoutMs: base.dockerTimeoutMs,
   });
-  if (gitCheck.repoRoot && isInsidePath(canonicalPath(base.statusFile), gitCheck.repoRoot)) {
+  if (
+    (gitCheck.repoRoot && isInsidePath(canonicalPath(base.statusFile), gitCheck.repoRoot)) ||
+    (gitCheck.projectTopLevel &&
+      isInsidePath(canonicalPath(base.statusFile), gitCheck.projectTopLevel))
+  ) {
     return;
   }
   reportFailure(base, 'internal', 1, () => new Date(), `сбой: ${message}`);
@@ -85,7 +89,11 @@ export async function main(env = process.env, argv = process.argv.slice(2)) {
       env,
       timeoutMs: config.dockerTimeoutMs,
     });
-    if (gitCheck.repoRoot && isInsidePath(canonicalPath(config.statusFile), gitCheck.repoRoot)) {
+    if (
+      (gitCheck.repoRoot && isInsidePath(canonicalPath(config.statusFile), gitCheck.repoRoot)) ||
+      (gitCheck.projectTopLevel &&
+        isInsidePath(canonicalPath(config.statusFile), gitCheck.projectTopLevel))
+    ) {
       process.stderr.write('backup: BACKUP_STATUS_FILE: путь внутри репозитория\n');
       return 1;
     }

@@ -11,6 +11,7 @@ import {
   existsSync,
   fstatSync,
   fsyncSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   openSync,
@@ -212,21 +213,91 @@ async function sweepStaleTemp(tempRoot, backupDir, docker) {
   if (stuck) throw new StepError('cleanup', EXIT.failed);
 }
 
-// Completed copies in the backup directory, by the time in their file name.
-// Recognizes both unencrypted (.dump) and encrypted (.dump.age) copies and ignores temp files.
+// Completed, accepted copies in the backup directory, by the time in their file name.
+// Recognizes both unencrypted (.dump) and encrypted (.dump.age) copies and uses a single
+// publication completeness model across baseline comparison, transition purge, and retention:
+// a dump file is accepted only when its committed metadata record exists with verify === 'ok'
+// and valid counts (compatible with prior-version records that omit the `encrypted` field).
+function inspectCompletedBackup(backupDir, name, match) {
+  const dumpPath = path.join(backupDir, name);
+  let dumpLstat;
+  try {
+    dumpLstat = lstatSync(dumpPath);
+  } catch (error) {
+    if (error.code === 'ENOENT') return { status: 'incomplete' };
+    throw new StepError('verify', EXIT.failed);
+  }
+  if (dumpLstat.isSymbolicLink() || !dumpLstat.isFile()) {
+    throw new StepError('verify', EXIT.failed);
+  }
+  if (dumpLstat.size <= 0) {
+    return { status: 'incomplete' };
+  }
+
+  const metaPath = path.join(backupDir, META_DIR, `${name}.json`);
+  let metaLstat;
+  try {
+    metaLstat = lstatSync(metaPath);
+  } catch (error) {
+    if (error.code === 'ENOENT') return { status: 'incomplete' };
+    throw new StepError('verify', EXIT.failed);
+  }
+  if (metaLstat.isSymbolicLink() || !metaLstat.isFile()) {
+    throw new StepError('verify', EXIT.failed);
+  }
+
+  let raw;
+  try {
+    raw = readFileSync(metaPath, 'utf8');
+  } catch (error) {
+    if (error.code === 'ENOENT') return { status: 'incomplete' };
+    throw new StepError('verify', EXIT.failed);
+  }
+  let meta;
+  try {
+    meta = JSON.parse(raw);
+  } catch {
+    throw new StepError('verify', EXIT.failed);
+  }
+  if (typeof meta !== 'object' || meta === null || Array.isArray(meta)) {
+    throw new StepError('verify', EXIT.failed);
+  }
+  if (meta.name !== undefined && meta.name !== name) {
+    throw new StepError('verify', EXIT.failed);
+  }
+  const encrypted = Boolean(match[2]);
+  if (meta.encrypted !== undefined && meta.encrypted !== encrypted) {
+    throw new StepError('verify', EXIT.failed);
+  }
+  if (meta.verify === 'suspicious') {
+    return { status: 'legacy-suspicious' };
+  }
+  if (meta.verify !== 'ok' || !isValidCounts(meta.counts)) {
+    throw new StepError('verify', EXIT.failed);
+  }
+
+  const rawStamp = match[1];
+  const iso = `${rawStamp.slice(0, 4)}-${rawStamp.slice(4, 6)}-${rawStamp.slice(6, 8)}T${rawStamp.slice(9, 11)}:${rawStamp.slice(11, 13)}:${rawStamp.slice(13, 15)}Z`;
+  return {
+    status: 'complete',
+    entry: {
+      name,
+      time: new Date(iso),
+      encrypted,
+      counts: new Map(Object.entries(meta.counts)),
+    },
+  };
+}
+
 export function listBackups(backupDir) {
-  return readdirSync(backupDir)
-    .map((name) => ({ name, match: BACKUP_NAME_PATTERN.exec(name) }))
-    .filter((entry) => entry.match)
-    .map((entry) => {
-      const raw = entry.match[1];
-      const iso = `${raw.slice(0, 4)}-${raw.slice(4, 6)}-${raw.slice(6, 8)}T${raw.slice(9, 11)}:${raw.slice(11, 13)}:${raw.slice(13, 15)}Z`;
-      return {
-        name: entry.name,
-        time: new Date(iso),
-        encrypted: Boolean(entry.match[2]),
-      };
-    });
+  const completed = [];
+  for (const name of readdirSync(backupDir)) {
+    const match = BACKUP_NAME_PATTERN.exec(name);
+    if (!match) continue;
+    const inspected = inspectCompletedBackup(backupDir, name, match);
+    if (inspected.status === 'complete') completed.push(inspected.entry);
+  }
+  return completed;
 }
 
 function isValidCounts(counts) {
@@ -237,41 +308,22 @@ function isValidCounts(counts) {
 // Row counts of the newest accepted copy of any age, if any.
 // Unreadable or malformed metadata fails verification closed rather than ignoring the baseline.
 function readPreviousCounts(backupDir) {
-  const metaDir = path.join(backupDir, META_DIR);
-  if (!existsSync(metaDir)) return null;
   const backups = listBackups(backupDir).sort(
     (a, b) => b.time - a.time || (a.name < b.name ? 1 : -1)
   );
-  for (const entry of backups) {
-    const metaPath = path.join(metaDir, `${entry.name}.json`);
-    let raw;
-    try {
-      raw = readFileSync(metaPath, 'utf8');
-    } catch (error) {
-      if (error.code === 'ENOENT') continue;
-      throw new StepError('verify', EXIT.failed);
-    }
-    let meta;
-    try {
-      meta = JSON.parse(raw);
-    } catch {
-      throw new StepError('verify', EXIT.failed);
-    }
-    if (typeof meta !== 'object' || meta === null) {
-      throw new StepError('verify', EXIT.failed);
-    }
-    if (meta.verify === 'suspicious') continue;
-    if (meta.verify !== 'ok' || !isValidCounts(meta.counts)) {
-      throw new StepError('verify', EXIT.failed);
-    }
-    return new Map(Object.entries(meta.counts));
-  }
-  return null;
+  return backups[0]?.counts ?? null;
 }
 
 // Copy into the backup directory under a partial name (0600 from creation), then rename.
 // A reader never sees a partial copy, and a failure leaves no partial files behind.
-function publish({ backupDir, sourceFile, name, meta, copyFile = writePrivateCopy }) {
+function publish({
+  backupDir,
+  sourceFile,
+  name,
+  meta,
+  copyFile = writePrivateCopy,
+  onBeforeMetaRename = null,
+}) {
   ensurePrivateDir(backupDir);
   const metaDir = path.join(backupDir, META_DIR);
   ensurePrivateDir(metaDir);
@@ -281,7 +333,7 @@ function publish({ backupDir, sourceFile, name, meta, copyFile = writePrivateCop
   const finalMeta = path.join(metaDir, `${name}.json`);
   let dumpMoved = false;
   try {
-    if (existsSync(finalDump)) throw new Error('name taken');
+    if (existsSync(finalDump) || existsSync(finalMeta)) throw new Error('name taken');
     rmSync(partialDump, { force: true });
     rmSync(partialMeta, { force: true });
     copyFile(sourceFile, partialDump);
@@ -289,6 +341,7 @@ function publish({ backupDir, sourceFile, name, meta, copyFile = writePrivateCop
     writePrivateText(partialMeta, JSON.stringify(meta));
     renameSync(partialDump, finalDump);
     dumpMoved = true;
+    if (onBeforeMetaRename) onBeforeMetaRename(finalDump, partialMeta, finalMeta);
     renameSync(partialMeta, finalMeta);
   } catch {
     rmSync(partialDump, { force: true });
@@ -303,6 +356,31 @@ function removeCopyWithMeta(backupDir, name) {
   rmSync(path.join(backupDir, META_DIR, `${name}.json`), { force: true });
 }
 
+// Removes orphaned dumps lacking committed acceptance metadata (e.g. crash between the two
+// renames) and leftover .partial-* files after a successful publication under the held lock.
+function cleanupIncompletePublishes(backupDir) {
+  for (const name of readdirSync(backupDir)) {
+    if (name.startsWith('.partial-')) {
+      rmSync(path.join(backupDir, name), { force: true });
+      continue;
+    }
+    const match = BACKUP_NAME_PATTERN.exec(name);
+    if (!match) continue;
+    const inspected = inspectCompletedBackup(backupDir, name, match);
+    if (inspected.status === 'incomplete') {
+      rmSync(path.join(backupDir, name), { force: true });
+    }
+  }
+  const metaDir = path.join(backupDir, META_DIR);
+  if (existsSync(metaDir)) {
+    for (const name of readdirSync(metaDir)) {
+      if (name.startsWith('.partial-')) {
+        rmSync(path.join(metaDir, name), { force: true });
+      }
+    }
+  }
+}
+
 // Throws StepError for a failed step, or Interrupted when the run is aborted.
 // The lock is checked again before the copy becomes visible and before anything is pruned:
 // a run that no longer holds it must not touch the shared backup names.
@@ -315,6 +393,8 @@ async function executeBackup({
   allowRowDrop = false,
   env = process.env,
   publishCopy = writePrivateCopy,
+  onBeforeMetaRename = null,
+  projectRoot = REPO_ROOT,
 }) {
   // A container step counts only when its start exited 0 AND the daemon has been seen to hold no
   // container of its name. A zero exit alone is not proof: the daemon may be unreachable or still
@@ -399,20 +479,34 @@ async function executeBackup({
     sourceToPublish = encryptedFile;
   }
 
-  // Re-check git ignore on the physical path right before writing to backupDir.
+  const suffix = config.encrypt ? BACKUP_ENCRYPTED_SUFFIX : BACKUP_PLAIN_SUFFIX;
+  const name = `${BACKUP_PREFIX}${stamp(startedAt)}${suffix}`;
+
+  // Re-check git ignore on the exact physical temporary and final paths (including metadata) right
+  // before writing to backupDir.
+  const targetPaths = [
+    path.join(config.backupDir, `.partial-${name}`),
+    path.join(config.backupDir, name),
+    path.join(config.backupDir, META_DIR, `.partial-${name}.json`),
+    path.join(config.backupDir, META_DIR, `${name}.json`),
+  ];
   const gitCheck = verifyBackupDirGitIgnored({
     backupDir: config.backupDir,
     gitBin: config.gitBin,
     env,
     timeoutMs: config.dockerTimeoutMs,
+    projectRoot,
+    targetPaths,
   });
   if (!gitCheck.ok) throw new StepError(gitCheck.key, gitCheck.exit);
-  if (gitCheck.repoRoot && isInsidePath(canonicalPath(config.statusFile), gitCheck.repoRoot)) {
+  if (
+    (gitCheck.repoRoot && isInsidePath(canonicalPath(config.statusFile), gitCheck.repoRoot)) ||
+    (gitCheck.projectTopLevel &&
+      isInsidePath(canonicalPath(config.statusFile), gitCheck.projectTopLevel))
+  ) {
     throw new StepError('notIgnored', EXIT.failed);
   }
 
-  const suffix = config.encrypt ? BACKUP_ENCRYPTED_SUFFIX : BACKUP_PLAIN_SUFFIX;
-  const name = `${BACKUP_PREFIX}${stamp(startedAt)}${suffix}`;
   const meta = {
     name,
     encrypted: config.encrypt,
@@ -432,6 +526,7 @@ async function executeBackup({
     name,
     meta,
     copyFile: publishCopy,
+    onBeforeMetaRename,
   });
 
   // Transition & pruning run only after the new copy is completely published, and only for the lock holder.
@@ -440,6 +535,7 @@ async function executeBackup({
     pruned = 'skipped';
   } else {
     try {
+      cleanupIncompletePublishes(config.backupDir);
       // Enabling encryption purges all prior recognized unencrypted copies immediately after the
       // first encrypted copy is safely published, then applies normal N-copy retention.
       if (config.encrypt) {
@@ -571,6 +667,8 @@ export async function runBackup({
   allowRowDrop = false,
   env = process.env,
   publishCopy = writePrivateCopy,
+  onBeforeMetaRename = null,
+  projectRoot = REPO_ROOT,
 }) {
   // Check git ignore before creating or modifying backupDir so a non-ignored path stays untouched.
   const gitCheck = verifyBackupDirGitIgnored({
@@ -578,11 +676,16 @@ export async function runBackup({
     gitBin: config.gitBin,
     env,
     timeoutMs: config.dockerTimeoutMs,
+    projectRoot,
   });
   if (!gitCheck.ok) {
     return reportFailure(config, gitCheck.key, gitCheck.exit, now);
   }
-  if (gitCheck.repoRoot && isInsidePath(canonicalPath(config.statusFile), gitCheck.repoRoot)) {
+  if (
+    (gitCheck.repoRoot && isInsidePath(canonicalPath(config.statusFile), gitCheck.repoRoot)) ||
+    (gitCheck.projectTopLevel &&
+      isInsidePath(canonicalPath(config.statusFile), gitCheck.projectTopLevel))
+  ) {
     return reportFailure(config, 'notIgnored', EXIT.failed, now);
   }
 
@@ -590,7 +693,7 @@ export async function runBackup({
   try {
     const resolvedTmp = canonicalPath(tempRoot);
     if (
-      isInsidePath(resolvedTmp, canonicalPath(REPO_ROOT)) ||
+      isInsidePath(resolvedTmp, canonicalPath(projectRoot)) ||
       isInsidePath(resolvedTmp, canonicalPath(config.backupDir)) ||
       isTempRootUnsafeForGit(resolvedTmp, {
         gitBin: config.gitBin,
@@ -633,6 +736,8 @@ export async function runBackup({
         allowRowDrop,
         env,
         publishCopy,
+        onBeforeMetaRename,
+        projectRoot,
       })),
     };
     saved = true; // publish is the last step that can fail; nothing after it can undo it

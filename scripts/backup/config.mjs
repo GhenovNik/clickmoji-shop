@@ -2,13 +2,12 @@
 // (plus the single-run --allow-row-drop CLI flag); nothing has a default for the
 // database address or paths. Encryption is disabled by default (unencrypted pg_dump -Fc)
 // and enabled explicitly with BACKUP_ENCRYPT=1.
-import { lstatSync, readFileSync, realpathSync } from 'node:fs';
+import { lstatSync, readFileSync } from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { DEFAULT_RETENTION_COUNT, DOCKER_TIMEOUT_MS } from './constants.mjs';
+import { DEFAULT_RETENTION_COUNT, DOCKER_TIMEOUT_MS, REPO_ROOT } from './constants.mjs';
 import { canonicalPath, isInsidePath } from './git.mjs';
 
-export const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
+export { REPO_ROOT };
 
 // Bech32 alphabet; an age recipient is "age1" followed by 58 characters.
 const AGE_RECIPIENT = /^age1[qpzry9x8gf2tvdw0s3jn54khce6mua7l]{58}$/;
@@ -179,6 +178,7 @@ export function loadBaseConfig(env = process.env, { repoRoot = REPO_ROOT } = {})
   const backupDir = requireAbsolute(env, 'BACKUP_DIR');
   const statusFile = requireAbsolute(env, 'BACKUP_STATUS_FILE');
 
+  checkStatusTarget(statusFile, backupDir);
   const resolvedRepoRoot = canonicalPath(repoRoot);
   if (
     isInsidePath(statusFile, repoRoot) ||
@@ -186,7 +186,6 @@ export function loadBaseConfig(env = process.env, { repoRoot = REPO_ROOT } = {})
   ) {
     throw new ConfigError('BACKUP_STATUS_FILE: путь внутри репозитория');
   }
-  checkStatusTarget(statusFile, backupDir);
 
   const rawTmp = env.TMPDIR?.trim();
   if (rawTmp) {

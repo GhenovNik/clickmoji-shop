@@ -22,6 +22,7 @@ import {
   containersLeft,
   envFor,
   listCopies,
+  makeProjectRepo,
   makeSandbox,
   readDockerLog,
   readStatus,
@@ -60,7 +61,7 @@ describe('cli concurrency', () => {
     const holder = spawnLockHolder(sandbox.backupDir, path.join(sandbox.root, 'gate'));
     assert.equal(await holder.acquired, true);
     try {
-      const result = await runCli(envFor(sandbox, db));
+      const result = await runCli(envFor(sandbox, db), [], { cli: sandbox.cli });
       assert.equal(result.code, EXIT.busy);
       assert.equal(result.stdout, `backup: ${MESSAGES.busy}\n`);
       assert.deepEqual(listCopies(sandbox.backupDir).sort(), [...old].sort());
@@ -77,7 +78,9 @@ describe('cli concurrency', () => {
 describe('cli failure outcomes', () => {
   it('docker unavailable: literal sanitized status, non-zero exit, old copies intact', async () => {
     const old = seedBackups(sandbox.backupDir, 20);
-    const result = await runCli(envFor(sandbox, db, { FAKE_DOCKER_MODE: 'docker-down' }));
+    const result = await runCli(envFor(sandbox, db, { FAKE_DOCKER_MODE: 'docker-down' }), [], {
+      cli: sandbox.cli,
+    });
 
     assert.equal(result.code, EXIT.unavailable);
     assert.notEqual(result.code, 0);
@@ -90,7 +93,9 @@ describe('cli failure outcomes', () => {
 
   it('image pull failed: explicit status, non-zero exit, old copies intact', async () => {
     const old = seedBackups(sandbox.backupDir, 20);
-    const result = await runCli(envFor(sandbox, db, { FAKE_DOCKER_MODE: 'pull-fail' }));
+    const result = await runCli(envFor(sandbox, db, { FAKE_DOCKER_MODE: 'pull-fail' }), [], {
+      cli: sandbox.cli,
+    });
 
     assert.equal(result.code, EXIT.unavailable);
     assert.match(readStatus(sandbox), /\tfailed\tсбой: не удалось получить образ\n$/);
@@ -102,7 +107,7 @@ describe('cli failure outcomes', () => {
   it('a configuration error exits non-zero and prints no value, and writes status for missing age key when encryption is enabled', async () => {
     const env = envFor(sandbox, db);
     delete env.BACKUP_AGE_RECIPIENT_FILE;
-    const result = await runCli(env);
+    const result = await runCli(env, [], { cli: sandbox.cli });
     assert.equal(result.code, 1);
     assert.match(result.stderr, /BACKUP_AGE_RECIPIENT_FILE не задан/);
     assert.match(readStatus(sandbox), /\tfailed\tсбой: BACKUP_AGE_RECIPIENT_FILE не задан\n$/);
@@ -117,7 +122,7 @@ describe('cli failure outcomes', () => {
       const env = envFor(sandbox, db);
       if (badDir === undefined) delete env.BACKUP_DIR;
       else env.BACKUP_DIR = badDir;
-      const result = await runCli(env, [], { cwd: outsideCwd });
+      const result = await runCli(env, [], { cwd: outsideCwd, cli: sandbox.cli });
       assert.equal(result.code, 1);
       assert.match(result.stderr, /BACKUP_DIR/);
       assert.equal(existsSync(path.join(outsideCwd, 'backups')), false);
@@ -129,7 +134,7 @@ describe('cli failure outcomes', () => {
     const env = envFor(sandbox, db);
     delete env.BACKUP_ENCRYPT;
     delete env.BACKUP_AGE_RECIPIENT_FILE;
-    const result = await runCli(env);
+    const result = await runCli(env, [], { cli: sandbox.cli });
     assert.equal(result.code, EXIT.ok, result.stderr);
     assert.match(result.stdout, /^backup: ok clickmoji-\d{8}T\d{6}Z\.dump verify=ok\n$/);
     const copies = listCopies(sandbox.backupDir);
@@ -139,14 +144,14 @@ describe('cli failure outcomes', () => {
   });
 
   it('rejects unknown CLI arguments', async () => {
-    const result = await runCli(envFor(sandbox, db), ['--unknown-flag']);
+    const result = await runCli(envFor(sandbox, db), ['--unknown-flag'], { cli: sandbox.cli });
     assert.equal(result.code, 1);
     assert.match(result.stderr, /неизвестный параметр/);
   });
 
   it('a successful run prints no address, credential or count', async () => {
     seedBackups(sandbox.backupDir, 3);
-    const result = await runCli(envFor(sandbox, db));
+    const result = await runCli(envFor(sandbox, db), [], { cli: sandbox.cli });
     assert.equal(result.code, EXIT.ok);
     assert.match(result.stdout, /^backup: ok clickmoji-\d{8}T\d{6}Z\.dump\.age verify=ok\n$/);
     assertNoSecrets(result.stdout + result.stderr + readStatus(sandbox));
@@ -157,7 +162,10 @@ describe('interruption after plaintext exists', () => {
   it('the writer SIGKILLed mid-run frees the lock at once, publishes nothing, and the next run recovers and completes', async () => {
     const old = seedBackups(sandbox.backupDir, 20);
     const env = envFor(sandbox, db, { FAKE_DOCKER_MODE: 'interrupt' });
-    const child = spawn(process.execPath, [CLI], { env, stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn(process.execPath, [sandbox.cli], {
+      env,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
     child.stdout.on('data', () => {});
     child.stderr.on('data', () => {});
     const exited = new Promise((resolve) =>
@@ -177,7 +185,7 @@ describe('interruption after plaintext exists', () => {
     assert.deepEqual(listCopies(sandbox.backupDir).sort(), [...old].sort(), 'nothing published');
 
     // The killed run left its container for the ledger; the next run proves it gone and completes.
-    const next = await runCli(envFor(sandbox, db));
+    const next = await runCli(envFor(sandbox, db), [], { cli: sandbox.cli });
     assert.equal(next.code, EXIT.ok, next.stderr);
     assert.deepEqual(containersLeft(sandbox), [], 'the stale container was proven gone');
     assert.deepEqual(tempLeft(), [], 'the stale temporary directory was removed');
@@ -186,7 +194,7 @@ describe('interruption after plaintext exists', () => {
   it('SIGTERM kills the dump container, removes plaintext and the cluster, releases the lock', async () => {
     const old = seedBackups(sandbox.backupDir, 20);
     const env = envFor(sandbox, db, { FAKE_DOCKER_MODE: 'interrupt' });
-    const child = spawn(process.execPath, [CLI], {
+    const child = spawn(process.execPath, [sandbox.cli], {
       env,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
@@ -235,7 +243,9 @@ describe('the status file cannot alias backup data', () => {
       envFor(sandbox, db, {
         BACKUP_STATUS_FILE: path.join(sandbox.root, 'alias.log'),
         FAKE_DOCKER_MODE: 'docker-down',
-      })
+      }),
+      [],
+      { cli: sandbox.cli }
     );
     assert.equal(result.code, 1);
     assert.match(result.stderr, /жёсткая ссылка/);
@@ -247,7 +257,9 @@ describe('the status file cannot alias backup data', () => {
   it('a status path inside the backup directory is refused', async () => {
     const old = seedBackups(sandbox.backupDir, 2);
     const result = await runCli(
-      envFor(sandbox, db, { BACKUP_STATUS_FILE: path.join(sandbox.backupDir, old[0]) })
+      envFor(sandbox, db, { BACKUP_STATUS_FILE: path.join(sandbox.backupDir, old[0]) }),
+      [],
+      { cli: sandbox.cli }
     );
     assert.equal(result.code, 1);
     assert.match(result.stderr, /внутри каталога резервных копий/);
@@ -260,7 +272,9 @@ describe('the status file cannot alias backup data', () => {
     writeFileSync(target, 'untouched\n');
     const link = path.join(sandbox.root, 'link.log');
     symlinkSync(target, link);
-    const result = await runCli(envFor(sandbox, db, { BACKUP_STATUS_FILE: link }));
+    const result = await runCli(envFor(sandbox, db, { BACKUP_STATUS_FILE: link }), [], {
+      cli: sandbox.cli,
+    });
     assert.equal(result.code, 1);
     assert.match(result.stderr, /символическая ссылка/);
     assert.equal(readFileSync(target, 'utf8'), 'untouched\n');
@@ -270,7 +284,9 @@ describe('the status file cannot alias backup data', () => {
     const old = seedBackups(sandbox.backupDir, 2);
     const link = path.join(sandbox.root, 'link.log');
     symlinkSync(path.join(sandbox.backupDir, old[1]), link);
-    const result = await runCli(envFor(sandbox, db, { BACKUP_STATUS_FILE: link }));
+    const result = await runCli(envFor(sandbox, db, { BACKUP_STATUS_FILE: link }), [], {
+      cli: sandbox.cli,
+    });
     assert.equal(result.code, 1);
     assert.match(result.stderr, /внутри каталога резервных копий|символическая ссылка/);
     assert.equal(copyBytes(old[1]), 'old 2', 'copy bytes unchanged');
@@ -281,7 +297,9 @@ describe('the status file cannot alias backup data', () => {
     const alias = path.join(sandbox.root, 'alias-dir');
     symlinkSync(sandbox.backupDir, alias);
     const result = await runCli(
-      envFor(sandbox, db, { BACKUP_STATUS_FILE: path.join(alias, 'status.log') })
+      envFor(sandbox, db, { BACKUP_STATUS_FILE: path.join(alias, 'status.log') }),
+      [],
+      { cli: sandbox.cli }
     );
     assert.equal(result.code, 1);
     assert.match(result.stderr, /внутри каталога резервных копий/);
@@ -293,7 +311,9 @@ describe('the status file cannot alias backup data', () => {
     writeFileSync(path.join(sandbox.root, 'logs', 'status.log'), '');
     seedBackups(sandbox.backupDir, 1);
     const result = await runCli(
-      envFor(sandbox, db, { BACKUP_STATUS_FILE: path.join(sandbox.root, 'logs', 'status.log') })
+      envFor(sandbox, db, { BACKUP_STATUS_FILE: path.join(sandbox.root, 'logs', 'status.log') }),
+      [],
+      { cli: sandbox.cli }
     );
     assert.equal(result.code, EXIT.ok);
   });
@@ -303,34 +323,20 @@ describe('git check-ignore, cross-checkout launch, row-drop override and permiss
   function initRepoWithWorktree() {
     const mainRepo = path.join(sandbox.root, 'main-repo');
     const worktree = path.join(sandbox.root, 'other-worktree');
-    mkdirSync(mainRepo);
-    assert.equal(spawnSync('git', ['init', '-q', mainRepo]).status, 0);
-    writeFileSync(path.join(mainRepo, '.gitignore'), '/backups/\n');
-    assert.equal(spawnSync('git', ['-C', mainRepo, 'add', '.gitignore']).status, 0);
-    assert.equal(
-      spawnSync('git', [
-        '-C',
-        mainRepo,
-        '-c',
-        'user.name=t',
-        '-c',
-        'user.email=t@e.invalid',
-        'commit',
-        '-q',
-        '-m',
-        'init',
-      ]).status,
-      0
-    );
+    makeProjectRepo(mainRepo, { copyScripts: true });
     assert.equal(
       spawnSync('git', ['-C', mainRepo, 'worktree', 'add', '-q', worktree, '-b', 'wt']).status,
       0
     );
-    return { mainRepo, worktree };
+    return {
+      mainRepo,
+      worktree,
+      worktreeCli: path.join(worktree, 'scripts', 'backup', 'cli.mjs'),
+    };
   }
 
-  it('succeeds from another checkout into main repo gitignored backups/, prunes 10 to 2, and keeps git status clean', async () => {
-    const { mainRepo, worktree } = initRepoWithWorktree();
+  it('succeeds from a linked worktree into main repo gitignored backups/, prunes 10 to 2, and keeps git status clean', async () => {
+    const { mainRepo, worktree, worktreeCli } = initRepoWithWorktree();
     const targetBackups = path.join(mainRepo, 'backups');
     seedBackups(targetBackups, 10, { encrypted: false });
 
@@ -338,7 +344,7 @@ describe('git check-ignore, cross-checkout launch, row-drop override and permiss
     delete env.BACKUP_ENCRYPT;
     delete env.BACKUP_AGE_RECIPIENT_FILE;
 
-    const result = await runCli(env, [], { cwd: worktree });
+    const result = await runCli(env, [], { cwd: worktree, cli: worktreeCli });
     assert.equal(result.code, EXIT.ok, result.stderr + result.stdout);
     assert.equal(listCopies(targetBackups).length, 2, '10 fixtures + new copy pruned to 2 newest');
     assert.equal(existsSync(path.join(worktree, 'backups')), false, 'no backups dir in worktree');
@@ -353,19 +359,73 @@ describe('git check-ignore, cross-checkout launch, row-drop override and permiss
     assert.equal(wtStatus.stdout, '', 'worktree git status is completely clean');
   });
 
-  it('refuses non-ignored path in destination repo with status reason and creates nothing', async () => {
-    const { mainRepo, worktree } = initRepoWithWorktree();
-    const unignored = path.join(mainRepo, 'unignored-backups');
-    const env = envFor(sandbox, db, { BACKUP_DIR: unignored });
+  it('B4: rejects linked worktree own backups/, foreign repo, and external path with reason and creates nothing', async () => {
+    const { worktree, worktreeCli } = initRepoWithWorktree();
+    const { backupDir: foreignBackups } = makeProjectRepo(path.join(sandbox.root, 'foreign-repo'), {
+      copyScripts: false,
+    });
+    const externalBackups = path.join(sandbox.root, 'external-backups');
 
-    const result = await runCli(env, [], { cwd: worktree });
+    for (const [label, badDir] of [
+      ['linked worktree own backups/', path.join(worktree, 'backups')],
+      ['foreign repository backups/', foreignBackups],
+      ['external path outside git', externalBackups],
+    ]) {
+      const env = envFor(sandbox, db, { BACKUP_DIR: badDir });
+      const result = await runCli(env, [], { cwd: worktree, cli: worktreeCli });
+      assert.equal(result.code, EXIT.failed, `${label} must fail`);
+      assert.match(result.stdout, /backups\/ основной копии проекта/, label);
+      assert.match(
+        readStatus(sandbox),
+        new RegExp(`\\tfailed\\t${MESSAGES.notMainBackups}\\n$`),
+        label
+      );
+      assert.equal(existsSync(badDir), false, `${label}: directory not created`);
+    }
+    assert.equal(readDockerCalls(), 0, 'docker was never called');
+
+    // Also verify the repository's own CLI rejects an external path directly without env overrides.
+    const realExternal = await runCli(
+      envFor(sandbox, db, { BACKUP_DIR: path.join(sandbox.root, 'real-external') }),
+      [],
+      { cli: CLI }
+    );
+    assert.equal(realExternal.code, EXIT.failed);
+    assert.match(realExternal.stdout, /backups\/ основной копии проекта/);
+    assert.equal(existsSync(path.join(sandbox.root, 'real-external')), false);
+    assert.equal(readDockerCalls(), 0);
+  });
+
+  it('refuses non-ignored main backups/ path with status reason and creates nothing', async () => {
+    const { mainRepo, worktree, worktreeCli } = initRepoWithWorktree();
+    writeFileSync(path.join(mainRepo, '.gitignore'), '');
+    assert.equal(spawnSync('git', ['-C', mainRepo, 'add', '.gitignore']).status, 0);
+    assert.equal(
+      spawnSync('git', [
+        '-C',
+        mainRepo,
+        '-c',
+        'user.name=t',
+        '-c',
+        'user.email=t@e.invalid',
+        'commit',
+        '-q',
+        '-m',
+        'drop ignore',
+      ]).status,
+      0
+    );
+    const targetBackups = path.join(mainRepo, 'backups');
+    const env = envFor(sandbox, db, { BACKUP_DIR: targetBackups });
+
+    const result = await runCli(env, [], { cwd: worktree, cli: worktreeCli });
     assert.equal(result.code, EXIT.failed);
     assert.match(result.stdout, /не игнорируется git/);
     assert.match(
       readStatus(sandbox),
       /\tfailed\tсбой: каталог резервных копий не игнорируется git\n$/
     );
-    assert.equal(existsSync(unignored), false, 'non-ignored dir was not created');
+    assert.equal(existsSync(targetBackups), false, 'non-ignored dir was not created');
     assert.equal(readDockerCalls(), 0, 'docker was never called');
     const mainStatus = spawnSync('git', ['-C', mainRepo, 'status', '--porcelain'], {
       encoding: 'utf8',
@@ -373,14 +433,68 @@ describe('git check-ignore, cross-checkout launch, row-drop override and permiss
     assert.equal(mainStatus.stdout, '', 'destination repo remains clean');
   });
 
+  it('B3 CLI: /backups/* with targeted !/backups/<real-name> rejects with status, preserves old copies, and keeps git status clean', async () => {
+    const old = seedBackups(sandbox.backupDir, 2, { encrypted: false });
+    const exactName = 'clickmoji-20261124T120000Z.dump';
+    writeFileSync(path.join(sandbox.repo, '.gitignore'), `/backups/*\n!/backups/${exactName}\n`);
+    assert.equal(spawnSync('git', ['-C', sandbox.repo, 'add', '.gitignore']).status, 0);
+    assert.equal(
+      spawnSync('git', [
+        '-C',
+        sandbox.repo,
+        '-c',
+        'user.name=t',
+        '-c',
+        'user.email=t@e.invalid',
+        'commit',
+        '-q',
+        '-m',
+        'targeted negation',
+      ]).status,
+      0
+    );
+
+    const env = envFor(sandbox, db);
+    delete env.BACKUP_ENCRYPT;
+    delete env.BACKUP_AGE_RECIPIENT_FILE;
+
+    // Run real CLI subprocess (starter + locked writer) with deterministic clock preload so the
+    // exact generated filename hits !/backups/<exactName>.
+    const preload = path.join(sandbox.root, 'fixed-clock-preload.mjs');
+    writeFileSync(
+      preload,
+      `const RealDate = Date;
+const fixed = new RealDate('2026-11-24T12:00:00.000Z').getTime();
+globalThis.Date = class extends RealDate {
+  constructor(...args) { super(...(args.length === 0 ? [fixed] : args)); }
+  static now() { return fixed; }
+};
+`
+    );
+    env.NODE_OPTIONS = `--import=${preload}`;
+    const run = await runCli(env, [], { cli: sandbox.cli });
+    assert.equal(run.code, EXIT.failed, run.stderr + run.stdout);
+    assert.match(run.stdout, /не игнорируется git/);
+    assert.match(
+      readStatus(sandbox),
+      /\tfailed\tсбой: каталог резервных копий не игнорируется git\n$/
+    );
+    assert.deepEqual(listCopies(sandbox.backupDir).sort(), [...old].sort());
+    assert.equal(existsSync(path.join(sandbox.backupDir, exactName)), false);
+    const repoStatus = spawnSync('git', ['-C', sandbox.repo, 'status', '--porcelain'], {
+      encoding: 'utf8',
+    });
+    assert.equal(repoStatus.stdout, '', 'git status remains completely clean');
+  });
+
   it('refuses when git is unavailable with status reason and creates no copy', async () => {
-    const { mainRepo } = initRepoWithWorktree();
+    const { mainRepo, worktreeCli } = initRepoWithWorktree();
     const targetBackups = path.join(mainRepo, 'backups');
     const env = envFor(sandbox, db, {
       BACKUP_DIR: targetBackups,
       BACKUP_GIT_BIN: '/nonexistent/git-binary',
     });
-    const result = await runCli(env);
+    const result = await runCli(env, [], { cli: worktreeCli });
     assert.equal(result.code, EXIT.unavailable);
     assert.match(result.stdout, /git недоступен/);
     assert.match(readStatus(sandbox), /\tfailed\tсбой: git недоступен\n$/);
@@ -395,13 +509,13 @@ describe('git check-ignore, cross-checkout launch, row-drop override and permiss
     });
     const env = envFor(sandbox, db, { FAKE_COUNTS: '{"a":10,"b":100}' });
 
-    const rejected = await runCli(env);
+    const rejected = await runCli(env, [], { cli: sandbox.cli });
     assert.equal(rejected.code, EXIT.suspicious);
     assert.match(rejected.stdout, /число строк упало более чем на 20%/);
     assert.match(readStatus(sandbox), /\tfailed\tсбой: число строк упало более чем на 20%\n$/);
     assert.deepEqual(listCopies(sandbox.backupDir).sort(), [...old].sort());
 
-    const confirmed = await runCli(env, ['--allow-row-drop']);
+    const confirmed = await runCli(env, ['--allow-row-drop'], { cli: sandbox.cli });
     assert.equal(confirmed.code, EXIT.ok, confirmed.stderr + confirmed.stdout);
     const afterConfirm = listCopies(sandbox.backupDir);
     assert.equal(afterConfirm.length, 2);
@@ -409,7 +523,7 @@ describe('git check-ignore, cross-checkout launch, row-drop override and permiss
 
     // Wait 1 second so the next CLI invocation gets a distinct timestamp.
     await new Promise((resolve) => setTimeout(resolve, 1100));
-    const followUp = await runCli(env);
+    const followUp = await runCli(env, [], { cli: sandbox.cli });
     assert.equal(followUp.code, EXIT.ok, followUp.stderr + followUp.stdout);
     assert.equal(listCopies(sandbox.backupDir).length, 2);
   });
@@ -424,7 +538,7 @@ describe('git check-ignore, cross-checkout launch, row-drop override and permiss
     const runner = path.join(sandbox.root, 'umask-cli.mjs');
     writeFileSync(
       runner,
-      `process.umask(0o000);\nconst { main } = await import(${JSON.stringify(CLI)});\nprocess.exitCode = await main(process.env, []);\n`
+      `process.umask(0o000);\nconst { main } = await import(${JSON.stringify(sandbox.cli)});\nprocess.exitCode = await main(process.env, []);\n`
     );
     const run = spawnSync(process.execPath, [runner], { env, encoding: 'utf8' });
     assert.equal(run.status, EXIT.ok, run.stderr + run.stdout);

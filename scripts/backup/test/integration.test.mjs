@@ -13,7 +13,7 @@ import { Ledger } from '../ledger.mjs';
 import { removeTemp } from '../pipeline.mjs';
 import { libpqEnv, LIBPQ_ENV_NAMES } from '../config.mjs';
 import { EXIT, LEDGER_NAME, POSTGRES_BASE_IMAGE, TOOLS_IMAGE } from '../constants.mjs';
-import { CLI, listCopies, lockIsFree, makeSandbox, readStatus, seedBackups } from './helpers.mjs';
+import { listCopies, lockIsFree, makeSandbox, readStatus, seedBackups } from './helpers.mjs';
 
 const enabled = process.env.CLICKMOJI_BACKUP_INTEGRATION === '1';
 const dockerUp =
@@ -196,7 +196,7 @@ describe(
         BACKUP_ENCRYPT: '1',
         BACKUP_AGE_RECIPIENT_FILE: sandbox.recipientFile,
       };
-      const result = spawnSync(process.execPath, [CLI], { env, encoding: 'utf8' });
+      const result = spawnSync(process.execPath, [sandbox.cli], { env, encoding: 'utf8' });
       assert.equal(result.status, EXIT.ok, 'run succeeded');
       const visible = `${result.stdout}${result.stderr}${readStatus(sandbox)}`;
       assert.doesNotMatch(visible, new RegExp(password));
@@ -331,7 +331,7 @@ describe(
           BACKUP_ENCRYPT: '1',
           BACKUP_AGE_RECIPIENT_FILE: sandbox.recipientFile,
         };
-        child = spawn(process.execPath, [CLI], { env, stdio: ['ignore', 'pipe', 'pipe'] });
+        child = spawn(process.execPath, [sandbox.cli], { env, stdio: ['ignore', 'pipe', 'pipe'] });
         let output = '';
         child.stdout.on('data', (chunk) => {
           output += chunk;
