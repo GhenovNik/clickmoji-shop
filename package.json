@@ -28,6 +28,7 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:catalog-postgres": "tsx scripts/test-catalog-cleanup-postgres.ts",
+    "test:account-delete-postgres": "tsx scripts/test-account-delete-postgres.ts",
     "test:legacy-locales-postgres": "tsx scripts/test-emoji-legacy-ru-locales-postgres.ts",
     "test:queue-replace-postgres": "tsx scripts/test-emoji-queue-replace-postgres.ts",
     "test:items-postgres": "tsx scripts/test-item-duplicates-postgres.ts",

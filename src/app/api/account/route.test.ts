@@ -139,6 +139,18 @@ function matches(row: Record<string, unknown>, where: Record<string, unknown>): 
     if (key === 'AND') {
       return (value as Record<string, unknown>[]).every((clause) => matches(row, clause));
     }
+    if (key === 'list') {
+      const list = db.lists.find((l) => l.id === row.listId);
+      return list
+        ? matches(list as unknown as Record<string, unknown>, value as Record<string, unknown>)
+        : false;
+    }
+    if (key === 'history') {
+      const history = db.histories.find((h) => h.id === row.historyId);
+      return history
+        ? matches(history as unknown as Record<string, unknown>, value as Record<string, unknown>)
+        : false;
+    }
     if (key === 'product') {
       const product = db.products.find((p) => p.id === row.productId);
       return product
@@ -159,6 +171,9 @@ function matches(row: Record<string, unknown>, where: Record<string, unknown>): 
           : false;
       }
       return matches(variant as unknown as Record<string, unknown>, vWhere);
+    }
+    if (value && typeof value === 'object' && 'not' in value) {
+      return row[key] !== value.not;
     }
     if (value && typeof value === 'object' && 'in' in value) {
       return (value.in as unknown[]).includes(row[key]);
@@ -524,6 +539,19 @@ vi.mock('@/lib/prisma', () => {
         },
       },
       listHistory: {
+        findFirst: async ({
+          where,
+          select,
+        }: {
+          where: Record<string, unknown>;
+          select?: Record<string, unknown>;
+        }) => {
+          recordOp('listHistory', 'findFirst');
+          const row = db.histories.find((h) =>
+            matches(h as unknown as Record<string, unknown>, where)
+          );
+          return row ? pickSelected(row, select) : null;
+        },
         findMany: async ({
           where,
           select,
@@ -545,6 +573,19 @@ vi.mock('@/lib/prisma', () => {
         },
       },
       favorite: {
+        findFirst: async ({
+          where,
+          select,
+        }: {
+          where: Record<string, unknown>;
+          select?: Record<string, unknown>;
+        }) => {
+          recordOp('favorite', 'findFirst');
+          const row = db.favorites.find((f) =>
+            matches(f as unknown as Record<string, unknown>, where)
+          );
+          return row ? pickSelected(row, select) : null;
+        },
         findMany: async ({
           where,
           select,
@@ -573,6 +614,19 @@ vi.mock('@/lib/prisma', () => {
         },
       },
       variantFavorite: {
+        findFirst: async ({
+          where,
+          select,
+        }: {
+          where: Record<string, unknown>;
+          select?: Record<string, unknown>;
+        }) => {
+          recordOp('variantFavorite', 'findFirst');
+          const row = db.variantFavorites.find((vf) =>
+            matches(vf as unknown as Record<string, unknown>, where)
+          );
+          return row ? pickSelected(row, select) : null;
+        },
         findMany: async ({
           where,
           select,
@@ -607,6 +661,48 @@ vi.mock('@/lib/prisma', () => {
           });
         },
       },
+      productVariant: {
+        findMany: async ({
+          where,
+          select,
+        }: {
+          where: Record<string, unknown>;
+          select?: Record<string, unknown>;
+        }) => {
+          recordOp('productVariant', 'findMany');
+          return db.variants
+            .filter((v) => matches(v as unknown as Record<string, unknown>, where))
+            .map((v) => pickSelected(v, select));
+        },
+      },
+      item: {
+        findFirst: async ({
+          where,
+          select,
+        }: {
+          where: Record<string, unknown>;
+          select?: Record<string, unknown>;
+        }) => {
+          recordOp('item', 'findFirst');
+          const row = db.items.find((i) => matches(i as unknown as Record<string, unknown>, where));
+          return row ? pickSelected(row, select) : null;
+        },
+      },
+      listHistoryItem: {
+        findFirst: async ({
+          where,
+          select,
+        }: {
+          where: Record<string, unknown>;
+          select?: Record<string, unknown>;
+        }) => {
+          recordOp('listHistoryItem', 'findFirst');
+          const row = db.historyItems.find((hi) =>
+            matches(hi as unknown as Record<string, unknown>, where)
+          );
+          return row ? pickSelected(row, select) : null;
+        },
+      },
       $queryRaw: async (strings: TemplateStringsArray, ...values: unknown[]) => {
         const sql = strings.join('?');
         if (/FROM\s+users\s+WHERE\s+id\s*=\s*\?\s+FOR\s+UPDATE/i.test(sql)) {
@@ -626,6 +722,29 @@ vi.mock('@/lib/prisma', () => {
           await doubles.onAfterResetLock();
           const user = db.users.find((u) => u.email === email);
           return user ? [{ id: user.id, emailVerified: user.emailVerified }] : [];
+        }
+        // Row locks are not simulated here; the fake only mirrors which rows the SQL selects.
+        if (/FROM\s+products\s+WHERE\s+"createdById"/i.test(sql)) {
+          recordOp('product', 'forUpdate');
+          const userId = String(values[0]);
+          return db.products
+            .filter((p) => p.createdById === userId && !p.isGlobal)
+            .map((p) => ({ id: p.id }));
+        }
+        if (/FROM\s+product_variants\s+v\s+JOIN\s+products/i.test(sql)) {
+          recordOp('product_variants', 'forUpdate');
+          const userId = String(values[0]);
+          const ownProductIds = new Set(
+            db.products.filter((p) => p.createdById === userId && !p.isGlobal).map((p) => p.id)
+          );
+          return db.variants
+            .filter((v) => ownProductIds.has(v.productId))
+            .map((v) => ({ id: v.id }));
+        }
+        if (/FROM\s+lists\s+WHERE\s+"userId"/i.test(sql)) {
+          recordOp('lists', 'forUpdate');
+          const userId = String(values[0]);
+          return db.lists.filter((l) => l.userId === userId).map((l) => ({ id: l.id }));
         }
         throw new Error(`Unsupported $queryRaw in test fake: ${sql}`);
       },
@@ -1312,6 +1431,206 @@ describe('GET /api/account/export', () => {
   });
 });
 
+describe('GET /api/account/export: variant must belong to the item product and stay visible', () => {
+  const now = new Date('2026-11-20T10:00:00.000Z');
+
+  function addVariantFixtures() {
+    db.variants.push(
+      {
+        id: 'var-private-b',
+        name: 'Секретный вариант Боба',
+        nameEn: 'Bob secret variant',
+        emoji: '🍞',
+        imageUrl: null,
+        imageUrlEn: null,
+        productId: 'prod-private-b',
+      },
+      {
+        id: 'var-private-a',
+        name: 'Секретный вариант Алисы',
+        nameEn: 'Alice secret variant',
+        emoji: '🧀',
+        imageUrl: null,
+        imageUrlEn: null,
+        productId: 'prod-private-a',
+      }
+    );
+  }
+
+  it('keeps an owned live item but drops a variant of another private product or of another product', async () => {
+    addVariantFixtures();
+    db.items.push(
+      {
+        id: 'item-a-foreign-variant',
+        listId: 'list-a',
+        productId: 'prod-global-by-a',
+        variantId: 'var-private-b',
+        isPurchased: false,
+        note: null,
+        createdAt: now,
+        updatedAt: now,
+        purchasedAt: null,
+      },
+      {
+        id: 'item-a-inconsistent-variant',
+        listId: 'list-a',
+        productId: 'prod-global-by-a',
+        variantId: 'var-private-a',
+        isPurchased: false,
+        note: null,
+        createdAt: now,
+        updatedAt: now,
+        purchasedAt: null,
+      }
+    );
+
+    const res = await exportRoute.GET(
+      jsonRequest('http://localhost/api/account/export', 'GET', undefined, 'en')
+    );
+    expect(res.status).toBe(200);
+    const rawText = await res.text();
+    const items = JSON.parse(rawText).lists[0].items as Array<{
+      id: string;
+      product: { id: string };
+      variant: { id: string; name: string } | null;
+    }>;
+    const byId = new Map(items.map((item) => [item.id, item]));
+
+    expect([...byId.keys()].sort()).toEqual([
+      'item-a-foreign-variant',
+      'item-a-global',
+      'item-a-inconsistent-variant',
+      'item-a-own',
+    ]);
+    expect(byId.get('item-a-foreign-variant')).toMatchObject({
+      product: { id: 'prod-global-by-a' },
+      variant: null,
+    });
+    expect(byId.get('item-a-inconsistent-variant')).toMatchObject({
+      product: { id: 'prod-global-by-a' },
+      variant: null,
+    });
+    // Positive: a variant of the same visible product is still exported.
+    expect(byId.get('item-a-global')?.variant).toMatchObject({ id: 'var-global', name: '3.2%' });
+    expect(byId.get('item-a-own')?.variant).toBeNull();
+    expect(rawText).not.toContain('var-private-b');
+    expect(rawText).not.toContain('Секретный вариант Боба');
+    expect(rawText).not.toContain('Bob secret variant');
+  });
+
+  it('keeps snapshot rows but clears foreign or inconsistent snapshot variant fields, and keeps consistent ones', async () => {
+    addVariantFixtures();
+    const snapshot = (id: string, overrides: Partial<(typeof db.historyItems)[number]>) => ({
+      id,
+      historyId: 'hist-a',
+      productId: null as string | null,
+      variantId: null as string | null,
+      productName: 'Молоко',
+      productNameEn: 'Milk',
+      productEmoji: '🥛',
+      productImageUrl: null,
+      productImageUrlEn: null,
+      categoryName: 'Молочные продукты',
+      categoryNameEn: 'Dairy',
+      isCustom: false,
+      variantName: null as string | null,
+      variantNameEn: null as string | null,
+      variantEmoji: null as string | null,
+      note: null,
+      isPurchased: true,
+      addedAt: now,
+      createdAt: now,
+      ...overrides,
+    });
+    db.historyItems.push(
+      snapshot('hi-a-global-variant', {
+        productId: 'prod-global-by-a',
+        variantId: 'var-global',
+        variantName: '3.2%',
+        variantNameEn: 'Whole',
+        variantEmoji: '🥛',
+      }),
+      snapshot('hi-a-foreign-variant', {
+        productId: 'prod-global-by-a',
+        variantId: 'var-private-b',
+        variantName: 'Секретный вариант Боба',
+        variantNameEn: 'Bob secret variant',
+        variantEmoji: '🍞',
+      }),
+      snapshot('hi-a-inconsistent-variant', {
+        productId: 'prod-global-by-a',
+        variantId: 'var-private-a',
+        variantName: 'Секретный вариант Алисы',
+        variantNameEn: 'Alice secret variant',
+        variantEmoji: '🧀',
+      }),
+      snapshot('hi-a-null-product-foreign-variant', {
+        productId: null,
+        variantId: 'var-private-b',
+        variantName: 'Секретный вариант Боба',
+        variantNameEn: 'Bob secret variant',
+        variantEmoji: '🍞',
+      }),
+      snapshot('hi-a-null-product-own-variant', {
+        productId: null,
+        variantId: 'var-private-a',
+        variantName: 'Секретный вариант Алисы',
+        variantNameEn: 'Alice secret variant',
+        variantEmoji: '🧀',
+      })
+    );
+
+    const res = await exportRoute.GET(
+      jsonRequest('http://localhost/api/account/export', 'GET', undefined, 'en')
+    );
+    expect(res.status).toBe(200);
+    const rawText = await res.text();
+    const items = JSON.parse(rawText).history[0].items as Array<Record<string, string | null>>;
+    const byId = new Map(items.map((item) => [item.id, item]));
+
+    // Legacy snapshot of Bob's private product stays excluded (existing rule).
+    expect([...byId.keys()].sort()).toEqual([
+      'hi-a-foreign-variant',
+      'hi-a-global-variant',
+      'hi-a-inconsistent-variant',
+      'hi-a-null-product-foreign-variant',
+      'hi-a-null-product-own-variant',
+      'hi-a-own',
+    ]);
+    const cleared = {
+      variantId: null,
+      variantName: null,
+      variantNameEn: null,
+      variantEmoji: null,
+    };
+    expect(byId.get('hi-a-foreign-variant')).toMatchObject({
+      productId: 'prod-global-by-a',
+      productName: 'Молоко',
+      ...cleared,
+    });
+    expect(byId.get('hi-a-inconsistent-variant')).toMatchObject(cleared);
+    expect(byId.get('hi-a-null-product-foreign-variant')).toMatchObject({
+      productId: null,
+      ...cleared,
+    });
+    // Positive: consistent visible variant keeps its snapshot fields.
+    expect(byId.get('hi-a-global-variant')).toMatchObject({
+      variantId: 'var-global',
+      variantName: '3.2%',
+      variantNameEn: 'Whole',
+    });
+    // Positive: productId=null with a variant owned by a visible product keeps the variant.
+    expect(byId.get('hi-a-null-product-own-variant')).toMatchObject({
+      productId: null,
+      variantId: 'var-private-a',
+      variantName: 'Секретный вариант Алисы',
+    });
+    expect(rawText).not.toContain('var-private-b');
+    expect(rawText).not.toContain('Секретный вариант Боба');
+    expect(rawText).not.toContain('Bob secret variant');
+  });
+});
+
 describe('DELETE /api/account', () => {
   it('rejects wrong password without deleting any records', async () => {
     const res = await accountRoute.DELETE(
@@ -1531,5 +1850,160 @@ describe('DELETE /api/account', () => {
       const tokenIdx = tables.indexOf('passwordResetToken');
       expect(tokenIdx).toBeGreaterThan(0);
     }
+  });
+});
+
+describe('DELETE /api/account: another user referencing a private product blocks deletion', () => {
+  const now = new Date('2026-11-20T10:00:00.000Z');
+  const blockedEn =
+    "Account cannot be deleted yet: other users' lists, favorites or history still reference your private products or their variants. Nothing was changed.";
+
+  // Each case adds one cross-owner reference of Bob to Alice's private data through a real FK path.
+  async function expectBlockedAndUnchanged(addReference: () => void) {
+    db.variants.push({
+      id: 'var-private-a',
+      name: 'Секретный вариант Алисы',
+      nameEn: 'Alice secret variant',
+      emoji: '🧀',
+      imageUrl: null,
+      imageUrlEn: null,
+      productId: 'prod-private-a',
+    });
+    addReference();
+    const before = snapshotDb();
+
+    const res = await accountRoute.DELETE(
+      jsonRequest('http://localhost/api/account', 'DELETE', { password: 'Password123' }, 'en')
+    );
+
+    expect(res.status).toBe(409);
+    expect(await res.json()).toEqual({ error: blockedEn });
+    // No Set-Cookie: the session stays as it was.
+    expect(res.headers.get('set-cookie')).toBeNull();
+    expect(snapshotDb()).toEqual(before);
+    expect(db.users.map((u) => u.id)).toContain('user-a');
+  }
+
+  it('blocks when another list item points at a private product (Item.productId cascade)', async () => {
+    await expectBlockedAndUnchanged(() => {
+      db.items.push({
+        id: 'item-b-foreign',
+        listId: 'list-b',
+        productId: 'prod-private-a',
+        variantId: null,
+        isPurchased: false,
+        note: null,
+        createdAt: now,
+        updatedAt: now,
+        purchasedAt: null,
+      });
+    });
+  });
+
+  it('blocks when another list item keeps a private variant on a global product (Item.variantId SetNull)', async () => {
+    await expectBlockedAndUnchanged(() => {
+      db.items.push({
+        id: 'item-b-foreign-variant',
+        listId: 'list-b',
+        productId: 'prod-global-by-a',
+        variantId: 'var-private-a',
+        isPurchased: false,
+        note: null,
+        createdAt: now,
+        updatedAt: now,
+        purchasedAt: null,
+      });
+    });
+  });
+
+  it('blocks when another user favorited a private product (Favorite.productId cascade)', async () => {
+    await expectBlockedAndUnchanged(() => {
+      db.favorites.push({
+        id: 'fav-b-foreign',
+        userId: 'user-b',
+        productId: 'prod-private-a',
+        usageCount: 1,
+        createdAt: now,
+        updatedAt: now,
+      });
+    });
+  });
+
+  it('blocks when another user starred a private variant (VariantFavorite cascade)', async () => {
+    await expectBlockedAndUnchanged(() => {
+      db.variantFavorites.push({
+        id: 'vfav-b-foreign',
+        userId: 'user-b',
+        variantId: 'var-private-a',
+        usageCount: 1,
+        createdAt: now,
+        updatedAt: now,
+      });
+    });
+  });
+
+  it('blocks when another history snapshot points at a private product (ListHistoryItem.productId SetNull)', async () => {
+    await expectBlockedAndUnchanged(() => {
+      db.historyItems.push({
+        id: 'hi-b-foreign',
+        historyId: 'hist-b',
+        productId: 'prod-private-a',
+        variantId: null,
+        productName: 'Секрет Алисы',
+        productNameEn: 'Alice Secret',
+        productEmoji: '🧀',
+        productImageUrl: null,
+        productImageUrlEn: null,
+        categoryName: 'Молочные продукты',
+        categoryNameEn: 'Dairy',
+        isCustom: false,
+        variantName: null,
+        variantNameEn: null,
+        variantEmoji: null,
+        note: null,
+        isPurchased: true,
+        addedAt: now,
+        createdAt: now,
+      });
+    });
+  });
+
+  it('blocks when another history snapshot keeps a private variant (ListHistoryItem.variantId SetNull)', async () => {
+    await expectBlockedAndUnchanged(() => {
+      db.historyItems.push({
+        id: 'hi-b-foreign-variant',
+        historyId: 'hist-b',
+        productId: 'prod-global-by-a',
+        variantId: 'var-private-a',
+        productName: 'Молоко',
+        productNameEn: 'Milk',
+        productEmoji: '🥛',
+        productImageUrl: null,
+        productImageUrlEn: null,
+        categoryName: 'Молочные продукты',
+        categoryNameEn: 'Dairy',
+        isCustom: false,
+        variantName: 'Секретный вариант Алисы',
+        variantNameEn: 'Alice secret variant',
+        variantEmoji: '🧀',
+        note: null,
+        isPurchased: true,
+        addedAt: now,
+        createdAt: now,
+      });
+    });
+  });
+
+  it('blocks when another user history points at a list of the deleted account (ListHistory.listId SetNull)', async () => {
+    await expectBlockedAndUnchanged(() => {
+      db.histories.push({
+        id: 'hist-b-foreign',
+        userId: 'user-b',
+        listId: 'list-a',
+        listName: 'Чужая история',
+        completedAt: now,
+        createdAt: now,
+      });
+    });
   });
 });
