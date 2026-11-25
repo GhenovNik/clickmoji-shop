@@ -26,7 +26,7 @@ describe('vercel.json region contract', () => {
     expect(record.regions).toEqual(['pdx1']);
   });
 
-  // В39 (25.11): the free plan allows 100 builds a day; task branches build no preview, CI builds them.
+  // Operator decision of 2026-11-25: the free plan allows 100 builds a day; task branches build no preview, CI builds them.
   it('skips preview builds for task branches and keeps master and develop deploying', () => {
     const record = readVercelJson() as Record<string, unknown>;
     const git = record.git as { deploymentEnabled?: Record<string, unknown> };
