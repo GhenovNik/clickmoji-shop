@@ -13,7 +13,7 @@ import { Ledger } from '../ledger.mjs';
 import { removeTemp } from '../pipeline.mjs';
 import { libpqEnv, LIBPQ_ENV_NAMES } from '../config.mjs';
 import { EXIT, LEDGER_NAME, POSTGRES_BASE_IMAGE, TOOLS_IMAGE } from '../constants.mjs';
-import { CLI, listCopies, lockIsFree, makeSandbox, readStatus, seedBackups } from './helpers.mjs';
+import { listCopies, lockIsFree, makeSandbox, readStatus, seedBackups } from './helpers.mjs';
 
 const enabled = process.env.CLICKMOJI_BACKUP_INTEGRATION === '1';
 const dockerUp =
@@ -193,9 +193,10 @@ describe(
         DATABASE_URL: state.url,
         BACKUP_DIR: sandbox.backupDir,
         BACKUP_STATUS_FILE: sandbox.statusFile,
+        BACKUP_ENCRYPT: '1',
         BACKUP_AGE_RECIPIENT_FILE: sandbox.recipientFile,
       };
-      const result = spawnSync(process.execPath, [CLI], { env, encoding: 'utf8' });
+      const result = spawnSync(process.execPath, [sandbox.cli], { env, encoding: 'utf8' });
       assert.equal(result.status, EXIT.ok, 'run succeeded');
       const visible = `${result.stdout}${result.stderr}${readStatus(sandbox)}`;
       assert.doesNotMatch(visible, new RegExp(password));
@@ -236,6 +237,156 @@ describe(
       assert.equal(meta.counts['audit.event'], 3, 'a table outside public is counted');
     });
 
+    it('B2 real docker: keeps unencrypted copies until real age -d + pg_restore + --confirm-encrypted-restore, then next encrypted run purges them', async () => {
+      const b2Sandbox = makeSandbox();
+      try {
+        const keys = docker([
+          'run',
+          '--rm',
+          '--entrypoint',
+          '/bin/sh',
+          TOOLS_IMAGE,
+          '-c',
+          'age-keygen',
+        ]);
+        const output = `${keys.stdout}${keys.stderr}`;
+        const recipient = /^# public key: (age1\S+)$/m.exec(output)?.[1];
+        const secret = /^(AGE-SECRET-KEY-\S+)$/m.exec(output)?.[1];
+        assert.ok(recipient && secret, 'key pair generated');
+        writeFileSync(b2Sandbox.recipientFile, `${recipient}\n`);
+        const identityFile = path.join(b2Sandbox.root, 'identity.txt');
+        writeFileSync(identityFile, `${secret}\n`, { mode: 0o600 });
+
+        const plainEnv = {
+          PATH: process.env.PATH,
+          TMPDIR: b2Sandbox.tmp,
+          DATABASE_URL: state.url,
+          BACKUP_DIR: b2Sandbox.backupDir,
+          BACKUP_STATUS_FILE: b2Sandbox.statusFile,
+        };
+        const p1 = spawnSync(process.execPath, [b2Sandbox.cli], {
+          env: plainEnv,
+          encoding: 'utf8',
+        });
+        assert.equal(p1.status, EXIT.ok, p1.stderr + p1.stdout);
+        await new Promise((resolve) => setTimeout(resolve, 1100));
+        const p2 = spawnSync(process.execPath, [b2Sandbox.cli], {
+          env: plainEnv,
+          encoding: 'utf8',
+        });
+        assert.equal(p2.status, EXIT.ok, p2.stderr + p2.stdout);
+        const plainCopies = listCopies(b2Sandbox.backupDir);
+        assert.equal(plainCopies.length, 2);
+
+        // First encrypted run keeps both plain copies + 1 encrypted copy (waiting)
+        const encEnv = {
+          ...plainEnv,
+          BACKUP_ENCRYPT: '1',
+          BACKUP_AGE_RECIPIENT_FILE: b2Sandbox.recipientFile,
+        };
+        await new Promise((resolve) => setTimeout(resolve, 1100));
+        const e1 = spawnSync(process.execPath, [b2Sandbox.cli], { env: encEnv, encoding: 'utf8' });
+        assert.equal(e1.status, EXIT.ok, e1.stderr + e1.stdout);
+        assert.match(
+          e1.stdout,
+          /шифрование включено, открытые копии ждут подтверждения восстановления/
+        );
+        const afterE1 = listCopies(b2Sandbox.backupDir);
+        assert.equal(afterE1.length, 3);
+        const firstEnc = afterE1.find((name) => name.endsWith('.dump.age'));
+        assert.ok(firstEnc);
+
+        // Real age -d + pg_restore into an ephemeral PostgreSQL 17 cluster inside container
+        const restoreCheck = docker([
+          'run',
+          '--rm',
+          '--mount',
+          `type=bind,source=${b2Sandbox.backupDir},target=/b,readonly`,
+          '--mount',
+          `type=bind,source=${identityFile},target=/k,readonly`,
+          '--entrypoint',
+          '/bin/sh',
+          TOOLS_IMAGE,
+          '-c',
+          `set -eu
+           C=$(mktemp -d /tmp/pg.XXXXXX)
+           trap 'su-exec postgres pg_ctl -D "$C/data" -m fast stop >/dev/null 2>&1 || true; rm -rf "$C"' EXIT
+           mkdir -p "$C/data" "$C/run" "$C/log" && chown -R postgres:postgres "$C"
+           su-exec postgres initdb -D "$C/data" -U postgres --auth=trust -E UTF8 > "$C/log/init.log" 2>&1
+           su-exec postgres pg_ctl -D "$C/data" -w -l "$C/log/srv.log" -o "-k $C/run -p 5432 -c listen_addresses=''" start >/dev/null
+           createdb -h "$C/run" -p 5432 -U postgres restored
+           age -d -i /k "/b/${firstEnc}" > "$C/r.dump"
+           pg_restore -h "$C/run" -p 5432 -U postgres --no-owner --no-privileges --exit-on-error -d restored "$C/r.dump"
+           COUNT=$(psql -h "$C/run" -p 5432 -U postgres -d restored -tAc 'SELECT count(*) FROM public."User"')
+           test "$COUNT" = "50"`,
+        ]);
+        assert.equal(restoreCheck.status, 0, restoreCheck.stderr + restoreCheck.stdout);
+
+        // Wrong key cannot decrypt (demonstrating why operator confirmation is required)
+        const otherKeys = docker([
+          'run',
+          '--rm',
+          '--entrypoint',
+          '/bin/sh',
+          TOOLS_IMAGE,
+          '-c',
+          'age-keygen',
+        ]);
+        const wrongSecret = /^(AGE-SECRET-KEY-\S+)$/m.exec(
+          `${otherKeys.stdout}${otherKeys.stderr}`
+        )?.[1];
+        const wrongKeyFile = path.join(b2Sandbox.root, 'wrong-identity.txt');
+        writeFileSync(wrongKeyFile, `${wrongSecret}\n`, { mode: 0o600 });
+        const wrongDecrypt = docker([
+          'run',
+          '--rm',
+          '--mount',
+          `type=bind,source=${b2Sandbox.backupDir},target=/b,readonly`,
+          '--mount',
+          `type=bind,source=${wrongKeyFile},target=/k,readonly`,
+          '--entrypoint',
+          '/bin/sh',
+          TOOLS_IMAGE,
+          '-c',
+          `age -d -i /k "/b/${firstEnc}" > /dev/null`,
+        ]);
+        assert.notEqual(wrongDecrypt.status, 0, 'mismatched identity fails decryption');
+
+        // Explicit confirmation via CLI with snapshot SHA-256 and without DATABASE_URL or age keys
+        const firstEncSha = crypto
+          .createHash('sha256')
+          .update(readFileSync(path.join(b2Sandbox.backupDir, firstEnc)))
+          .digest('hex');
+        const confirmRes = spawnSync(
+          process.execPath,
+          [b2Sandbox.cli, '--confirm-encrypted-restore', firstEnc, '--sha256', firstEncSha],
+          {
+            env: {
+              PATH: process.env.PATH,
+              BACKUP_DIR: b2Sandbox.backupDir,
+              BACKUP_STATUS_FILE: b2Sandbox.statusFile,
+            },
+            encoding: 'utf8',
+          }
+        );
+        assert.equal(confirmRes.status, EXIT.ok, confirmRes.stderr + confirmRes.stdout);
+        assert.equal(listCopies(b2Sandbox.backupDir).length, 3, 'confirmation deletes nothing');
+
+        // Next successful encrypted backup purges plain copies and returns to N=2
+        await new Promise((resolve) => setTimeout(resolve, 1100));
+        const e2 = spawnSync(process.execPath, [b2Sandbox.cli], { env: encEnv, encoding: 'utf8' });
+        assert.equal(e2.status, EXIT.ok, e2.stderr + e2.stdout);
+        const finalCopies = listCopies(b2Sandbox.backupDir);
+        assert.equal(finalCopies.length, 2);
+        assert.ok(finalCopies.every((name) => name.endsWith('.dump.age')));
+        for (const p of plainCopies) {
+          assert.equal(existsSync(path.join(b2Sandbox.backupDir, p)), false);
+        }
+      } finally {
+        b2Sandbox.cleanup();
+      }
+    });
+
     it('a truncated dump fails the restore check', () => {
       // Its own fixture directory, outside the run's temporary root, removed on every path: the
       // scratch check of the stop test looks only inside that root.
@@ -268,7 +419,7 @@ describe(
 
     it('a stop during the active dump leaves no container, scratch, plaintext, and no copy changed', async () => {
       // Every copy present before the run, including the one the publish test left in this sandbox.
-      seedBackups(sandbox.backupDir, 3);
+      seedBackups(sandbox.backupDir, 3, { recipientFile: sandbox.recipientFile });
       const old = listCopies(sandbox.backupDir);
       const bytesBefore = old.map((name) =>
         readFileSync(path.join(sandbox.backupDir, name), 'utf8')
@@ -327,9 +478,10 @@ describe(
           DATABASE_URL: state.url,
           BACKUP_DIR: sandbox.backupDir,
           BACKUP_STATUS_FILE: sandbox.statusFile,
+          BACKUP_ENCRYPT: '1',
           BACKUP_AGE_RECIPIENT_FILE: sandbox.recipientFile,
         };
-        child = spawn(process.execPath, [CLI], { env, stdio: ['ignore', 'pipe', 'pipe'] });
+        child = spawn(process.execPath, [sandbox.cli], { env, stdio: ['ignore', 'pipe', 'pipe'] });
         let output = '';
         child.stdout.on('data', (chunk) => {
           output += chunk;
