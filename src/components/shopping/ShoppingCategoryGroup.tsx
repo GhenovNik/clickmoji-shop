@@ -5,7 +5,8 @@ import { ChevronDown, ChevronUp } from 'lucide-react';
 import { useLocale, useTranslations } from 'next-intl';
 import type { Item } from '@/hooks/useShoppingListItems';
 import type { ShoppingView } from '@/hooks/useShoppingListPresentation';
-import { localizedName } from '@/lib/catalog-name';
+import { namesOf } from '@/lib/catalog-name';
+import { LocalizedName } from '@/components/ui/LocalizedName';
 import { cn } from '@/lib/utils';
 
 type Props = {
@@ -33,7 +34,13 @@ export default function ShoppingCategoryGroup({
   const Chevron = expanded ? ChevronUp : ChevronDown;
 
   return (
-    <section className={cn('rounded-xl p-0.5 bg-indigo-100/60', purchased && 'bg-green-100/50')}>
+    <section
+      className={cn(
+        'rounded-xl p-0.5 bg-indigo-100/60',
+        view === 'list' && 'p-px',
+        purchased && 'bg-green-100/50'
+      )}
+    >
       <h3>
         <button
           type="button"
@@ -44,9 +51,16 @@ export default function ShoppingCategoryGroup({
           className="flex w-full items-center gap-2 min-h-6 px-1 text-left text-sm font-medium text-gray-700 rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
         >
           <span className="text-lg leading-6">{category.emoji}</span>{' '}
-          <span className="min-w-0 flex-1 truncate">
-            {localizedName(category, locale)} ({count})
-          </span>
+          <LocalizedName
+            names={namesOf(category)}
+            locale={locale}
+            primaryOnly
+            // Compact list only: one 16px line, so the group header is 24px (measured on the
+            // candidate) and the three pending groups keep the seven items above the bottom
+            // navigation at 375x812. The English line used to make the header two lines (28px).
+            className={cn('min-w-0 flex-1 truncate', view === 'list' && 'leading-4')}
+            suffix={` (${count})`}
+          />
           <Chevron size={18} aria-hidden="true" />
         </button>
       </h3>

@@ -4,6 +4,8 @@ import Image from 'next/image';
 import { useLocale, useTranslations } from 'next-intl';
 import type { FavoriteProduct } from '@/hooks/useFavorites';
 import { productNameClassName } from '@/components/products/product-name';
+import { LocalizedName } from '@/components/ui/LocalizedName';
+import { localizedName, namesOf } from '@/lib/catalog-name';
 import { favoriteDisplay, favoriteKey } from '@/lib/favorites';
 
 interface FavoriteCardProps {
@@ -21,8 +23,9 @@ export default function FavoriteCard({
 }: FavoriteCardProps) {
   const t = useTranslations('catalog.shared');
   const locale = useLocale();
-  // A starred variant shows its own name and picture; hyphenation follows the shown language.
-  const { name, imageUrl, emoji, nameLang } = favoriteDisplay(favorite, locale);
+  // A starred variant shows its own name and picture.
+  const { entity, imageUrl, emoji } = favoriteDisplay(favorite, locale);
+  const name = localizedName(entity, locale);
 
   const handleRemoveClick = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -52,9 +55,13 @@ export default function FavoriteCard({
               <span className="text-4xl md:text-6xl leading-none">{emoji}</span>
             )}
           </div>
-          <p lang={nameLang} className={productNameClassName(name)}>
-            {name}
-          </p>
+          <LocalizedName
+            names={namesOf(entity)}
+            locale={locale}
+            className="text-center"
+            primaryClassName={productNameClassName(name)}
+            secondaryClassName="truncate"
+          />
         </div>
       </button>
 

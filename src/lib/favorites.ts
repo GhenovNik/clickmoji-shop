@@ -1,4 +1,3 @@
-import { localizedName } from '@/lib/catalog-name';
 import { productImageUrl, type CatalogLocale } from '@/lib/product-image';
 
 export type FavoriteVariant = {
@@ -60,16 +59,14 @@ export function favoriteDisplay(
   const { product, variant } = favorite;
   if (variant) {
     return {
-      name: localizedName(variant, locale),
+      entity: variant,
       imageUrl: productImageUrl(variant, locale),
       emoji: variant.emoji || product.emoji,
-      nameLang: locale === 'en' && variant.nameEn?.trim() ? 'en' : 'ru',
     };
   }
   return {
-    name: localizedName(product, locale),
+    entity: product,
     imageUrl: product.isCustom ? productImageUrl(product, locale) : null,
     emoji: product.emoji,
-    nameLang: locale === 'en' && product.nameEn?.trim() ? 'en' : 'ru',
   };
 }
