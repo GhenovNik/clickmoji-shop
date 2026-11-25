@@ -1,5 +1,6 @@
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { format, resolveConfig } from 'prettier';
 
 // Builds the emoji batches for the operator (AGE-1465 item 1): docs/emoji-batches/candidates.json
 // minus the catalog snapshot → batches of 9 with a ready Gemini prompt and a cell manifest.
@@ -156,7 +157,8 @@ function emptyCells(items: Candidate[]) {
   return `\nOnly cells 1–${items.length} hold an icon. Every other cell stays completely empty white: do not repeat, copy or add any icon there.`;
 }
 
-const STYLE = `Style: Apple iOS emoji style — exactly like the emoji set on an iPhone (match the attached samples if any). Soft volume, smooth rounded shapes, subtle gradients, gentle highlights. One consistent emoji set.
+const STYLE = `Style: One object viewed from the front at a slight angle, filling 70–80% of the cell; simplified smooth forms, 3–5 saturated colors, soft upper-left light and one soft highlight. No texture, pores, fibres, grains or photographic reflections; no outlines or background shadows. Labels are flat, single-color, with up to two large words. Recognizable at 32px.
+Category cells: Compose two or three items of the same group with the same lighting and simplification.
 NOT photorealistic, NOT a cartoon sticker: no thick dark outlines. NO shadows or drop shadows. NO grid lines, cell borders, frames or dividers. NO captions under the icons.
 Every icon is centered in its own cell with generous white space around it; no icon touches or crosses its cell edge.`;
 
@@ -242,30 +244,44 @@ ${universalPrompt(items)}
 `;
 }
 
-function main() {
-  const file = JSON.parse(readFileSync(join(DIR, 'candidates.json'), 'utf8')) as CandidatesFile;
-  const snapshot = JSON.parse(readFileSync(join(DIR, SNAPSHOT), 'utf8')) as Snapshot;
+export async function main(dir = DIR, formatMarkdown = format) {
+  const file = JSON.parse(readFileSync(join(dir, 'candidates.json'), 'utf8')) as CandidatesFile;
+  const snapshot = JSON.parse(readFileSync(join(dir, SNAPSHOT), 'utf8')) as Snapshot;
   const batches = planBatches(collectCandidates(file, snapshot));
 
-  const batchDir = join(DIR, 'batches');
+  const batchDir = join(dir, 'batches');
+
+  const prettierOptions = await resolveConfig(join(batchDir, 'batch.md'));
+  const prepared = await Promise.all(
+    batches.map(async (batch) => {
+      const markdown = await formatMarkdown(batchMarkdown(batch), {
+        ...prettierOptions,
+        parser: 'markdown',
+      });
+      return {
+        markdown,
+        entry: {
+          batch: batch.id,
+          kind: batch.kind,
+          file: `${batch.id}.png`,
+          ...(batch.kind === 'text' && { fileEn: `${batch.id}-en.png` }),
+          cells: batch.items.map((item, i) => {
+            const supersededBy = batch.supersededBy?.get(i + 1);
+            return { cell: i + 1, ...item, ...(supersededBy && { supersededBy }) };
+          }),
+        },
+      };
+    })
+  );
+  const manifest = prepared.map(({ entry }) => entry);
+  const manifestJson = `${JSON.stringify(manifest, null, 2)}\n`;
+
   rmSync(batchDir, { recursive: true, force: true });
   mkdirSync(batchDir, { recursive: true });
-
-  const manifest = batches.map((batch) => {
-    writeFileSync(join(batchDir, `${batch.id}.md`), batchMarkdown(batch));
-    return {
-      batch: batch.id,
-      kind: batch.kind,
-      file: `${batch.id}.png`,
-      ...(batch.kind === 'text' && { fileEn: `${batch.id}-en.png` }),
-      cells: batch.items.map((item, i) => {
-        const supersededBy = batch.supersededBy?.get(i + 1);
-        return { cell: i + 1, ...item, ...(supersededBy && { supersededBy }) };
-      }),
-    };
-  });
-
-  writeFileSync(join(DIR, 'manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`);
+  for (const { markdown, entry } of prepared) {
+    writeFileSync(join(batchDir, `${entry.batch}.md`), markdown);
+  }
+  writeFileSync(join(dir, 'manifest.json'), manifestJson);
   const count = (kind: BatchKind) => manifest.filter((b) => b.kind === kind).length;
   console.log(
     `${count('universal')} text-free batches, ${count('text')} text batches, ${

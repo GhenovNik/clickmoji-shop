@@ -1,5 +1,13 @@
 // @vitest-environment node
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  copyFileSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { PrismaClient } from '@prisma/client';
@@ -366,5 +374,76 @@ describe('applyCell', () => {
         imageUrlEn: 'https://utfs.io/f/en.webp',
       },
     });
+  });
+});
+
+describe('batch prompts', () => {
+  it('preserves existing batches and manifest when formatting fails', async () => {
+    const { main } = await import('../../../scripts/emoji-batches');
+    const dir = mkdtempSync(join(tmpdir(), 'emoji-generator-'));
+    dirs.push(dir);
+    for (const name of ['candidates.json', 'catalog-snapshot-2026-10-30.json']) {
+      copyFileSync(join('docs/emoji-batches', name), join(dir, name));
+    }
+    mkdirSync(join(dir, 'batches'));
+    writeFileSync(join(dir, 'batches', 'old.md'), 'old batch');
+    writeFileSync(join(dir, 'manifest.json'), 'old manifest');
+
+    await expect(
+      main(dir, vi.fn().mockRejectedValue(new Error('formatter failed')))
+    ).rejects.toThrow('formatter failed');
+    expect(readFileSync(join(dir, 'batches', 'old.md'), 'utf8')).toBe('old batch');
+    expect(readFileSync(join(dir, 'manifest.json'), 'utf8')).toBe('old manifest');
+  });
+
+  it('emits the shared style and category rule', async () => {
+    const { universalPrompt, textPrompt } = await import('../../../scripts/emoji-batches');
+    for (const prompt of [universalPrompt([]), textPrompt([])]) {
+      expect(prompt).toContain(
+        'Style: One object viewed from the front at a slight angle, filling 70–80% of the cell; simplified smooth forms, 3–5 saturated colors, soft upper-left light and one soft highlight. No texture, pores, fibres, grains or photographic reflections; no outlines or background shadows. Labels are flat, single-color, with up to two large words. Recognizable at 32px.'
+      );
+      expect(prompt).toContain(
+        'Category cells: Compose two or three items of the same group with the same lighting and simplification.'
+      );
+    }
+  });
+});
+
+// Match explicit platform or visual-style references, not fruit names or metadata.
+const forbiddenVisualReference =
+  /\b(?:iphone|ios)\b|\bapple[\s-]+(?:emoji|style|styled|icons?|design|aesthetic|look)\b|\b(?:like|style of|inspired by)\s+apple\b/i;
+
+describe('prompt visual references', () => {
+  it('distinguishes brand references from product names and metadata', () => {
+    for (const text of [
+      'iPhone',
+      'IOS',
+      'Apple emoji',
+      'APPLE-style',
+      'like Apple',
+      'Apple icons',
+      'inspired by Apple',
+    ]) {
+      expect(forbiddenVisualReference.test(text), text).toBe(true);
+    }
+    for (const text of ['Apple juice', 'Pineapple', 'apple', 'apple-touch-icon', 'PWA']) {
+      expect(forbiddenVisualReference.test(text), text).toBe(false);
+    }
+  });
+
+  it('keeps checked-in prompts, instructions and generator free of visual brand references', () => {
+    const dir = 'docs/emoji-batches/batches';
+    const files = readdirSync(dir)
+      .filter((name) => name.endsWith('.md'))
+      .map((name) => join(dir, name));
+    expect(files.length).toBeGreaterThan(0);
+    files.push('docs/emoji-batches/README.md', 'scripts/emoji-batches.ts');
+    for (const file of files) {
+      const lines = readFileSync(file, 'utf8').split('\n');
+      const matches = lines.flatMap((line, index) =>
+        forbiddenVisualReference.test(line) ? [`${file}:${index + 1}: ${line}`] : []
+      );
+      expect(matches, matches.join('\n')).toEqual([]);
+    }
   });
 });
