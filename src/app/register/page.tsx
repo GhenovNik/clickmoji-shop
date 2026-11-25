@@ -165,7 +165,7 @@ export default function RegisterPage() {
             <button
               type="button"
               onClick={() => void startGoogleUpgrade()}
-              className="mb-4 w-full bg-white hover:bg-gray-50 text-gray-900 border border-gray-300 py-3 rounded-lg font-semibold transition-colors"
+              className="mb-4 w-full bg-white hover:bg-gray-50 text-gray-900 border border-gray-300 px-4 py-3 rounded-lg font-semibold transition-colors"
             >
               {t('register.saveWithGoogle')}
             </button>
