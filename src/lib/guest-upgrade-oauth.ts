@@ -1,13 +1,15 @@
-import { GUEST_UPGRADE_INTENT_COOKIE } from '@/lib/guest-upgrade-intent';
+import { GUEST_UPGRADE_ARM_COOKIE, GUEST_UPGRADE_INTENT_COOKIE } from '@/lib/guest-upgrade-intent';
 
 /**
  * Cookie set of the explicit guest upgrade's own NextAuth instance (AGE-1667).
  *
- * NextAuth names its OAuth state, PKCE verifier and callback-url cookies with one fixed name per
- * browser, whatever the provider. An ordinary Google start and an upgrade start therefore overwrite
- * each other, and the first callback then fails. The upgrade instance keeps the same session and
- * CSRF cookies (one browser, one session) but moves its round-trip cookies into their own namespace,
- * so each flow keeps its own state, PKCE verifier and callback url until it completes.
+ * The upgrade uses the same provider id (`google`) and the same redirect URI as ordinary sign-in, so
+ * nothing is added to the Google client. NextAuth names its OAuth state, PKCE verifier and
+ * callback-url cookies with one fixed name per browser, whatever the flow. An ordinary Google start
+ * and an upgrade start therefore overwrite each other, and the first callback then fails. The upgrade
+ * instance keeps the same session and CSRF cookies (one browser, one session) but moves its
+ * round-trip cookies into their own namespace, so each flow keeps its own state, PKCE verifier and
+ * callback url until it completes.
  */
 export const GUEST_UPGRADE_OAUTH_NAMESPACE = 'next-auth.guest-upgrade';
 
@@ -48,7 +50,27 @@ export function expiredCookieHeader(name: string, secure: boolean): string {
   return `${name}=; Path=/; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT; HttpOnly; SameSite=Lax${secure ? '; Secure' : ''}`;
 }
 
+/** The name of the upgrade instance's signed state cookie, read by the dispatcher (AGE-1667). */
+export function guestUpgradeStateCookieName(secure: boolean): string {
+  return guestUpgradeOAuthCookies(secure).state.name;
+}
+
 /** A Set-Cookie header value for the signed guest-upgrade intent (AGE-1667). */
 export function intentCookieHeader(value: string, maxAgeSeconds: number, secure: boolean): string {
-  return `${GUEST_UPGRADE_INTENT_COOKIE}=${value}; Path=/; Max-Age=${maxAgeSeconds}; HttpOnly; SameSite=Lax${secure ? '; Secure' : ''}`;
+  return signedCookieHeader(GUEST_UPGRADE_INTENT_COOKIE, value, maxAgeSeconds, secure);
+}
+
+/** A Set-Cookie header value for the server-side guest-upgrade arm (AGE-1667). */
+export function armCookieHeader(value: string, maxAgeSeconds: number, secure: boolean): string {
+  return signedCookieHeader(GUEST_UPGRADE_ARM_COOKIE, value, maxAgeSeconds, secure);
+}
+
+/** The arm and intent cookie names, cleared together on every explicit path exit. */
+export const GUEST_UPGRADE_SIGNED_COOKIE_NAMES = [
+  GUEST_UPGRADE_ARM_COOKIE,
+  GUEST_UPGRADE_INTENT_COOKIE,
+] as const;
+
+function signedCookieHeader(name: string, value: string, maxAgeSeconds: number, secure: boolean) {
+  return `${name}=${value}; Path=/; Max-Age=${maxAgeSeconds}; HttpOnly; SameSite=Lax${secure ? '; Secure' : ''}`;
 }

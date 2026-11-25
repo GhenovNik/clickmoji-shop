@@ -1,34 +1,44 @@
 import NextAuth, { type NextAuthOptions } from 'next-auth';
+import { decode } from 'next-auth/jwt';
 import type { NextRequest } from 'next/server';
 import { authOptions, guestUpgradeAuthOptions } from '@/lib/auth';
 import { shouldUseSecureSessionCookies } from '@/lib/guest';
 import {
+  mintGuestUpgradeArm,
   mintGuestUpgradeIntent,
+  readGuestUpgradeArm,
   readGuestUpgradeIntent,
   resolveRegistrationGuest,
 } from '@/lib/guest-promotion';
 import {
+  GOOGLE_PROVIDER_ID,
+  GUEST_UPGRADE_ARM_COOKIE,
   GUEST_UPGRADE_INTENT_COOKIE,
   GUEST_UPGRADE_INTENT_MAX_AGE_SECONDS,
-  GUEST_UPGRADE_PROVIDER_ID,
 } from '@/lib/guest-upgrade-intent';
 import {
   expiredCookieHeader,
   guestUpgradeOAuthCookieNames,
+  guestUpgradeStateCookieName,
   intentCookieHeader,
 } from '@/lib/guest-upgrade-oauth';
 
 /**
- * NextAuth routes (AGE-1667). Every request for the `google-upgrade` provider goes to a separate
- * NextAuth instance with its own round-trip cookies; every other request goes to the ordinary one.
- * The upgrade binds its intent to the OAuth `state` that NextAuth issued for that round trip:
- *   - start (POST signin): the signed intent cookie is set with the guest id and the state in the
- *     authorization URL, so it describes exactly this attempt;
- *   - callback (GET): the request's state must equal the intent's state before NextAuth runs. A
- *     newer attempt's intent therefore refuses an older one, and that refusal does not clear the
- *     newer attempt's cookies.
- * Single use: the promotion itself is one conditional update (see guest-promotion.ts); the round-trip
- * and intent cookies are also cleared on the callback whatever NextAuth decided.
+ * NextAuth routes (AGE-1667). The explicit guest upgrade uses the same Google provider and redirect
+ * URI as ordinary sign-in, so the server tells the two apart, and the browser never names the mode:
+ *
+ *   - Start (POST /api/auth/signin/google). Explicit only while the server-side arm cookie is present
+ *     (set by POST /api/auth/guest-upgrade for a live guest). The arm is consumed here. The explicit
+ *     start runs the upgrade NextAuth instance and binds an intent cookie to the guest's User.id and
+ *     to the OAuth `state` in the authorization URL. Otherwise the ordinary instance runs.
+ *   - Callback (GET /api/auth/callback/google). The request's `state` decides the mode. It is explicit
+ *     when it equals the intent's state, or the state of the upgrade instance's own round-trip cookie.
+ *     An explicit callback whose intent is missing or names another attempt is refused, and nothing
+ *     falls through to ordinary sign-up. Any other callback is ordinary, so an ordinary sign-in is
+ *     never refused because an upgrade started (or the reverse).
+ *
+ * Single use: the promotion itself is one conditional update (see guest-promotion.ts). The round-trip,
+ * arm and intent cookies are cleared on every explicit exit: success, refusal and cancellation.
  */
 
 const ordinaryHandler = NextAuth(authOptions);
@@ -37,8 +47,19 @@ type RouteContext = { params: Promise<{ nextauth?: string[] }> };
 
 type UpgradeHandler = (request: NextRequest, context: RouteContext) => Promise<Response>;
 
+const REGISTER_EXPIRED_PATH = '/register?upgrade=expired';
+
+/** A callback refusal: a redirect, as NextAuth's own callback refusals are. */
 function expiredRedirect(request: Request): Response {
-  return Response.redirect(new URL('/register?upgrade=expired', request.url), 302);
+  return Response.redirect(new URL(REGISTER_EXPIRED_PATH, request.url), 302);
+}
+
+/**
+ * A start refusal. The NextAuth client reads `url` from the JSON and navigates there; a redirect
+ * would be followed by fetch and break its JSON read.
+ */
+function expiredStartJson(request: Request): Response {
+  return Response.json({ url: new URL(REGISTER_EXPIRED_PATH, request.url).toString() });
 }
 
 function withCookies(response: Response, cookies: string[]): Response {
@@ -51,30 +72,65 @@ function withCookies(response: Response, cookies: string[]): Response {
   });
 }
 
-async function startGoogleUpgrade(
-  request: NextRequest,
-  context: RouteContext,
-  upgrade: UpgradeHandler,
-  secure: boolean
-): Promise<Response> {
-  const guest = await resolveRegistrationGuest(request);
-  if (guest.kind !== 'guest') return expiredRedirect(request);
-
-  const response = await upgrade(request, context);
-  if (!response.ok) return response;
-
+/** The `state` that NextAuth put into the authorization URL of this start, or null. */
+async function authorizationState(response: Response): Promise<string | null> {
   const body = (await response
     .clone()
     .json()
     .catch(() => null)) as { url?: unknown } | null;
-  let state: string | null = null;
   try {
-    state = typeof body?.url === 'string' ? new URL(body.url).searchParams.get('state') : null;
+    return typeof body?.url === 'string' ? new URL(body.url).searchParams.get('state') : null;
   } catch {
-    state = null;
+    return null;
   }
-  // No state in the authorization URL: no intent is set, so the callback refuses (fails closed).
-  if (!state) return response;
+}
+
+/**
+ * The OAuth state held by the upgrade instance's own round-trip cookie, read from the request. It
+ * is a NextAuth JWE of `{ value: state, provider }` salted with the cookie name. Null when absent,
+ * malformed or not verifiable with this secret.
+ */
+async function upgradeRoundTripState(
+  request: NextRequest,
+  secure: boolean
+): Promise<string | null> {
+  const name = guestUpgradeStateCookieName(secure);
+  const token = request.cookies.get(name)?.value;
+  const secret = process.env.AUTH_SECRET || process.env.NEXTAUTH_SECRET;
+  if (!token || !secret) return null;
+  try {
+    const claims = (await decode({ token, secret, salt: name })) as { value?: unknown } | null;
+    return typeof claims?.value === 'string' ? claims.value : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Explicit start. Runs only when the server-side arm cookie is present. The arm must be fresh, and
+ * the caller must still be the live guest it names. Any refusal returns `expired` JSON with the arm
+ * cleared, and never an ordinary start.
+ */
+async function startGoogleUpgrade(
+  request: NextRequest,
+  context: RouteContext,
+  secure: boolean
+): Promise<Response> {
+  const clearArm = expiredCookieHeader(GUEST_UPGRADE_ARM_COOKIE, secure);
+  const arm = await readGuestUpgradeArm(request.cookies.get(GUEST_UPGRADE_ARM_COOKIE)?.value);
+  const guest = await resolveRegistrationGuest(request);
+  const options: NextAuthOptions | null = guestUpgradeAuthOptions(secure);
+  if (!arm || !options || guest.kind !== 'guest' || guest.userId !== arm.guestUserId) {
+    return withCookies(expiredStartJson(request), [clearArm]);
+  }
+
+  const upgrade = NextAuth(options) as UpgradeHandler;
+  const response = await upgrade(request, context);
+  if (!response.ok) return withCookies(response, [clearArm]);
+
+  const state = await authorizationState(response);
+  // No state in the authorization URL: no intent is set, so the start fails closed.
+  if (!state) return withCookies(expiredStartJson(request), [clearArm]);
 
   let value: string;
   try {
@@ -84,20 +140,30 @@ async function startGoogleUpgrade(
   }
   return withCookies(response, [
     intentCookieHeader(value, GUEST_UPGRADE_INTENT_MAX_AGE_SECONDS, secure),
+    clearArm,
   ]);
 }
 
+/**
+ * Callback of an explicit round trip. The intent must name this round trip's state. A callback whose
+ * intent is missing or names another attempt is refused. Cookies are cleared only when that refusal
+ * belongs to this attempt (no intent left); a newer attempt's intent is never touched.
+ */
 async function finishGoogleUpgrade(
   request: NextRequest,
   context: RouteContext,
   upgrade: UpgradeHandler,
-  secure: boolean
+  secure: boolean,
+  intentState: string | null
 ): Promise<Response> {
-  const intent = await readGuestUpgradeIntent();
   const state = new URL(request.url).searchParams.get('state');
-  // The intent names another attempt, or none: refuse without touching the cookies, which may belong
-  // to a newer attempt that is still in progress.
-  if (!intent || !state || intent.state !== state) return expiredRedirect(request);
+  if (!intentState || intentState !== state) {
+    const belongsToThisAttempt = intentState === null;
+    const cleared = belongsToThisAttempt
+      ? guestUpgradeOAuthCookieNames(secure).map((name) => expiredCookieHeader(name, secure))
+      : [];
+    return withCookies(expiredRedirect(request), cleared);
+  }
 
   const response = await upgrade(request, context);
   const cleared = [...guestUpgradeOAuthCookieNames(secure), GUEST_UPGRADE_INTENT_COOKIE].map(
@@ -108,23 +174,32 @@ async function finishGoogleUpgrade(
 
 async function dispatch(request: NextRequest, context: RouteContext): Promise<Response> {
   const segments = (await context.params).nextauth ?? [];
-  if (segments[1] !== GUEST_UPGRADE_PROVIDER_ID) {
+  const isGoogle = segments[1] === GOOGLE_PROVIDER_ID;
+  const secure = shouldUseSecureSessionCookies(request);
+
+  if (isGoogle && segments[0] === 'signin' && request.method === 'POST') {
+    if (request.cookies.has(GUEST_UPGRADE_ARM_COOKIE)) {
+      return startGoogleUpgrade(request, context, secure);
+    }
     return ordinaryHandler(request, context);
   }
 
-  const secure = shouldUseSecureSessionCookies(request);
-  const options: NextAuthOptions | null = guestUpgradeAuthOptions(secure);
-  if (!options) return expiredRedirect(request);
-  const upgrade = NextAuth(options) as UpgradeHandler;
+  if (isGoogle && segments[0] === 'callback' && request.method === 'GET') {
+    const requestState = new URL(request.url).searchParams.get('state');
+    const intent = await readGuestUpgradeIntent();
+    const roundTripState = await upgradeRoundTripState(request, secure);
+    const explicit =
+      Boolean(requestState) && (intent?.state === requestState || roundTripState === requestState);
+    if (!explicit) return ordinaryHandler(request, context);
 
-  if (segments[0] === 'signin' && request.method === 'POST') {
-    return startGoogleUpgrade(request, context, upgrade, secure);
+    // Never the ordinary instance: without the upgrade instance, the explicit round trip is refused.
+    const options = guestUpgradeAuthOptions(secure);
+    if (!options) return expiredRedirect(request);
+    const upgrade = NextAuth(options) as UpgradeHandler;
+    return finishGoogleUpgrade(request, context, upgrade, secure, intent?.state ?? null);
   }
-  if (segments[0] === 'callback' && request.method === 'GET') {
-    return finishGoogleUpgrade(request, context, upgrade, secure);
-  }
-  // Any other request for the upgrade provider (a page, a POST callback) starts nothing.
-  return expiredRedirect(request);
+
+  return ordinaryHandler(request, context);
 }
 
 export async function GET(request: NextRequest, context: RouteContext) {

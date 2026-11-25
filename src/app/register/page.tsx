@@ -12,7 +12,7 @@ import { getProviders, signIn, useSession } from 'next-auth/react';
 import Link from 'next/link';
 import { Eye, EyeOff } from 'lucide-react';
 import LegalLinks from '@/components/LegalLinks';
-import { GUEST_UPGRADE_PROVIDER_ID } from '@/lib/guest-upgrade-intent';
+import { GOOGLE_PROVIDER_ID } from '@/lib/guest-upgrade-intent';
 
 /** Reasons the Google callback sends back as `/register?upgrade=<reason>` (AGE-1667). */
 function upgradeNoticeKeyFor(reason: string | null) {
@@ -46,7 +46,7 @@ export default function RegisterPage() {
     let active = true;
     getProviders()
       .then((providers) => {
-        if (active) setGoogleEnabled(Boolean(providers?.[GUEST_UPGRADE_PROVIDER_ID]));
+        if (active) setGoogleEnabled(Boolean(providers?.[GOOGLE_PROVIDER_ID]));
       })
       .catch(() => {
         if (active) setGoogleEnabled(false);
@@ -64,13 +64,14 @@ export default function RegisterPage() {
     setUpgradeReason(null);
     try {
       // The server arms the upgrade for this live guest (httpOnly cookie). A refusal means the
-      // guest session is no longer live, so the register page shows the expired notice.
+      // guest session is no longer live, so the register page shows the expired notice. The same
+      // Google provider and redirect URI serve the upgrade: the armed cookie is what makes it one.
       const res = await fetch('/api/auth/guest-upgrade', { method: 'POST' });
       if (!res.ok) {
         setUpgradeReason('expired');
         return;
       }
-      void signIn(GUEST_UPGRADE_PROVIDER_ID, { callbackUrl: '/' });
+      void signIn(GOOGLE_PROVIDER_ID, { callbackUrl: '/' });
     } catch {
       setError(t('register.networkError'));
     }

@@ -17,6 +17,8 @@ import {
 } from '@/lib/funnel';
 import { recordGuestActivity } from '@/lib/guest-activity';
 import {
+  GUEST_UPGRADE_ARM_COOKIE,
+  GUEST_UPGRADE_ARM_MAX_AGE_SECONDS,
   GUEST_UPGRADE_INTENT_COOKIE,
   GUEST_UPGRADE_INTENT_MAX_AGE_SECONDS,
 } from '@/lib/guest-upgrade-intent';
@@ -359,6 +361,62 @@ export async function mintGuestUpgradeIntent(
     maxAge: GUEST_UPGRADE_INTENT_MAX_AGE_SECONDS,
     salt: GUEST_UPGRADE_INTENT_COOKIE,
   });
+}
+
+type UpgradeArmClaims = {
+  kind?: unknown;
+  guestUserId?: unknown;
+  issuedAt?: unknown;
+};
+
+/**
+ * Arms the explicit upgrade for one live guest (AGE-1667): the server-side marker that the next
+ * Google sign-in start is an upgrade. Signed with the auth secret and bound to the guest's User.id,
+ * valid for GUEST_UPGRADE_ARM_MAX_AGE_SECONDS. It is consumed by that start (see the NextAuth route).
+ */
+export async function mintGuestUpgradeArm(
+  guestUserId: string,
+  nowSeconds: number = currentSessionIssuedAtSeconds()
+): Promise<string> {
+  const secret = getAuthSecret();
+  if (!secret) throw new Error('Auth secret is missing');
+  if (!guestUserId) throw new Error('Guest upgrade arm needs a guest');
+  const claims: UpgradeArmClaims = { kind: 'guest-upgrade-arm', guestUserId, issuedAt: nowSeconds };
+  return encode({
+    token: claims as unknown as Parameters<typeof encode>[0]['token'],
+    secret,
+    maxAge: GUEST_UPGRADE_ARM_MAX_AGE_SECONDS,
+    salt: GUEST_UPGRADE_ARM_COOKIE,
+  });
+}
+
+/**
+ * Verifies an arm cookie value. Returns the armed guest id only for a signed, fresh arm; a missing,
+ * forged, malformed or old value returns null.
+ */
+export async function readGuestUpgradeArm(
+  value: string | undefined,
+  nowSeconds: number = currentSessionIssuedAtSeconds()
+): Promise<{ guestUserId: string } | null> {
+  const secret = getAuthSecret();
+  if (!secret || !value) return null;
+  let claims: UpgradeArmClaims | null;
+  try {
+    claims = (await decode({
+      token: value,
+      secret,
+      salt: GUEST_UPGRADE_ARM_COOKIE,
+    })) as UpgradeArmClaims | null;
+  } catch {
+    return null;
+  }
+  if (!claims || claims.kind !== 'guest-upgrade-arm') return null;
+  const { guestUserId, issuedAt } = claims;
+  if (typeof guestUserId !== 'string' || guestUserId.length === 0) return null;
+  if (typeof issuedAt !== 'number' || !Number.isInteger(issuedAt)) return null;
+  if (issuedAt > nowSeconds + 30) return null;
+  if (nowSeconds - issuedAt >= GUEST_UPGRADE_ARM_MAX_AGE_SECONDS) return null;
+  return { guestUserId };
 }
 
 /**

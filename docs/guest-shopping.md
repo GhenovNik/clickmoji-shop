@@ -101,25 +101,31 @@ after promotion the ordinary AI and email behaviour applies with no extra switch
 
 ### Google sign-in from a guest session
 
-Google has two paths, and they are separate NextAuth providers that share one Google client. The
-path is chosen by the provider whose OAuth round trip returned, never by a cookie or a callback URL:
+Google has one provider, `google`, and one redirect URI, `/api/auth/callback/google`, as before.
+Nothing is added to the Google client. The explicit upgrade (AGE-1667) runs through a second NextAuth
+instance (`guestUpgradeAuthOptions`) built from the same provider. Its round-trip cookies are
+namespaced (`next-auth.guest-upgrade.*`: state, PKCE verifier, callback url). NextAuth keys those
+cookies by name, not by provider, so without the namespace an ordinary start and an upgrade start
+overwrite each other. With it, both round trips keep their own state, in either order.
 
-- `google` is the ordinary sign-in. It never reads the upgrade intent and never promotes a guest.
-- `google-upgrade` is the explicit upgrade (AGE-1667). It is served by its own NextAuth instance
-  (`guestUpgradeAuthOptions`) whose round-trip cookies are namespaced (`next-auth.guest-upgrade.*`:
-  state, PKCE verifier, callback url). NextAuth keys those cookies by name, not by provider, so
-  without the namespace an ordinary start and an upgrade start overwrite each other. With it, both
-  round trips keep their own state, in either order, and an ordinary sign-in is never refused because
-  an upgrade started (or the reverse). Canceled round trips leave nothing the other path can consume.
+The server, never the browser, decides which path a round trip takes:
 
-**Explicit upgrade.** The register page first calls `POST /api/auth/guest-upgrade`, which only
-confirms a live guest (409 otherwise) and sets no cookie. The page then starts Google with
-`signIn('google-upgrade')`. For a live guest, that start sets `clickmoji_guest_upgrade`: a signed
-(auth secret), httpOnly, SameSite Lax cookie bound to the guest's `User.id` and to the OAuth `state`
-of that round trip (the value in the authorization URL), valid for 300 seconds. The callback refuses
-unless the `state` it receives equals the intent's, so a newer attempt's intent cannot validate an
-older round trip. NextAuth then checks the state and PKCE cookies of the same round trip. The
-upgrade runs only with this intent and a live guest session that is the same guest:
+- **Arm.** `POST /api/auth/guest-upgrade` checks that the caller is a live guest (409 otherwise) and
+  sets `clickmoji_guest_upgrade_arm`: a signed, httpOnly, SameSite Lax cookie bound to that guest's
+  `User.id`, valid for 120 seconds. The register page calls it, then `signIn('google')`.
+- **Start.** `POST /api/auth/signin/google` takes the explicit path only while the arm cookie is
+  present. It consumes the arm, re-checks that the caller is the armed live guest, runs the upgrade
+  instance, and binds the intent to the OAuth `state` in the authorization URL. Any refusal returns
+  `{ url: /register?upgrade=expired }` as JSON, because the NextAuth client navigates to that URL. A
+  redirect would break its JSON read. Without the arm, the start is ordinary.
+- **Intent.** `clickmoji_guest_upgrade` is a signed, httpOnly cookie bound to the guest's `User.id`
+  and to that round trip's `state`, valid for 300 seconds.
+- **Callback.** `GET /api/auth/callback/google` is explicit when the returned `state` equals the
+  intent's state, or the state of the upgrade instance's own round-trip cookie. An explicit callback
+  whose intent is missing or names another attempt is refused with `/register?upgrade=expired`, and
+  nothing falls through to ordinary sign-up. Any other callback is ordinary, unchanged from #167.
+
+The upgrade runs only with this intent and a live guest session that is the same guest:
 
 - **Live guest, verified Google address, no account holds it**: the guest is promoted in place with
   `promoteGuestWithGoogleIdentity` (same `User.id`, no password, verified now, `GUEST_REGISTERED`).
@@ -129,8 +135,7 @@ upgrade runs only with this intent and a live guest session that is the same gue
 - **Address not verified by Google**: refused with `/register?upgrade=unverified`. No account is
   created and the guest stays a guest. A Google response without an email is refused the same way.
 - **Stale, removed, already-promoted or different guest, missing, forged or old intent, or no guest
-  session**: refused with `/register?upgrade=expired`. No second user is created, and the explicit
-  upgrade never falls back to ordinary sign-up.
+  session**: refused with `/register?upgrade=expired`. No second user is created.
 - **Replay**: the first promotion makes the guest an account, so a second callback for the same
   guest is `expired`. The promotion itself is one conditional update (`where { id, isGuest: true }`),
   which is the durable, multi-instance-safe single use; the intent cookie is not consumed in memory.
@@ -140,20 +145,27 @@ the address, or a new account is created. A guest row is never promoted, merged 
 path, whatever cookies the browser carries, so a guest's own Google login cannot silently convert
 the guest.
 
-Deployment: the Google OAuth client must list `<origin>/api/auth/callback/google-upgrade` as an
-authorized redirect URI in addition to `/api/auth/callback/google`. Until it does, the upgrade
-round trip fails at Google, and nothing is promoted.
+Deployment: no Google Cloud change. The client's redirect URIs stay exactly as they were.
+
+Limitations of this design, stated plainly:
+
+- A replaced or expired explicit callback has no tag of its own once the newer attempt has
+  overwritten the intent and round-trip state. It fails inside NextAuth's ordinary checks (a generic
+  OAuth error page), not on `/register?upgrade=expired`. It never signs anyone in.
+- The arm is a 120-second server-side marker. If the browser drops the arm cookie after the register
+  page armed it, that Google start is ordinary, exactly as an ordinary sign-in. The register page
+  arms and starts in the same click, so this window is the cookie being refused.
 
 Decisions:
 
-- A forged intent cookie can only select the stricter explicit path. It never grants a promotion
-  the guest session does not already hold.
-- The upgrade callback clears its round-trip and intent cookies whatever NextAuth decides (success,
-  refusal, cancellation). A callback whose state does not match the intent is refused without
-  touching cookies, because they may belong to a newer attempt still in progress. The intent also
-  expires on its own after 5 minutes.
-- A refused explicit upgrade cannot clear the stale guest cookie (a NextAuth redirect). The next
-  guest API call clears it, as it does for any stale guest.
+- A forged arm, intent or round-trip cookie can only select the stricter explicit path. It never
+  grants a promotion the guest session does not already hold.
+- The explicit callback clears its round-trip, arm and intent cookies whatever NextAuth decides
+  (success, refusal, cancellation). A callback whose state does not match the intent is refused
+  without touching cookies, because they may belong to a newer attempt still in progress. The intent
+  also expires on its own after 5 minutes.
+- A refused explicit start cannot clear the stale guest cookie (a NextAuth redirect). The next guest
+  API call clears it, as it does for any stale guest.
 - Two promotions at once (two guests, or Google and email for one guest): the conditional update and
   the unique email decide. The loser is refused, and no second account is created.
 
@@ -170,6 +182,13 @@ recovers an account.
 
 ## Decisions (AGE-1667)
 
+- **One Google provider and one redirect URI.** The explicit upgrade does not add a provider id or a
+  callback path to the Google client. The mode is chosen on the server: a signed arm at start, then
+  the intent and the round-trip state at callback. The browser never names the mode, and no
+  `google-upgrade` redirect URI is needed.
+- **Explicit callbacks never fall through.** An explicit callback with a missing or foreign intent is
+  refused as `expired`, never routed to ordinary sign-up. The one exception is a state that matches
+  neither the intent nor the round-trip cookie, which is ordinary by definition and fails there.
 - **No account merging.** A promotion never merges a guest with an existing account. An email that
   belongs to another account is refused, and the guest keeps its lists and stays a guest.
 - **In-place update, not a copy.** The guest row keeps its `id` and all owned data. A new row

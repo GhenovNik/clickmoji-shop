@@ -19,7 +19,7 @@ import {
   isSessionIssuedAtClaim,
   isSessionTokenFreshForUser,
 } from './guest';
-import { GUEST_UPGRADE_PROVIDER_ID } from './guest-upgrade-intent';
+import { GOOGLE_PROVIDER_ID } from './guest-upgrade-intent';
 import { guestUpgradeOAuthCookies } from './guest-upgrade-oauth';
 
 const providers: NextAuthOptions['providers'] = [
@@ -74,37 +74,30 @@ const providers: NextAuthOptions['providers'] = [
 const googleConfigured = Boolean(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET);
 
 /**
- * The explicit guest upgrade (AGE-1667) is a separate provider with the same Google client. The
- * route in src/app/api/auth/[...nextauth] sends its requests to guestUpgradeAuthOptions, a NextAuth
- * instance with namespaced round-trip cookies, so the two flows never overwrite each other's state.
+ * The one Google provider (`google`, redirect URI /api/auth/callback/google). The explicit upgrade
+ * (AGE-1667) uses a second NextAuth instance built from this same provider, see guestUpgradeAuthOptions.
+ * Nothing new is registered with Google.
  */
-function googleUpgradeProvider() {
+function googleProvider() {
   return Google({
-    id: GUEST_UPGRADE_PROVIDER_ID,
     clientId: process.env.GOOGLE_CLIENT_ID as string,
     clientSecret: process.env.GOOGLE_CLIENT_SECRET as string,
   });
 }
 
 if (googleConfigured) {
-  providers.push(
-    Google({
-      clientId: process.env.GOOGLE_CLIENT_ID as string,
-      clientSecret: process.env.GOOGLE_CLIENT_SECRET as string,
-    })
-  );
-  providers.push(googleUpgradeProvider());
+  providers.push(googleProvider());
 }
 
-/** Google identity verification for either Google provider: the same profile checks apply. */
+/** Google identity from the ordinary provider: a verified identity, the same checks either way. */
 function isGoogleAccount(account: { provider?: string } | null | undefined): boolean {
-  return account?.provider === 'google' || account?.provider === GUEST_UPGRADE_PROVIDER_ID;
+  return account?.provider === GOOGLE_PROVIDER_ID;
 }
 
 /**
- * Explicit guest upgrade through Google (AGE-1667). Runs only for a callback of the
- * `google-upgrade` provider, whose state and PKCE cookies NextAuth has already verified for that
- * provider. It never falls back to ordinary sign-in: every refusal redirects to the register page
+ * Explicit guest upgrade through Google (AGE-1667). Runs only in the upgrade NextAuth instance
+ * (guestUpgradeAuthOptions), whose state and PKCE cookies NextAuth has already verified for that
+ * round trip. It never falls back to ordinary sign-in: every refusal redirects to the register page
  * with no session and no second user. Promotion keeps the guest's User.id.
  *
  * The guest must be the live guest the upgrade was armed for (the signed intent cookie names it),
@@ -152,16 +145,25 @@ async function completeGoogleUpgrade(
 }
 
 /**
- * The NextAuth instance that serves the explicit guest upgrade only: the `google-upgrade` provider
- * and the namespaced round-trip cookies of guest-upgrade-oauth.ts. Null when Google is not configured.
+ * The NextAuth instance that serves the explicit guest upgrade only (AGE-1667): the same `google`
+ * provider and redirect URI, the namespaced round-trip cookies of guest-upgrade-oauth.ts, and a
+ * sign-in callback that only promotes. Null when Google is not configured. The route picks this
+ * instance for a round trip that the server armed and bound to an intent (see the NextAuth route).
  */
 export function guestUpgradeAuthOptions(secure: boolean): NextAuthOptions | null {
   if (!googleConfigured) return null;
   return {
     ...authOptions,
-    providers: [googleUpgradeProvider()],
+    providers: [googleProvider()],
     useSecureCookies: secure,
     cookies: guestUpgradeOAuthCookies(secure),
+    callbacks: {
+      ...authOptions.callbacks,
+      async signIn({ user, account, profile }) {
+        if (account?.provider !== GOOGLE_PROVIDER_ID) return false;
+        return completeGoogleUpgrade(user, profile);
+      },
+    },
   };
 }
 
@@ -169,10 +171,7 @@ export const authOptions: NextAuthOptions = {
   ...authConfig,
   callbacks: {
     async signIn({ user, account, profile }) {
-      if (account?.provider === GUEST_UPGRADE_PROVIDER_ID) {
-        return completeGoogleUpgrade(user, profile);
-      }
-      if (account?.provider !== 'google') {
+      if (account?.provider !== GOOGLE_PROVIDER_ID) {
         if (user?.id) {
           const guestId = await readGuestIdFromRequestScope();
           await recordFunnelEvent({
@@ -190,8 +189,8 @@ export const authOptions: NextAuthOptions = {
         return false;
       }
 
-      // Ordinary Google sign-in (AGE-1667): it never reads the upgrade intent and never promotes a
-      // guest, whatever cookies the browser carries. A guest row is refused, as before.
+      // Ordinary Google sign-in (AGE-1667): it never reads the upgrade intent or arm and never
+      // promotes a guest, whatever cookies the browser carries. A guest row is refused, as before.
       const existingUser = await prisma.user.findUnique({ where: { email } });
 
       if (existingUser?.isGuest) {

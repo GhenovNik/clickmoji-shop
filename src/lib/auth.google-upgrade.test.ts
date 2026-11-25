@@ -2,6 +2,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const doubles = vi.hoisted(() => ({
+  // Google is configured, so both NextAuth instances (ordinary and upgrade) exist.
+  env: (() => {
+    process.env.GOOGLE_CLIENT_ID = 'test-google-client-id';
+    process.env.GOOGLE_CLIENT_SECRET = 'test-google-client-secret';
+    return true;
+  })(),
   findUniqueUser: vi.fn(),
   createUser: vi.fn(),
   updateUser: vi.fn(),
@@ -46,7 +52,7 @@ vi.mock('@/lib/guest-promotion', async (importOriginal) => ({
   upgradeGuestWithGoogle: doubles.upgradeWithGoogle,
 }));
 
-const { authOptions } = await import('./auth');
+const { authOptions, guestUpgradeAuthOptions } = await import('./auth');
 const { mintGuestUpgradeIntent } = await import('./guest-promotion');
 const { GUEST_UPGRADE_INTENT_COOKIE } = await import('./guest-upgrade-intent');
 
@@ -67,21 +73,27 @@ async function armUpgrade(guestUserId = GUEST_ID, issuedAt = NOW) {
   );
 }
 
+/**
+ * Runs the sign-in callback of one NextAuth instance. The upgrade instance (AGE-1667) is the one
+ * built by guestUpgradeAuthOptions for the round trip the route validated; ordinary sign-in is the
+ * main instance. Both use the one `google` provider.
+ */
 async function callback(
-  provider: 'google' | 'google-upgrade',
-  { verified = true }: { verified?: boolean } = {}
+  instance: 'ordinary' | 'upgrade',
+  { verified = true, email = EMAIL }: { verified?: boolean; email?: string | null } = {}
 ) {
-  const signIn = authOptions.callbacks!.signIn!;
-  const user = { id: 'google-subject', email: EMAIL, name: 'Shopper', image: null };
+  const options = instance === 'upgrade' ? guestUpgradeAuthOptions(false)! : authOptions;
+  const signIn = options.callbacks!.signIn!;
+  const user = { id: 'google-subject', email, name: 'Shopper', image: null };
   const result = await signIn({
     user,
-    account: { provider, type: 'oauth', providerAccountId: 'sub' },
-    profile: { email: EMAIL, email_verified: verified },
+    account: { provider: 'google', type: 'oauth', providerAccountId: 'sub' },
+    profile: { email, email_verified: verified },
   } as unknown as SignInParams);
   return { result, user };
 }
 
-const upgrade = (opts?: { verified?: boolean }) => callback('google-upgrade', opts);
+const upgrade = (opts?: { verified?: boolean }) => callback('upgrade', opts);
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -246,12 +258,7 @@ describe('Google upgrade callback: explicit guest upgrade (AGE-1667)', () => {
   it('refuses an upgrade whose provider returned no email', async () => {
     await armUpgrade();
     doubles.resolveGuest.mockResolvedValue({ kind: 'guest', userId: GUEST_ID, guestId: null });
-    const signIn = authOptions.callbacks!.signIn!;
-    const result = await signIn({
-      user: { id: 'google-subject', email: null, name: null, image: null },
-      account: { provider: 'google-upgrade', type: 'oauth', providerAccountId: 'sub' },
-      profile: {},
-    } as unknown as SignInParams);
+    const { result } = await callback('upgrade', { email: null });
 
     expect(result).toBe('/register?upgrade=unverified');
     expect(doubles.upgradeWithGoogle).not.toHaveBeenCalled();
@@ -263,7 +270,7 @@ describe('Google sign-in: ordinary behaviour never reads the upgrade (AGE-1667)'
     await armUpgrade();
     doubles.resolveGuest.mockResolvedValue({ kind: 'guest', userId: GUEST_ID, guestId: null });
 
-    const { result } = await callback('google');
+    const { result } = await callback('ordinary');
 
     expect(result).toBe(true);
     expect(doubles.upgradeWithGoogle).not.toHaveBeenCalled();
@@ -283,7 +290,7 @@ describe('Google sign-in: ordinary behaviour never reads the upgrade (AGE-1667)'
       emailVerified: new Date(),
     });
 
-    const { result, user } = await callback('google');
+    const { result, user } = await callback('ordinary');
 
     expect(result).toBe(true);
     expect(user.id).toBe('account-9');
@@ -302,7 +309,7 @@ describe('Google sign-in: ordinary behaviour never reads the upgrade (AGE-1667)'
       emailVerified: new Date(),
     });
 
-    const { result, user } = await callback('google');
+    const { result, user } = await callback('ordinary');
 
     expect(result).toBe(true);
     expect(user.id).toBe('account-9');
@@ -316,7 +323,7 @@ describe('Google sign-in: ordinary behaviour never reads the upgrade (AGE-1667)'
       isGuest: true,
     });
 
-    const { result } = await callback('google');
+    const { result } = await callback('ordinary');
 
     expect(result).toBe(false);
     expect(doubles.createUser).not.toHaveBeenCalled();

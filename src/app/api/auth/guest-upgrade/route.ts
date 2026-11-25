@@ -1,16 +1,37 @@
 import { NextResponse } from 'next/server';
-import { resolveRegistrationGuest } from '@/lib/guest-promotion';
+import { shouldUseSecureSessionCookies } from '@/lib/guest';
+import { mintGuestUpgradeArm, resolveRegistrationGuest } from '@/lib/guest-promotion';
+import { GUEST_UPGRADE_ARM_MAX_AGE_SECONDS } from '@/lib/guest-upgrade-intent';
+import { armCookieHeader } from '@/lib/guest-upgrade-oauth';
 
 /**
- * POST /api/auth/guest-upgrade - checks that the caller is a live guest before the register page
- * starts the explicit Google upgrade (AGE-1667). It arms nothing and sets no cookie: the intent is
- * bound to the OAuth state when the upgrade starts (see src/app/api/auth/[...nextauth]/route.ts).
- * A refusal (409) tells the register page to show the expired notice instead of leaving the page.
+ * POST /api/auth/guest-upgrade - arms the explicit Google upgrade for the live guest (AGE-1667). It
+ * sets a short-lived, signed, httpOnly arm cookie bound to that guest's User.id. The register page
+ * then calls signIn('google'), and the NextAuth route takes the explicit path only while the arm is
+ * present (see src/app/api/auth/[...nextauth]/route.ts). A refusal (409) means the guest session is
+ * no longer live, so the page shows the expired notice and starts nothing.
  */
 export async function POST(request: Request) {
   const guest = await resolveRegistrationGuest(request);
   if (guest.kind !== 'guest') {
     return NextResponse.json({ error: 'guestSessionExpired' }, { status: 409 });
   }
-  return NextResponse.json({ ok: true });
+
+  let value: string;
+  try {
+    value = await mintGuestUpgradeArm(guest.userId);
+  } catch {
+    return NextResponse.json({ error: 'guestUpgradeUnavailable' }, { status: 500 });
+  }
+
+  const response = NextResponse.json({ ok: true });
+  response.headers.append(
+    'Set-Cookie',
+    armCookieHeader(
+      value,
+      GUEST_UPGRADE_ARM_MAX_AGE_SECONDS,
+      shouldUseSecureSessionCookies(request)
+    )
+  );
+  return response;
 }

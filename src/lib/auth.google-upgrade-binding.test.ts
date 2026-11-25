@@ -1,7 +1,8 @@
 // @vitest-environment node
 //
-// The NextAuth round-trip checks (state and PKCE) with the exact cookie sets the app uses (AGE-1667):
-// the ordinary sign-in keeps NextAuth's default names, and the explicit upgrade has its own namespace
+// The NextAuth round-trip checks (state and PKCE) with the exact cookie sets the app uses (AGE-1667).
+// Both flows use the one `google` provider id, so the separation is by cookie: the ordinary sign-in
+// keeps NextAuth's default names, and the explicit upgrade has its own namespace
 // (guest-upgrade-oauth.ts). The full route-level behaviour is in auth.google-upgrade-flow.test.ts.
 // Here the installed checks run on real signed cookies, so overlapping round trips are proven at the
 // cookie level, in both orders.
@@ -126,44 +127,42 @@ describe('OAuth round trips with the app cookie sets (AGE-1667)', () => {
   });
 
   it('an upgrade round trip completes its own callback', async () => {
-    const started = await start(jar, 'google-upgrade', UPGRADE_COOKIES());
-    const done = await finish(jar, 'google-upgrade', UPGRADE_COOKIES());
+    const started = await start(jar, 'google', UPGRADE_COOKIES());
+    const done = await finish(jar, 'google', UPGRADE_COOKIES());
     expect(done.state).toBe(started.state);
   });
 
   it('order 1: an upgrade started, then an ordinary start: both callbacks complete', async () => {
-    const upgrade = await start(jar, 'google-upgrade', UPGRADE_COOKIES());
+    const upgrade = await start(jar, 'google', UPGRADE_COOKIES());
     const ordinary = await start(jar, 'google', ORDINARY_COOKIES());
 
     expect((await finish(jar, 'google', ORDINARY_COOKIES())).state).toBe(ordinary.state);
-    expect((await finish(jar, 'google-upgrade', UPGRADE_COOKIES())).state).toBe(upgrade.state);
+    expect((await finish(jar, 'google', UPGRADE_COOKIES())).state).toBe(upgrade.state);
   });
 
   it('order 2: an ordinary start, then an upgrade started: both callbacks complete', async () => {
     const ordinary = await start(jar, 'google', ORDINARY_COOKIES());
-    const upgrade = await start(jar, 'google-upgrade', UPGRADE_COOKIES());
+    const upgrade = await start(jar, 'google', UPGRADE_COOKIES());
 
-    expect((await finish(jar, 'google-upgrade', UPGRADE_COOKIES())).state).toBe(upgrade.state);
+    expect((await finish(jar, 'google', UPGRADE_COOKIES())).state).toBe(upgrade.state);
     expect((await finish(jar, 'google', ORDINARY_COOKIES())).state).toBe(ordinary.state);
   });
 
   it('a canceled upgrade (no callback) leaves nothing an ordinary round trip can consume', async () => {
-    await start(jar, 'google-upgrade', UPGRADE_COOKIES());
+    await start(jar, 'google', UPGRADE_COOKIES());
     // The user cancels at Google; the upgrade callback never runs. An ordinary sign-in follows.
     const later = await start(jar, 'google', ORDINARY_COOKIES());
     expect((await finish(jar, 'google', ORDINARY_COOKIES())).state).toBe(later.state);
   });
 
   it('a replayed upgrade callback finds its state cookie already consumed', async () => {
-    await start(jar, 'google-upgrade', UPGRADE_COOKIES());
-    await finish(jar, 'google-upgrade', UPGRADE_COOKIES());
-    await expect(finish(jar, 'google-upgrade', UPGRADE_COOKIES())).rejects.toThrow(
-      /cookie was missing/
-    );
+    await start(jar, 'google', UPGRADE_COOKIES());
+    await finish(jar, 'google', UPGRADE_COOKIES());
+    await expect(finish(jar, 'google', UPGRADE_COOKIES())).rejects.toThrow(/cookie was missing/);
   });
 
   it('an ordinary callback refuses an upgrade state cookie that is copied under the ordinary name', async () => {
-    await start(jar, 'google-upgrade', UPGRADE_COOKIES());
+    await start(jar, 'google', UPGRADE_COOKIES());
     // The signature is salted with the cookie's own name, so the copy does not verify as ordinary state.
     jar[ORDINARY_COOKIES().state.name] = jar[UPGRADE_COOKIES().state.name];
     await expect(finish(jar, 'google', ORDINARY_COOKIES())).rejects.toThrow(

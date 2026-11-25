@@ -1,10 +1,7 @@
 // @vitest-environment node
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import {
-  GUEST_UPGRADE_INTENT_COOKIE as UPGRADE_INTENT_COOKIE,
-  GUEST_UPGRADE_PROVIDER_ID,
-} from './guest-upgrade-intent';
+import { GUEST_UPGRADE_INTENT_COOKIE as UPGRADE_INTENT_COOKIE } from './guest-upgrade-intent';
 
 /**
  * Real-PostgreSQL checks of guest upgrades (AGE-1667): Google sign-in and email registration of the
@@ -72,6 +69,8 @@ describe.skipIf(!url || !isLocal)('guest upgrade on PostgreSQL', () => {
   let POST: (request: Request) => Promise<Response>;
   let encode: typeof import('next-auth/jwt').encode;
   let authOptions: typeof import('./auth').authOptions;
+  let guestUpgradeAuthOptions: typeof import('./auth').guestUpgradeAuthOptions;
+  let upgradeSignInCallback: (args: SignInArgs) => Promise<boolean>;
   let signInCallback: (args: SignInArgs) => Promise<boolean>;
   let jwtCallback: (args: {
     token: Record<string, unknown>;
@@ -154,9 +153,9 @@ describe.skipIf(!url || !isLocal)('guest upgrade on PostgreSQL', () => {
   }
 
   /**
-   * Arms an explicit upgrade for one guest, as POST /api/auth/guest-upgrade does (AGE-1667): the
-   * signed intent cookie names the guest's User.id. The Google round trip is then the
-   * `google-upgrade` provider, as the register page starts it.
+   * Arms an explicit upgrade for one guest (AGE-1667): the signed intent cookie names the guest's
+   * User.id and the round trip's OAuth state. The Google round trip is the same `google` provider;
+   * the explicit callback is the upgrade NextAuth instance's, as the route dispatches it.
    */
   async function setUpgradeIntent(guestUserId: string) {
     jar.cookies.set(
@@ -171,10 +170,11 @@ describe.skipIf(!url || !isLocal)('guest upgrade on PostgreSQL', () => {
   ) {
     const sub = options.sub ?? `google-${randomUUID()}`;
     if (options.explicit) setUpgradeIntent(options.explicit);
-    return signInCallback({
+    const callback = options.explicit ? upgradeSignInCallback : signInCallback;
+    return callback({
       user: { id: sub, email, name: 'Google Name', image: 'https://img.example.test/a.png' },
       account: {
-        provider: options.explicit ? GUEST_UPGRADE_PROVIDER_ID : 'google',
+        provider: 'google',
         type: 'oauth',
         providerAccountId: sub,
       },
@@ -188,8 +188,10 @@ describe.skipIf(!url || !isLocal)('guest upgrade on PostgreSQL', () => {
     prisma = new PrismaClient({ adapter: createPrismaPgAdapter(url!) });
     ({ POST } = await import('@/app/api/auth/register/route'));
     ({ encode } = await import('next-auth/jwt'));
-    ({ authOptions } = await import('./auth'));
+    ({ authOptions, guestUpgradeAuthOptions } = await import('./auth'));
     signInCallback = authOptions.callbacks!.signIn as unknown as typeof signInCallback;
+    upgradeSignInCallback = guestUpgradeAuthOptions(false)!.callbacks!
+      .signIn as unknown as typeof upgradeSignInCallback;
     jwtCallback = authOptions.callbacks!.jwt as unknown as typeof jwtCallback;
     ({ signGuestId } = await import('./funnel'));
     ({ mintGuestUpgradeIntent } = await import('./guest-promotion'));
@@ -241,12 +243,12 @@ describe.skipIf(!url || !isLocal)('guest upgrade on PostgreSQL', () => {
       const user = { id: 'google-sub-raw', email, name: 'G', image: null } as SignInArgs['user'];
       await setUpgradeIntent(guest.id);
       const account = {
-        provider: GUEST_UPGRADE_PROVIDER_ID,
+        provider: 'google',
         type: 'oauth',
         providerAccountId: 'raw',
       };
 
-      const allowed = await signInCallback({
+      const allowed = await upgradeSignInCallback({
         user,
         account,
         profile: { email, email_verified: true },
@@ -313,10 +315,10 @@ describe.skipIf(!url || !isLocal)('guest upgrade on PostgreSQL', () => {
         image: null,
       } as SignInArgs['user'];
       expect(
-        await signInCallback({
+        await upgradeSignInCallback({
           user,
           account: {
-            provider: GUEST_UPGRADE_PROVIDER_ID,
+            provider: 'google',
             type: 'oauth',
             providerAccountId: 'collide',
           },

@@ -1,8 +1,9 @@
 // @vitest-environment node
 //
 // Ordinary Google sign-in and the explicit guest upgrade (AGE-1667), run through the real route
-// handlers of src/app/api/auth/[...nextauth]/route.ts and the installed NextAuth: its real state,
-// PKCE and round-trip cookies, its real callback and session handling. Doubles stand in only for
+// handlers (src/app/api/auth/[...nextauth]/route.ts, src/app/api/auth/guest-upgrade/route.ts) and the
+// installed NextAuth: its real state, PKCE and round-trip cookies, its real callback and session
+// handling. Both flows use the one `google` provider and redirect URI. Doubles stand in only for
 // what is outside the process: Google's token and profile endpoints (network), the database (an
 // in-memory table with the same conditional-update semantics) and the request's cookie store.
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -108,7 +109,7 @@ vi.mock('@/lib/auth', async (importOriginal) => {
   // Only the Google endpoints go offline: no discovery document, a local token and profile step
   // that checks the state and PKCE values exactly as openid-client does in production.
   const offline = <T extends { id: string }>(provider: T): T => {
-    if (provider.id !== 'google' && provider.id !== 'google-upgrade') return provider;
+    if (provider.id !== 'google') return provider;
     return {
       ...provider,
       wellKnown: undefined,
@@ -189,10 +190,13 @@ afterAll(() => {
 });
 
 const { GET, POST } = await import('@/app/api/auth/[...nextauth]/route');
-const { GUEST_UPGRADE_INTENT_COOKIE } = await import('@/lib/guest-upgrade-intent');
+const { POST: armGuestUpgrade } = await import('@/app/api/auth/guest-upgrade/route');
+const { GUEST_UPGRADE_ARM_COOKIE, GUEST_UPGRADE_INTENT_COOKIE } =
+  await import('@/lib/guest-upgrade-intent');
 
 const SECRET = 'test-secret-for-google-upgrade-flow';
 const BASE = 'http://localhost:3000';
+const REDIRECT_URI = `${BASE}/api/auth/callback/google`;
 const ORDINARY_STATE = 'next-auth.state';
 const UPGRADE_STATE = 'next-auth.guest-upgrade.state';
 const UPGRADE_PKCE = 'next-auth.guest-upgrade.pkce.code_verifier';
@@ -240,38 +244,55 @@ async function send(
   return response;
 }
 
+/** POST /api/auth/guest-upgrade, as the register page calls it before signIn('google'). */
+async function arm(jar: Jar): Promise<Response> {
+  const cookie = [...jar].map(([name, value]) => `${name}=${value}`).join('; ');
+  const headers = new Headers({ cookie });
+  world.cookieHeader = cookie;
+  world.headers = headers;
+  const response = await armGuestUpgrade(
+    new Request(new URL('/api/auth/guest-upgrade', BASE), { method: 'POST', headers })
+  );
+  absorb(jar, response);
+  return response;
+}
+
 async function csrf(jar: Jar): Promise<string> {
   const response = await send(jar, 'GET', '/api/auth/csrf');
   return ((await response.json()) as { csrfToken: string }).csrfToken;
 }
 
-/** Starts a round trip the way next-auth/react's signIn does: POST signin, then Google's URL. */
-async function startSignIn(jar: Jar, provider: string) {
+/**
+ * Starts a round trip the way next-auth/react's signIn does: POST signin/google, then the URL it
+ * returns. `explicit` arms the upgrade first, as the register page does. `url` is the URL the client
+ * would navigate to: Google's authorization URL, or the register page for a refused start.
+ */
+async function startSignIn(jar: Jar, { explicit = false }: { explicit?: boolean } = {}) {
+  if (explicit) await arm(jar);
   const csrfToken = await csrf(jar);
-  const response = await send(jar, 'POST', `/api/auth/signin/${provider}`, {
+  const response = await send(jar, 'POST', '/api/auth/signin/google', {
     csrfToken,
     callbackUrl: '/',
     json: 'true',
   });
-  if (response.status !== 200) return { response, state: null as string | null };
   const { url } = (await response.json()) as { url: string };
   const authorization = new URL(url);
   const state = authorization.searchParams.get('state');
   if (state) world.challenges.set(state, authorization.searchParams.get('code_challenge') ?? '');
-  return { response, state };
+  return { response, url, state };
 }
 
-/** Google's redirect back to the app for one round trip. */
-function finishSignIn(
-  jar: Jar,
-  provider: string,
-  state: string | null,
-  extra: Record<string, string> = {}
-) {
+/** Google's redirect back to the app for one round trip, always to the one redirect URI. */
+function finishSignIn(jar: Jar, state: string | null, extra: Record<string, string> = {}) {
   const query = new URLSearchParams(
     state === null ? extra : { code: 'authorization-code', state, ...extra }
   );
-  return send(jar, 'GET', `/api/auth/callback/${provider}?${query.toString()}`);
+  return send(jar, 'GET', `/api/auth/callback/google?${query.toString()}`);
+}
+
+function refusedTo(url: string): string | null {
+  const { pathname, search } = new URL(url);
+  return pathname === '/register' ? `${pathname}${search}` : null;
 }
 
 async function sessionSubjectOf(response: Response): Promise<string | null> {
@@ -353,10 +374,34 @@ beforeEach(() => {
   seedUser('user-existing', 'alex@example.com');
 });
 
+describe('one provider, one redirect URI for both flows (AGE-1667)', () => {
+  it('an ordinary start and an explicit start both send Google to /api/auth/callback/google', async () => {
+    const ordinary = await startSignIn(new Map());
+    const guestJar: Jar = new Map();
+    await seedGuest(guestJar);
+    const explicit = await startSignIn(guestJar, { explicit: true });
+
+    for (const started of [ordinary, explicit]) {
+      expect(started.state).toBeTruthy();
+      expect(new URL(started.url).searchParams.get('redirect_uri')).toBe(REDIRECT_URI);
+      expect(new URL(started.url).searchParams.get('client_id')).toBe('test-google-client-id');
+    }
+  });
+
+  it('the explicit start consumes the arm and leaves no arm behind', async () => {
+    const jar: Jar = new Map();
+    await seedGuest(jar);
+    await startSignIn(jar, { explicit: true });
+
+    expect(jar.has(GUEST_UPGRADE_ARM_COOKIE)).toBe(false);
+    expect(jar.has(GUEST_UPGRADE_INTENT_COOKIE)).toBe(true);
+  });
+});
+
 describe('round-trip cookies are namespaced per flow (AGE-1667)', () => {
-  it('an ordinary start writes only the ordinary state cookie, and an upgrade start only its own', async () => {
+  it('an ordinary start writes only the ordinary state cookie, and an explicit start only its own', async () => {
     const ordinary = new Map<string, string>();
-    await startSignIn(ordinary, 'google');
+    await startSignIn(ordinary);
     expect([...ordinary.keys()].filter((k) => k.includes('state') || k.includes('pkce'))).toEqual([
       ORDINARY_STATE,
       'next-auth.pkce.code_verifier',
@@ -364,7 +409,7 @@ describe('round-trip cookies are namespaced per flow (AGE-1667)', () => {
 
     const upgrade = new Map<string, string>();
     await seedGuest(upgrade);
-    await startSignIn(upgrade, 'google-upgrade');
+    await startSignIn(upgrade, { explicit: true });
     expect(upgrade.has(UPGRADE_STATE)).toBe(true);
     expect(upgrade.has(UPGRADE_PKCE)).toBe(true);
     expect(upgrade.has(UPGRADE_CALLBACK_URL)).toBe(true);
@@ -377,9 +422,9 @@ describe('ordinary Google sign-in (AGE-1667)', () => {
   it('signs an existing account in with the same email, and the session names that account', async () => {
     const jar: Jar = new Map();
     world.profile = alex;
-    const { state } = await startSignIn(jar, 'google');
+    const { state } = await startSignIn(jar);
 
-    const response = await finishSignIn(jar, 'google', state);
+    const response = await finishSignIn(jar, state);
 
     expect(response.headers.get('location')).not.toContain('upgrade=');
     expect(await sessionSubjectOf(response)).toBe('user-existing');
@@ -391,17 +436,17 @@ describe('ordinary sign-in and the upgrade overlap (AGE-1667)', () => {
     const jar: Jar = new Map();
     const guestId = await seedGuest(jar);
     world.profile = alex;
-    const ordinary = await startSignIn(jar, 'google');
-    const upgrade = await startSignIn(jar, 'google-upgrade');
+    const ordinary = await startSignIn(jar);
+    const upgrade = await startSignIn(jar, { explicit: true });
     world.profile = shopper;
 
-    const upgraded = await finishSignIn(jar, 'google-upgrade', upgrade.state);
+    const upgraded = await finishSignIn(jar, upgrade.state);
     expect(upgraded.headers.get('location')).not.toContain('upgrade=');
     expect(await sessionSubjectOf(upgraded)).toBe(guestId);
     expect(world.users.get(guestId)?.isGuest).toBe(false);
 
     world.profile = alex;
-    const signedIn = await finishSignIn(jar, 'google', ordinary.state);
+    const signedIn = await finishSignIn(jar, ordinary.state);
     expect(signedIn.headers.get('location')).not.toContain('upgrade=');
     expect(await sessionSubjectOf(signedIn)).toBe('user-existing');
   });
@@ -409,17 +454,17 @@ describe('ordinary sign-in and the upgrade overlap (AGE-1667)', () => {
   it('order 2: the upgrade starts first, the ordinary sign-in completes, and the upgrade is then refused', async () => {
     const jar: Jar = new Map();
     const guestId = await seedGuest(jar);
-    const upgrade = await startSignIn(jar, 'google-upgrade');
+    const upgrade = await startSignIn(jar, { explicit: true });
     world.profile = alex;
-    const ordinary = await startSignIn(jar, 'google');
+    const ordinary = await startSignIn(jar);
 
-    const signedIn = await finishSignIn(jar, 'google', ordinary.state);
+    const signedIn = await finishSignIn(jar, ordinary.state);
     expect(signedIn.headers.get('location')).not.toContain('upgrade=');
     expect(await sessionSubjectOf(signedIn)).toBe('user-existing');
 
     // The browser now holds an ordinary account, not the guest: the upgrade must not promote it.
     world.profile = shopper;
-    const refused = await finishSignIn(jar, 'google-upgrade', upgrade.state);
+    const refused = await finishSignIn(jar, upgrade.state);
     expect(refused.headers.get('location')).toContain('/register?upgrade=expired');
     expect(await sessionSubjectOf(refused)).toBeNull();
     expect(world.users.get(guestId)?.isGuest).toBe(true);
@@ -431,10 +476,10 @@ describe('explicit guest upgrade through Google (AGE-1667)', () => {
   it('promotes the live guest in place and signs that same id in', async () => {
     const jar: Jar = new Map();
     const guestId = await seedGuest(jar);
-    const { state } = await startSignIn(jar, 'google-upgrade');
+    const { state } = await startSignIn(jar, { explicit: true });
     world.profile = shopper;
 
-    const response = await finishSignIn(jar, 'google-upgrade', state);
+    const response = await finishSignIn(jar, state);
 
     expect(response.headers.get('location')).not.toContain('upgrade=');
     expect(await sessionSubjectOf(response)).toBe(guestId);
@@ -444,25 +489,40 @@ describe('explicit guest upgrade through Google (AGE-1667)', () => {
     expect(jar.has(UPGRADE_STATE)).toBe(false);
   });
 
-  it('does not start for a caller who is not a live guest: no round trip, no cookie', async () => {
+  it('refuses to start for a caller who is not a live guest: no round trip, no intent', async () => {
     const jar: Jar = new Map();
-    const response = await send(jar, 'POST', '/api/auth/signin/google-upgrade', {
-      csrfToken: await csrf(jar),
-      callbackUrl: '/',
-      json: 'true',
-    });
+    await seedGuest(jar, 'guest-1');
+    expect((await arm(jar)).status).toBe(200);
+    // The session now names another guest, so the armed guest is no longer the caller.
+    jar.set('next-auth.session-token', await guestSession('guest-2'));
 
-    expect(response.headers.get('location')).toContain('/register?upgrade=expired');
+    const started = await startSignIn(jar);
+
+    expect(refusedTo(started.url)).toBe('/register?upgrade=expired');
+    expect(started.state).toBeNull();
     expect(jar.has(UPGRADE_STATE)).toBe(false);
     expect(jar.has(GUEST_UPGRADE_INTENT_COOKIE)).toBe(false);
+    expect(jar.has(GUEST_UPGRADE_ARM_COOKIE)).toBe(false);
+  });
+
+  it('refuses a forged or garbage arm rather than starting an ordinary sign-in in its place', async () => {
+    const jar: Jar = new Map();
+    await seedGuest(jar);
+    jar.set(GUEST_UPGRADE_ARM_COOKIE, 'forged-value');
+
+    const started = await startSignIn(jar);
+
+    expect(refusedTo(started.url)).toBe('/register?upgrade=expired');
+    expect(started.state).toBeNull();
+    expect(jar.has(UPGRADE_STATE)).toBe(false);
   });
 
   it('a canceled upgrade promotes nothing, clears its own cookies, and leaves the guest as it was', async () => {
     const jar: Jar = new Map();
     const guestId = await seedGuest(jar);
-    const { state } = await startSignIn(jar, 'google-upgrade');
+    const { state } = await startSignIn(jar, { explicit: true });
 
-    const canceled = await finishSignIn(jar, 'google-upgrade', state, { error: 'access_denied' });
+    const canceled = await finishSignIn(jar, state, { error: 'access_denied' });
 
     expect(await sessionSubjectOf(canceled)).toBeNull();
     expect(world.users.get(guestId)?.isGuest).toBe(true);
@@ -472,40 +532,60 @@ describe('explicit guest upgrade through Google (AGE-1667)', () => {
 
     // An ordinary sign-in afterwards is untouched by the canceled attempt.
     world.profile = alex;
-    const ordinary = await startSignIn(jar, 'google');
-    const signedIn = await finishSignIn(jar, 'google', ordinary.state);
+    const ordinary = await startSignIn(jar);
+    const signedIn = await finishSignIn(jar, ordinary.state);
     expect(await sessionSubjectOf(signedIn)).toBe('user-existing');
   });
 
   it('a newer attempt replaces an older one: the older callback is refused and the newer still promotes', async () => {
     const jar: Jar = new Map();
     const guestId = await seedGuest(jar);
-    const older = await startSignIn(jar, 'google-upgrade');
-    const newer = await startSignIn(jar, 'google-upgrade');
+    const older = await startSignIn(jar, { explicit: true });
+    const newer = await startSignIn(jar, { explicit: true });
     expect(newer.state).not.toBe(older.state);
     world.profile = shopper;
 
-    const refused = await finishSignIn(jar, 'google-upgrade', older.state);
-    expect(refused.headers.get('location')).toContain('/register?upgrade=expired');
+    // The older round trip matches neither the intent nor its own cookie any more, so it is not
+    // explicit: it fails inside NextAuth's ordinary checks (generic OAuth error), never as a sign-in.
+    const refused = await finishSignIn(jar, older.state);
+    expect(refused.headers.get('location')).not.toContain('upgrade=promoted');
+    expect(await sessionSubjectOf(refused)).toBeNull();
     expect(world.users.get(guestId)?.isGuest).toBe(true);
     // The refusal does not clear the newer attempt's cookies.
     expect(jar.has(UPGRADE_STATE)).toBe(true);
     expect(jar.has(GUEST_UPGRADE_INTENT_COOKIE)).toBe(true);
 
-    const promoted = await finishSignIn(jar, 'google-upgrade', newer.state);
+    const promoted = await finishSignIn(jar, newer.state);
     expect(promoted.headers.get('location')).not.toContain('upgrade=');
     expect(world.users.get(guestId)?.isGuest).toBe(false);
     expect(world.users.size).toBe(2);
   });
 
+  it('an explicit attempt whose intent has expired is refused, never signed up as an ordinary account', async () => {
+    const jar: Jar = new Map();
+    const guestId = await seedGuest(jar);
+    const { state } = await startSignIn(jar, { explicit: true });
+    // The 5-minute intent is gone; the round-trip cookies of the same attempt are still present.
+    jar.delete(GUEST_UPGRADE_INTENT_COOKIE);
+    world.profile = shopper;
+
+    const response = await finishSignIn(jar, state);
+
+    expect(response.headers.get('location')).toContain('/register?upgrade=expired');
+    expect(await sessionSubjectOf(response)).toBeNull();
+    expect(world.users.get(guestId)?.isGuest).toBe(true);
+    expect(world.users.size).toBe(2);
+    expect(jar.has(UPGRADE_STATE)).toBe(false);
+  });
+
   it('a guest that expired before the callback yields no account and no session', async () => {
     const jar: Jar = new Map();
     const guestId = await seedGuest(jar);
-    const { state } = await startSignIn(jar, 'google-upgrade');
+    const { state } = await startSignIn(jar, { explicit: true });
     world.users.delete(guestId);
     world.profile = shopper;
 
-    const response = await finishSignIn(jar, 'google-upgrade', state);
+    const response = await finishSignIn(jar, state);
 
     expect(response.headers.get('location')).toContain('/register?upgrade=expired');
     expect(await sessionSubjectOf(response)).toBeNull();
@@ -515,18 +595,18 @@ describe('explicit guest upgrade through Google (AGE-1667)', () => {
   it('a replayed callback promotes nothing, with the browser cookies or with an older copy of them', async () => {
     const jar: Jar = new Map();
     const guestId = await seedGuest(jar);
-    const { state } = await startSignIn(jar, 'google-upgrade');
+    const { state } = await startSignIn(jar, { explicit: true });
     const beforeCallback: Jar = new Map(jar);
     world.profile = shopper;
-    const first = await finishSignIn(jar, 'google-upgrade', state);
+    const first = await finishSignIn(jar, state);
     expect(first.headers.get('location')).not.toContain('upgrade=');
 
     // The browser's cookies were cleared by the first callback: nothing left to validate against.
-    const cleared = await finishSignIn(jar, 'google-upgrade', state);
-    expect(cleared.headers.get('location')).toContain('/register?upgrade=expired');
+    const cleared = await finishSignIn(jar, state);
+    expect(await sessionSubjectOf(cleared)).toBeNull();
 
     // An older copy of the cookies (a replay) passes NextAuth's checks, but the row is already an account.
-    const replayed = await finishSignIn(beforeCallback, 'google-upgrade', state);
+    const replayed = await finishSignIn(beforeCallback, state);
     expect(replayed.headers.get('location')).toContain('/register?upgrade=expired');
     expect(await sessionSubjectOf(replayed)).toBeNull();
     expect(world.users.get(guestId)).toMatchObject({ email: 'new@example.com', isGuest: false });

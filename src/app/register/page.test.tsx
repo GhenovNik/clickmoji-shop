@@ -8,7 +8,6 @@ const auth = vi.hoisted(() => ({
   signIn: vi.fn(),
   getProviders: vi.fn(async () => ({
     google: { id: 'google' },
-    'google-upgrade': { id: 'google-upgrade' },
   })),
   session: null as null | { user: { isGuest: boolean } },
 }));
@@ -42,7 +41,6 @@ beforeEach(() => {
   auth.getProviders.mockReset();
   auth.getProviders.mockResolvedValue({
     google: { id: 'google' },
-    'google-upgrade': { id: 'google-upgrade' },
   });
   window.history.replaceState({}, '', '/register');
   router.push.mockReset();
@@ -230,7 +228,7 @@ describe('RegisterPage guest upgrade (AGE-1667)', () => {
     expect(screen.queryByRole('button', { name: 'Сохранить аккаунт через Google' })).toBeNull();
   });
 
-  it('arms the server-side upgrade first, then starts the google-upgrade provider', async () => {
+  it('arms the server-side upgrade first, then starts the same google provider', async () => {
     auth.session = { user: { isGuest: true } };
     const fetchMock = vi.fn(async () => Response.json({ ok: true }));
     vi.stubGlobal('fetch', fetchMock);
@@ -240,8 +238,9 @@ describe('RegisterPage guest upgrade (AGE-1667)', () => {
 
     await waitFor(() => expect(auth.signIn).toHaveBeenCalledTimes(1));
     expect(fetchMock).toHaveBeenCalledWith('/api/auth/guest-upgrade', { method: 'POST' });
-    expect(auth.signIn).toHaveBeenCalledWith('google-upgrade', { callbackUrl: '/' });
-    expect(auth.signIn).not.toHaveBeenCalledWith('google', expect.anything());
+    // The upgrade is the same Google provider and redirect URI; the server-side arm makes it explicit.
+    expect(auth.signIn).toHaveBeenCalledWith('google', { callbackUrl: '/' });
+    expect(auth.signIn).not.toHaveBeenCalledWith('google-upgrade', expect.anything());
     // The intent lives only in the server's httpOnly cookie; the page never sets a browser flag.
     expect(document.cookie).not.toContain('clickmoji_guest_upgrade');
   });
