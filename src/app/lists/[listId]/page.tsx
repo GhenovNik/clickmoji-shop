@@ -24,6 +24,8 @@ export default function ShoppingListPage({ params }: { params: Promise<{ listId:
   const { setActiveList } = useLists();
   const { listId } = use(params);
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
+  // Text import is refused for guests by POST /api/lists/import-text, so no entry point is shown.
+  const canImportFromText = !session?.user?.isGuest;
   const t = useTranslations('lists');
   const tCommon = useTranslations('common');
   const { rememberFocus, registerTarget, isFocusTarget } = useShoppingListFocus();
@@ -156,6 +158,7 @@ export default function ShoppingListPage({ params }: { params: Promise<{ listId:
         <ShoppingListEmptyState
           listName={list?.name || t('listPage.listFallback')}
           onImport={() => setIsImportModalOpen(true)}
+          showImport={canImportFromText}
         />
       ) : (
         <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 -mx-4 sm:mx-0 px-3 py-2 sm:p-5 pb-24 rounded-2xl">
@@ -191,14 +194,16 @@ export default function ShoppingListPage({ params }: { params: Promise<{ listId:
                   <ProductSearch compact />
                 </div>
 
-                <button
-                  type="button"
-                  onClick={openModalFromTrigger(() => setIsImportModalOpen(true))}
-                  className="shrink-0 w-28 sm:w-auto min-h-11 bg-gradient-to-r from-green-500 to-teal-600 hover:from-green-600 hover:to-teal-700 text-white px-2 sm:px-4 py-1 rounded-xl text-xs sm:text-sm font-semibold transition-all flex items-center justify-center gap-1"
-                >
-                  <span>📋</span>
-                  <span>{t('listPage.importFromText')}</span>
-                </button>
+                {canImportFromText && (
+                  <button
+                    type="button"
+                    onClick={openModalFromTrigger(() => setIsImportModalOpen(true))}
+                    className="shrink-0 w-28 sm:w-auto min-h-11 bg-gradient-to-r from-green-500 to-teal-600 hover:from-green-600 hover:to-teal-700 text-white px-2 sm:px-4 py-1 rounded-xl text-xs sm:text-sm font-semibold transition-all flex items-center justify-center gap-1"
+                  >
+                    <span>📋</span>
+                    <span>{t('listPage.importFromText')}</span>
+                  </button>
+                )}
               </div>
             </div>
 

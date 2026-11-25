@@ -6,6 +6,7 @@ import { isEmailVerificationRequired, sendVerificationEmail } from '@/lib/email'
 import { getPasswordValidationError } from '@/lib/validation/password';
 import { starterListData } from '@/lib/starter-lists';
 import { getGuestIdFromRequest, recordFunnelEvent } from '@/lib/funnel';
+import { isGuestEmail } from '@/lib/guest';
 import {
   checkRateLimit,
   getClientIp,
@@ -46,7 +47,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: t('api.auth.emailAndPasswordRequired') }, { status: 400 });
     }
 
-    if (!isValidEmail(normalizedEmail)) {
+    if (!isValidEmail(normalizedEmail) || isGuestEmail(normalizedEmail)) {
       return NextResponse.json({ error: t('api.auth.invalidEmail') }, { status: 400 });
     }
 

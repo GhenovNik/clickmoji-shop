@@ -2,6 +2,7 @@
 import assert from 'node:assert/strict';
 import { fixtureUrl } from './helpers.mjs';
 import { readFileSync } from 'node:fs';
+import crypto from 'node:crypto';
 import path from 'node:path';
 import { describe, it } from 'node:test';
 import {
@@ -9,20 +10,30 @@ import {
   libpqEnv,
   LIBPQ_ENV_NAMES,
   loadConfig,
+  loadConfirmConfig,
+  parseCliArgs,
   parseDockerTimeout,
+  parseEncryptFlag,
+  parseRetentionCount,
   REPO_ROOT,
 } from '../config.mjs';
 import { Ledger, LedgerError } from '../ledger.mjs';
 import { DockerRunner } from '../docker.mjs';
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync, mkdirSync, symlinkSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import os from 'node:os';
 import {
   POSTGRES_BASE_DIGEST,
   POSTGRES_BASE_IMAGE,
   TOOLS_IMAGE,
   DROP_THRESHOLD_PERCENT,
-  RETENTION,
+  DEFAULT_RETENTION_COUNT,
+  CONFIRMED_RECIPIENT_STATE_NAME,
+  ENCRYPTED_CONFIRM_STATE_NAME,
+  EXIT,
 } from '../constants.mjs';
+import { verifyBackupDirGitIgnored } from '../git.mjs';
+import { listBackups, StepError } from '../pipeline.mjs';
 import {
   CONTAINER_DIR,
   cleanupArgs,
@@ -42,8 +53,8 @@ import {
   ReportError,
 } from '../compare.mjs';
 import { formatStatusLine } from '../status.mjs';
-import { selectRetention } from '../retention.mjs';
-import { HERE, syntheticDatabase, makeSandbox } from './helpers.mjs';
+import { selectRetention, selectTransitionRetention } from '../retention.mjs';
+import { HERE, makeProjectRepo, makeSandbox, syntheticDatabase } from './helpers.mjs';
 
 const VALID_RECIPIENT = `age1${'q'.repeat(58)}`;
 
@@ -54,6 +65,7 @@ describe('config', () => {
     DATABASE_URL: syntheticDatabase().url,
     BACKUP_DIR: sandbox.backupDir,
     BACKUP_STATUS_FILE: sandbox.statusFile,
+    BACKUP_ENCRYPT: '1',
     BACKUP_AGE_RECIPIENT_FILE: recipientFile,
   });
 
@@ -85,14 +97,128 @@ describe('config', () => {
     );
   });
 
-  it('refuses backup paths inside the repository', () => {
+  it('allows gitignored backup dir inside repo while refusing status file and tmpdir inside repo', () => {
     const inside = path.join(REPO_ROOT, 'backups');
-    assert.throws(
-      () => loadConfig({ ...base(), BACKUP_DIR: inside }),
-      /BACKUP_DIR: путь внутри репозитория/
-    );
+    const config = loadConfig({ ...base(), BACKUP_DIR: inside });
+    assert.equal(config.backupDir, inside);
     assert.throws(
       () => loadConfig({ ...base(), BACKUP_STATUS_FILE: path.join(REPO_ROOT, 'status.log') }),
+      /BACKUP_STATUS_FILE: путь внутри репозитория/
+    );
+    assert.throws(
+      () => loadConfig({ ...base(), TMPDIR: path.join(REPO_ROOT, 'tmp') }),
+      /TMPDIR: путь внутри репозитория/
+    );
+    assert.throws(
+      () => loadConfig({ ...base(), TMPDIR: path.join(sandbox.backupDir, 'tmp') }),
+      /TMPDIR: путь внутри репозитория/
+    );
+  });
+
+  it('defaults to unencrypted mode without requiring BACKUP_AGE_RECIPIENT_FILE', () => {
+    const env = base();
+    delete env.BACKUP_ENCRYPT;
+    delete env.BACKUP_AGE_RECIPIENT_FILE;
+    const config = loadConfig(env);
+    assert.equal(config.encrypt, false);
+    assert.equal(config.recipientFile, null);
+    assert.equal(config.recipient, null);
+    assert.equal(config.keepCount, DEFAULT_RETENTION_COUNT);
+  });
+
+  it('parses BACKUP_ENCRYPT, BACKUP_RETENTION_COUNT and CLI args strictly', () => {
+    assert.equal(parseEncryptFlag(undefined), false);
+    assert.equal(parseEncryptFlag('0'), false);
+    assert.equal(parseEncryptFlag('1'), true);
+    assert.equal(parseEncryptFlag('true'), true);
+    assert.throws(() => parseEncryptFlag('maybe'), ConfigError);
+
+    assert.equal(parseRetentionCount(undefined), 2);
+    assert.equal(parseRetentionCount(' 7 '), 7);
+    for (const bad of ['0', '-1', '1.5', 'abc']) {
+      assert.throws(() => parseRetentionCount(bad), ConfigError, `rejects ${bad}`);
+    }
+
+    const sha = 'a'.repeat(64);
+    assert.deepEqual(parseCliArgs([]), { allowRowDrop: false });
+    assert.deepEqual(parseCliArgs(['--allow-row-drop']), { allowRowDrop: true });
+    assert.deepEqual(
+      parseCliArgs([
+        '--confirm-encrypted-restore',
+        'clickmoji-20261124T120000Z.dump.age',
+        '--sha256',
+        sha.toUpperCase(),
+      ]),
+      {
+        allowRowDrop: false,
+        confirmEncryptedRestore: 'clickmoji-20261124T120000Z.dump.age',
+        confirmSha256: sha,
+      }
+    );
+    assert.deepEqual(
+      parseCliArgs([
+        `--sha256=${sha}`,
+        '--confirm-encrypted-restore=clickmoji-20261124T120000Z.dump.age',
+      ]),
+      {
+        allowRowDrop: false,
+        confirmEncryptedRestore: 'clickmoji-20261124T120000Z.dump.age',
+        confirmSha256: sha,
+      }
+    );
+    for (const badArgs of [
+      ['--unknown'],
+      ['--confirm-encrypted-restore'],
+      ['--confirm-encrypted-restore', 'clickmoji-20261124T120000Z.dump.age'],
+      ['--confirm-encrypted-restore', ''],
+      ['--confirm-encrypted-restore='],
+      ['--sha256', sha],
+      ['--confirm-encrypted-restore', 'a.dump.age', '--sha256'],
+      ['--confirm-encrypted-restore', 'a.dump.age', '--sha256', 'not-hex'],
+      ['--confirm-encrypted-restore', 'a.dump.age', '--sha256=abc'],
+      ['--confirm-encrypted-restore', 'a.dump.age', '--sha256', sha, '--sha256', sha],
+      ['--confirm-encrypted-restore', '--allow-row-drop', '--sha256', sha],
+      [
+        '--allow-row-drop',
+        '--confirm-encrypted-restore',
+        'clickmoji-20261124T120000Z.dump.age',
+        '--sha256',
+        sha,
+      ],
+      [
+        '--confirm-encrypted-restore',
+        'a.dump.age',
+        '--confirm-encrypted-restore',
+        'b.dump.age',
+        '--sha256',
+        sha,
+      ],
+    ]) {
+      assert.throws(() => parseCliArgs(badArgs), ConfigError, `rejects ${badArgs.join(' ')}`);
+    }
+  });
+
+  it('loadConfirmConfig requires only BACKUP_DIR and BACKUP_STATUS_FILE, not DATABASE_URL or age keys', () => {
+    const confirm = loadConfirmConfig({
+      BACKUP_DIR: sandbox.backupDir,
+      BACKUP_STATUS_FILE: sandbox.statusFile,
+    });
+    assert.equal(confirm.backupDir, sandbox.backupDir);
+    assert.equal(confirm.statusFile, sandbox.statusFile);
+    assert.throws(
+      () =>
+        loadConfirmConfig({
+          BACKUP_DIR: 'relative/backups',
+          BACKUP_STATUS_FILE: sandbox.statusFile,
+        }),
+      /BACKUP_DIR: нужен абсолютный путь/
+    );
+    assert.throws(
+      () =>
+        loadConfirmConfig({
+          BACKUP_DIR: sandbox.backupDir,
+          BACKUP_STATUS_FILE: path.join(REPO_ROOT, 'status.log'),
+        }),
       /BACKUP_STATUS_FILE: путь внутри репозитория/
     );
   });
@@ -174,41 +300,441 @@ describe('config', () => {
 });
 
 describe('retention', () => {
-  const day = (n) => ({
-    name: `d${String(n).padStart(3, '0')}`,
-    time: new Date(Date.UTC(2026, 10, 24, 12) - n * 86_400_000),
-  });
+  const day = (n, encrypted = true) => {
+    const time = new Date(Date.UTC(2026, 10, 24, 12) - n * 86_400_000);
+    const stamp = time
+      .toISOString()
+      .replace(/[-:]/g, '')
+      .replace(/\.\d{3}Z$/, 'Z');
+    return {
+      name: `clickmoji-${stamp}${encrypted ? '.dump.age' : '.dump'}`,
+      time,
+      encrypted,
+    };
+  };
 
-  it('keeps exactly 14 of 100 daily copies: 7 daily, 4 weekly, 3 monthly', () => {
-    const entries = Array.from({ length: 100 }, (_, i) => day(i));
+  it('keeps exactly 2 newest of 10 copies by default', () => {
+    const entries = Array.from({ length: 10 }, (_, i) => day(i));
     const { keep, remove } = selectRetention(entries);
-    assert.equal(keep.length, 14);
-    assert.equal(remove.length, 86);
-    for (let i = 0; i < 7; i += 1)
-      assert.ok(keep.includes(`d${String(i).padStart(3, '0')}`), `newest day ${i} kept`);
+    assert.deepEqual(keep, [entries[0].name, entries[1].name]);
+    assert.equal(remove.length, 8);
   });
 
-  it('keeps everything when there are fewer than 14 copies in few periods', () => {
-    const entries = [day(0), day(1), day(2)];
+  it('keeps everything when there are fewer copies than the limit', () => {
+    const entries = [day(0)];
     assert.deepEqual(selectRetention(entries).remove, []);
   });
 
-  it('keeps one copy per day for the daily tier, even with several per day', () => {
-    const entries = [];
-    for (let n = 0; n < 100; n += 1) {
-      entries.push({ name: `a${n}`, time: new Date(day(n).time.getTime() + 3_600_000) });
-      entries.push({ name: `b${n}`, time: new Date(day(n).time.getTime()) });
+  it('recognizes both .dump and .dump.age across multiple copies per day, excludes temp/orphans, and keeps prior-version meta compatibility', () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'clickmoji-mixed-ret-'));
+    try {
+      mkdirSync(path.join(dir, 'meta'), { recursive: true });
+      const completed = [
+        'clickmoji-20261124T120000Z.dump',
+        'clickmoji-20261124T090000Z.dump.age',
+        'clickmoji-20261123T120000Z.dump',
+        'clickmoji-20261122T120000Z.dump.age',
+      ];
+      const xHash = crypto.createHash('sha256').update('x').digest('hex');
+      for (const f of completed) {
+        writeFileSync(path.join(dir, f), 'x');
+        // Omit `encrypted` on one legacy .dump.age entry to confirm prior-version compatibility.
+        const meta =
+          f === 'clickmoji-20261122T120000Z.dump.age'
+            ? {
+                name: f,
+                createdAt: '2026-11-22T12:00:00.000Z',
+                sizeBytes: 1,
+                sha256: xHash,
+                verify: 'ok',
+                migration: '20261101000000_init',
+                counts: { a: 1 },
+                flagged: [],
+              }
+            : { name: f, sizeBytes: 1, sha256: xHash, verify: 'ok', counts: { a: 1 } };
+        writeFileSync(path.join(dir, 'meta', `${f}.json`), JSON.stringify(meta));
+      }
+      const unaccepted = [
+        '.partial-clickmoji-20261125T120000Z.dump.age',
+        '.partial-clickmoji-20261125T120000Z.dump',
+        'dump.custom',
+        'clickmoji-20261125T120000Z.dump.tmp',
+        'clickmoji-20261124T060000Z.dump', // orphaned dump without meta/*.json
+        'clickmoji-20261124T030000Z.dump.age', // legacy suspicious copy
+      ];
+      for (const f of unaccepted) writeFileSync(path.join(dir, f), 'x');
+      writeFileSync(
+        path.join(dir, 'meta', 'clickmoji-20261124T030000Z.dump.age.json'),
+        JSON.stringify({
+          name: 'clickmoji-20261124T030000Z.dump.age',
+          verify: 'suspicious',
+          counts: { a: 1 },
+        })
+      );
+
+      const listed = listBackups(dir);
+      assert.equal(listed.length, 4, 'only recognized completed and accepted copies are listed');
+      const { keep, remove } = selectRetention(listed, 2);
+      assert.deepEqual(keep.sort(), [
+        'clickmoji-20261124T090000Z.dump.age',
+        'clickmoji-20261124T120000Z.dump',
+      ]);
+      assert.deepEqual(remove.sort(), [
+        'clickmoji-20261122T120000Z.dump.age',
+        'clickmoji-20261123T120000Z.dump',
+      ]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
     }
-    const { keep } = selectRetention(entries);
-    assert.equal(keep.length, 14);
-    const dayKeys = new Set(
-      entries.filter((e) => keep.includes(e.name)).map((e) => e.time.toISOString().slice(0, 10))
-    );
-    assert.equal(dayKeys.size, 14, 'no two kept copies share a calendar day');
   });
 
-  it('applies the policy constants', () => {
-    assert.deepEqual(RETENTION, { daily: 7, weekly: 4, monthly: 3 });
+  it('applies the default retention constant of 2 without weekly or monthly tiers', () => {
+    assert.equal(DEFAULT_RETENTION_COUNT, 2);
+    const entries = Array.from({ length: 10 }, (_, i) => day(i));
+    assert.equal(selectRetention(entries, 5).keep.length, 5);
+  });
+
+  it('B2 transition retention: preserves up to N plain copies + first .age, fills only free N slots with other .age (max N+1, never N+2), and pins confirmed copy on cutover including N=1', () => {
+    const p3 = day(6, false);
+    const p2 = day(5, false); // older plain
+    const p1 = day(4, false); // newer plain
+    const e1 = day(3, true); // first encrypted of transition
+    const e2 = day(2, true); // second encrypted
+    const e3 = day(1, true); // newest encrypted
+
+    // First encrypted run (unconfirmed): N=2 plain + 1 encrypted (N+1 = 3)
+    const first = selectTransitionRetention({
+      entries: [p2, p1, e1],
+      keepCount: 2,
+      encrypt: true,
+      confirmed: false,
+    });
+    assert.equal(first.waitingForConfirmation, true);
+    assert.deepEqual(first.keep.sort(), [p2.name, p1.name, e1.name].sort());
+    assert.deepEqual(first.remove, []);
+
+    // Repeated unconfirmed runs when plainKept === N (N=2): keep N plain + first encrypted (e1), prune e2 and e3 (never N+2)
+    const repeated = selectTransitionRetention({
+      entries: [p2, p1, e1, e2, e3],
+      keepCount: 2,
+      encrypt: true,
+      confirmed: false,
+    });
+    assert.equal(repeated.waitingForConfirmation, true);
+    assert.deepEqual(repeated.keep.sort(), [p2.name, p1.name, e1.name].sort());
+    assert.deepEqual(repeated.remove, [e2.name, e3.name]);
+
+    // N=1 unconfirmed: keeps 1 plain + first encrypted (N+1 = 2), prunes newer unconfirmed e2
+    const n1Unconfirmed = selectTransitionRetention({
+      entries: [p1, e1, e2],
+      keepCount: 1,
+      encrypt: true,
+      confirmed: false,
+    });
+    assert.equal(n1Unconfirmed.waitingForConfirmation, true);
+    assert.deepEqual(n1Unconfirmed.keep.sort(), [p1.name, e1.name].sort());
+    assert.deepEqual(n1Unconfirmed.remove, [e2.name]);
+
+    // When plainKept < N, other .age copies fill ONLY free slots in normal limit N (never exceeding N)
+    const freeSlots = selectTransitionRetention({
+      entries: [p1, e1, e2, e3],
+      keepCount: 3,
+      encrypt: true,
+      confirmed: false,
+    });
+    assert.equal(freeSlots.waitingForConfirmation, true);
+    assert.deepEqual(freeSlots.keep.sort(), [p1.name, e1.name, e3.name].sort());
+    assert.deepEqual(freeSlots.remove, [e2.name]);
+
+    // N=2 with plainKept=1 has 0 free slots after p1 + e1, so e2 is pruned (total = N = 2)
+    const zeroFreeSlots = selectTransitionRetention({
+      entries: [p1, e1, e2],
+      keepCount: 2,
+      encrypt: true,
+      confirmed: false,
+    });
+    assert.deepEqual(zeroFreeSlots.keep.sort(), [p1.name, e1.name].sort());
+    assert.deepEqual(zeroFreeSlots.remove, [e2.name]);
+
+    // Excess plaintext (>N) refuses before confirmation instead of deleting any plaintext copy (B3).
+    assert.throws(
+      () =>
+        selectTransitionRetention({
+          entries: [p3, p2, p1, e1],
+          keepCount: 2,
+          encrypt: true,
+          confirmed: false,
+        }),
+      /keepCount cannot be smaller than unencrypted backups before confirmation/
+    );
+
+    // Pre-transition encrypted copy older than newest plain is pruned when N+1 is full
+    const eOld = day(7, true);
+    const withOldEnc = selectTransitionRetention({
+      entries: [eOld, p2, p1, e1, e2],
+      keepCount: 2,
+      encrypt: true,
+      confirmed: false,
+    });
+    assert.deepEqual(withOldEnc.keep.sort(), [p2.name, p1.name, e1.name].sort());
+    assert.deepEqual(withOldEnc.remove, [eOld.name, e2.name]);
+
+    // Confirmed cutover (N=2): keeps confirmed e1 + newest e4, removes intermediate e3 before plain p2/p1
+    const e4 = day(0, true);
+    const afterConfirm = selectTransitionRetention({
+      entries: [p2, p1, e1, e3, e4],
+      keepCount: 2,
+      encrypt: true,
+      confirmed: true,
+      confirmedFile: e1.name,
+    });
+    assert.equal(afterConfirm.waitingForConfirmation, false);
+    assert.deepEqual(afterConfirm.keep.sort(), [e1.name, e4.name].sort());
+    assert.deepEqual(afterConfirm.remove, [e3.name, p2.name, p1.name]);
+
+    // Confirmed cutover (N=1): confirmed e1 takes priority over newly published e2; removes e2 before p1
+    const afterConfirmN1 = selectTransitionRetention({
+      entries: [p1, e1, e2],
+      keepCount: 1,
+      encrypt: true,
+      confirmed: true,
+      confirmedFile: e1.name,
+    });
+    assert.equal(afterConfirmN1.waitingForConfirmation, false);
+    assert.deepEqual(afterConfirmN1.keep, [e1.name]);
+    assert.deepEqual(afterConfirmN1.remove, [e2.name, p1.name]);
+
+    // Confirmed without a matching encrypted copy fails closed
+    assert.throws(() =>
+      selectTransitionRetention({
+        entries: [p1, e1],
+        keepCount: 1,
+        encrypt: true,
+        confirmed: true,
+        confirmedFile: 'clickmoji-20261120T000000Z.dump.age',
+      })
+    );
+  });
+
+  it('B4: fails closed on non-zero truncation, same-size byte substitution, and missing digest without modifying metadata', () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'clickmoji-integrity-unit-'));
+    try {
+      mkdirSync(path.join(dir, 'meta'), { recursive: true });
+      const name = 'clickmoji-20261124T120000Z.dump.age';
+      const orig = 'ORIGINAL-BYTES';
+      const origHash = crypto.createHash('sha256').update(orig).digest('hex');
+      const metaPath = path.join(dir, 'meta', `${name}.json`);
+
+      // 1. Non-zero truncation
+      writeFileSync(path.join(dir, name), 'ORIG');
+      writeFileSync(
+        metaPath,
+        JSON.stringify({
+          name,
+          encrypted: true,
+          sizeBytes: Buffer.byteLength(orig),
+          sha256: origHash,
+          verify: 'ok',
+          counts: { a: 1 },
+        })
+      );
+      assert.throws(
+        () => listBackups(dir),
+        (e) => e instanceof StepError && e.key === 'corruptBackup'
+      );
+
+      // 2. Same-size substitution
+      writeFileSync(path.join(dir, name), 'TAMPERED-BYTES');
+      assert.equal(Buffer.byteLength('TAMPERED-BYTES'), Buffer.byteLength(orig));
+      assert.throws(
+        () => listBackups(dir),
+        (e) => e instanceof StepError && e.key === 'corruptBackup'
+      );
+
+      // 3. Old record without digest/sizeBytes fails closed and does NOT auto-upgrade metadata by re-hashing
+      const rawNoDigest = JSON.stringify({ name, verify: 'ok', counts: { a: 1 } });
+      writeFileSync(metaPath, rawNoDigest);
+      assert.throws(
+        () => listBackups(dir),
+        (e) => e instanceof StepError && e.key === 'corruptBackup'
+      );
+      assert.equal(readFileSync(metaPath, 'utf8'), rawNoDigest, 'metadata never auto-rehashed');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('git check-ignore and main-checkout destination guard', () => {
+  it('accepts main checkout backups/ (also from worktree) and refuses non-ignored, worktree, foreign repo, external, symlink, and unavailable git', () => {
+    const tmp = mkdtempSync(path.join(os.tmpdir(), 'clickmoji-git-guard-'));
+    try {
+      const { repo: mainRepo, backupDir: ignored } = makeProjectRepo(path.join(tmp, 'main-repo'), {
+        copyScripts: false,
+      });
+      const worktree = path.join(tmp, 'linked-wt');
+      assert.equal(
+        spawnSync('git', ['-C', mainRepo, 'worktree', 'add', '-q', worktree, '-b', 'wt']).status,
+        0
+      );
+      const { backupDir: foreignBackups } = makeProjectRepo(path.join(tmp, 'foreign-repo'), {
+        copyScripts: false,
+      });
+      const { backupDir: wrongNameBackups } = makeProjectRepo(path.join(tmp, 'wrong-name-repo'), {
+        projectName: 'other-project',
+        copyScripts: false,
+      });
+      const outside = path.join(tmp, 'outside-backups');
+
+      // Main checkout backups/ passes from both mainRepo and linked worktree
+      const ok = verifyBackupDirGitIgnored({ backupDir: ignored, projectRoot: mainRepo });
+      assert.equal(ok.ok, true);
+      assert.equal(ok.inRepo, true);
+      const okFromWt = verifyBackupDirGitIgnored({ backupDir: ignored, projectRoot: worktree });
+      assert.equal(okFromWt.ok, true);
+
+      // Linked worktree's own backups/ fails even though it has .gitignore /backups/
+      const wtOwn = verifyBackupDirGitIgnored({
+        backupDir: path.join(worktree, 'backups'),
+        projectRoot: worktree,
+      });
+      assert.equal(wtOwn.ok, false);
+      assert.equal(wtOwn.key, 'notMainBackups');
+      assert.equal(wtOwn.exit, EXIT.failed);
+
+      // Foreign repo, wrong project identity, external path, and non-backups subdir fail
+      assert.equal(
+        verifyBackupDirGitIgnored({ backupDir: foreignBackups, projectRoot: worktree }).key,
+        'notMainBackups'
+      );
+      assert.equal(
+        verifyBackupDirGitIgnored({
+          backupDir: wrongNameBackups,
+          projectRoot: path.dirname(wrongNameBackups),
+        }).key,
+        'notMainBackups'
+      );
+      assert.equal(
+        verifyBackupDirGitIgnored({ backupDir: outside, projectRoot: worktree }).key,
+        'notMainBackups'
+      );
+      assert.equal(
+        verifyBackupDirGitIgnored({
+          backupDir: path.join(mainRepo, 'plain-backups'),
+          projectRoot: mainRepo,
+        }).key,
+        'notMainBackups'
+      );
+
+      // Repo root and .git directory fail
+      assert.equal(
+        verifyBackupDirGitIgnored({ backupDir: mainRepo, projectRoot: mainRepo }).key,
+        'notMainBackups'
+      );
+      assert.equal(
+        verifyBackupDirGitIgnored({
+          backupDir: path.join(mainRepo, '.git', 'backups'),
+          projectRoot: mainRepo,
+        }).key,
+        'notIgnored'
+      );
+
+      // Symlink pointing to backups or unignored directory fails
+      const unignoredTarget = path.join(mainRepo, 'exposed');
+      mkdirSync(unignoredTarget);
+      const link = path.join(tmp, 'alias-backups');
+      symlinkSync(unignoredTarget, link);
+      assert.equal(
+        verifyBackupDirGitIgnored({ backupDir: link, projectRoot: mainRepo }).key,
+        'notMainBackups'
+      );
+
+      // Symlinked meta/ inside mainRepo/backups fails
+      mkdirSync(ignored, { recursive: true });
+      symlinkSync(unignoredTarget, path.join(ignored, 'meta'));
+      assert.equal(
+        verifyBackupDirGitIgnored({ backupDir: ignored, projectRoot: mainRepo }).key,
+        'notIgnored'
+      );
+      rmSync(path.join(ignored, 'meta'));
+
+      // Exact targetPaths catch negated rules under /backups/*
+      writeFileSync(
+        path.join(mainRepo, '.gitignore'),
+        '/backups/*\n!/backups/clickmoji-20261125T034000Z.dump\n!/backups/.partial-clickmoji-20261125T034001Z.dump\n!/backups/meta/\n!/backups/meta/clickmoji-20261125T034002Z.dump.json\n!/backups/meta/.partial-clickmoji-20261125T034003Z.dump.json\n'
+      );
+      assert.equal(
+        verifyBackupDirGitIgnored({
+          backupDir: ignored,
+          projectRoot: mainRepo,
+          targetPaths: [path.join(ignored, 'clickmoji-20261125T034000Z.dump')],
+        }).key,
+        'notIgnored'
+      );
+      assert.equal(
+        verifyBackupDirGitIgnored({
+          backupDir: ignored,
+          projectRoot: mainRepo,
+          targetPaths: [path.join(ignored, '.partial-clickmoji-20261125T034001Z.dump')],
+        }).key,
+        'notIgnored'
+      );
+      assert.equal(
+        verifyBackupDirGitIgnored({
+          backupDir: ignored,
+          projectRoot: mainRepo,
+          targetPaths: [path.join(ignored, 'meta', 'clickmoji-20261125T034002Z.dump.json')],
+        }).key,
+        'notIgnored'
+      );
+      assert.equal(
+        verifyBackupDirGitIgnored({
+          backupDir: ignored,
+          projectRoot: mainRepo,
+          targetPaths: [
+            path.join(ignored, 'meta', '.partial-clickmoji-20261125T034003Z.dump.json'),
+          ],
+        }).key,
+        'notIgnored'
+      );
+
+      // Exact check catches negated rules targeting confirmation and recipient policy files under /backups/meta/
+      for (const stateFile of [
+        ENCRYPTED_CONFIRM_STATE_NAME,
+        `.partial-${ENCRYPTED_CONFIRM_STATE_NAME}`,
+        CONFIRMED_RECIPIENT_STATE_NAME,
+        `.partial-${CONFIRMED_RECIPIENT_STATE_NAME}`,
+      ]) {
+        writeFileSync(
+          path.join(mainRepo, '.gitignore'),
+          `/backups/*\n!/backups/meta/\n!/backups/meta/${stateFile}\n`
+        );
+        assert.equal(
+          verifyBackupDirGitIgnored({ backupDir: ignored, projectRoot: mainRepo }).key,
+          'notIgnored',
+          `must reject targeted negation for ${stateFile}`
+        );
+      }
+
+      // Non-ignored mainRepo/backups fails with notIgnored
+      writeFileSync(path.join(mainRepo, '.gitignore'), '');
+      const bad = verifyBackupDirGitIgnored({ backupDir: ignored, projectRoot: mainRepo });
+      assert.equal(bad.ok, false);
+      assert.equal(bad.key, 'notIgnored');
+      assert.equal(bad.exit, EXIT.failed);
+
+      // Unavailable git fails closed
+      const missingGit = verifyBackupDirGitIgnored({
+        backupDir: ignored,
+        projectRoot: mainRepo,
+        gitBin: '/nonexistent/git-bin',
+      });
+      assert.equal(missingGit.ok, false);
+      assert.equal(missingGit.key, 'git');
+      assert.equal(missingGit.exit, EXIT.unavailable);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
   });
 });
 

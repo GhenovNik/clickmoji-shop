@@ -86,6 +86,10 @@ async function importListText(request: Request) {
       return NextResponse.json({ error: t('api.import.invalidRequest') }, { status: 400 });
     }
 
+    if (session.user.isGuest) {
+      return NextResponse.json({ error: t('api.aiQuota.guestDisabled') }, { status: 403 });
+    }
+
     const userLimit = await checkRateLimit({
       key: `ai:import:${session.user.id}`,
       limit: 10,

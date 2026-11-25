@@ -71,6 +71,7 @@ const HANG = new Set((process.env.FAKE_DOCKER_HANG ?? '').split(',').filter(Bool
 if (process.env.FAKE_DOCKER_LOG) {
   const nameArg = argv.includes('--name') ? argv[argv.indexOf('--name') + 1] : null;
   const ledgerFile = process.env.FAKE_WATCH_LEDGER;
+  const recipientMount = mountSource('/run/recipient.txt');
   appendFileSync(
     process.env.FAKE_DOCKER_LOG,
     `${JSON.stringify({
@@ -84,6 +85,10 @@ if (process.env.FAKE_DOCKER_LOG) {
       ledgerHas:
         nameArg && ledgerFile
           ? existsSync(ledgerFile) && readFileSync(ledgerFile, 'utf8').includes(nameArg)
+          : null,
+      recipientUsed:
+        recipientMount && existsSync(recipientMount)
+          ? readFileSync(recipientMount, 'utf8').trim()
           : null,
     })}\n`
   );
@@ -287,6 +292,12 @@ function runContainer(quiet) {
   const workDir = mountSource('/work');
   if (argv.includes('/opt/backup/dump.sh')) {
     writeFileSync(path.join(workDir, 'dump.custom'), 'FAKE-DUMP');
+    if (process.env.FAKE_SWAP_RECIPIENT_FILE && process.env.FAKE_SWAP_RECIPIENT_VALUE) {
+      writeFileSync(
+        process.env.FAKE_SWAP_RECIPIENT_FILE,
+        `${process.env.FAKE_SWAP_RECIPIENT_VALUE}\n`
+      );
+    }
     if (mode === 'interrupt') {
       // Plaintext exists now; the host must kill this process and remove the container.
       return undefined;
