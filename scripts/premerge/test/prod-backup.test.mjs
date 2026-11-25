@@ -25,7 +25,7 @@ import { LIBPQ_ENV_NAMES, libpqEnv } from '../../backup/config.mjs';
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const PREMERGE = path.join(HERE, '..');
 const SECRET = 'SYNTH-pw-7f3a9c-do-not-log';
-const SYNTH_DSN = `postgresql://premerge_synth:${SECRET}@db.synthetic.invalid:5432/clickmoji?sslmode=require`;
+const SYNTH_DSN = `postgresql://premerge_synth:${SECRET}@127.0.0.1:5432/clickmoji?sslmode=require`;
 const NAME = 'neon-prod-premigrate-20261124-093000.dump';
 
 // The fake docker: logs one line per call (argv, then PG* presence), then acts on the call.
@@ -200,7 +200,7 @@ describe('prod-backup.sh and libpq-env.mjs', () => {
     });
 
     it('refuses a password with a line break (percent-encoded newline)', () => {
-      const dsn = `postgresql://premerge_synth:${SECRET}%0Aevil@db.synthetic.invalid:5432/clickmoji`;
+      const dsn = `postgresql://premerge_synth:${SECRET}%0Aevil@127.0.0.1:5432/clickmoji`;
       const result = run('dump', { DATABASE_URL: dsn });
       assert.equal(result.status, 1);
       assert.match(result.stdout + result.stderr, /control character/);
@@ -258,7 +258,7 @@ describe('libpq-env.mjs', () => {
         [path.join(PREMERGE, 'libpq-env.mjs'), '--out', out],
         {
           env: {
-            DATABASE_URL: `postgresql://u%27x:p%27w@db.synthetic.invalid:6543/app?sslmode=require`,
+            DATABASE_URL: `postgresql://u%27x:p%27w@127.0.0.1:6543/app?sslmode=require`,
           },
           encoding: 'utf8',
         }
@@ -266,7 +266,7 @@ describe('libpq-env.mjs', () => {
       assert.equal(result.status, 0, result.stderr);
       const text = readFileSync(out, 'utf8');
       const expected = libpqEnv(
-        'postgresql://u%27x:p%27w@db.synthetic.invalid:6543/app?sslmode=require'
+        'postgresql://u%27x:p%27w@127.0.0.1:6543/app?sslmode=require'
       );
       assert.match(text, /^export PGUSER='u'\\''x'$/m, 'single quote is escaped, not evaluated');
       assert.match(text, /^export PGPASSWORD='p'\\''w'$/m);
