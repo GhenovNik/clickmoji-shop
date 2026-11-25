@@ -204,6 +204,19 @@ export const authOptions: NextAuthOptions = {
   providers,
 };
 
-export function auth() {
-  return getServerSession(authOptions);
+/**
+ * Reads the current session. The jwt callback throws for a token whose user row was deleted or
+ * recreated, and next-auth does not catch that. Such a token is treated as signed out here, so a
+ * stale guest cookie yields an anonymous caller (for example Start can mint a fresh guest) instead
+ * of a 500 on every route.
+ */
+export async function auth() {
+  try {
+    return await getServerSession(authOptions);
+  } catch (error) {
+    console.warn('Session token rejected; treating caller as signed out', {
+      errorName: error instanceof Error ? error.name : 'UnknownError',
+    });
+    return null;
+  }
 }
