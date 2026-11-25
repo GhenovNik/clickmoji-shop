@@ -253,7 +253,7 @@ jobs:
       - name: Backup production database
         # The DSN reaches docker by name (-e DATABASE_URL): its value is in the step environment, never in argv.
         env:
-          DATABASE_URL: ${{ secrets.PROD_DATABASE_URL }}
+          DATABASE_URL: ${{ secrets.PREMERGE_PROD_DATABASE_URL }}
         shell: bash
         run: |
           if [[ -z "${DATABASE_URL}" ]]; then
@@ -299,7 +299,7 @@ jobs:
       # Prisma prints database error details (P3018) and connection info; the repository is public.
       - name: Apply pending migrations
         env:
-          DATABASE_URL: ${{ secrets.PROD_DATABASE_URL }}
+          DATABASE_URL: ${{ secrets.PREMERGE_PROD_DATABASE_URL }}
         shell: bash
         run: |
           if npx prisma migrate deploy > /dev/null 2>&1; then
