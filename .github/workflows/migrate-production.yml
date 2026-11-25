@@ -7,14 +7,50 @@ name: Production migration
 # The repository is public, so the dump is never uploaded as an artifact: it lives only inside this run and
 # is proven restorable into a throwaway PostgreSQL 17 before any migration. Recovery after a bad
 # migration is Neon point-in-time restore.
+#
+# Two paths, both through the same concurrency lock:
+#   1. master (existing): dispatch from master with confirm = "migrate production". Uses the repository
+#      secret PROD_DATABASE_URL, as before.
+#   2. pre-merge (AGE-1667): dispatch from the reviewed feature branch below, before its PR merges. Needs
+#      confirm_premerge, the full reviewed commit SHA, the name and SHA-256 of the encrypted backup the
+#      curator restored, and the restore attestation. Its production job runs in the protected environment
+#      "production-migration-premerge" (see the setup notes in the PR), which holds its own copy of
+#      PROD_DATABASE_URL and is the only job that can read it.
+# Any invalid dispatch fails in the "validate" job with a REFUSED line. It never ends as a skipped green run.
 
 on:
   workflow_dispatch:
     inputs:
       confirm:
-        description: 'Type "migrate production" to apply pending migrations'
-        required: true
+        description: 'master only: type "migrate production" to apply pending migrations (leave empty on other branches)'
+        required: false
+        default: ''
         type: string
+      confirm_premerge:
+        description: 'feature branch only: type "migrate production before merge" (leave empty on master)'
+        required: false
+        default: ''
+        type: string
+      reviewed_sha:
+        description: 'feature branch only: full 40-character lowercase commit SHA that was reviewed; must equal the dispatched head'
+        required: false
+        default: ''
+        type: string
+      backup_age_file:
+        description: 'feature branch only: the encrypted backup you restored, e.g. clickmoji-20261124-093000.dump.age'
+        required: false
+        default: ''
+        type: string
+      backup_age_sha256:
+        description: 'feature branch only: SHA-256 of that exact .age file (shasum -a 256), 64 lowercase hex characters'
+        required: false
+        default: ''
+        type: string
+      backup_restore_attested:
+        description: 'feature branch only: I restored this exact .age with the recovery key into a disposable PostgreSQL 17 before this dispatch'
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -24,8 +60,69 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # No environment, no secrets. Decides the path and refuses everything else before any production secret is read.
+  validate:
+    name: Validate dispatch
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      mode: ${{ steps.check.outputs.mode }}
+    steps:
+      - name: Check branch, confirmation and reviewed SHA
+        id: check
+        shell: bash
+        env:
+          DISPATCH_REF: ${{ github.ref }}
+          DISPATCH_SHA: ${{ github.sha }}
+          CONFIRM: ${{ inputs.confirm }}
+          CONFIRM_PREMERGE: ${{ inputs.confirm_premerge }}
+          REVIEWED_SHA: ${{ inputs.reviewed_sha }}
+          BACKUP_FILE: ${{ inputs.backup_age_file }}
+          BACKUP_SHA256: ${{ inputs.backup_age_sha256 }}
+          RESTORE_ATTESTED: ${{ inputs.backup_restore_attested }}
+        run: |
+          refuse() {
+            echo "REFUSED: $1"
+            echo "No production secret was read and no database was touched."
+            exit 1
+          }
+          case "$DISPATCH_REF" in
+            refs/heads/master)
+              [[ "$CONFIRM" == 'migrate production' ]] \
+                || refuse "a master run needs confirm = 'migrate production'"
+              [[ -z "$CONFIRM_PREMERGE$REVIEWED_SHA$BACKUP_FILE$BACKUP_SHA256" && "$RESTORE_ATTESTED" != 'true' ]] \
+                || refuse "pre-merge inputs are only accepted on refs/heads/feature/age-1667-localized-picture-fields"
+              echo "mode=master" >> "$GITHUB_OUTPUT"
+              echo "path: master (existing confirmation)"
+              ;;
+            refs/heads/feature/age-1667-localized-picture-fields)
+              [[ -z "$CONFIRM" ]] \
+                || refuse "a pre-merge run must leave confirm empty; use confirm_premerge"
+              [[ "$CONFIRM_PREMERGE" == 'migrate production before merge' ]] \
+                || refuse "confirm_premerge must be exactly 'migrate production before merge'"
+              [[ "$REVIEWED_SHA" =~ ^[0-9a-f]{40}$ ]] \
+                || refuse "reviewed_sha must be a full 40-character lowercase commit SHA"
+              [[ "$REVIEWED_SHA" == "$DISPATCH_SHA" ]] \
+                || refuse "reviewed_sha is not the dispatched head ($DISPATCH_SHA); the branch moved or the wrong SHA was typed; re-review and dispatch again"
+              [[ "$BACKUP_FILE" =~ ^clickmoji-[0-9]{8}-[0-9]{6}\.dump\.age$ ]] \
+                || refuse "backup_age_file must be clickmoji-YYYYMMDD-HHMMSS.dump.age"
+              [[ "$BACKUP_SHA256" =~ ^[0-9a-f]{64}$ ]] \
+                || refuse "backup_age_sha256 must be 64 lowercase hex characters"
+              [[ "$RESTORE_ATTESTED" == 'true' ]] \
+                || refuse "backup_restore_attested must be checked: the curator attests the restore into a disposable PostgreSQL 17 happened before dispatch"
+              echo "mode=premerge" >> "$GITHUB_OUTPUT"
+              echo "path: pre-merge, reviewed commit $DISPATCH_SHA"
+              echo "attested backup: $BACKUP_FILE sha256 $BACKUP_SHA256 (attestation recorded, not verified by this workflow)"
+              ;;
+            *)
+              refuse "dispatch from master or refs/heads/feature/age-1667-localized-picture-fields only (got $DISPATCH_REF)"
+              ;;
+          esac
+
   migrate:
-    if: ${{ inputs.confirm == 'migrate production' && github.ref == 'refs/heads/master' }}
+    name: Migrate production (master)
+    needs: validate
+    if: ${{ needs.validate.outputs.mode == 'master' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -49,17 +146,123 @@ jobs:
           echo "file_name=neon-prod-premigrate-${ts}.dump" >> "$GITHUB_OUTPUT"
 
       - name: Backup production database
+        # The DSN reaches docker by name (-e DATABASE_URL): its value is in the step environment, never in argv.
         env:
-          PROD_DATABASE_URL: ${{ secrets.PROD_DATABASE_URL }}
+          DATABASE_URL: ${{ secrets.PROD_DATABASE_URL }}
         shell: bash
         run: |
-          if [[ -z "${PROD_DATABASE_URL}" ]]; then
+          if [[ -z "${DATABASE_URL}" ]]; then
             echo "PROD_DATABASE_URL secret is required"
             exit 1
           fi
           mkdir -p backups
           docker run --rm \
-            -e DATABASE_URL="${PROD_DATABASE_URL}" \
+            -e DATABASE_URL \
+            -v "${GITHUB_WORKSPACE}/backups:/backups" \
+            postgres:17-alpine \
+            sh -lc "pg_dump \"\$DATABASE_URL\" -Fc -f \"/backups/${{ steps.meta.outputs.file_name }}\"" \
+            > /dev/null 2>&1 || { echo "backup failed; migration not applied"; exit 1; }
+          echo "backup created"
+
+      - name: Prove the backup restores
+        # Output is suppressed: a failing COPY can print production values and the repository is public.
+        shell: bash
+        run: |
+          test -s "backups/${{ steps.meta.outputs.file_name }}"
+          docker network create restore-check > /dev/null
+          docker run -d --rm --name scratch --network restore-check --log-driver none \
+            -e POSTGRES_PASSWORD=scratch -e POSTGRES_DB=restore_check postgres:17-alpine > /dev/null
+          ready=""
+          for _ in $(seq 1 60); do
+            if docker exec scratch pg_isready -h 127.0.0.1 -p 5432 -U postgres > /dev/null 2>&1; then ready=1; break; fi
+            sleep 2
+          done
+          [ -n "$ready" ] || { echo "scratch database did not start; migration not applied"; docker stop scratch > /dev/null 2>&1 || true; exit 1; }
+          if docker run --rm --network restore-check --log-driver none \
+              -v "${GITHUB_WORKSPACE}/backups:/backups" -e PGPASSWORD=scratch postgres:17-alpine \
+              sh -lc "pg_restore --exit-on-error --no-owner --no-privileges -h scratch -U postgres -d restore_check \"/backups/${{ steps.meta.outputs.file_name }}\"" \
+              > /dev/null 2>&1; then
+            echo "backup restored into a scratch PostgreSQL 17"
+          else
+            echo "backup restore check failed; migration not applied"
+            docker stop scratch > /dev/null 2>&1 || true
+            exit 1
+          fi
+          docker stop scratch > /dev/null 2>&1 || true
+          rm -f "backups/${{ steps.meta.outputs.file_name }}"
+
+      # Prisma prints database error details (P3018) and connection info; the repository is public.
+      - name: Apply pending migrations
+        env:
+          DATABASE_URL: ${{ secrets.PROD_DATABASE_URL }}
+        shell: bash
+        run: |
+          if npx prisma migrate deploy > /dev/null 2>&1; then
+            echo "migrations applied"
+          else
+            echo "migrate deploy failed; production may be partially migrated — check in Neon, restore point-in-time if needed"
+            exit 1
+          fi
+          if npx prisma migrate status > /dev/null 2>&1; then
+            echo "migrate status: up to date"
+          else
+            echo "migrate status reports pending or failed migrations"
+            exit 1
+          fi
+
+  # Pre-merge path. Runs only after validate passed. GitHub holds this job until a required reviewer approves
+  # in the environment; the environment's secret is the only PROD_DATABASE_URL this job can read.
+  premerge-migrate:
+    name: Migrate production (pre-merge, reviewed branch)
+    needs: validate
+    if: ${{ needs.validate.outputs.mode == 'premerge' && github.ref == 'refs/heads/feature/age-1667-localized-picture-fields' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: production-migration-premerge
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Confirm the checkout is the reviewed commit
+        shell: bash
+        env:
+          REVIEWED_SHA: ${{ inputs.reviewed_sha }}
+        run: |
+          if [[ "$(git rev-parse HEAD)" != "$REVIEWED_SHA" ]]; then
+            echo "REFUSED: checkout is not the reviewed commit; nothing was applied"
+            exit 1
+          fi
+          echo "checkout is the reviewed commit"
+
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Prepare backup file name
+        id: meta
+        shell: bash
+        run: |
+          ts="$(date -u +%Y%m%d-%H%M%S)"
+          echo "file_name=neon-prod-premigrate-${ts}.dump" >> "$GITHUB_OUTPUT"
+
+      - name: Backup production database
+        # The DSN reaches docker by name (-e DATABASE_URL): its value is in the step environment, never in argv.
+        env:
+          DATABASE_URL: ${{ secrets.PROD_DATABASE_URL }}
+        shell: bash
+        run: |
+          if [[ -z "${DATABASE_URL}" ]]; then
+            echo "PROD_DATABASE_URL secret is required"
+            exit 1
+          fi
+          mkdir -p backups
+          docker run --rm \
+            -e DATABASE_URL \
             -v "${GITHUB_WORKSPACE}/backups:/backups" \
             postgres:17-alpine \
             sh -lc "pg_dump \"\$DATABASE_URL\" -Fc -f \"/backups/${{ steps.meta.outputs.file_name }}\"" \
