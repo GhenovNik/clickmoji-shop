@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { buildPasswordResetEmail, buildVerificationEmail } from './email';
 
 // Emails go out in the language of the request that triggered them.
@@ -43,4 +43,32 @@ describe('buildPasswordResetEmail', () => {
     expect(content.subject).toBe('Сброс пароля в ClickMoji');
     expect(content.html).toContain('Ссылка действует 1 час.');
   });
+});
+
+describe('email sender', () => {
+  it.each(['sender@example.com', 'Old Display Name <sender@example.com>'])(
+    'uses the public brand with the configured address (%s)',
+    async (configuredSender) => {
+      const send = vi.fn().mockResolvedValue({});
+      vi.doMock('resend', () => ({
+        Resend: class {
+          emails = { send };
+        },
+      }));
+      vi.stubEnv('RESEND_API_KEY', 'fixture');
+      vi.stubEnv('RESEND_FROM_EMAIL', configuredSender);
+      vi.resetModules();
+      try {
+        const { sendVerificationEmail } = await import('./email');
+        await sendVerificationEmail({ ...request, locale: 'en' });
+        expect(send).toHaveBeenCalledWith(
+          expect.objectContaining({ from: 'ClickMoji <sender@example.com>', to: request.email })
+        );
+      } finally {
+        vi.doUnmock('resend');
+        vi.unstubAllEnvs();
+        vi.resetModules();
+      }
+    }
+  );
 });
