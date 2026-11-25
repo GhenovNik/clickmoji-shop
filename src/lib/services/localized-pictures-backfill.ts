@@ -1,7 +1,7 @@
 import type { Prisma, PrismaClient } from '@prisma/client';
 import { sanitizeDatabaseErrorMessage } from './emoji-legacy-ru-locales';
 
-// Fills the localized picture fields (AGE-1667 Я2) from the legacy columns, while the legacy
+// Fills the localized picture fields (AGE-1667) from the legacy columns, while the legacy
 // columns stay untouched and the previous release keeps working:
 //   - the English legacy URL is copied to localizedImages.en; other keys are kept;
 //   - the language of the text on the main picture comes from the library row with the exact

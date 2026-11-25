@@ -10,7 +10,7 @@ import {
 } from '../src/lib/services/localized-pictures-backfill';
 
 // Fills imageTextLocale and localizedImages on Product, ProductVariant and ListHistoryItem from the
-// legacy imageUrl / imageUrlEn columns and the emoji library (AGE-1667 Я2). The legacy columns are
+// legacy imageUrl / imageUrlEn columns and the emoji library (AGE-1667). The legacy columns are
 // not changed. Repeatable: a second run on unchanged data writes nothing.
 //
 // Usage:
