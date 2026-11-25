@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
 import { getToken } from 'next-auth/jwt';
+import { readSessionClaims } from '@/lib/auth-session';
+import { prisma } from '@/lib/prisma';
 import {
   checkRateLimit,
   getClientIp,
@@ -93,9 +95,18 @@ export default async function proxy(request: NextRequest) {
     secret: process.env.AUTH_SECRET || process.env.NEXTAUTH_SECRET,
   });
 
+  const claims = readSessionClaims(token);
+  const account = claims
+    ? await prisma.user.findUnique({
+        where: { id: claims.id },
+        select: { createdAt: true, role: true },
+      })
+    : null;
+  const activeAccount =
+    account && claims && account.createdAt.getTime() <= claims.authIssuedAt ? account : null;
   const hasE2EAuth = hasPlaywrightAuthBypass(request);
-  const isLoggedIn = Boolean(token) || hasE2EAuth;
-  const userRole = hasE2EAuth ? 'USER' : (token?.role as string | undefined);
+  const isLoggedIn = Boolean(activeAccount) || hasE2EAuth;
+  const userRole = hasE2EAuth ? 'USER' : activeAccount?.role;
   const isPublicRoute = publicRoutes.includes(pathname) || isPublicCatalogRoute(pathname);
 
   if (pathname.startsWith('/admin')) {
@@ -119,7 +130,7 @@ export default async function proxy(request: NextRequest) {
   }
 
   if (isFunnelEntryRoute(pathname) && isDocumentGetRequest(request)) {
-    return recordEntryVisit(request, typeof token?.id === 'string' ? token.id : null);
+    return recordEntryVisit(request, activeAccount ? claims!.id : null);
   }
 
   return NextResponse.next();

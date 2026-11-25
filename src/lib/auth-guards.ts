@@ -27,30 +27,6 @@ export async function requireUser(): Promise<GuardResult> {
     where: { id: session.user.id },
   });
 
-  if (!dbUser && session.user.email) {
-    const userByEmail = await prisma.user.findUnique({
-      where: { email: session.user.email },
-    });
-
-    if (!userByEmail) {
-      return NextResponse.json(
-        { error: await apiText(undefined, 'unauthorized') },
-        { status: 401 }
-      );
-    }
-
-    return {
-      session: {
-        ...session,
-        user: {
-          ...session.user,
-          id: userByEmail.id,
-          role: userByEmail.role,
-        },
-      },
-    };
-  }
-
   if (!dbUser) {
     return NextResponse.json({ error: await apiText(undefined, 'unauthorized') }, { status: 401 });
   }

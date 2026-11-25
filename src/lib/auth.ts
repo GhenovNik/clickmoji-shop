@@ -6,6 +6,7 @@ import { prisma } from './prisma';
 import { authConfig } from './auth.config';
 import { isEmailVerificationRequired } from './email';
 import { normalizeEmail } from './auth-security';
+import { readSessionClaims, SESSION_ISSUED_AT_CLAIM } from './auth-session';
 import { readGuestIdFromRequestScope, recordFunnelEvent } from './funnel';
 
 const providers: NextAuthOptions['providers'] = [
@@ -112,6 +113,10 @@ export const authOptions: NextAuthOptions = {
         authenticatedUserId = existingUser.id;
       }
 
+      // NextAuth passes this same object to the jwt callback on sign-in; the token must carry
+      // the DB id of the account that was just authorised, not the Google subject.
+      user.id = authenticatedUserId;
+
       const guestId = await readGuestIdFromRequestScope();
       await recordFunnelEvent({
         type: isNewUser ? 'REGISTER' : 'LOGIN',
@@ -124,21 +129,37 @@ export const authOptions: NextAuthOptions = {
     },
     async jwt({ token, user }) {
       if (user) {
-        token.id = user.id;
-        token.role = (user as typeof user & { role?: string }).role;
-        token.email = user.email;
-      }
-
-      if (token.email) {
+        // Sign-in only: bind the token once to the account id and stamp its issuance in ms.
         const dbUser = await prisma.user.findUnique({
-          where: { email: token.email as string },
+          where: { id: user.id },
+          select: { role: true },
         });
-        if (dbUser) {
-          token.id = dbUser.id;
-          token.role = dbUser.role;
+        if (!dbUser) {
+          throw new Error('InvalidSession');
         }
+        token.id = user.id;
+        token.email = user.email;
+        token.role = dbUser.role;
+        token[SESSION_ISSUED_AT_CLAIM] = Date.now();
+        return token;
       }
 
+      // Refresh: the token must still name a live account issued after that account was created.
+      // Throwing makes NextAuth's session route drop the cookie and treat the session as absent.
+      const claims = readSessionClaims(token);
+      if (!claims) {
+        throw new Error('InvalidSession');
+      }
+
+      const dbUser = await prisma.user.findUnique({
+        where: { id: claims.id },
+        select: { role: true, createdAt: true },
+      });
+      if (!dbUser || dbUser.createdAt.getTime() > claims.authIssuedAt) {
+        throw new Error('InvalidSession');
+      }
+
+      token.role = dbUser.role;
       return token;
     },
     async session({ session, token }) {
