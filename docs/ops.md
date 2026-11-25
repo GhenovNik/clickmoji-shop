@@ -1482,8 +1482,8 @@ got past the fence: the path is then ambiguous, and the exposed path applies.
 There is **no automatic rollback** on this path: restoring the old URL would silently drop what was written to the target.
 Required steps:
 
-1. **Fence the target again.** Unless `barrier target: closed` has already printed in this recovery, run `close_only_target`
-   until it prints (_Write barrier_). Stop the writers of every deployment that holds the target URL by the methods of _Fence
+1. **Fence the target again.** Run `close_only_target` on every entry to exposed rollback. Proceed only after this
+   invocation prints `barrier target: closed` (_Write barrier_). Earlier confirmations cannot be reused. Stop the writers of every deployment that holds the target URL by the methods of _Fence
    production_ step 1, and confirm that no deployment still serves requests or runs scheduled work with it. Terminate target
    sessions other than the operator's and the verifier's (`pg_terminate_backend` rolls back their open transactions only),
    then run the session and write-role checks, and `BARRIER_CHECK_SQL` on the target, twice, two minutes apart, as in
@@ -1628,16 +1628,19 @@ The synthetic drill must show these outcomes:
   right after its `COMMIT;`, so the server commits and the client sees a dropped connection. The block prints no `reopened`
   line, and before the reclose the runtime role's `INSERT` is `allowed`, which shows the barrier was open. `reclose_barrier`
   then prints `barrier ...: closed` and the `INSERT` is `permission denied`.
-- **Reopen with a failed independent read.** The reopen commits, then the independent read fails (an unreadable
-  `PROD_READONLY_URL`). The block prints no `reopened` line, the barrier is closed again (`barrier production: closed`), and
+- **Reopen with a failed independent read.** The reopen commits, then only its first independent read fails. Restore the verifier
+  before the reclose check. If the verifier is still unavailable, record the state as unknown and retry only close-only. The block prints no `reopened` line, the barrier is closed again (`barrier production: closed`), and
   the runtime role's `INSERT` is `permission denied`.
 - **Close-only retry after a failed post-read, both directions.** For each database in turn (production first, then
-  target): the reopen block runs with its post-read made to fail (production: the unreadable `PROD_READONLY_URL` above;
+  target): the reopen block runs with its post-read made to fail (production: the one-shot read failure above;
   target: `GRANTS_SQL` replaced by `SELECT 1/0;` for that one read). The block prints no `reopened` line and then
   `barrier LABEL: closed`. Then, with the failure removed and **without running any reopen block**, `close_only_LABEL` is run.
   The control records: its output has no `reopened` line; `type close_only_LABEL` lists only `close_file_ok` and
   `reclose_barrier`; SHA-256 of the saved open file and of the pre-barrier snapshot are unchanged across the retry; the
   runtime role's `INSERT` is `permission denied` before and after; and the retry prints `barrier LABEL: closed`.
+- **Exposed rollback after a successful reopen.** Close the target and record the initial confirmation, reopen it,
+  and verify a fixture runtime write succeeds. Enter exposed rollback and run `close_only_target` again. Require a fresh
+  confirmation and a denied fixture runtime write before any reverse comparison.
 - **Close-only retry after the first failed reclose, both directions.** After a reopen commits, the close file of that
   database is replaced by a copy that fails (`SELECT 1/0;`) for one reclose. The reclose prints no `barrier LABEL: closed`,
   the runtime role's `INSERT` is `allowed` (the barrier is open), and the writers of that database are recorded as stopped.
