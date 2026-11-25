@@ -223,15 +223,10 @@ describe('cleanupInactiveGuests', () => {
       }
     );
 
-    const result = await cleanupInactiveGuests({
-      db,
-      inactiveDays: 30,
-      now: NOW,
-      handOff: noHandOff,
-    });
-
-    expect(result.matchedCount).toBe(1);
-    expect(result.deletedCount).toBe(0);
+    // The donor stays, and the batch fails instead of keeping a hand-off that moved its milestones.
+    await expect(
+      cleanupInactiveGuests({ db, inactiveDays: 30, now: NOW, handOff: noHandOff })
+    ).rejects.toThrow(/changed under its lock/);
     expect(users).toHaveLength(1);
   });
 
@@ -250,8 +245,8 @@ describe('cleanupInactiveGuests', () => {
       ],
       { beforeDelete: () => calls.push('delete') }
     );
-    const handOff = vi.fn(async ({ candidateIds }: { candidateIds: string[] }, _tx) => {
-      calls.push(`handOff:${candidateIds.join(',')}`);
+    const handOff = vi.fn(async ({ donorIds }: { donorIds: string[] }, _tx) => {
+      calls.push(`handOff:${donorIds.join(',')}`);
       return 0;
     });
 
@@ -260,7 +255,7 @@ describe('cleanupInactiveGuests', () => {
     expect(result.deletedCount).toBe(1);
     expect(calls).toEqual(['handOff:guest-stale', 'delete']);
     expect(handOff).toHaveBeenCalledWith(
-      { candidateIds: ['guest-stale'], cutoff: daysAgo(30) },
+      { donorIds: ['guest-stale'], cutoff: daysAgo(30) },
       expect.anything()
     );
 
@@ -350,32 +345,6 @@ describe('cleanupInactiveGuests', () => {
 
     expect(handOff).not.toHaveBeenCalled();
     expect(result.deletedCount).toBe(0);
-    expect(users).toHaveLength(1);
-  });
-
-  it('rolls the batch back when a locked donor is not deleted, so no hand-off is kept alone', async () => {
-    const { db, users } = createFakeDb(
-      [
-        {
-          id: 'guest-converted',
-          role: 'USER',
-          isGuest: true,
-          guestLastActiveAt: daysAgo(40),
-          createdAt: daysAgo(40),
-          updatedAt: daysAgo(40),
-        },
-      ],
-      {
-        beforeDelete: (rows) => {
-          const converted = rows.find((u) => u.id === 'guest-converted');
-          if (converted) converted.isGuest = false;
-        },
-      }
-    );
-
-    await expect(
-      cleanupInactiveGuests({ db, inactiveDays: 30, now: NOW, handOff: noHandOff })
-    ).rejects.toThrow(/changed under its lock/);
     expect(users).toHaveLength(1);
   });
 

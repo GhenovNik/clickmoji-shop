@@ -99,11 +99,14 @@ vi.mock('@/lib/prisma', () => {
   };
   // The batch hand-off and delete run in one transaction; this fake has no rollback, and the
   // hand-off below is a no-op, so the callback just runs against the same in-memory rows.
+  // The batch locks its candidate rows with a raw statement; the in-memory rows need no lock.
   const client: {
     user: typeof user;
+    $queryRaw: () => Promise<unknown[]>;
     $transaction: (run: (tx: unknown) => Promise<unknown>) => Promise<unknown>;
   } = {
     user,
+    $queryRaw: async () => [],
     $transaction: async (run) => run(client),
   };
   return { prisma: client };

@@ -7,7 +7,7 @@ export const DEFAULT_GUEST_INACTIVE_DAYS = 30;
 export const DEFAULT_GUEST_CLEANUP_BATCH_SIZE = 500;
 
 export type GuestCleanupDbClient = {
-  /** Runs one batch hand-off and its conditional delete in a single transaction. */
+  /** Runs one batch (donor lock, hand-off, conditional delete) in a single transaction. */
   $transaction: <T>(run: (tx: Prisma.TransactionClient) => Promise<T>) => Promise<T>;
   user: {
     count: (args: { where: Prisma.UserWhereInput }) => Promise<number>;
@@ -100,7 +100,7 @@ export function activeGuestWhere(cutoff: Date): Prisma.UserWhereInput {
 }
 
 export type MilestoneHandOff = (
-  input: { candidateIds: string[]; cutoff: Date },
+  input: { donorIds: string[]; cutoff: Date },
   tx: Prisma.TransactionClient
 ) => Promise<number>;
 
@@ -121,16 +121,20 @@ export type MilestoneHandOff = (
  * writers and guest starts, in sorted order. The caller deletes the guests in that same transaction,
  * so a start cannot slip in between the move and the cascade. Only the milestone rows move: lists,
  * items, purchases and history stay with their own guest.
+ *
+ * `donorIds` must be the guests the caller has locked and re-checked as stale (see
+ * `lockStaleDonorIds`); only their rows move. The replacement is any active guest that is not one of
+ * those donors, including a candidate that a touch made active after the scan.
  */
 export async function handOffSharedMilestones(
-  { candidateIds, cutoff }: { candidateIds: string[]; cutoff: Date },
+  { donorIds, cutoff }: { donorIds: string[]; cutoff: Date },
   tx: Prisma.TransactionClient
 ): Promise<number> {
-  if (candidateIds.length === 0) return 0;
+  if (donorIds.length === 0) return 0;
 
   const owned = await tx.funnelEvent.findMany({
     where: {
-      userId: { in: candidateIds },
+      userId: { in: donorIds },
       type: { in: [...SHARED_MILESTONE_TYPES] },
       guestId: { not: null },
     },
@@ -155,7 +159,7 @@ export async function handOffSharedMilestones(
     const replacement = await tx.funnelEvent.findFirst({
       where: {
         guestId,
-        userId: { notIn: candidateIds },
+        userId: { notIn: donorIds },
         user: activeGuestWhere(cutoff),
       },
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
@@ -196,12 +200,41 @@ export async function handOffSharedMilestones(
 }
 
 /**
+ * Locks the batch's candidate rows and returns the ids that are still stale under that lock. The
+ * batch calls it first in its transaction, so the hand-off and the delete act only on guests that
+ * cannot become active before the commit. A candidate touched after the scan drops out here.
+ *
+ * `FOR NO KEY UPDATE` conflicts with a touch, because a plain UPDATE of `guestLastActiveAt` takes the
+ * same lock. A touch therefore either lands before this check, and that guest is no longer a donor,
+ * or waits for the commit and then finds no guest. It does not conflict with the KEY SHARE lock that a
+ * milestone insert takes on the user row it references, so a chain writer that already holds its
+ * chain lock never waits here. Rows are locked in id order, and the check uses the batch's own
+ * eligibility filter, so the rule lives in one place.
+ */
+export async function lockStaleDonorIds(
+  candidateIds: string[],
+  eligibleWhere: Prisma.UserWhereInput,
+  tx: Prisma.TransactionClient
+): Promise<string[]> {
+  if (candidateIds.length === 0) return [];
+
+  await tx.$queryRaw`SELECT id FROM users WHERE id = ANY(${candidateIds}::text[]) ORDER BY id FOR NO KEY UPDATE`;
+  const donors = await tx.user.findMany({
+    where: { id: { in: candidateIds }, ...eligibleWhere },
+    select: { id: true },
+    orderBy: { id: 'asc' },
+  });
+  return donors.map((row) => row.id);
+}
+
+/**
  * Deletes server-backed guest accounts inactive longer than `inactiveDays` (and their owned
  * lists, items, history, favorites, AI usage counters and user-scoped funnel events via schema
- * cascades). Before each batch delete, the shared funnel milestones of that batch move to an
- * active guest of the same chain when one exists (see `handOffSharedMilestones`). Re-checks
- * eligibility inside every batch delete to avoid racing with a guest that becomes active or stops
- * being a guest concurrently.
+ * cascades). Each batch locks its candidates and re-checks which are still stale under the lock
+ * (see `lockStaleDonorIds`). For those donors, the shared funnel milestones move to an active guest
+ * of the same chain when one exists (see `handOffSharedMilestones`), and then the donors are
+ * deleted with the same conditional filter. The batch is one transaction: if a locked donor is not
+ * deleted, the whole batch rolls back, so no milestone moves without its donor going.
  */
 export async function cleanupInactiveGuests({
   db = prisma,
@@ -257,17 +290,28 @@ export async function cleanupInactiveGuests({
 
     matchedCount += candidates.length;
     const candidateIds = candidates.map((row) => row.id);
-    // One transaction: the hand-off and the conditional delete share the chain locks. A failure
-    // rolls both back (the guest stays with its milestones), and a start that joins the chain waits
-    // for the commit, so its own VISIT is never ahead of a cascade that removes the chain.
+    // One transaction: the donor lock, the hand-off and the conditional delete run together. The
+    // donors are locked and re-checked before anything moves, so a guest touched after the scan is
+    // kept with its milestones. A failure rolls everything back, and a start that joins the chain
+    // waits for the commit, so its own VISIT is never ahead of a cascade that removes the chain.
     const result = await db.$transaction(async (tx) => {
-      await handOff({ candidateIds, cutoff }, tx);
-      return tx.user.deleteMany({
+      const donorIds = await lockStaleDonorIds(candidateIds, eligibleWhere, tx);
+      if (donorIds.length === 0) return { count: 0 };
+
+      await handOff({ donorIds, cutoff }, tx);
+      const deleted = await tx.user.deleteMany({
         where: {
-          id: { in: candidateIds },
+          id: { in: donorIds },
           ...eligibleWhere,
         },
       });
+      // Every locked donor must go, or milestones would be moved to a guest that stays.
+      if (deleted.count !== donorIds.length) {
+        throw new Error(
+          `Guest cleanup batch changed under its lock: ${deleted.count} of ${donorIds.length} deleted; batch rolled back`
+        );
+      }
+      return deleted;
     });
     deletedCount += result.count;
 
