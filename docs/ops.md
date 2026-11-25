@@ -151,8 +151,13 @@ models (e.g. `gemini-3.1-flash-lite-image`, `imagen-4.0-*`) also fail closed bef
 - Restore **local development** DB from a specific local file (local only): `npm run db:restore -- clickmoji-YYYYMMDD-HHMMSS.dump`
 - Both run `pg_dump` / `pg_restore` in the `postgres:17-alpine` image: production is PostgreSQL 17.11
   and a `pg_dump` 16 client refuses a 17 server.
-- Production backups must be encrypted, access-controlled, monitored, and restore-tested.
-- Do not store production database copies in GitHub in any form: not as Actions artifacts (short-term ones included), releases, caches or repository files, even encrypted. The earlier allowance for short-term ordinary artifacts is withdrawn; GitHub takes no part in copying. Existing production copies there are removed under task A, not kept as a fallback.
+- Retained production backups must be encrypted, access-controlled, monitored, and restore-tested.
+- Do not publish or retain production database copies in GitHub Actions artifacts, releases,
+  caches, or repository files, even encrypted. Existing copies there are removed under task A.
+- The existing **Production migration** workflow on `master` may use an unencrypted temporary
+  dump solely for its in-run restore check on the isolated runner. It deletes the dump after
+  successful restore and applies migrations only after that check succeeds. The runner copy is
+  temporary; use the production recovery procedure for recovery after DDL.
 - Before a production migration, create and verify a fresh backup, run `prisma migrate deploy` with
   a direct/unpooled database URL, and confirm `prisma migrate status` afterwards.
 
@@ -166,9 +171,10 @@ scalar columns immediately, including from existing queries. Use this order for 
    destructive change, stage the rollout so every running release stops using the affected
    objects before the contract migration is merged.
 2. After merging the SQL-only PR, the curator runs **Production migration** from `master`
-   with its existing confirmation and waits for the backup, isolated restore check, migration
-   and `prisma migrate status` to succeed. Confirm the expected database objects before
-   advancing. The workflow uses a temporary runner-local copy for the restore check.
+   with its existing confirmation. Record the exact `master` SHA and expected pending migrations.
+   Wait for the temporary backup, isolated restore check, migration and `prisma migrate status`
+   to succeed. Verify the expected database objects, including column types and nullability where
+   applicable, before advancing.
 3. Merge the follow-up PR with the Prisma schema and dependent code only after the migration
    is applied. Run any task-specific backfill in its documented order.
 
