@@ -59,11 +59,11 @@ describe('modal-footer fixture database guard', () => {
 
   it('never echoes the password in a refusal', () => {
     const sentinel = 'SENTINEL-not-a-real-password';
+    const url = new URL(FIXTURE_URL);
+    url.password = sentinel;
     const refusal = (() => {
       try {
-        modalFooterDatabaseUrl(
-          `postgresql://${MODAL_FOOTER_DB.username}:${sentinel}@db.example.com:55432/${MODAL_FOOTER_DB.database}`
-        );
+        modalFooterDatabaseUrl(url.toString());
         return '';
       } catch (error) {
         return (error as Error).message;
