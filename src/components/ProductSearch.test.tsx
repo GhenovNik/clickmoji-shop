@@ -44,6 +44,31 @@ function mockSearch(products: unknown[]) {
   );
 }
 
+function mockCreateFailure(answer: Response) {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (url: string) => {
+      if (url.startsWith('/api/search')) return new Response(JSON.stringify([]));
+      if (url === '/api/lists') {
+        return new Response(
+          JSON.stringify([
+            {
+              id: 'list-1',
+              name: 'Список',
+              isActive: true,
+              createdAt: '2026-01-01T00:00:00.000Z',
+              updatedAt: '2026-01-01T00:00:00.000Z',
+              _count: { items: 0 },
+            },
+          ])
+        );
+      }
+      if (url === '/api/products/smart-create') return answer;
+      throw new Error(`unexpected fetch ${url}`);
+    })
+  );
+}
+
 function renderSearch(locale: 'ru' | 'en') {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const Wrapper = ({ children }: { children: ReactNode }) => (
@@ -102,6 +127,35 @@ describe('product search', () => {
 
     expect(await screen.findByText('Ничего не найдено')).toBeTruthy();
     expect(screen.getByRole('button', { name: /Создать через AI/ })).toBeTruthy();
+  });
+
+  it('shows the localized failure when the AI create answer is not JSON', async () => {
+    mockCreateFailure(new Response('<html>Bad gateway</html>', { status: 500 }));
+    renderSearch('ru');
+
+    fireEvent.change(screen.getByPlaceholderText('Поиск товаров...'), {
+      target: { value: 'сметана' },
+    });
+    fireEvent.click((await screen.findAllByRole('button', { name: /Создать через AI/ }))[0]);
+
+    expect(await screen.findByText(/Ошибка при создании товара/)).toBeTruthy();
+    expect(screen.queryByText(/valid JSON/)).toBeNull();
+  });
+
+  it('shows the server message for a failed AI create in the request language', async () => {
+    mockCreateFailure(
+      new Response(JSON.stringify({ error: 'Нет категорий. Обратитесь к администратору.' }), {
+        status: 400,
+      })
+    );
+    renderSearch('ru');
+
+    fireEvent.change(screen.getByPlaceholderText('Поиск товаров...'), {
+      target: { value: 'сметана' },
+    });
+    fireEvent.click((await screen.findAllByRole('button', { name: /Создать через AI/ }))[0]);
+
+    expect(await screen.findByText('Нет категорий. Обратитесь к администратору.')).toBeTruthy();
   });
 
   it('asks for and caches results per interface language', async () => {

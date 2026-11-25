@@ -47,7 +47,7 @@ describe('POST /api/auth/forgot-password', () => {
     const response = await forgot('', { 'accept-language': 'ru-RU,ru;q=0.9' });
 
     expect(response.status).toBe(400);
-    expect(await response.json()).toEqual({ error: 'Email обязателен' });
+    expect(await response.json()).toEqual({ error: 'Электронная почта обязательна' });
   });
 
   it('sends the reset email in the language of the request', async () => {

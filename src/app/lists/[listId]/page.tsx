@@ -16,6 +16,7 @@ import ShoppingListEmptyState from '@/components/shopping/ShoppingListEmptyState
 import ProductSearch from '@/components/ProductSearch';
 import ImportListModal from '@/components/shopping/ImportListModal';
 import { openModalFromTrigger } from '@/components/ui/Modal';
+import { cn } from '@/lib/utils';
 
 export default function ShoppingListPage({ params }: { params: Promise<{ listId: string }> }) {
   const router = useRouter();
@@ -204,7 +205,12 @@ export default function ShoppingListPage({ params }: { params: Promise<{ listId:
             {items.length > 0 && (
               <section
                 aria-labelledby="shopping-to-buy"
-                className="mb-3 rounded-2xl bg-white/30 p-1 space-y-1"
+                // Compact list: 2px between the heading and the groups keeps seven items above
+                // the bottom navigation at 375x812; grid keeps its 4px rhythm.
+                className={cn(
+                  'mb-3 rounded-2xl bg-white/30 p-1',
+                  view === 'list' ? 'space-y-0.5' : 'space-y-1'
+                )}
               >
                 <div className="flex items-center justify-between gap-2 px-1">
                   <h2 id="shopping-to-buy" className="text-xl font-semibold text-gray-900">

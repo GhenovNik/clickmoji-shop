@@ -2,7 +2,7 @@ import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { test, expect, type APIRequestContext } from '@playwright/test';
 import sharp from 'sharp';
-import { e2eCategory, mockPublicCatalog } from './fixtures/auth';
+import { e2eCategory, e2eMilkProduct, mockPublicCatalog } from './fixtures/auth';
 
 // Fetch the root document without following redirects and require HTTP 200 before reading HTML.
 async function fetchRootWithoutRedirects(request: APIRequestContext, targetUrl = '/') {
@@ -153,6 +153,47 @@ test.describe('Public categories flows', () => {
     await expect(page).not.toHaveURL(/\/login/);
     await expect(page).toHaveURL(new RegExp(`/categories/${e2eCategory.id}/products$`));
     await expect(page.getByRole('main').getByTestId('products-grid')).toBeVisible();
+  });
+
+  test('category headings stay one line and expose the full localized name @smoke', async ({
+    page,
+  }) => {
+    const short = { name: 'Молочные продукты', nameEn: 'Dairy' };
+    const long = {
+      name: 'Органические молочные продукты и растительные альтернативы для завтрака',
+      nameEn: 'Organic dairy products and plant-based alternatives for breakfast',
+    };
+    let category = { ...e2eCategory, ...short, isCustom: true, imageUrl: '/icons/icon-192.png' };
+    await page.route('**/api/products?**', (route) =>
+      route.fulfill({ json: [{ ...e2eMilkProduct, category }] })
+    );
+
+    for (const width of [320, 390]) {
+      await page.setViewportSize({ width, height: 844 });
+      for (const locale of ['ru', 'en']) {
+        await page
+          .context()
+          .addCookies([{ name: 'NEXT_LOCALE', value: locale, url: 'http://localhost:3000' }]);
+        for (const names of [short, long]) {
+          category = { ...category, ...names };
+          const name = locale === 'ru' ? names.name : names.nameEn;
+          await page.goto(`/categories/${category.id}/products`);
+          const heading = page.getByRole('heading', { level: 1, name, exact: true });
+          await expect(heading).toBeVisible();
+          await expect(heading).toHaveAttribute('title', name);
+          await expect(heading.locator('img')).toHaveAttribute('alt', '');
+          const geometry = await heading.evaluate((element) => ({
+            height: element.getBoundingClientRect().height,
+            pageWidth: document.documentElement.scrollWidth,
+            visibleWidth: element.lastElementChild!.clientWidth,
+            textWidth: element.lastElementChild!.scrollWidth,
+          }));
+          expect(geometry.height).toBeLessThanOrEqual(28);
+          expect(geometry.pageWidth).toBeLessThanOrEqual(width);
+          expect(geometry.textWidth > geometry.visibleWidth).toBe(names === long);
+        }
+      }
+    }
   });
 
   test('category products show login CTA for add-to-list actions @smoke', async ({ page }) => {
