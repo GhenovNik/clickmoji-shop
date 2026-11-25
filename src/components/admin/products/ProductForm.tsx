@@ -4,6 +4,10 @@ import Image from 'next/image';
 import { useState, useRef, useEffect } from 'react';
 import { useLocale, useTranslations } from 'next-intl';
 import { localizedName } from '@/lib/catalog-name';
+import { IMAGE_LANGUAGES } from '@/lib/image-languages';
+import { imageLanguageLabel } from '@/lib/image-language-label';
+import { localizedImagesOf, type LocalizedImages } from '@/lib/product-image';
+import type { PictureEdit as LocalizedImageEdit } from '@/lib/picture-storage';
 import EmojiPicker from '../shared/EmojiPicker';
 import ImagePreviewButton from '../shared/ImagePreviewButton';
 
@@ -14,7 +18,8 @@ interface Product {
   emoji: string;
   isCustom: boolean;
   imageUrl: string | null;
-  imageUrlEn?: string | null;
+  imageTextLocale?: string | null;
+  localizedImages?: unknown;
   categoryId: string;
   variants?: ProductVariant[];
 }
@@ -42,16 +47,37 @@ interface ProductFormProps {
   onCancel: () => void;
 }
 
-export type FormData = {
+// What the form works on: the pictures of the listed languages as the admin sees them.
+type FormState = {
   name: string;
   nameEn: string;
   emoji: string;
   categoryId: string;
   isCustom: boolean;
   imageUrl: string;
-  // English version of a labelled picture; null when the picture has no text.
-  imageUrlEn: string | null;
+  // Language of the text on imageUrl: null = not labelled, 'none' = no text, otherwise a language.
+  imageTextLocale: string | null;
+  // Pictures in the picture languages, by language; a language without an entry has none.
+  localizedImages: LocalizedImages;
   variants?: ProductVariant[];
+};
+
+// What the form submits: the same fields, but the pictures are an EDIT, not the whole dictionary.
+// A language the admin changed carries its new URL, or `null` for a picture the admin removed; a
+// language the admin did not touch is absent. The form shows only what the dictionary holds, so a
+// picture that only the legacy English column still holds (written by the previous release) is
+// invisible to it: submitting "everything I can see" would erase that address.
+export type FormData = Omit<FormState, 'localizedImages'> & {
+  localizedImages: LocalizedImageEdit;
+};
+
+// The wording of one picture-language field.
+type PictureText = {
+  savedLabel: string;
+  newLabel: string;
+  currentLabel: string;
+  currentAlt: string;
+  removeLabel: string;
 };
 
 const MAX_UPLOAD_MB = 3;
@@ -69,14 +95,15 @@ function readAsDataUrl(file: File, failureMessage: string) {
 export default function ProductForm({ product, categories, onSubmit, onCancel }: ProductFormProps) {
   const t = useTranslations('admin');
   const locale = useLocale();
-  const [formData, setFormData] = useState<FormData>({
+  const [formData, setFormData] = useState<FormState>({
     name: product?.name || '',
     nameEn: product?.nameEn || '',
     emoji: product?.emoji || '',
     categoryId: product?.categoryId || '',
     isCustom: product?.isCustom || false,
     imageUrl: product?.imageUrl || '',
-    imageUrlEn: product?.imageUrlEn || null,
+    imageTextLocale: product?.imageTextLocale ?? null,
+    localizedImages: localizedImagesOf(product?.localizedImages, IMAGE_LANGUAGES),
     variants: product?.variants || [],
   });
 
@@ -90,7 +117,8 @@ export default function ProductForm({ product, categories, onSubmit, onCancel }:
   // AI answer both fall back to it.
   const [savedImage] = useState(() => ({
     imageUrl: product?.imageUrl ?? '',
-    imageUrlEn: product?.imageUrlEn ?? (null as string | null),
+    imageTextLocale: product?.imageTextLocale ?? (null as string | null),
+    localizedImages: localizedImagesOf(product?.localizedImages, IMAGE_LANGUAGES),
   }));
   // INV-1: every selection action bumps the sequence; an AI answer applies only while the
   // sequence still equals the value recorded at the request.
@@ -98,20 +126,48 @@ export default function ProductForm({ product, categories, onSubmit, onCancel }:
   const aiRequestSeq = useRef(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const mainPictureChanged = !!selectedFile || formData.imageUrl !== savedImage.imageUrl;
-  const englishPictureChanged = formData.imageUrlEn !== savedImage.imageUrlEn;
-  const hasNewPicture = mainPictureChanged || englishPictureChanged;
+  const languageChanged = (language: string) =>
+    formData.localizedImages[language] !== savedImage.localizedImages[language];
+  const hasNewPicture = mainPictureChanged || IMAGE_LANGUAGES.some(languageChanged);
   const newMainPreview = selectedFile ? filePreviewUrl : formData.imageUrl || null;
+
+  // Every language of the picture list gets a field. English keeps its own wording; any other
+  // language (listed later, or only in a test) uses the generic wording with its name or code.
+  const pictureText = (language: string): PictureText => {
+    if (language === 'en') {
+      return {
+        savedLabel: t('shared.nowEnglishImage'),
+        newLabel: t('shared.newEnglishImage'),
+        currentLabel: t('productForm.englishVersion'),
+        currentAlt: t('productForm.englishVersionAlt'),
+        removeLabel: t('productForm.removeEnglishVersion'),
+      };
+    }
+    const code = language.toUpperCase();
+    const name = imageLanguageLabel(language, locale);
+    return {
+      savedLabel: t('shared.nowLanguageImage', { code }),
+      newLabel: t('shared.newLanguageImage', { code }),
+      currentLabel: t('productForm.languageVersion', { language: name }),
+      currentAlt: t('productForm.languageVersionAlt', { language: name }),
+      removeLabel: t('productForm.removeLanguageVersion', { language: name }),
+    };
+  };
 
   const clearFileInput = () => {
     setSelectedFile(null);
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
-  // Deleting the English picture is a selection action: a pending AI answer must not replace
+  // Deleting a language's picture is a selection action: a pending AI answer must not replace
   // the main picture or report its result (AGE-1626).
-  const removeEnglishPicture = () => {
+  const removeLanguagePicture = (language: string) => {
     selectionSeq.current += 1;
-    setFormData((prev) => ({ ...prev, imageUrlEn: null }));
+    setFormData((prev) => {
+      const localizedImages = { ...prev.localizedImages };
+      delete localizedImages[language];
+      return { ...prev, localizedImages };
+    });
   };
 
   // Revert: any new pick (file, AI or library) is dropped; nothing is saved here.
@@ -121,7 +177,8 @@ export default function ProductForm({ product, categories, onSubmit, onCancel }:
     setFormData((prev) => ({
       ...prev,
       imageUrl: savedImage.imageUrl,
-      imageUrlEn: savedImage.imageUrlEn,
+      imageTextLocale: savedImage.imageTextLocale,
+      localizedImages: savedImage.localizedImages,
     }));
   };
 
@@ -155,6 +212,8 @@ export default function ProductForm({ product, categories, onSubmit, onCancel }:
       return;
     }
     selectionSeq.current += 1;
+    // An uploaded picture is not labelled until someone says what its text is.
+    setFormData((prev) => ({ ...prev, imageTextLocale: null }));
     setSelectedFile(file);
   };
 
@@ -179,12 +238,29 @@ export default function ProductForm({ product, categories, onSubmit, onCancel }:
     return uploadData.imageUrl as string;
   };
 
+  // The pictures to submit: only the languages whose picture the admin changed since the form
+  // opened (a new URL, or `null` for a removal). Untouched languages are absent, so the server
+  // keeps them as stored, a picture the form never showed included.
+  const pictureEdit = (): LocalizedImageEdit => {
+    const edit: LocalizedImageEdit = {};
+    for (const language of IMAGE_LANGUAGES) {
+      if (languageChanged(language)) edit[language] = formData.localizedImages[language] ?? null;
+    }
+    return edit;
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    // FR-2: an unchecked custom-image box saves no picture; the stored file is not deleted.
+    // FR-2: an unchecked custom-image box saves no picture; the stored file is not deleted. The
+    // pictures the form showed are removed explicitly; nothing else is touched.
     if (!formData.isCustom) {
-      await onSubmit({ ...formData, imageUrl: '', imageUrlEn: null }, '');
+      const removed: LocalizedImageEdit = {};
+      for (const language of Object.keys(savedImage.localizedImages)) removed[language] = null;
+      await onSubmit(
+        { ...formData, imageUrl: '', imageTextLocale: null, localizedImages: removed },
+        ''
+      );
       return;
     }
 
@@ -219,7 +295,7 @@ export default function ProductForm({ product, categories, onSubmit, onCancel }:
       setUploading(false);
     }
 
-    await onSubmit({ ...formData, imageUrl }, imageUrl);
+    await onSubmit({ ...formData, imageUrl, localizedImages: pictureEdit() }, imageUrl);
   };
 
   const updateVariant = (index: number, key: keyof ProductVariant, value: string) => {
@@ -361,17 +437,31 @@ export default function ProductForm({ product, categories, onSubmit, onCancel }:
           onGenerateImage={(url) => {
             if (aiRequestSeq.current !== selectionSeq.current) return;
             clearFileInput();
-            setFormData((prev) => ({ ...prev, imageUrl: url, isCustom: true }));
+            setFormData((prev) => ({
+              ...prev,
+              imageUrl: url,
+              imageTextLocale: null,
+              isCustom: true,
+            }));
           }}
-          onSelectLibraryImage={({ imageUrl, imageUrlEn }) => {
+          onSelectLibraryImage={({ imageUrl, imageTextLocale, localizedImages }) => {
             selectionSeq.current += 1;
-            // An English-only library picture fills the English field and keeps the main one.
+            // Without a main picture only the language versions are filled; the main one stays.
             if (!imageUrl) {
-              setFormData((prev) => ({ ...prev, imageUrlEn }));
+              setFormData((prev) => ({
+                ...prev,
+                localizedImages: { ...prev.localizedImages, ...localizedImages },
+              }));
               return;
             }
             clearFileInput();
-            setFormData((prev) => ({ ...prev, imageUrl, imageUrlEn, isCustom: true }));
+            setFormData((prev) => ({
+              ...prev,
+              imageUrl,
+              imageTextLocale,
+              localizedImages,
+              isCustom: true,
+            }));
           }}
         />
       </div>
@@ -469,60 +559,68 @@ export default function ProductForm({ product, categories, onSubmit, onCancel }:
                 </div>
               )
             )}
-            {englishPictureChanged ? (
-              <div className="mt-2 flex flex-wrap gap-4">
-                {savedImage.imageUrlEn && (
-                  <div className="flex flex-col gap-1">
-                    <span className="text-sm text-gray-600">{t('shared.nowEnglishImage')}</span>
-                    <ImagePreviewButton
-                      src={savedImage.imageUrlEn}
-                      alt={t('productForm.englishVersionAlt')}
-                      imgClassName="w-16 h-16"
-                    />
+            {IMAGE_LANGUAGES.map((language) => {
+              const text = pictureText(language);
+              const current = formData.localizedImages[language];
+              const saved = savedImage.localizedImages[language];
+              if (languageChanged(language)) {
+                return (
+                  <div key={language} className="mt-2 flex flex-wrap gap-4">
+                    {saved && (
+                      <div className="flex flex-col gap-1">
+                        <span className="text-sm text-gray-600">{text.savedLabel}</span>
+                        <ImagePreviewButton
+                          src={saved}
+                          alt={text.currentAlt}
+                          imgClassName="w-16 h-16"
+                        />
+                      </div>
+                    )}
+                    {current && (
+                      <div className="flex flex-col gap-1">
+                        <span className="text-sm text-gray-600">{text.newLabel}</span>
+                        <div className="flex items-center gap-3">
+                          <ImagePreviewButton
+                            src={current}
+                            alt={t('productForm.newImageAlt')}
+                            imgClassName="w-16 h-16"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => removeLanguagePicture(language)}
+                            className="text-sm text-red-600 hover:text-red-800"
+                          >
+                            {text.removeLabel}
+                          </button>
+                        </div>
+                      </div>
+                    )}
                   </div>
-                )}
-                {formData.imageUrlEn && (
-                  <div className="flex flex-col gap-1">
-                    <span className="text-sm text-gray-600">{t('shared.newEnglishImage')}</span>
+                );
+              }
+              return (
+                current && (
+                  <div key={language} className="mt-2">
+                    <p className="text-sm text-gray-600">{text.currentLabel}</p>
                     <div className="flex items-center gap-3">
                       <ImagePreviewButton
-                        src={formData.imageUrlEn}
-                        alt={t('productForm.newImageAlt')}
+                        src={current}
+                        alt={text.currentAlt}
+                        className="mt-1"
                         imgClassName="w-16 h-16"
                       />
                       <button
                         type="button"
-                        onClick={removeEnglishPicture}
+                        onClick={() => removeLanguagePicture(language)}
                         className="text-sm text-red-600 hover:text-red-800"
                       >
-                        {t('productForm.removeEnglishVersion')}
+                        {text.removeLabel}
                       </button>
                     </div>
                   </div>
-                )}
-              </div>
-            ) : (
-              formData.imageUrlEn && (
-                <div className="mt-2">
-                  <p className="text-sm text-gray-600">{t('productForm.englishVersion')}</p>
-                  <div className="flex items-center gap-3">
-                    <ImagePreviewButton
-                      src={formData.imageUrlEn}
-                      alt={t('productForm.englishVersionAlt')}
-                      className="mt-1"
-                      imgClassName="w-16 h-16"
-                    />
-                    <button
-                      type="button"
-                      onClick={removeEnglishPicture}
-                      className="text-sm text-red-600 hover:text-red-800"
-                    >
-                      {t('productForm.removeEnglishVersion')}
-                    </button>
-                  </div>
-                </div>
-              )
-            )}
+                )
+              );
+            })}
           </div>
         )}
       </div>

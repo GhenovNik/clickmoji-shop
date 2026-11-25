@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { apiText } from '@/lib/api-messages';
 import { prisma } from '@/lib/prisma';
+import { PRODUCT_OMIT, VARIANT_OMIT } from '@/lib/catalog-omit';
 import { requireUser } from '@/lib/auth-guards';
 import { variantOfItemProduct, visibleItemsWhere } from '@/lib/product-visibility';
 
@@ -23,11 +24,12 @@ export async function GET(request: Request, { params }: { params: Promise<{ list
           where: visibleItemsWhere(session.user.id),
           include: {
             product: {
+              omit: PRODUCT_OMIT,
               include: {
                 category: true,
               },
             },
-            variant: true,
+            variant: { omit: VARIANT_OMIT },
           },
         },
         _count: {

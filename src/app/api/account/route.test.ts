@@ -27,7 +27,8 @@ type ProductRow = {
   emoji: string;
   isCustom: boolean;
   imageUrl: string | null;
-  imageUrlEn: string | null;
+  imageTextLocale: string | null;
+  localizedImages: Record<string, string> | null;
   categoryId: string;
   isGlobal: boolean;
   createdById: string | null;
@@ -41,7 +42,8 @@ type VariantRow = {
   nameEn: string;
   emoji: string;
   imageUrl: string | null;
-  imageUrlEn: string | null;
+  imageTextLocale: string | null;
+  localizedImages: Record<string, string> | null;
   productId: string;
 };
 
@@ -102,7 +104,8 @@ type HistoryItemRow = {
   productNameEn: string | null;
   productEmoji: string;
   productImageUrl: string | null;
-  productImageUrlEn: string | null;
+  imageTextLocale: string | null;
+  localizedImages: Record<string, string> | null;
   categoryName: string;
   categoryNameEn: string | null;
   isCustom: boolean;
@@ -917,7 +920,8 @@ async function seedDatabase() {
       emoji: '🥛',
       isCustom: false,
       imageUrl: null,
-      imageUrlEn: null,
+      imageTextLocale: null,
+      localizedImages: null,
       categoryId: 'cat-1',
       isGlobal: true,
       createdById: 'user-a',
@@ -931,7 +935,8 @@ async function seedDatabase() {
       emoji: '🧀',
       isCustom: false,
       imageUrl: null,
-      imageUrlEn: null,
+      imageTextLocale: null,
+      localizedImages: null,
       categoryId: 'cat-1',
       isGlobal: false,
       createdById: 'user-a',
@@ -945,7 +950,8 @@ async function seedDatabase() {
       emoji: '🍞',
       isCustom: false,
       imageUrl: null,
-      imageUrlEn: null,
+      imageTextLocale: null,
+      localizedImages: null,
       categoryId: 'cat-1',
       isGlobal: false,
       createdById: 'user-b',
@@ -961,7 +967,8 @@ async function seedDatabase() {
       nameEn: 'Whole',
       emoji: '🥛',
       imageUrl: null,
-      imageUrlEn: null,
+      imageTextLocale: null,
+      localizedImages: null,
       productId: 'prod-global-by-a',
     },
   ];
@@ -1119,7 +1126,8 @@ async function seedDatabase() {
       productNameEn: 'Alice Secret',
       productEmoji: '🧀',
       productImageUrl: null,
-      productImageUrlEn: null,
+      imageTextLocale: null,
+      localizedImages: null,
       categoryName: 'Молочные продукты',
       categoryNameEn: 'Dairy',
       isCustom: false,
@@ -1140,7 +1148,8 @@ async function seedDatabase() {
       productNameEn: 'Bob Secret',
       productEmoji: '🍞',
       productImageUrl: null,
-      productImageUrlEn: null,
+      imageTextLocale: null,
+      localizedImages: null,
       categoryName: 'Молочные продукты',
       categoryNameEn: 'Dairy',
       isCustom: false,
@@ -1161,7 +1170,8 @@ async function seedDatabase() {
       productNameEn: 'Milk',
       productEmoji: '🥛',
       productImageUrl: null,
-      productImageUrlEn: null,
+      imageTextLocale: null,
+      localizedImages: null,
       categoryName: 'Молочные продукты',
       categoryNameEn: 'Dairy',
       isCustom: false,
@@ -1417,7 +1427,8 @@ describe('GET /api/account/export', () => {
       productNameEn: 'Deleted Product',
       productEmoji: '🥫',
       productImageUrl: null,
-      productImageUrlEn: null,
+      imageTextLocale: null,
+      localizedImages: null,
       categoryName: 'Бакалея',
       categoryNameEn: 'Pantry',
       isCustom: false,
@@ -1472,6 +1483,128 @@ describe('GET /api/account/export', () => {
   });
 });
 
+describe('GET /api/account/export: picture metadata and the legacy English key', () => {
+  async function exportPayload() {
+    const res = await exportRoute.GET(
+      jsonRequest('http://localhost/api/account/export', 'GET', undefined, 'en')
+    );
+    expect(res.status).toBe(200);
+    return JSON.parse(await res.text());
+  }
+
+  it('exports the picture dictionary and projects imageUrlEn from its English entry on products and variants', async () => {
+    const product = db.products.find((p) => p.id === 'prod-global-by-a')!;
+    product.imageUrl = '/img/milk-ru.png';
+    product.imageTextLocale = 'ru';
+    product.localizedImages = { en: '/img/milk-en.png', es: '/img/milk-es.png' };
+    const variant = db.variants.find((v) => v.id === 'var-global')!;
+    variant.imageUrl = '/img/whole.png';
+    variant.imageTextLocale = 'none';
+    variant.localizedImages = { en: '/img/whole-en.png' };
+    const privateAlice = db.products.find((p) => p.id === 'prod-private-a')!;
+    privateAlice.imageUrl = '/img/secret.png';
+    privateAlice.imageTextLocale = 'en';
+    privateAlice.localizedImages = { ru: '/img/secret-ru.png' };
+    // A legacy-only value the dictionary does not know about must not reach the download.
+    (privateAlice as Record<string, unknown>).imageUrlEn = '/img/legacy-only.png';
+
+    const payload = await exportPayload();
+
+    const expectedProduct = {
+      imageUrl: '/img/milk-ru.png',
+      imageTextLocale: 'ru',
+      localizedImages: { en: '/img/milk-en.png', es: '/img/milk-es.png' },
+      imageUrlEn: '/img/milk-en.png',
+    };
+    const expectedVariant = {
+      imageUrl: '/img/whole.png',
+      imageTextLocale: 'none',
+      localizedImages: { en: '/img/whole-en.png' },
+      imageUrlEn: '/img/whole-en.png',
+    };
+
+    const listItem = payload.lists[0].items.find((i: { id: string }) => i.id === 'item-a-global');
+    expect(listItem.product).toMatchObject(expectedProduct);
+    expect(listItem.variant).toMatchObject(expectedVariant);
+
+    const productFavorite = payload.favorites.find(
+      (f: { variant: unknown; product: { id: string } }) =>
+        f.variant === null && f.product.id === 'prod-private-a'
+    );
+    expect(productFavorite.product).toMatchObject({
+      imageUrl: '/img/secret.png',
+      imageTextLocale: 'en',
+      localizedImages: { ru: '/img/secret-ru.png' },
+      imageUrlEn: null,
+    });
+
+    const variantFavorite = payload.favorites.find(
+      (f: { variant: { id: string } | null }) => f.variant?.id === 'var-global'
+    );
+    expect(variantFavorite.product).toMatchObject(expectedProduct);
+    expect(variantFavorite.variant).toMatchObject(expectedVariant);
+
+    const created = payload.createdProducts.find(
+      (p: { id: string }) => p.id === 'prod-global-by-a'
+    );
+    expect(created).toMatchObject(expectedProduct);
+    expect(created.variants).toHaveLength(1);
+    expect(created.variants[0]).toMatchObject(expectedVariant);
+
+    // The legacy column is not read: a dictionary without an English entry gives a null legacy key.
+    const privateProduct = payload.createdProducts.find(
+      (p: { id: string }) => p.id === 'prod-private-a'
+    );
+    expect(privateProduct).toMatchObject({
+      imageUrl: '/img/secret.png',
+      imageTextLocale: 'en',
+      localizedImages: { ru: '/img/secret-ru.png' },
+      imageUrlEn: null,
+    });
+    expect(JSON.stringify(payload)).not.toContain('legacy-only');
+  });
+
+  it('exports the history picture snapshot and projects productImageUrlEn from its dictionary', async () => {
+    const own = db.historyItems.find((h) => h.id === 'hi-a-own')!;
+    own.productImageUrl = '/img/secret-ru.png';
+    own.imageTextLocale = 'ru';
+    own.localizedImages = { en: '/img/secret-en.png' };
+    (own as Record<string, unknown>).productImageUrlEn = '/img/legacy-only.png';
+
+    const payload = await exportPayload();
+
+    expect(payload.history[0].items).toHaveLength(1);
+    expect(payload.history[0].items[0]).toMatchObject({
+      id: 'hi-a-own',
+      productImageUrl: '/img/secret-ru.png',
+      imageTextLocale: 'ru',
+      localizedImages: { en: '/img/secret-en.png' },
+      productImageUrlEn: '/img/secret-en.png',
+    });
+    expect(JSON.stringify(payload)).not.toContain('legacy-only');
+  });
+
+  it('keeps picture fields on a snapshot whose variant is cleared, and exports no picture of a hidden product', async () => {
+    const foreign = db.historyItems.find((h) => h.id === 'hi-a-legacy-foreign')!;
+    foreign.productImageUrl = '/img/bob-secret.png';
+    foreign.localizedImages = { en: '/img/bob-secret-en.png' };
+    const own = db.historyItems.find((h) => h.id === 'hi-a-own')!;
+    own.productId = null;
+    own.variantId = 'var-global';
+    own.variantName = '3.2%';
+    own.localizedImages = { en: '/img/own-en.png' };
+
+    const payload = await exportPayload();
+    const rawText = JSON.stringify(payload);
+
+    expect(rawText).not.toContain('bob-secret');
+    const [item] = payload.history[0].items;
+    expect(item.id).toBe('hi-a-own');
+    expect(item.productImageUrlEn).toBe('/img/own-en.png');
+    expect(item.localizedImages).toEqual({ en: '/img/own-en.png' });
+  });
+});
+
 describe('GET /api/account/export: variant must belong to the item product and stay visible', () => {
   const now = new Date('2026-11-20T10:00:00.000Z');
 
@@ -1483,7 +1616,8 @@ describe('GET /api/account/export: variant must belong to the item product and s
         nameEn: 'Bob secret variant',
         emoji: '🍞',
         imageUrl: null,
-        imageUrlEn: null,
+        imageTextLocale: null,
+        localizedImages: null,
         productId: 'prod-private-b',
       },
       {
@@ -1492,7 +1626,8 @@ describe('GET /api/account/export: variant must belong to the item product and s
         nameEn: 'Alice secret variant',
         emoji: '🧀',
         imageUrl: null,
-        imageUrlEn: null,
+        imageTextLocale: null,
+        localizedImages: null,
         productId: 'prod-private-a',
       }
     );
@@ -1570,7 +1705,8 @@ describe('GET /api/account/export: variant must belong to the item product and s
       productNameEn: 'Milk',
       productEmoji: '🥛',
       productImageUrl: null,
-      productImageUrlEn: null,
+      imageTextLocale: null,
+      localizedImages: null,
       categoryName: 'Молочные продукты',
       categoryNameEn: 'Dairy',
       isCustom: false,
@@ -1906,7 +2042,8 @@ describe('DELETE /api/account: another user referencing a private product keeps 
       nameEn: 'Alice secret variant',
       emoji: '🧀',
       imageUrl: null,
-      imageUrlEn: null,
+      imageTextLocale: null,
+      localizedImages: null,
       productId: 'prod-private-a',
     });
     addReference();
@@ -2025,7 +2162,8 @@ describe('DELETE /api/account: another user referencing a private product keeps 
         productNameEn: 'Alice Secret',
         productEmoji: '🧀',
         productImageUrl: null,
-        productImageUrlEn: null,
+        imageTextLocale: null,
+        localizedImages: null,
         categoryName: 'Молочные продукты',
         categoryNameEn: 'Dairy',
         isCustom: false,
@@ -2056,7 +2194,8 @@ describe('DELETE /api/account: another user referencing a private product keeps 
         productNameEn: 'Milk',
         productEmoji: '🥛',
         productImageUrl: null,
-        productImageUrlEn: null,
+        imageTextLocale: null,
+        localizedImages: null,
         categoryName: 'Молочные продукты',
         categoryNameEn: 'Dairy',
         isCustom: false,
@@ -2119,7 +2258,8 @@ describe('DELETE /api/account: another user referencing a private product keeps 
         emoji: '🍪',
         isCustom: true,
         imageUrl: null,
-        imageUrlEn: null,
+        imageTextLocale: null,
+        localizedImages: null,
         categoryId: 'cat-1',
         isGlobal: false,
         createdById: 'user-a',
@@ -2132,7 +2272,8 @@ describe('DELETE /api/account: another user referencing a private product keeps 
         nameEn: 'Free variant',
         emoji: '🍪',
         imageUrl: null,
-        imageUrlEn: null,
+        imageTextLocale: null,
+        localizedImages: null,
         productId: 'prod-private-free',
       });
     });

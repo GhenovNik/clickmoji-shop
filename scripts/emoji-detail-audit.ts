@@ -11,11 +11,11 @@ import {
   expandHomePath,
   formatCatalogAuditMarkdown,
   loadStyleRefs,
-  parseCatalogExport,
   parseDetailThreshold,
   type CatalogAuditScope,
 } from '../src/lib/services/emoji-detail';
 import { assertAuditOutputPath, canonicalPath } from '../src/lib/services/safe-paths';
+import { parseCatalogExport } from './lib/catalog-export';
 
 // Measures the canonical detail score on public images from a catalogue export JSON without any
 // database connection. Downloaded images are cached only in a temporary directory outside the repo.

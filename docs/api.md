@@ -111,14 +111,14 @@ All endpoints are implemented as Next.js Route Handlers under `src/app/api`.
 ### `POST /api/products`
 
 - Auth: admin
-- Body: `name`, `nameEn`, `categoryId`, `emoji?`, `isCustom?`, `imageUrl?`, `variants?`
+- Body: `name`, `nameEn`, `categoryId`, `emoji?`, `isCustom?`, `imageUrl?`, `imageTextLocale?`, `localizedImages?` (only the languages listed in `src/lib/image-languages.ts` are stored), `variants?`
 - Notes: `emoji` required when `isCustom` is false; can create variants in same request
 
 ### `PUT /api/products/:productId`
 
 - Auth: admin
-- Body: `name?`, `nameEn?`, `emoji?`, `categoryId?`, `isCustom?`, `imageUrl?`, `variants?`
-- Notes: upserts/deletes variants; keeps variants that are already used in items; accepts `imageUrlEn?`; a replaced image stays in UploadThing; leftovers are removed by `npm run db:files`, which must run with the app stopped (with writers running it can delete a file attached during the run; a safe protocol is AGE-1472)
+- Body: `name?`, `nameEn?`, `emoji?`, `categoryId?`, `isCustom?`, `imageUrl?`, `imageTextLocale?`, `localizedImages?`, `variants?`
+- Notes: upserts/deletes variants; keeps variants that are already used in items; `localizedImages` (`{"<language>": "<url>"}`) replaces the entries of the languages listed in `src/lib/image-languages.ts` (an absent one is removed) and keeps the entries of any other language; leaving it out keeps the dictionary; a replaced image stays in UploadThing; leftovers are removed by `npm run db:files`, which must run with the app stopped (with writers running it can delete a file attached during the run; a safe protocol is AGE-1472)
 
 ### `DELETE /api/products/:productId`
 

@@ -21,7 +21,7 @@ const result = {
   emoji: '🥛',
   isCustom: true,
   imageUrl: '/uploads/milk-ru.png',
-  imageUrlEn: '/uploads/milk-en.png',
+  localizedImages: { en: '/uploads/milk-en.png' },
   variants: [{ id: 'v-1', name: 'Обезжиренное', nameEn: 'Skimmed', emoji: '' }],
   category: {
     id: 'dairy',
@@ -106,7 +106,7 @@ describe('product search', () => {
   });
 
   it('keeps the main picture in English when there is no English one', async () => {
-    mockSearch([{ ...result, imageUrlEn: undefined }]);
+    mockSearch([{ ...result, localizedImages: undefined }]);
     renderSearch('en');
 
     fireEvent.change(screen.getByPlaceholderText('Search products...'), {

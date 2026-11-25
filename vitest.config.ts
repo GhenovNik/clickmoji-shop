@@ -8,7 +8,8 @@ export default defineConfig({
     environment: 'jsdom',
     globals: true,
     setupFiles: './src/test/setup.ts',
-    include: ['src/**/*.{test,spec}.{ts,tsx}'],
+    // scripts/lib holds standalone tooling that keeps legacy reads out of `src` (AGE-1667 Я3).
+    include: ['src/**/*.{test,spec}.{ts,tsx}', 'scripts/lib/**/*.{test,spec}.ts'],
     exclude: ['tests/e2e/**', 'node_modules/**'],
     passWithNoTests: true,
     coverage: {

@@ -16,7 +16,9 @@
     "nowImage": "Now",
     "newImage": "New",
     "nowEnglishImage": "Now (EN)",
-    "newEnglishImage": "New (EN)"
+    "newEnglishImage": "New (EN)",
+    "nowLanguageImage": "Now ({code})",
+    "newLanguageImage": "New ({code})"
   },
   "columns": {
     "icon": "Icon",
@@ -116,6 +118,9 @@
     "removeEnglishVersion": "Remove the English version",
     "currentImageAlt": "Current image",
     "englishVersionAlt": "English version",
+    "languageVersion": "{language} version (with labels):",
+    "removeLanguageVersion": "Remove the {language} version",
+    "languageVersionAlt": "{language} version",
     "newImageAlt": "New picture",
     "restorePrevious": "Restore previous"
   },

@@ -2,6 +2,7 @@ import { PrismaClient } from '@prisma/client';
 import { UTApi } from 'uploadthing/server';
 import { createPrismaPgAdapter } from '../src/lib/prisma-adapter';
 import { collectReferencedFileKeys } from '../src/lib/services/stored-image-references';
+import { legacyEnglishReferences } from './lib/legacy-picture-references';
 
 // Deletes UploadThing files that nothing in the database points at. Run it only while the
 // application is stopped: the references are read once and the files are deleted afterwards, so a
@@ -47,7 +48,7 @@ async function cleanupOrphanedFiles() {
   console.log(`📦 Found ${files.length} files in UploadThing\n`);
 
   console.log('🔍 Checking database for used images...');
-  const { keys: usedFileKeys } = await collectReferencedFileKeys(prisma);
+  const { keys: usedFileKeys } = await collectReferencedFileKeys(prisma, legacyEnglishReferences);
 
   console.log(`✅ Found ${usedFileKeys.size} files currently in use\n`);
 
@@ -92,11 +93,16 @@ async function cleanupUnusedImages(isDryRun: boolean) {
   }
 
   console.log('📊 Fetching used images from database...');
-  const { keys: usedFileKeys, counts } = await collectReferencedFileKeys(prisma);
+  const { keys: usedFileKeys, counts } = await collectReferencedFileKeys(
+    prisma,
+    legacyEnglishReferences
+  );
 
   console.log(`✅ Found ${usedFileKeys.size} files in use`);
   console.log(`   - Categories with a picture: ${counts.categories}`);
   console.log(`   - Products with a picture: ${counts.products}`);
+  console.log(`   - Variants with a picture: ${counts.variants}`);
+  console.log(`   - History rows with a picture: ${counts.history}`);
   console.log(`   - Library: ${counts.library}\n`);
 
   console.log('☁️  Fetching files from UploadThing...');

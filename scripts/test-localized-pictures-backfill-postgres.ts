@@ -116,7 +116,7 @@ async function main() {
       [
         'node_modules/vitest/vitest.mjs',
         'run',
-        'src/lib/services/localized-pictures-backfill.integration.test.ts',
+        'scripts/lib/localized-pictures-backfill.integration.test.ts',
         '--testTimeout=30000',
       ],
       { env, stdio: ['ignore', 'inherit', 'inherit'] }

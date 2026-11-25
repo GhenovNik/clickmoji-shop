@@ -31,7 +31,7 @@ const savedProduct = {
   emoji: '🍏',
   isCustom: true,
   imageUrl: 'https://utfs.io/f/old.webp',
-  imageUrlEn: 'https://utfs.io/f/old-en.webp' as string | null,
+  localizedImages: { en: 'https://utfs.io/f/old-en.webp' } as Record<string, string>,
   categoryId: 'c1',
 };
 
@@ -144,7 +144,8 @@ describe('AGE-1626 deleting the saved English picture while AI is in flight', ()
 
     const [data] = await submitAndRead(onSubmit);
     expect(data.imageUrl).toBe('https://utfs.io/f/old.webp');
-    expect(data.imageUrlEn).toBeNull();
+    // The saved English picture was removed: an explicit removal, not an absent key.
+    expect(data.localizedImages).toEqual({ en: null });
   });
 
   it('an error result after deletion shows no alert', async () => {
@@ -201,7 +202,8 @@ describe('AGE-1626 deleting a newly picked English picture while AI is in flight
 
     const [data] = await submitAndRead(onSubmit);
     expect(data.imageUrl).toBe('https://utfs.io/f/old.webp');
-    expect(data.imageUrlEn).toBeNull();
+    // The saved English picture was removed: an explicit removal, not an absent key.
+    expect(data.localizedImages).toEqual({ en: null });
   });
 
   it('an error result after deletion shows no alert', async () => {

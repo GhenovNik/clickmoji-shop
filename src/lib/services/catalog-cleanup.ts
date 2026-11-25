@@ -1,4 +1,7 @@
 import type { Prisma } from '@prisma/client';
+import { legacyEnglishOf, localizedImagesForStorage } from '../picture-storage';
+import { type LocalizedImages } from '../product-image';
+import { withLegacyEnglish } from '../../../scripts/lib/legacy-picture-transition';
 
 // One-off catalogue cleanup (operator decision of 2026-11-01): duplicate products are merged into
 // the singular one, a few specific products become variants of their base product, misfiled
@@ -96,6 +99,15 @@ async function moveFavorites(tx: Tx, fromId: string, toId: string) {
   return favorites.length;
 }
 
+// The first language both sets name with different addresses, if any. A language only one side
+// has is not a conflict (it travels), and neither is the same address on both sides. The main
+// address is decided apart from the languages.
+function conflictingLanguage(kept: LocalizedImages, incoming: LocalizedImages) {
+  return Object.keys(incoming).find(
+    (language) => kept[language] && kept[language] !== incoming[language]
+  );
+}
+
 export async function applyCatalogCleanup(
   tx: Tx,
   plan: CatalogCleanupPlan,
@@ -126,6 +138,28 @@ export async function applyCatalogCleanup(
     }
     if (!keep) throw new Error(`Merge target ${label(keepRef)} not found`);
 
+    // The duplicate is deleted below, so nothing it holds may be lost silently. Its main address
+    // and each of its picture languages are decided apart (an English address is read through
+    // `withLegacyEnglish`: the legacy column of the same read is the source, an explicit null
+    // included, the way the backfill treats it):
+    // - the main address: the singular product's own wins, the duplicate's is taken only when the
+    //   singular product has none (the operator's rule of 2026-11-01);
+    // - each language: one that only the duplicate has moves over, whatever happens to the main
+    //   address; one that both have with different addresses stops the cleanup before anything
+    //   is moved or deleted, because dropping either side would be a guess.
+    const keepLanguages = withLegacyEnglish(keep);
+    const dropMain = drop.isCustom && drop.imageUrl ? drop.imageUrl : null;
+    const dropLanguages: LocalizedImages = drop.isCustom ? withLegacyEnglish(drop) : {};
+    const conflict = conflictingLanguage(keepLanguages, dropLanguages);
+    if (conflict) {
+      throw new Error(`Conflicting merge ${label(dropRef)} → ${label(keepRef)}: ${conflict}`);
+    }
+    const keepsMain = keep.isCustom && Boolean(keep.imageUrl);
+    const takesMain = dropMain !== null && !keepsMain;
+    const takesLanguages = Object.keys(dropLanguages).some(
+      (language) => keepLanguages[language] !== dropLanguages[language]
+    );
+
     await tx.productVariant.updateMany({
       where: { productId: drop.id },
       data: { productId: keep.id },
@@ -139,17 +173,27 @@ export async function applyCatalogCleanup(
       data: { productId: keep.id },
     });
     const favorites = await moveFavorites(tx, drop.id, keep.id);
-    // The duplicate's own picture is kept when the singular product has none.
-    if (!(keep.isCustom && keep.imageUrl) && drop.isCustom && drop.imageUrl) {
+    if (takesMain || takesLanguages) {
+      // The singular product's own languages stay (read through the same rule, so its legacy-only
+      // English address is not erased when the mirror is rewritten); the duplicate's join them.
+      const merged = { ...keepLanguages, ...dropLanguages };
       await tx.product.update({
         where: { id: keep.id },
-        data: { isCustom: true, imageUrl: drop.imageUrl, imageUrlEn: drop.imageUrlEn },
+        data: {
+          isCustom: true,
+          ...(takesMain && { imageUrl: dropMain, imageTextLocale: drop.imageTextLocale }),
+          localizedImages: localizedImagesForStorage(merged),
+          imageUrlEn: legacyEnglishOf(merged),
+        },
       });
     }
     await tx.product.delete({ where: { id: drop.id } });
     log(
       `merge ${label(dropRef)} → ${label(keepRef)}: ${items.count} list items, ` +
-        `${history.count} history items, ${favorites} favorites, ${drop.variants.length} variants`
+        `${history.count} history items, ${favorites} favorites, ${drop.variants.length} variants` +
+        (dropMain && keepsMain && dropMain !== keep.imageUrl
+          ? `; main picture of the duplicate not kept (${dropMain})`
+          : '')
     );
   }
 
@@ -179,22 +223,34 @@ export async function applyCatalogCleanup(
     ) {
       throw new Error(`Ambiguous or conflicting variant ${step.name} / ${step.nameEn}`);
     }
+    // Every dictionary entry moves, including the languages the picture list does not cover, and
+    // an English address held only by the legacy column of the child (deleted below) or of an
+    // existing variant (rewritten below) joins its dictionary first.
+    const childLocalized: LocalizedImages = child.isCustom ? withLegacyEnglish(child) : {};
     const pictures = {
       imageUrl: child.isCustom ? child.imageUrl : null,
-      imageUrlEn: child.isCustom ? child.imageUrlEn : null,
+      imageTextLocale: child.isCustom ? child.imageTextLocale : null,
+      localized: childLocalized,
     };
+    const existingLocalized: LocalizedImages = existing ? withLegacyEnglish(existing) : {};
     // Never silently overwrite a different existing picture, or lose the child's picture.
-    for (const key of ['imageUrl', 'imageUrlEn'] as const) {
-      if (existing?.[key] && pictures[key] && existing[key] !== pictures[key]) {
-        throw new Error(`Conflicting variant ${step.name}: ${key}`);
-      }
+    if (existing?.imageUrl && pictures.imageUrl && existing.imageUrl !== pictures.imageUrl) {
+      throw new Error(`Conflicting variant ${step.name}: imageUrl`);
     }
+    // The main address and each language are decided apart: a language only one side has moves.
+    const conflict = conflictingLanguage(existingLocalized, pictures.localized);
+    if (conflict) throw new Error(`Conflicting variant ${step.name}: ${conflict}`);
+    const mergedLocalized = { ...existingLocalized, ...pictures.localized };
     const variant = existing
       ? await tx.productVariant.update({
           where: { id: existing.id },
           data: {
             imageUrl: pictures.imageUrl ?? existing.imageUrl,
-            imageUrlEn: pictures.imageUrlEn ?? existing.imageUrlEn,
+            imageTextLocale: pictures.imageUrl
+              ? pictures.imageTextLocale
+              : existing.imageTextLocale,
+            localizedImages: localizedImagesForStorage(mergedLocalized),
+            imageUrlEn: legacyEnglishOf(mergedLocalized),
           },
         })
       : await tx.productVariant.create({
@@ -203,7 +259,10 @@ export async function applyCatalogCleanup(
             name: step.name,
             nameEn: step.nameEn,
             emoji: child.emoji,
-            ...pictures,
+            imageUrl: pictures.imageUrl,
+            imageTextLocale: pictures.imageTextLocale,
+            localizedImages: localizedImagesForStorage(pictures.localized),
+            imageUrlEn: legacyEnglishOf(pictures.localized),
           },
         });
     const moved = { productId: parent.id, variantId: variant.id };

@@ -16,14 +16,16 @@ export type Product = {
   emoji: string;
   isCustom: boolean;
   imageUrl: string | null;
-  imageUrlEn?: string | null;
+  imageTextLocale?: string | null;
+  localizedImages?: unknown;
   variants?: {
     id: string;
     name: string;
     nameEn: string;
     emoji: string;
     imageUrl?: string | null;
-    imageUrlEn?: string | null;
+    imageTextLocale?: string | null;
+    localizedImages?: unknown;
   }[];
   category: {
     id: string;

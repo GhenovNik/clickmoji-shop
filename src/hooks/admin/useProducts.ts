@@ -1,5 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useTranslations } from 'next-intl';
+import type { PictureEdit } from '@/lib/picture-storage';
 
 export interface Product {
   id: string;
@@ -8,6 +9,8 @@ export interface Product {
   emoji: string;
   isCustom: boolean;
   imageUrl: string | null;
+  imageTextLocale?: string | null;
+  localizedImages?: unknown;
   categoryId: string;
   variants?: ProductVariant[];
   category: {
@@ -33,16 +36,27 @@ interface ProductInput {
   categoryId: string;
   isCustom: boolean;
   imageUrl: string;
-  imageUrlEn?: string | null;
+  imageTextLocale?: string | null;
+  // An edit of the picture languages the admin touched (`null` removes one); see `PictureEdit`.
+  localizedImages?: PictureEdit;
   variants?: Array<Partial<ProductVariant>>;
 }
 
-// The picture is kept only while the custom-image flag is on. An unchecked flag clears both
-// addresses whatever picture is passed; the stored files are not deleted (AGE-1620).
+// The picture is kept only while the custom-image flag is on. An unchecked flag clears the main
+// address, its text language and every language picture the form passes (each is turned into an
+// explicit removal, whatever picture is passed); the stored files are not deleted (AGE-1620). A
+// language that is not in the edit is left as stored, never cleared by omission.
 const pictureFields = (data: ProductInput, imageUrl?: string) =>
   data.isCustom
     ? { isCustom: true, imageUrl: imageUrl || null }
-    : { isCustom: false, imageUrl: null, imageUrlEn: null };
+    : {
+        isCustom: false,
+        imageUrl: null,
+        imageTextLocale: null,
+        localizedImages: Object.fromEntries(
+          Object.keys(data.localizedImages ?? {}).map((language) => [language, null])
+        ),
+      };
 
 // API functions
 const fetchProductsAPI = async (): Promise<Product[]> => {

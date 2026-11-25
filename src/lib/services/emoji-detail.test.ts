@@ -7,6 +7,7 @@ import sharp from 'sharp';
 import { afterEach, describe, expect, it } from 'vitest';
 import { previewHtml, type PreviewRow } from '../../../scripts/emoji-import';
 import { runAuditCli } from '../../../scripts/emoji-detail-audit';
+import { parseCatalogExport } from '../../../scripts/lib/catalog-export';
 import { readBatchImages, type ManifestBatch } from './emoji-batch-import';
 import {
   DEFAULT_DETAIL_THRESHOLD_BYTES,
@@ -19,7 +20,6 @@ import {
   isDetailAboveThreshold,
   loadStyleRefs,
   measureEmojiDetail,
-  parseCatalogExport,
   parseDetailThreshold,
 } from './emoji-detail';
 
@@ -251,67 +251,6 @@ describe('two-path consistency and preview rendering (AGE-1667 C3)', () => {
 });
 
 describe('catalogue export audit without database or network (AGE-1667 C3)', () => {
-  it('parses products vs all slots and rejects malformed exports', () => {
-    const sample = {
-      source: 'test export',
-      categories: [
-        {
-          name: 'Овощи',
-          nameEn: 'Vegetables',
-          imageUrl: 'https://example.test/cat.webp',
-          products: [
-            {
-              id: 'p1',
-              name: 'Морковь',
-              nameEn: 'Carrot',
-              imageUrl: 'https://example.test/p1.webp',
-              imageUrlEn: 'https://example.test/p1-en.webp',
-              variants: [
-                {
-                  id: 'v1',
-                  name: 'Морковь мытая',
-                  nameEn: 'Washed carrot',
-                  imageUrl: 'https://example.test/v1.webp',
-                },
-              ],
-            },
-            {
-              name: 'Лук',
-              nameEn: 'Onion',
-              imageUrl: null,
-              imageUrlEn: null,
-              variants: [],
-            },
-          ],
-        },
-      ],
-    };
-
-    const productsOnly = parseCatalogExport(sample, 'products');
-    expect(productsOnly.entries).toHaveLength(1);
-    expect(productsOnly.entries[0]).toMatchObject({ id: 'p1', kind: 'product', field: 'imageUrl' });
-    expect(productsOnly.counts).toEqual({
-      categories: 1,
-      products: 2,
-      variants: 1,
-      productPrimary: 1,
-      productEn: 1,
-      variantPrimary: 1,
-      variantEn: 0,
-      categoryPrimary: 1,
-      totalSlots: 4,
-    });
-
-    const allSlots = parseCatalogExport(sample, 'all');
-    expect(allSlots.entries).toHaveLength(4);
-
-    expect(() => parseCatalogExport([])).toThrow('top-level JSON object');
-    expect(() => parseCatalogExport({})).toThrow('missing "categories" array');
-    expect(() => parseCatalogExport({ categories: [{ name: '', products: [] }] })).toThrow(
-      'missing string categories[0].name'
-    );
-  });
-
   it('refuses cache or output paths inside the repository', () => {
     expect(() => assertPathOutsideRepo(REPO_ROOT, REPO_ROOT)).toThrow('inside repository');
     expect(() => assertPathOutsideRepo(join(REPO_ROOT, 'tmp-cache'), REPO_ROOT)).toThrow(

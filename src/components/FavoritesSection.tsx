@@ -29,7 +29,8 @@ type FavoriteProduct = {
     emoji: string;
     isCustom: boolean;
     imageUrl: string | null;
-    imageUrlEn?: string | null;
+    imageTextLocale?: string | null;
+    localizedImages?: unknown;
     category: {
       id: string;
       name: string;

@@ -12,7 +12,7 @@ const product: Product = {
   emoji: '🥛',
   isCustom: true,
   imageUrl: '/uploads/milk-ru.png',
-  imageUrlEn: '/uploads/milk-en.png',
+  localizedImages: { en: '/uploads/milk-en.png' },
   variants: [
     { id: 'skimmed', name: 'Обезжиренное', nameEn: 'Skimmed', emoji: '' },
     { id: 'whole', name: 'Цельное', nameEn: 'Whole', emoji: '🐄' },
@@ -213,7 +213,7 @@ describe('VariantMenu localized images', () => {
         nameEn: 'Skimmed',
         emoji: '🍼',
         imageUrl: null,
-        imageUrlEn: '/uploads/skimmed-en.png',
+        localizedImages: { en: '/uploads/skimmed-en.png' },
       },
     ],
   };

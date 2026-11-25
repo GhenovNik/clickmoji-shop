@@ -15,7 +15,7 @@ const baseData = {
   emoji: '🍏',
   categoryId: 'c1',
   imageUrl: 'https://utfs.io/f/old.webp',
-  imageUrlEn: 'https://utfs.io/f/old-en.webp' as string | null,
+  localizedImages: { en: 'https://utfs.io/f/old-en.webp' },
   variants: [],
 };
 
@@ -62,7 +62,25 @@ afterEach(() => {
 });
 
 describe('useProducts update body', () => {
-  it('AC-2: unchecking the custom image sends isCustom: false, imageUrl: null, imageUrlEn: null and no deletion request', async () => {
+  it('AC-2: unchecking the custom image removes only the pictures the form passes, never an unseen one', async () => {
+    const calls = stubFetch();
+    const { result } = renderHook(() => useProducts(), { wrapper: createWrapper() });
+
+    await act(async () => {
+      await result.current.updateProduct(
+        'p1',
+        { ...baseData, isCustom: false, localizedImages: {} },
+        undefined
+      );
+    });
+
+    const body = JSON.parse(String(putCalls(calls)[0]!.init?.body));
+    // A picture language the form did not pass (for example an English address that only the
+    // legacy column holds) is not named, so the server leaves it as stored.
+    expect(body.localizedImages).toEqual({});
+  });
+
+  it('AC-2: unchecking the custom image sends isCustom: false, imageUrl: null, an explicit removal of the passed language and no deletion request', async () => {
     const calls = stubFetch();
     const { result } = renderHook(() => useProducts(), { wrapper: createWrapper() });
 
@@ -73,7 +91,7 @@ describe('useProducts update body', () => {
     const puts = putCalls(calls);
     expect(puts).toHaveLength(1);
     const body = JSON.parse(String(puts[0]!.init?.body));
-    expect(body).toMatchObject({ isCustom: false, imageUrl: null, imageUrlEn: null });
+    expect(body).toMatchObject({ isCustom: false, imageUrl: null, localizedImages: { en: null } });
 
     expect(calls.every(({ init }) => (init?.method ?? 'GET') !== 'DELETE')).toBe(true);
     const bodies = calls.map(({ init }) => String(init?.body ?? ''));
@@ -95,7 +113,7 @@ describe('useProducts update body', () => {
     const puts = putCalls(calls);
     expect(puts).toHaveLength(1);
     const body = JSON.parse(String(puts[0]!.init?.body));
-    expect(body).toMatchObject({ isCustom: false, imageUrl: null, imageUrlEn: null });
+    expect(body).toMatchObject({ isCustom: false, imageUrl: null, localizedImages: { en: null } });
   });
 
   it('AC-3: keeping the custom image sends the same body as before the change', async () => {
@@ -116,7 +134,7 @@ describe('useProducts update body', () => {
     expect(body).toMatchObject({
       isCustom: true,
       imageUrl: 'https://utfs.io/f/old.webp',
-      imageUrlEn: 'https://utfs.io/f/old-en.webp',
+      localizedImages: { en: 'https://utfs.io/f/old-en.webp' },
     });
   });
 
@@ -136,7 +154,7 @@ describe('useProducts update body', () => {
     );
     expect(posts).toHaveLength(1);
     const body = JSON.parse(String(posts[0]!.init?.body));
-    expect(body).toMatchObject({ isCustom: false, imageUrl: null, imageUrlEn: null });
+    expect(body).toMatchObject({ isCustom: false, imageUrl: null, localizedImages: { en: null } });
   });
 
   it('AC-2 (create): creating a product with the checkbox unchecked sends nulls', async () => {
@@ -152,6 +170,6 @@ describe('useProducts update body', () => {
     );
     expect(posts).toHaveLength(1);
     const body = JSON.parse(String(posts[0]!.init?.body));
-    expect(body).toMatchObject({ isCustom: false, imageUrl: null, imageUrlEn: null });
+    expect(body).toMatchObject({ isCustom: false, imageUrl: null, localizedImages: { en: null } });
   });
 });
