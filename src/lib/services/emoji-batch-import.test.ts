@@ -68,7 +68,7 @@ describe('findBatchFiles', () => {
   });
 });
 
-describe('readBatchImages gap clearing', () => {
+describe('readBatchImages gap clearing', { timeout: 30_000 }, () => {
   // A green ring around a pure white centre, the left third of a 3-column sheet.
   async function ringSheet() {
     return sharp(
@@ -94,25 +94,15 @@ describe('readBatchImages gap clearing', () => {
     return data[(128 * info.width + 128) * 4 + 3];
   }
 
-  // Image processing exceeded the default 5s in the full check.
-  it(
-    'clears an enclosed gap only for a cell whose gaps were checked',
-    { timeout: 20_000 },
-    async () => {
-      expect(await centreAlpha({ gaps: true }, 'universal')).toBe(0);
-      expect(await centreAlpha({}, 'universal')).toBe(255);
-    }
-  );
+  it('clears an enclosed gap only for a cell whose gaps were checked', async () => {
+    expect(await centreAlpha({ gaps: true }, 'universal')).toBe(0);
+    expect(await centreAlpha({}, 'universal')).toBe(255);
+  });
 
-  // Image processing exceeded the default 5s in the full check.
-  it(
-    'never clears gaps on a labelled product, even in a text-free batch',
-    { timeout: 20_000 },
-    async () => {
-      expect(await centreAlpha({ gaps: true, text: true }, 'universal')).toBe(255);
-      expect(await centreAlpha({ gaps: true }, 'text')).toBe(255);
-    }
-  );
+  it('never clears gaps on a labelled product, even in a text-free batch', async () => {
+    expect(await centreAlpha({ gaps: true, text: true }, 'universal')).toBe(255);
+    expect(await centreAlpha({ gaps: true }, 'text')).toBe(255);
+  });
 });
 
 describe('sliceSheet', () => {
