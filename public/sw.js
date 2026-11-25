@@ -1,7 +1,11 @@
+// v3: the precached manifest and offline page changed. An installed v2 worker still holds both,
+// manifest cache-first and offline HTML, in 'clickmoji-cache-v2', and a byte-identical worker file
+// never starts a new install. Installing v3 fetches both again into the new cache; activating v3
+// deletes v2, so nothing is cleared by hand.
 // v2: v1 also cached server-rendered responses (React Server Component payloads, `?_rsc=`), so a
 // page refresh after a language switch or a data change could replay a stale copy forever.
 // Activating v2 deletes the v1 cache.
-const CACHE_NAME = 'clickmoji-cache-v2';
+const CACHE_NAME = 'clickmoji-cache-v3';
 const OFFLINE_URL = '/offline.html';
 const STATIC_ASSETS = ['/manifest.json', '/icon.svg', OFFLINE_URL];
 

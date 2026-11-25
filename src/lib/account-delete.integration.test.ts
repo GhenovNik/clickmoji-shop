@@ -542,7 +542,12 @@ describe.skipIf(!url)('account deletion guards on disposable PostgreSQL', () => 
         },
       });
       await db.item.create({
-        data: { listId: 'bob-list', productId: 'milk-global', variantId: 'milk-variant', note: 'свой' },
+        data: {
+          listId: 'bob-list',
+          productId: 'milk-global',
+          variantId: 'milk-variant',
+          note: 'свой',
+        },
       });
       expect(await deleteAccount({ userId: 'alice', password })).toEqual({ status: 'deleted' });
 
@@ -554,11 +559,20 @@ describe.skipIf(!url)('account deletion guards on disposable PostgreSQL', () => 
 
       expect(response.status).toBe(200);
       const byNote = Object.fromEntries(
-        (body.items as { note: string; productId: string; variantId: string | null; variant: { id: string } | null }[]).map(
-          (item) => [item.note, item]
-        )
+        (
+          body.items as {
+            note: string;
+            productId: string;
+            variantId: string | null;
+            variant: { id: string } | null;
+          }[]
+        ).map((item) => [item.note, item])
       );
-      expect(byNote['чужой']).toMatchObject({ productId: 'milk-global', variantId: null, variant: null });
+      expect(byNote['чужой']).toMatchObject({
+        productId: 'milk-global',
+        variantId: null,
+        variant: null,
+      });
       expect(byNote['свой']).toMatchObject({
         productId: 'milk-global',
         variantId: 'milk-variant',
@@ -621,10 +635,12 @@ describe.skipIf(!url)('account deletion guards on disposable PostgreSQL', () => 
       const body = await (await GET(bobRequest('/api/history'))).json();
 
       expect(
-        body[0].items.map((item: { variantId: string | null; variantName: string | null }) => [
-          item.variantId,
-          item.variantName,
-        ]).sort()
+        body[0].items
+          .map((item: { variantId: string | null; variantName: string | null }) => [
+            item.variantId,
+            item.variantName,
+          ])
+          .sort()
       ).toEqual([
         [null, null],
         ['milk-variant', '3.2%'],
@@ -652,10 +668,12 @@ describe.skipIf(!url)('account deletion guards on disposable PostgreSQL', () => 
         ['milk-variant', '3.2%'],
       ];
       expect(
-        created.items.map((item: { variantId: string | null; variantName: string | null }) => [
-          item.variantId,
-          item.variantName,
-        ]).sort()
+        created.items
+          .map((item: { variantId: string | null; variantName: string | null }) => [
+            item.variantId,
+            item.variantName,
+          ])
+          .sort()
       ).toEqual(expected);
       expect(JSON.stringify(created)).not.toContain('alice-variant');
       expect(JSON.stringify(created)).not.toContain('Ханикрисп');
@@ -700,9 +718,9 @@ describe.skipIf(!url)('account deletion guards on disposable PostgreSQL', () => 
       expect(result).toMatchObject({ createdCount: 2, skippedCount: 0 });
       const restored = await db.item.findMany({ where: { listId: result.listId } });
       expect(restored).toHaveLength(2);
-      expect(restored.filter((item) => item.variantId !== null).map((item) => item.variantId)).toEqual([
-        'milk-variant',
-      ]);
+      expect(
+        restored.filter((item) => item.variantId !== null).map((item) => item.variantId)
+      ).toEqual(['milk-variant']);
       expect(restored.every((item) => item.productId === 'milk-global')).toBe(true);
     });
   });
