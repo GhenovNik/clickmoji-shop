@@ -13,7 +13,7 @@
 // FAKE_DOCKER_PS=fail-cleanup makes it fail only for cleanup containers: the fallback is unproven.
 // FAKE_DOCKER_HANG=<cmd,...> makes the named subcommands (version, image, build, ps, rm, create,
 // start) never answer: the client stays alive until the caller kills it.
-// FAKE_DOCKER_CREATE=fail makes `docker create` answer with an error, without creating anything.
+// FAKE_DOCKER_CREATE=disconnect simulates a client error after sending a delayed create.
 // FAKE_DOCKER_LATE_CREATE=<gate file> makes `docker create` hang, as a client whose request the daemon
 // has not answered. The daemon still creates the container once the gate file exists, even after the
 // client has been killed: the create lands at a time the test chooses.
@@ -223,7 +223,6 @@ function main() {
   if (command === 'create') {
     const name = optionValue('--name');
     const body = JSON.stringify({ argv });
-    if (process.env.FAKE_DOCKER_CREATE === 'fail') process.exit(1);
     if (process.env.FAKE_DOCKER_LATE_CREATE) {
       // The daemon takes the request, but the client never hears back in time: the create lands only
       // when the test releases the gate, and this client is the one the caller kills.
@@ -237,6 +236,7 @@ function main() {
           BODY: body,
         },
       }).unref();
+      if (process.env.FAKE_DOCKER_CREATE === 'disconnect') process.exit(1);
       return hang();
     }
     mkdirSync(REGISTRY, { recursive: true });

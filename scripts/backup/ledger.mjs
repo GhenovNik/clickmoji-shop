@@ -1,6 +1,6 @@
 // Recovery marker for containers. Every container name is written here, fsynced, before its
 // `create` is sent, and is removed only once the daemon has been seen to hold no container of that
-// name, and only from a state that makes that answer final (see STATES in docker.mjs). A run that
+// name, and only from a state that makes that answer final (see DockerRunner). A run that
 // is killed, or that cannot prove a container gone, leaves the name behind. Every later run takes
 // the lock first and then must reconcile those names before it does anything else: while the ledger
 // is not empty, no run starts a container or publishes. A ledger that cannot be read is treated the
@@ -21,7 +21,7 @@ import path from 'node:path';
 import { LEDGER_NAME } from './constants.mjs';
 
 const CONTAINER_NAME = /^clickmoji-backup-[a-z]+-[0-9a-f]{12}$/;
-const STATES = new Set(['pending', 'settled', 'exists']);
+const STATES = new Set(['pending', 'exists']);
 
 export class LedgerError extends Error {}
 
@@ -56,7 +56,8 @@ export class Ledger {
       throw new LedgerError('ledger unreadable');
     }
     return names.map((name) => {
-      const state = states[name] ?? 'pending';
+      const recorded = states[name];
+      const state = recorded === 'settled' ? 'pending' : (recorded ?? 'pending');
       if (!STATES.has(state)) throw new LedgerError('ledger unreadable');
       return { name, state };
     });

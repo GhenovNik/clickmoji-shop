@@ -787,92 +787,83 @@ const waitForCreate = () =>
   until(() => readDockerLog(sandbox).some((call) => call.argv[0] === 'create'), 15_000);
 
 describe('a create whose answer is pending is never cleared by an empty listing (B1, round 6)', () => {
-  it(
-    'a late create: an empty early listing clears nothing, the next writer waits, and once the container is seen it is removed first',
-    { timeout: 120_000 },
-    async () => {
-      seedBackups(sandbox.backupDir, 2);
-      const old = listCopies(sandbox.backupDir);
-      const gate = path.join(sandbox.root, 'daemon-create.gate');
-      const env = envFor(sandbox, db, { FAKE_DOCKER_LATE_CREATE: gate });
+  for (const failure of ['signal', 'disconnect']) {
+    it(
+      `a late create after ${failure} stays pending until it is seen and removed`,
+      { timeout: 120_000 },
+      async () => {
+        seedBackups(sandbox.backupDir, 2);
+        const old = listCopies(sandbox.backupDir);
+        const gate = path.join(sandbox.root, 'daemon-create.gate');
+        const env = envFor(sandbox, db, {
+          FAKE_DOCKER_LATE_CREATE: gate,
+          FAKE_DOCKER_CREATE: failure,
+        });
 
-      // The create client is sent and never answers. The run is stopped while the create is in flight.
-      const run = startLockedRun({ backupDir: sandbox.backupDir, env, tempRoot: sandbox.tmp });
-      assert.equal(await waitForCreate(), true, 'the dump create was sent');
-      run.child.kill('SIGTERM');
-      const result = await run.done;
-      assert.equal(result.ok, false);
-      assert.equal(result.key, 'containers');
+        // The create client is sent and never answers. The run is stopped while the create is in flight.
+        const run = startLockedRun({ backupDir: sandbox.backupDir, env, tempRoot: sandbox.tmp });
+        assert.equal(await waitForCreate(), true, 'the dump create was sent');
+        if (failure === 'signal') run.child.kill('SIGTERM');
+        const result = await run.done;
+        assert.equal(result.ok, false);
+        assert.equal(result.key, 'containers');
 
-      // The shutdown listed the name, found nothing, and must not have cleared it.
-      const [pending] = ledgerEntries();
-      assert.equal(ledgerEntries().length, 1);
-      assert.equal(pending.state, 'pending', 'an empty listing does not settle a pending create');
-      assert.deepEqual(containersLeft(sandbox), [], 'the create has not landed');
-      assert.equal(tempLeft().length, 1, 'scratch kept: the container may still be created');
-      assert.equal(startsOrCreates(readDockerLog(sandbox)).length, 1, 'only the create was sent');
-      assert.equal(
-        await lockIsFree(sandbox.backupDir),
-        true,
-        'the lock is free; the ledger blocks'
-      );
+        // The shutdown listed the name, found nothing, and must not have cleared it.
+        const [pending] = ledgerEntries();
+        assert.equal(ledgerEntries().length, 1);
+        assert.equal(pending.state, 'pending', 'an empty listing does not settle a pending create');
+        assert.deepEqual(containersLeft(sandbox), [], 'the create has not landed');
+        assert.equal(tempLeft().length, 1, 'scratch kept: the container may still be created');
+        assert.equal(startsOrCreates(readDockerLog(sandbox)).length, 1, 'only the create was sent');
+        assert.equal(
+          await lockIsFree(sandbox.backupDir),
+          true,
+          'the lock is free; the ledger blocks'
+        );
 
-      // The next writer, while the create is still unanswered, starts nothing and publishes nothing.
-      const before = readDockerLog(sandbox).length;
-      const blocked = await runWithFake(sandbox, db);
-      assert.equal(blocked.key, 'containers');
-      assert.deepEqual(
-        startsOrCreates(callsFrom(before)),
-        [],
-        'no container starts for the next writer'
-      );
-      assert.deepEqual(listCopies(sandbox.backupDir), old, 'nothing published or pruned');
-      assert.deepEqual(ledgerEntries(), [pending], 'the pending name is still recorded');
-      assert.equal(tempLeft().length, 1, 'scratch still kept');
+        // The next writer, while the create is still unanswered, starts nothing and publishes nothing.
+        const before = readDockerLog(sandbox).length;
+        const blocked = await runWithFake(sandbox, db);
+        assert.equal(blocked.key, 'containers');
+        assert.deepEqual(
+          startsOrCreates(callsFrom(before)),
+          [],
+          'no container starts for the next writer'
+        );
+        assert.deepEqual(listCopies(sandbox.backupDir), old, 'nothing published or pruned');
+        assert.deepEqual(ledgerEntries(), [pending], 'the pending name is still recorded');
+        assert.equal(tempLeft().length, 1, 'scratch still kept');
 
-      // The daemon creates the container late. The next writer sees it, removes it, proves it gone,
-      // and only then starts its own run.
-      writeFileSync(gate, '');
-      assert.equal(
-        await until(() => containersLeft(sandbox).includes(pending.name), 15_000),
-        true,
-        'the late create landed'
-      );
-      const from = readDockerLog(sandbox).length;
-      const recovered = await runWithFake(sandbox, db);
-      assert.equal(
-        recovered.ok,
-        true,
-        'once the late container is seen and removed, the run completes'
-      );
-      const later = callsFrom(from);
-      const removal = later.findIndex(
-        (call) => call.argv[0] === 'rm' && call.argv.includes(pending.name)
-      );
-      const firstCreate = later.findIndex((call) => call.argv[0] === 'create');
-      assert.ok(
-        removal >= 0 && removal < firstCreate,
-        'the late container is removed before any new create'
-      );
-      assert.deepEqual(ledgerEntries(), [], 'ledger cleared once the removal was proven');
-      assert.deepEqual(containersLeft(sandbox), [], 'no container survives');
-      assert.deepEqual(tempLeft(), [], 'scratch of the stopped run removed');
-    }
-  );
-
-  it(
-    'a create the daemon refuses answers on its own: its name is settled, the ledger clears and the next run completes',
-    { timeout: 120_000 },
-    async () => {
-      const refused = await runWithFake(sandbox, db, { FAKE_DOCKER_CREATE: 'fail' });
-      assert.equal(refused.ok, false);
-      assert.equal(refused.key, 'dump', 'a refused create is a failed step, not an unknown one');
-      assert.deepEqual(ledgerEntries(), [], 'the refused name is cleared at once');
-      assert.deepEqual(containersLeft(sandbox), []);
-      const next = await runWithFake(sandbox, db);
-      assert.equal(next.ok, true);
-    }
-  );
+        // The daemon creates the container late. The next writer sees it, removes it, proves it gone,
+        // and only then starts its own run.
+        writeFileSync(gate, '');
+        assert.equal(
+          await until(() => containersLeft(sandbox).includes(pending.name), 15_000),
+          true,
+          'the late create landed'
+        );
+        const from = readDockerLog(sandbox).length;
+        const recovered = await runWithFake(sandbox, db);
+        assert.equal(
+          recovered.ok,
+          true,
+          'once the late container is seen and removed, the run completes'
+        );
+        const later = callsFrom(from);
+        const removal = later.findIndex(
+          (call) => call.argv[0] === 'rm' && call.argv.includes(pending.name)
+        );
+        const firstCreate = later.findIndex((call) => call.argv[0] === 'create');
+        assert.ok(
+          removal >= 0 && removal < firstCreate,
+          'the late container is removed before any new create'
+        );
+        assert.deepEqual(ledgerEntries(), [], 'ledger cleared once the removal was proven');
+        assert.deepEqual(containersLeft(sandbox), [], 'no container survives');
+        assert.deepEqual(tempLeft(), [], 'scratch of the stopped run removed');
+      }
+    );
+  }
 });
 
 describe('docker management calls are bounded, and a hung call is a failure (B2, round 6)', () => {

@@ -147,11 +147,8 @@ const nameOf = (args) => (args.includes('--name') ? args[args.indexOf('--name') 
 // What the daemon is known to hold for a container name, as recorded in the ledger:
 //   pending  - a create was sent and its outcome is not known. The daemon may still create it,
 //              at any later time. Only seeing it in a listing settles that.
-//   settled  - the create client exited by itself (not signalled, not timed out), so the daemon
-//              has answered and nothing is pending. A name it did not create is absent for good.
-//   exists   - the daemon has shown the container: create exited 0, or a listing showed it.
-// An empty listing clears a name only from `settled` or `exists`, never from `pending`.
-export const STATES = Object.freeze(['pending', 'settled', 'exists']);
+//   exists   - creation succeeded or the daemon listed the container by name.
+// An empty listing alone never settles a pending create.
 
 // Runs docker with the libpq variables in its environment. Variables from the caller's own
 // environment with the same names are removed first, so only the configured source is used.
@@ -172,7 +169,7 @@ export class DockerRunner {
     );
     this.env = { ...inherited, ...containerEnv };
     this.children = new Map(); // tracked child -> { signalled, closed }
-    this.containers = new Map(); // name -> state (see STATES), for names not yet cleared
+    this.containers = new Map(); // name -> pending or exists, for names not yet cleared
     this.aborted = false;
     this.shutdownPromise = null;
     this.ledger = null; // set by the pipeline once the lock is held
@@ -261,9 +258,8 @@ export class DockerRunner {
     this.containers.set(name, state);
   }
 
-  // Clears a name only when it is absent and the daemon's answer about it is final: from `settled`
-  // or `exists`. A pending name is never removed and never cleared here: a create may still land, and
-  // a removal would erase the only evidence of it. Removal of a settled or existing name is followed by
+  // Clears a name only after it has existed and is now proven absent. A pending create may still
+  // land, so leave its record alone until the daemon lists it. Container removal is followed by
   // a fresh listing, which is the proof; the removal itself is never the proof.
   // Returns true only when the name is cleared.
   async #reconcile(name) {
@@ -305,10 +301,8 @@ export class DockerRunner {
     });
     if (created.code === 0) {
       this.#setState(name, 'exists');
-    } else if (!created.signalled && created.signal === null) {
-      // The client answered on its own, so the daemon's reply is in. Nothing is pending.
-      this.#setState(name, 'settled');
     }
+    // A client error can follow a lost response while the daemon is still creating the container.
     if (created.code !== 0) {
       return { code: created.code, absent: await this.#reconcileSafely(name) };
     }
