@@ -7,6 +7,7 @@ import { authConfig } from './auth.config';
 import { isEmailVerificationRequired } from './email';
 import { normalizeEmail } from './auth-security';
 import { readGuestIdFromRequestScope, recordFunnelEvent } from './funnel';
+import { promoteGuestWithGoogleIdentity, resolveGuestFromCookieStore } from './guest-promotion';
 import {
   currentSessionIssuedAtSeconds,
   isGuestEmail,
@@ -97,6 +98,34 @@ export const authOptions: NextAuthOptions = {
       const existingUser = await prisma.user.findUnique({ where: { email } });
       if (existingUser?.isGuest) {
         return false;
+      }
+
+      // A guest that signs in with Google becomes an account in place (AGE-1667): the same User.id,
+      // no merge, and only for a verified Google address that no account holds yet. An existing
+      // account with this email is signed into as before, and the guest is left untouched.
+      if (!existingUser) {
+        const guest = await resolveGuestFromCookieStore();
+        if (guest.kind === 'guest') {
+          const emailVerified =
+            (profile as { email_verified?: unknown } | undefined)?.email_verified === true;
+          if (!emailVerified) {
+            return false;
+          }
+          const outcome = await promoteGuestWithGoogleIdentity({
+            userId: guest.userId,
+            guestId: guest.guestId,
+            email,
+            name: user.name || null,
+            image: user.image || null,
+          });
+          if (outcome.status !== 'promoted') {
+            return false;
+          }
+          user.id = outcome.user.id;
+          (user as typeof user & { role?: string; isGuest?: boolean }).role = outcome.user.role;
+          (user as typeof user & { isGuest?: boolean }).isGuest = false;
+          return true;
+        }
       }
 
       let authenticatedUserId: string;

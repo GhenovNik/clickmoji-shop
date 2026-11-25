@@ -1,4 +1,6 @@
+import { cookies } from 'next/headers';
 import { decode, encode } from 'next-auth/jwt';
+import type { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
 import {
   currentSessionIssuedAtSeconds,
@@ -8,16 +10,20 @@ import {
   NEXTAUTH_SESSION_COOKIE,
   shouldUseSecureSessionCookies,
 } from '@/lib/guest';
-import { getGuestIdFromRequest, recordGuestPromotionEvent } from '@/lib/funnel';
+import {
+  getGuestIdFromRequest,
+  readGuestIdFromRequestScope,
+  recordGuestPromotionEvent,
+} from '@/lib/funnel';
 import { recordGuestActivity } from '@/lib/guest-activity';
 
 /**
  * In-place promotion of a server-backed guest into an ordinary account (AGE-1667).
  *
  * The guest's User row keeps its id, so lists, items, purchases, history and favorites keep their
- * owner. Only the identity columns change (email, password, name, emailVerified) and isGuest flips
- * to false, in one conditional update `where { id, isGuest: true }`. No second row is created, no
- * accounts are merged and no starter lists are re-created. See docs/guest-shopping.md (Decisions).
+ * owner. Only the identity columns change (email, password or Google identity, name, emailVerified)
+ * and isGuest flips to false, in one conditional update `where { id, isGuest: true }`. No second row
+ * is created, no accounts are merged and no starter lists are re-created. See docs/guest-shopping.md.
  */
 
 type SessionClaims = {
@@ -30,16 +36,27 @@ function getAuthSecret(): string | null {
   return process.env.AUTH_SECRET || process.env.NEXTAUTH_SECRET || null;
 }
 
+async function decodeSessionCookie(value: string | undefined): Promise<SessionClaims | null> {
+  const secret = getAuthSecret();
+  if (!secret || !value) return null;
+  try {
+    const claims = await decode({ token: value, secret });
+    return claims ? (claims as SessionClaims) : null;
+  } catch {
+    // A malformed or foreign cookie is not a guest session.
+    return null;
+  }
+}
+
 /**
- * Reads the NextAuth session cookie and verifies its signature. Returns null when there is no
- * cookie, no secret or an invalid token. It does not consult the database: callers do that.
+ * Reads the NextAuth session cookie of a request and verifies its signature. Returns null when there
+ * is no cookie, no secret or an invalid token. It does not consult the database: callers do that.
  */
 export async function readSessionClaimsFromRequest(
   request: Pick<Request, 'headers'>
 ): Promise<SessionClaims | null> {
-  const secret = getAuthSecret();
   const cookieHeader = request.headers.get('cookie');
-  if (!secret || !cookieHeader) return null;
+  if (!cookieHeader) return null;
 
   const names = new Set([NEXTAUTH_SESSION_COOKIE, NEXTAUTH_SECURE_SESSION_COOKIE]);
   for (const part of cookieHeader.split(';')) {
@@ -47,14 +64,8 @@ export async function readSessionClaimsFromRequest(
     if (separator <= 0) continue;
     const name = part.slice(0, separator).trim();
     if (!names.has(name)) continue;
-    const value = part.slice(separator + 1).trim();
-    if (!value) continue;
-    try {
-      const claims = await decode({ token: value, secret });
-      if (claims) return claims as SessionClaims;
-    } catch {
-      // A malformed or foreign cookie is not a guest session; try the other cookie name.
-    }
+    const claims = await decodeSessionCookie(part.slice(separator + 1).trim());
+    if (claims) return claims;
   }
   return null;
 }
@@ -62,20 +73,23 @@ export async function readSessionClaimsFromRequest(
 /**
  * What a registration request may do with the guest session it carries:
  * - `guest`: a live guest row with a fresh token. Registration promotes that row.
- * - `promoted`: a guest token whose row is already an account (a retry, a second tab or a stale
- *   cookie). Registration is refused, so no second account is created for the same browser.
- * - `anonymous`: no guest session, or the guest row was removed by cleanup. Registration creates an
- *   ordinary account, exactly as for any visitor.
+ * - `promoted`: a guest token whose row is already an account (a retry, a second tab). Registration
+ *   is refused, so one browser never opens a second account for the same guest.
+ * - `stale`: a signed guest token whose row was removed by cleanup, or no longer matches the token's
+ *   issuance. Registration fails with `guestSessionExpired` instead of silently creating a second
+ *   account, and the stale cookie is cleared so the next attempt starts from a clean session.
+ * - `anonymous`: no guest session at all. Registration creates an ordinary account, as for any visitor.
  */
 export type RegistrationGuestState =
   | { kind: 'anonymous' }
   | { kind: 'promoted' }
+  | { kind: 'stale' }
   | { kind: 'guest'; userId: string; guestId: string | null };
 
-export async function resolveRegistrationGuest(
-  request: Pick<Request, 'headers'>
+async function resolveGuestClaims(
+  claims: SessionClaims | null,
+  guestId: string | null
 ): Promise<RegistrationGuestState> {
-  const claims = await readSessionClaimsFromRequest(request);
   if (!claims || claims.isGuest !== true || typeof claims.id !== 'string' || !claims.id) {
     return { kind: 'anonymous' };
   }
@@ -84,16 +98,43 @@ export async function resolveRegistrationGuest(
     where: { id: claims.id },
     select: { id: true, isGuest: true, createdAt: true },
   });
-  if (!row) return { kind: 'anonymous' };
+  if (!row) return { kind: 'stale' };
   if (!row.isGuest) return { kind: 'promoted' };
   if (!isSessionTokenFreshForUser(claims.sessionIssuedAt, row.createdAt)) {
-    return { kind: 'anonymous' };
+    return { kind: 'stale' };
   }
-  return { kind: 'guest', userId: row.id, guestId: getGuestIdFromRequest(request) };
+  return { kind: 'guest', userId: row.id, guestId };
+}
+
+/** Resolves the guest session carried by a registration request (email/password path). */
+export async function resolveRegistrationGuest(
+  request: Pick<Request, 'headers'>
+): Promise<RegistrationGuestState> {
+  const claims = await readSessionClaimsFromRequest(request);
+  return resolveGuestClaims(claims, getGuestIdFromRequest(request));
 }
 
 /**
- * Marks a guest as active before registration begins. The inactive-guest cleanup re-checks
+ * Resolves the guest session held by the browser during a Google OAuth callback. The callback has no
+ * request object, so the session cookie is read from the request scope. A stale token is reported as
+ * `stale` here too, but the Google path treats it as no guest (see auth.ts): it only blocks
+ * registration, never a sign-in.
+ */
+export async function resolveGuestFromCookieStore(): Promise<RegistrationGuestState> {
+  let store: Awaited<ReturnType<typeof cookies>>;
+  try {
+    store = await cookies();
+  } catch {
+    return { kind: 'anonymous' };
+  }
+  const value =
+    store.get(NEXTAUTH_SECURE_SESSION_COOKIE)?.value ?? store.get(NEXTAUTH_SESSION_COOKIE)?.value;
+  const claims = await decodeSessionCookie(value);
+  return resolveGuestClaims(claims, await readGuestIdFromRequestScope());
+}
+
+/**
+ * Marks a guest as active before a promotion begins. The inactive-guest cleanup re-checks
  * `guestLastActiveAt` in its own delete, so a guest touched here is not removed while the
  * registration (password hashing, verification email, promotion) is in progress.
  * Resolves false when the row is no longer a guest.
@@ -102,13 +143,29 @@ export async function protectGuestForRegistration(userId: string): Promise<boole
   return recordGuestActivity(userId);
 }
 
+/** Thrown inside a promotion transaction when the verification email cannot be sent. */
+export class VerificationDeliveryError extends Error {
+  constructor() {
+    super('Verification email delivery failed');
+    this.name = 'VerificationDeliveryError';
+  }
+}
+
 export type PromotionInput = {
   userId: string;
   guestId: string | null;
   email: string;
-  passwordHash: string;
+  /** Null for a Google identity, which has no local password. */
+  passwordHash: string | null;
   name: string | null;
+  image?: string | null;
   emailVerified: Date | null;
+  /**
+   * Runs inside the promotion transaction after the conditional update succeeded and before commit.
+   * A throw rolls the whole promotion back, so anything it writes (a verification token) and the
+   * guest row are both left as they were.
+   */
+  beforeCommit?: (tx: Prisma.TransactionClient) => Promise<void>;
 };
 
 export type PromotionOutcome =
@@ -121,7 +178,9 @@ export type PromotionOutcome =
   /** The guest row is gone (cleanup) before the promotion could commit. */
   | { status: 'expired' }
   /** Another account already holds the email (unique constraint on User.email). */
-  | { status: 'email-taken' };
+  | { status: 'email-taken' }
+  /** The verification email could not be sent; nothing was promoted or kept. */
+  | { status: 'delivery-failed' };
 
 function isUniqueEmailViolation(error: unknown): boolean {
   return (
@@ -135,42 +194,56 @@ function isUniqueEmailViolation(error: unknown): boolean {
 /**
  * Promotes the guest row in one transaction. The conditional update `where { id, isGuest: true }`
  * is the only write that changes identity, so of several concurrent promotions of the same guest
- * exactly one commits. The funnel REGISTER is written under the chain lock in the same
- * transaction. A failed commit rolls everything back, so the guest stays a guest.
+ * exactly one commits, and a unique-email conflict rolls the promotion back. The funnel
+ * GUEST_REGISTERED is written in the same transaction, once per committed promotion.
  */
 export async function promoteGuestAccount(input: PromotionInput): Promise<PromotionOutcome> {
   try {
-    return await prisma.$transaction(async (tx) => {
-      const updated = await tx.user.updateMany({
-        where: { id: input.userId, isGuest: true },
-        data: {
-          email: input.email,
-          password: input.passwordHash,
-          name: input.name,
-          emailVerified: input.emailVerified,
-          isGuest: false,
-        },
-      });
-
-      if (updated.count !== 1) {
-        const row = await tx.user.findUnique({
-          where: { id: input.userId },
-          select: { id: true },
+    return await prisma.$transaction(
+      async (tx) => {
+        const updated = await tx.user.updateMany({
+          where: { id: input.userId, isGuest: true },
+          data: {
+            email: input.email,
+            password: input.passwordHash,
+            name: input.name,
+            ...(input.image !== undefined ? { image: input.image } : {}),
+            emailVerified: input.emailVerified,
+            isGuest: false,
+          },
         });
-        return { status: row ? 'already-registered' : 'expired' } as const;
-      }
 
-      if (input.guestId) {
+        if (updated.count !== 1) {
+          const row = await tx.user.findUnique({
+            where: { id: input.userId },
+            select: { id: true },
+          });
+          return { status: row ? 'already-registered' : 'expired' } as const;
+        }
+
+        if (input.beforeCommit) {
+          try {
+            await input.beforeCommit(tx);
+          } catch (error) {
+            if (error instanceof VerificationDeliveryError) throw error;
+            throw new VerificationDeliveryError();
+          }
+        }
+
         await recordGuestPromotionEvent(tx, { userId: input.userId, guestId: input.guestId });
-      }
 
-      const user = await tx.user.findUniqueOrThrow({
-        where: { id: input.userId },
-        select: { id: true, email: true, name: true, role: true },
-      });
-      return { status: 'promoted', user } as const;
-    });
+        const user = await tx.user.findUniqueOrThrow({
+          where: { id: input.userId },
+          select: { id: true, email: true, name: true, role: true },
+        });
+        return { status: 'promoted', user } as const;
+      },
+      { timeout: 15_000, maxWait: 5_000 }
+    );
   } catch (error) {
+    if (error instanceof VerificationDeliveryError) {
+      return { status: 'delivery-failed' };
+    }
     if (isUniqueEmailViolation(error)) {
       return { status: 'email-taken' };
     }
@@ -208,7 +281,7 @@ export async function encodeOrdinarySession(user: {
   });
 }
 
-/** Cookie options that match POST /api/auth/guest, so the replacement cookie overwrites it. */
+/** Cookie name and options that match POST /api/auth/guest, so a replacement overwrites it. */
 export function sessionCookieFor(request: Pick<Request, 'url' | 'headers'>) {
   const secure = shouldUseSecureSessionCookies(request);
   return {
@@ -221,4 +294,43 @@ export function sessionCookieFor(request: Pick<Request, 'url' | 'headers'>) {
       maxAge: GUEST_SESSION_MAX_AGE_SECONDS,
     },
   };
+}
+
+/**
+ * Promotes a guest in place with a verified Google identity (AGE-1667). Google has already verified
+ * the address, so emailVerified is set now and no verification email is sent. The caller checks
+ * `email_verified` and that no account holds the email yet; the unique email constraint still
+ * settles a race. A guest that cleanup removed in the meantime yields `expired`.
+ */
+export async function promoteGuestWithGoogleIdentity(input: {
+  userId: string;
+  guestId: string | null;
+  email: string;
+  name: string | null;
+  image: string | null;
+}): Promise<PromotionOutcome> {
+  const active = await protectGuestForRegistration(input.userId);
+  if (!active) return { status: 'expired' };
+  return promoteGuestAccount({
+    userId: input.userId,
+    guestId: input.guestId,
+    email: input.email,
+    passwordHash: null,
+    name: input.name,
+    image: input.image,
+    emailVerified: new Date(),
+  });
+}
+
+/** Expires the guest session cookie on the response, so the old guest token is no longer sent. */
+export function clearSessionCookie(
+  response: { cookies: { set: (name: string, value: string, options: object) => unknown } },
+  request: Pick<Request, 'url' | 'headers'>
+) {
+  const cookie = sessionCookieFor(request);
+  response.cookies.set(cookie.name, '', {
+    ...cookie.options,
+    maxAge: 0,
+    expires: new Date(0),
+  });
 }

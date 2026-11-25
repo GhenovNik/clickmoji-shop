@@ -32,6 +32,7 @@ const db = vi.hoisted(() => ({
   emailGate: null as null | Promise<void>,
   emailError: null as null | Error,
   verificationRequired: false,
+  mailSent: 0,
   seq: 0,
 }));
 
@@ -118,6 +119,50 @@ const fakePrisma = vi.hoisted(() => {
       return { count: doomed.length };
     },
   };
+  /**
+   * A transaction keeps an undo log of its own writes. A failed transaction reverts exactly the rows
+   * it touched, so a concurrent transaction that committed in between is not clobbered.
+   */
+  const transactional = async <T>(run: (tx: unknown) => Promise<T>): Promise<T> => {
+    const undo: Array<() => void> = [];
+    const tx = {
+      ...fakePrisma,
+      user: {
+        ...user,
+        updateMany: async (args: { where: AnyRecord; data: AnyRecord }) => {
+          for (const row of db.users.filter((candidate) => matches(candidate, args.where))) {
+            const before = { ...row };
+            undo.push(() => Object.assign(row, before));
+          }
+          return user.updateMany(args);
+        },
+        create: async (args: { data: AnyRecord }) => {
+          const row = await user.create(args);
+          undo.push(() => {
+            db.users = db.users.filter((candidate) => candidate.id !== row.id);
+          });
+          return row;
+        },
+      },
+      funnelEvent: {
+        ...fakePrisma.funnelEvent,
+        create: async (args: { data: AnyRecord }) => {
+          const event = await fakePrisma.funnelEvent.create(args);
+          undo.push(() => {
+            db.funnel = db.funnel.filter((candidate) => candidate !== event);
+          });
+          return event;
+        },
+      },
+    };
+    try {
+      return await run(tx);
+    } catch (error) {
+      for (const revert of undo.reverse()) revert();
+      throw error;
+    }
+  };
+
   return {
     user,
     list: {
@@ -138,7 +183,7 @@ const fakePrisma = vi.hoisted(() => {
     emailVerificationToken: { deleteMany: async () => ({ count: 0 }) },
     $executeRaw: async () => 0,
     $queryRaw: async () => [{ now: new Date() }],
-    $transaction: async <T>(run: (tx: unknown) => Promise<T>) => run(fakePrisma),
+    $transaction: transactional,
   };
 });
 
@@ -149,6 +194,7 @@ vi.mock('@/lib/email', () => ({
   sendVerificationEmail: async () => {
     if (db.emailGate) await db.emailGate;
     if (db.emailError) throw db.emailError;
+    db.mailSent += 1;
   },
 }));
 vi.mock('@/lib/auth-tokens', () => ({ createEmailVerificationToken: async () => 'verify-token' }));
@@ -231,6 +277,7 @@ beforeEach(() => {
   db.emailGate = null;
   db.emailError = null;
   db.verificationRequired = false;
+  db.mailSent = 0;
 });
 
 describe('POST /api/auth/register with a guest session', () => {
@@ -255,14 +302,18 @@ describe('POST /api/auth/register with a guest session', () => {
     expect(row.emailVerified).toBeInstanceOf(Date);
   });
 
-  it('writes one REGISTER on the guest chain, owned by the same User.id', async () => {
+  it('writes one GUEST_REGISTERED on the guest chain, not a REGISTER, owned by the same User.id', async () => {
     addGuest('guest-2');
 
     await register({ email: 'two@example.com' }, await guestCookie('guest-2'));
 
-    const registers = db.funnel.filter((event) => event.type === 'REGISTER');
-    expect(registers).toEqual([
-      expect.objectContaining({ type: 'REGISTER', userId: 'guest-2', guestId: FUNNEL_GUEST }),
+    expect(db.funnel.filter((event) => event.type === 'REGISTER')).toEqual([]);
+    expect(db.funnel.filter((event) => event.type === 'GUEST_REGISTERED')).toEqual([
+      expect.objectContaining({
+        type: 'GUEST_REGISTERED',
+        userId: 'guest-2',
+        guestId: FUNNEL_GUEST,
+      }),
     ]);
   });
 
@@ -321,16 +372,67 @@ describe('POST /api/auth/register with a guest session', () => {
     expect(userRows()[0].email).toBe('done@example.com');
   });
 
-  it('treats a guest removed by cleanup as no session: an ordinary account is created', async () => {
+  it('a signed guest whose row cleanup removed fails as expired: no account, cookie cleared', async () => {
     const response = await register(
       { email: 'fresh@example.com' },
       await guestCookie('gone-guest')
     );
 
+    expect(response.status).toBe(401);
+    expect((await response.json()).error).toBe('Гостевая сессия истекла. Начните покупки заново.');
+    expect(response.headers.get('set-cookie')).toMatch(/next-auth\.session-token=;.*Max-Age=0/);
+    expect(db.userCreates).toBe(0);
+    expect(userRows()).toHaveLength(0);
+    expect(db.listCreates).toBe(0);
+  });
+
+  it('a signed guest token older than its row (stale) fails as expired and creates no account', async () => {
+    addGuest('guest-stale', {
+      createdAt: new Date(GUEST_CREATED_AT.getTime() + 60_000),
+    });
+
+    const response = await register(
+      { email: 'stale@example.com' },
+      await guestCookie('guest-stale')
+    );
+
+    expect(response.status).toBe(401);
+    expect(db.userCreates).toBe(0);
+    expect(userRows()).toHaveLength(1);
+    expect(userRows()[0]).toMatchObject({ id: 'guest-stale', isGuest: true });
+  });
+
+  it('a signed-out visitor with no guest session still registers as an ordinary account', async () => {
+    const response = await register({ email: 'plain@example.com' });
+
     expect(response.status).toBe(201);
     expect((await response.json()).promoted).toBeUndefined();
     expect(db.userCreates).toBe(1);
-    expect(userRows().map((row) => row.id)).not.toContain('gone-guest');
+  });
+
+  it('with verification required, promotes without a session and clears the guest cookie', async () => {
+    db.verificationRequired = true;
+    addGuest('guest-v');
+
+    const response = await register({ email: 'v@example.com' }, await guestCookie('guest-v'));
+
+    expect(response.status).toBe(201);
+    expect(response.headers.get('set-cookie') ?? '').not.toMatch(/next-auth\.session-token=[^;]+;/);
+    expect(response.headers.get('set-cookie')).toMatch(/next-auth\.session-token=;.*Max-Age=0/);
+    expect(db.mailSent).toBe(1);
+    expect(userRows()[0]).toMatchObject({ id: 'guest-v', isGuest: false, emailVerified: null });
+  });
+
+  it('an email taken by another account sends no verification mail and promotes nothing', async () => {
+    db.verificationRequired = true;
+    addGuest('guest-t');
+    addGuest('owner', { email: 'busy@example.com', isGuest: false, password: 'hashed:x' });
+
+    const response = await register({ email: 'busy@example.com' }, await guestCookie('guest-t'));
+
+    expect(response.status).toBe(400);
+    expect(db.mailSent).toBe(0);
+    expect(userRows().find((row) => row.id === 'guest-t')).toMatchObject({ isGuest: true });
   });
 
   it('never deletes the guest when the verification email fails; the guest stays a guest', async () => {
@@ -382,7 +484,8 @@ describe('POST /api/auth/register with a guest session', () => {
     expect(userRows()).toHaveLength(1);
     expect(userRows()[0]).toMatchObject({ id: 'guest-9', isGuest: false });
     expect(db.userCreates).toBe(0);
-    expect(db.funnel.filter((event) => event.type === 'REGISTER')).toHaveLength(1);
+    expect(db.funnel.filter((event) => event.type === 'GUEST_REGISTERED')).toHaveLength(1);
+    expect(db.funnel.filter((event) => event.type === 'REGISTER')).toHaveLength(0);
   });
 
   it('two guests racing for one email: one promotes, the other stays a guest', async () => {

@@ -316,20 +316,27 @@ export async function recordFunnelEvent(input: RecordFunnelEventInput): Promise<
 }
 
 /**
- * Records the single promotion event of a guest that became an account in place (AGE-1667). It
- * runs inside the promotion transaction, under the chain lock, so it is committed with the row
- * update or not at all. The event is a REGISTER on the guest's own chain and User.id: the account
- * is the same row, so no second person is created. Callers must write it at most once per
- * promotion; the promotion's conditional update guarantees that.
+ * Records the single promotion event of a guest that became an account in place (AGE-1667). It is
+ * GUEST_REGISTERED, not REGISTER: a promotion keeps the same User.id, so it is not a new
+ * registration, and the report counts it apart. It runs inside the promotion transaction, so it
+ * commits with the row update or not at all. It is written even without the analytics cookie
+ * (guestId null), so a promotion is never missing from the funnel. With a guestId it joins the
+ * guest's chain under the chain lock, like every other milestone of that chain.
  */
 export async function recordGuestPromotionEvent(
   tx: Prisma.TransactionClient,
-  { userId, guestId }: { userId: string; guestId: string }
+  { userId, guestId }: { userId: string; guestId: string | null }
 ): Promise<void> {
+  if (!guestId) {
+    await tx.funnelEvent.create({
+      data: { type: 'GUEST_REGISTERED', userId, guestId: null },
+    });
+    return;
+  }
   await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${guestMilestoneLockKey(guestId)}, 0))`;
   await tx.funnelEvent.create({
     data: {
-      type: 'REGISTER',
+      type: 'GUEST_REGISTERED',
       userId,
       guestId,
       createdAt: await nextChainCreatedAt(tx, guestId),

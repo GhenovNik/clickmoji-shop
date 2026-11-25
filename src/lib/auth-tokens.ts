@@ -14,19 +14,31 @@ const PASSWORD_RESET_TTL_HOURS = 1;
 
 const hashToken = (token: string) => crypto.createHash('sha256').update(token).digest('hex');
 
-export async function createEmailVerificationToken(email: string) {
+type VerificationTokenClient = {
+  emailVerificationToken: Prisma.TransactionClient['emailVerificationToken'];
+};
+
+/**
+ * Creates a verification token for `email`. Pass a transaction client when the token must commit
+ * or roll back together with the account change it verifies (guest promotion, AGE-1667): a
+ * failed request then leaves no usable token behind.
+ */
+export async function createEmailVerificationToken(
+  email: string,
+  client: VerificationTokenClient = prisma
+) {
   const normalizedEmail = normalizeEmail(email);
   const token = crypto.randomBytes(32).toString('hex');
   const hashedToken = hashToken(token);
   const expiresAt = new Date(Date.now() + EMAIL_TOKEN_TTL_HOURS * 60 * 60 * 1000);
 
-  await prisma.emailVerificationToken.deleteMany({
+  await client.emailVerificationToken.deleteMany({
     where: {
       OR: [{ email: normalizedEmail }, { expiresAt: { lt: new Date() } }],
     },
   });
 
-  await prisma.emailVerificationToken.create({
+  await client.emailVerificationToken.create({
     data: {
       email: normalizedEmail,
       token: hashedToken,

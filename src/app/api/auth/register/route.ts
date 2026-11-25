@@ -8,11 +8,13 @@ import { starterListData } from '@/lib/starter-lists';
 import { getGuestIdFromRequest, recordFunnelEvent } from '@/lib/funnel';
 import { isGuestEmail } from '@/lib/guest';
 import {
+  clearSessionCookie,
   encodeOrdinarySession,
   promoteGuestAccount,
   protectGuestForRegistration,
   resolveRegistrationGuest,
   sessionCookieFor,
+  VerificationDeliveryError,
 } from '@/lib/guest-promotion';
 import {
   checkRateLimit,
@@ -72,6 +74,17 @@ export async function POST(request: Request) {
     const guest = await resolveRegistrationGuest(request);
     if (guest.kind === 'promoted') {
       return NextResponse.json({ error: t('api.auth.userExists') }, { status: 400 });
+    }
+    if (guest.kind === 'stale') {
+      // A signed guest token whose row is gone or no longer matches it. Creating an account here
+      // would be a second user for the same browser, so the request fails and the stale cookie
+      // is cleared; the next attempt starts from a clean session.
+      const response = NextResponse.json(
+        { error: t('api.auth.guestSessionExpired') },
+        { status: 401 }
+      );
+      clearSessionCookie(response, request);
+      return response;
     }
     if (guest.kind === 'guest') {
       return promoteGuestRegistration({
@@ -181,10 +194,14 @@ type PromoteArgs = {
 };
 
 /**
- * Promotes a live guest in place. Nothing is created: the guest row keeps its id, lists and history.
- * Order: protect the guest from cleanup, check the email, hash, send the verification email, then
- * promote in one transaction. A failure before the commit leaves the guest exactly as it was, so
- * no row is ever deleted on this path.
+ * Promotes a live guest in place (AGE-1667). Nothing is created: the guest row keeps its id, lists
+ * and history. Order: protect the guest from cleanup, check the email, hash, then promote in one
+ * transaction. With verification required, the verification token is created and its email sent
+ * inside that same transaction, before commit. Any failure rolls back the promotion and the token, so
+ * the guest stays a guest and no unsuccessful request leaves a usable verification proof behind.
+ *
+ * With verification required, no session is issued: the guest cookie is cleared and the user signs in
+ * after confirming the email. Without it, the ordinary session replaces the guest cookie at once.
  */
 async function promoteGuestRegistration({
   request,
@@ -204,7 +221,12 @@ async function promoteGuestRegistration({
   // activity time in its own delete, so it cannot remove this guest while the registration runs.
   const active = await protectGuestForRegistration(userId);
   if (!active) {
-    return NextResponse.json({ error: t('api.auth.guestSessionExpired') }, { status: 401 });
+    const response = NextResponse.json(
+      { error: t('api.auth.guestSessionExpired') },
+      { status: 401 }
+    );
+    clearSessionCookie(response, request);
+    return response;
   }
 
   const existingUser = await prisma.user.findUnique({ where: { email } });
@@ -215,17 +237,6 @@ async function promoteGuestRegistration({
   const passwordHash = await bcrypt.hash(password, 12);
   const requiresEmailVerification = isEmailVerificationRequired();
 
-  if (requiresEmailVerification) {
-    try {
-      const token = await createEmailVerificationToken(email);
-      await sendVerificationEmail({ email, token, locale });
-    } catch (emailError) {
-      console.error('Verification email error:', emailError);
-      // Nothing is promoted yet, and the guest row is not touched: the user can retry.
-      return NextResponse.json({ error: t('api.auth.verificationEmailFailed') }, { status: 503 });
-    }
-  }
-
   const outcome = await promoteGuestAccount({
     userId,
     guestId,
@@ -233,25 +244,61 @@ async function promoteGuestRegistration({
     passwordHash,
     name,
     emailVerified: requiresEmailVerification ? null : new Date(),
+    beforeCommit: requiresEmailVerification
+      ? async (tx) => {
+          try {
+            const token = await createEmailVerificationToken(email, tx);
+            await sendVerificationEmail({ email, token, locale });
+          } catch (emailError) {
+            console.error('Verification email error:', emailError);
+            throw new VerificationDeliveryError();
+          }
+        }
+      : undefined,
   });
 
   if (outcome.status === 'expired') {
-    return NextResponse.json({ error: t('api.auth.guestSessionExpired') }, { status: 401 });
+    const response = NextResponse.json(
+      { error: t('api.auth.guestSessionExpired') },
+      { status: 401 }
+    );
+    clearSessionCookie(response, request);
+    return response;
   }
   if (outcome.status === 'already-registered' || outcome.status === 'email-taken') {
     return NextResponse.json({ error: t('api.auth.userExists') }, { status: 400 });
   }
+  if (outcome.status === 'delivery-failed') {
+    // Rolled back: the guest row, its lists and the token table are unchanged.
+    return NextResponse.json({ error: t('api.auth.verificationEmailFailed') }, { status: 503 });
+  }
 
-  // The guest session is replaced by an ordinary one. Old guest tokens for this id are rejected
-  // by the jwt callback from now on, because the row is no longer a guest.
+  if (requiresEmailVerification) {
+    // No session until the email is confirmed; the guest cookie is cleared so it cannot be reused.
+    const response = NextResponse.json(
+      {
+        message: t('api.auth.userCreated'),
+        emailSent: true,
+        requiresEmailVerification: true,
+        promoted: true,
+        user: { id: outcome.user.id, email: outcome.user.email, name: outcome.user.name },
+      },
+      { status: 201 }
+    );
+    clearSessionCookie(response, request);
+    return response;
+  }
+
+  // The guest session is replaced by an ordinary one. Old guest tokens for this id are rejected by
+  // the jwt callback from now on, because the row is no longer a guest.
   const sessionJwt = await encodeOrdinarySession(outcome.user);
   const cookie = sessionCookieFor(request);
 
   const response = NextResponse.json(
     {
       message: t('api.auth.userCreated'),
-      emailSent: requiresEmailVerification,
-      requiresEmailVerification,
+      emailSent: false,
+      requiresEmailVerification: false,
       promoted: true,
       user: {
         id: outcome.user.id,

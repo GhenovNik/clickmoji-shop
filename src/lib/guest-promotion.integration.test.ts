@@ -147,7 +147,7 @@ describe.skipIf(!url || !isLocal)('guest promotion on PostgreSQL', () => {
     expect(await prisma.list.count({ where: { userId: guestId } })).toBe(5);
 
     const promotions = await prisma.funnelEvent.count({
-      where: { userId: guestId, type: 'REGISTER', guestId: `funnel-${tag}-a` },
+      where: { userId: guestId, type: 'GUEST_REGISTERED', guestId: `funnel-${tag}-a` },
     });
     expect(promotions).toBe(1);
   });

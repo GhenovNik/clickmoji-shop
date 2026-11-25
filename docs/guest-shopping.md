@@ -65,8 +65,11 @@ resolves the request's NextAuth session cookie (signature verified, row checked 
   owner. No second row is created, no starter lists are re-created and no accounts are merged.
 - **Guest token whose row is already an account** (a retry, a second tab, a stale cookie): refused
   with `400 userExists`, whatever email is sent. One browser never opens a second account.
-- **No session, or a guest row cleanup has removed**: the request is anonymous and creates an
-  ordinary account, exactly as for any visitor.
+- **A signed guest token whose row cleanup removed, or that no longer matches it** (stale): the
+  request fails with `401 guestSessionExpired`, creates no account, and clears the guest cookie.
+  Creating an account here would be a second user for the same browser.
+- **No guest session at all**: the request is anonymous and creates an ordinary account, exactly as
+  for any visitor.
 
 The promotion path, step by step:
 
@@ -74,13 +77,18 @@ The promotion path, step by step:
    Cleanup re-checks that field in its own delete, so a guest whose registration has begun is kept.
    A row that is already gone returns `401 guestSessionExpired`.
 2. The email must not belong to another account (`400 userExists`).
-3. The password is hashed. When verification is required, the verification email is sent.
-   If sending fails, `503 verificationEmailFailed` is returned and nothing has changed. The guest
-   is not deleted.
-4. One transaction promotes the row (conditional `updateMany`) and writes the funnel event. A
-   conditional update that matches no row means a concurrent request won (`already-registered`)
-   or the row is gone (`expired`). A unique-email violation means another account holds the email.
-5. The response sets a fresh ordinary session cookie for the same `User.id`, with `isGuest: false`.
+3. The password is hashed.
+4. One transaction promotes the row (conditional `updateMany`). A conditional update that matches
+   no row means a concurrent request won (`already-registered`) or the row is gone (`expired`). A
+   unique-email violation means another account holds the email (`email-taken`). Only after the
+   update succeeded, and only when verification is required, the verification token is created and
+   its email sent inside the same transaction, before commit. If the email cannot be sent, the
+   transaction rolls back: the guest, its lists, the token table and the funnel are unchanged, and
+   the response is `503 verificationEmailFailed`. The guest is never deleted on this path.
+5. The same transaction writes one `GUEST_REGISTERED` funnel event and commits.
+6. With verification required, no session is issued: the response clears the guest cookie, and the
+   user signs in after confirming the email. Without verification, the response sets a fresh
+   ordinary session cookie for the same `User.id`, with `isGuest: false`.
 
 ### Old guest sessions are invalid
 
@@ -91,12 +99,32 @@ while the row is an account (`Guest session superseded by account`). The same ch
 every browser that still holds the old cookie. `requireUser` reads `isGuest` from the row, so
 after promotion the ordinary AI and email behaviour applies with no extra switch.
 
+### Google sign-in from a guest session
+
+The Google OAuth callback reads the guest session from the request cookies. When a live guest holds
+the browser and the Google address has **no account yet**, and Google reports `email_verified: true`,
+the guest is promoted in place with the same `promoteGuestAccount` transaction (no password, verified
+now, no verification email). Any other case keeps the normal Google sign-in:
+
+- **Email already held by an account**: the browser signs into that account as before, and the guest
+  is not touched or merged. Refusing here would stop returning Google users from a browser that has
+  a guest cookie, since every guest is created by Start.
+- **Google address not verified**: the sign-in is refused and the guest stays a guest.
+- **Stale or missing guest**: treated as no guest, a plain Google sign-in. Unlike registration,
+  the callback cannot clear the cookie, and blocking Google sign-in would lock returning users out.
+- **Two promotions at once** (two guests, or Google and email for one guest): the conditional
+  update and the unique email decide. The loser is refused, and no second account is created.
+
 ### Funnel
 
-Promotion writes one `REGISTER` on the guest's chain, with the same `User.id` and the signed
-funnel `guestId`, inside the promotion transaction and under the chain lock. The funnel
-enum is unchanged, so no migration is needed. The anonymous cookie is used only for this
-analytics attribution; it never authenticates or recovers an account.
+A promotion writes `GUEST_REGISTERED`, not `REGISTER`. It is a new enum value, added by a
+SQL-only migration (`20261125060000_add_guest_registered_funnel_event`). The promotion writes it
+once, inside the promotion transaction. With the analytics cookie it joins the guest's chain under
+the chain lock; without the cookie it is written with `guestId` null, so the promotion is still
+counted. The report puts `GUEST_REGISTERED` in the `auth` stage, like `REGISTER`, and shows the
+promotions in a separate line (`guestPromotions`), so a promotion never adds a second `REGISTER`.
+The anonymous cookie is used only for this analytics attribution; it never authenticates or
+recovers an account.
 
 ## Decisions (AGE-1667)
 
@@ -107,22 +135,22 @@ analytics attribution; it never authenticates or recovers an account.
 - **Retries and races resolve to one account.** The conditional update
   (`where { id, isGuest: true }`) and the unique email decide the winner. Losers get
   `userExists` or `guestSessionExpired`, never a second account.
-- **Refusal for a promoted stale token, not anonymous registration.** Only a guest that cleanup
-  removed counts as "no session". A row that is an account makes the token a refused retry.
-- **Verification email before commit.** Sending first means a failed email leaves the guest
-  untouched, so no delete is needed. This path never deletes a row. The ordinary-registration
-  error path deletes only the row it created in that request.
-- **The promoted session is minted even when verification is required.** The new session replaces
-  the guest session so the guest's lists stay reachable. Sign-in with a password still requires
-  verification (`EmailNotVerified`). Open question for the operator: should an unverified
-  promoted account keep an authenticated session until it verifies?
+- **Refusal for a promoted stale token, not anonymous registration.** A row that is an account
+  makes the token a refused retry (`userExists`). A signed token whose row is gone or stale fails
+  with `guestSessionExpired` and clears the cookie, so no second account is created for it.
+- **Verification is in the promotion transaction.** The token and the email are created after the
+  conditional update and before commit. Any failure, including a lost email race, rolls them back:
+  an unsuccessful request never leaves a usable verification token for the address.
+- **No session until the email is confirmed.** When verification is required the promoted account
+  has no session: the guest cookie is cleared, and sign-in with the password requires the confirmed
+  email (`EmailNotVerified`). Without verification the ordinary session replaces the guest cookie.
 - **Analytics identity.** After promotion, events of this `User` are keyed by `User.id` in the
   report, so the guest's pre-promotion steps join that person. A second guest of the same browser
-  started after promotion can add a `REGISTER` row on the chain. The report counts each chain once
-  per stage, so counts are unchanged. An explicit conversion marker would need a funnel enum
-  value and a migration, which this change does not add.
+  started after promotion can add a `REGISTER` row on the chain. The report counts each person once
+  per stage, so counts are unchanged.
 - **Copy.** Registration shows a retention notice to guests, in RU and EN. The account CTA and
-  hiding the technical guest email belong to the account UI work (PR #167).
+  hiding the technical guest email belong to the account UI work (PR #167); they are not in this
+  change.
 
 ## Inactive guest cleanup
 
