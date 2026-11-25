@@ -127,7 +127,7 @@ if [ "$had_plist" -eq 1 ]; then
   mv -f "$PLIST" "$PREV_PLIST" || rollback "не удалось отложить прежний plist"
   moved_old=1
 elif [ "$was_loaded" -eq 1 ]; then
-  launchctl bootout "$DOMAIN/$LABEL" || fail "launchctl bootout не выполнен; прежний агент не тронут"
+  fail "прежний агент загружен, но его plist отсутствует; обновление остановлено до выгрузки"
 fi
 
 mv -f "$TMP_PLIST" "$PLIST" || rollback "не удалось записать новый plist"
