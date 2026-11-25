@@ -24,16 +24,19 @@ export function selectRetention(entries, keepCount = DEFAULT_RETENTION_COUNT) {
 // - When encryption is off: unified N-copy retention across both formats.
 // - When encryption is on and no unencrypted copies exist: unified N-copy retention.
 // - When encryption is on, unencrypted copies exist, and confirmed === true:
-//   remove all unencrypted copies and apply N-copy retention to the encrypted copies.
+//   keep the operator-confirmed encrypted copy plus up to N - 1 newest other encrypted copies
+//   (at N = 1, the confirmed copy takes priority on this cutover run). Excess unencrypted
+//   encrypted copies are removed first, then unencrypted copies oldest-to-newest.
 // - When encryption is on, unencrypted copies exist, and confirmed === false:
-//   keep up to N newest unencrypted copies, plus the first encrypted copy of the current
-//   transition (for operator restore testing) and the newest encrypted copy (just published),
-//   pruning intermediate encrypted copies so space stays bounded to at most N + 2.
+//   keep up to N newest unencrypted copies and the first encrypted copy of the current
+//   transition; other .age copies fill only free slots in the normal limit N, capping total
+//   retained copies at max(N, plainKept + 1) (at most N + 1, never N + 2).
 export function selectTransitionRetention({
   entries,
   keepCount = DEFAULT_RETENTION_COUNT,
   encrypt = false,
   confirmed = false,
+  confirmedFile = null,
 }) {
   if (!Number.isInteger(keepCount) || keepCount < 1) {
     throw new Error('keepCount must be an integer >= 1');
@@ -53,11 +56,26 @@ export function selectTransitionRetention({
     };
   }
   if (confirmed) {
-    const { keep, remove: removeEncrypted } = selectRetention(encrypted, keepCount);
-    const removeSet = new Set([...plain.map((entry) => entry.name), ...removeEncrypted]);
+    const confirmedEntry = confirmedFile
+      ? encrypted.find((entry) => entry.name === confirmedFile)
+      : null;
+    if (!confirmedEntry) {
+      throw new Error('confirmedFile must match an encrypted entry when confirmed is true');
+    }
+    const otherEncrypted = encrypted
+      .filter((entry) => entry.name !== confirmedEntry.name)
+      .sort(compareNewest);
+    const keptEncrypted = [confirmedEntry, ...otherEncrypted.slice(0, keepCount - 1)];
+    const keepSet = new Set(keptEncrypted.map((entry) => entry.name));
+    // Prune excess/unconfirmed ciphertext first and open copies oldest-to-newest last so any
+    // interruption point during cleanup preserves an available verified copy.
+    const removeEncrypted = encrypted
+      .filter((entry) => !keepSet.has(entry.name))
+      .sort(compareOldest);
+    const removePlain = [...plain].sort(compareOldest);
     return {
-      keep,
-      remove: entries.map((entry) => entry.name).filter((name) => removeSet.has(name)),
+      keep: entries.map((entry) => entry.name).filter((name) => keepSet.has(name)),
+      remove: [...removeEncrypted, ...removePlain].map((entry) => entry.name),
       waitingForConfirmation: false,
     };
   }
@@ -67,18 +85,20 @@ export function selectTransitionRetention({
   const transitionEncrypted = encrypted
     .filter((entry) => compareOldest(entry, latestPlain) > 0)
     .sort(compareOldest);
-  const keptEncrypted = [];
-  if (transitionEncrypted.length === 1) {
-    keptEncrypted.push(transitionEncrypted[0]);
-  } else if (transitionEncrypted.length >= 2) {
-    keptEncrypted.push(transitionEncrypted[0], transitionEncrypted.at(-1));
-  } else if (encrypted.length > 0) {
-    keptEncrypted.push([...encrypted].sort(compareNewest)[0]);
-  }
+  const firstEncrypted = transitionEncrypted[0] ?? null;
+  const totalLimit = Math.max(keepCount, keptPlain.length + (firstEncrypted ? 1 : 0));
+  const freeEncryptedSlots = Math.max(0, totalLimit - keptPlain.length - (firstEncrypted ? 1 : 0));
+  const otherEncrypted = encrypted
+    .filter((entry) => !firstEncrypted || entry.name !== firstEncrypted.name)
+    .sort(compareNewest)
+    .slice(0, freeEncryptedSlots);
+  const keptEncrypted = firstEncrypted ? [firstEncrypted, ...otherEncrypted] : otherEncrypted;
   const keepSet = new Set([...keptPlain, ...keptEncrypted].map((entry) => entry.name));
+  const removePlain = plain.filter((entry) => !keepSet.has(entry.name)).sort(compareOldest);
+  const removeEncrypted = encrypted.filter((entry) => !keepSet.has(entry.name)).sort(compareOldest);
   return {
     keep: entries.map((entry) => entry.name).filter((name) => keepSet.has(name)),
-    remove: entries.map((entry) => entry.name).filter((name) => !keepSet.has(name)),
+    remove: [...removePlain, ...removeEncrypted].map((entry) => entry.name),
     waitingForConfirmation: true,
   };
 }

@@ -205,6 +205,7 @@ async function executeBackup({
   env = process.env,
   publishCopy = writePrivateCopy,
   onBeforeMetaRename = null,
+  onBeforePruneRemove = null,
   projectRoot = REPO_ROOT,
 }) {
   // Fail closed early if an existing confirmation state file is corrupted, symlinked, or hardlinked.
@@ -351,6 +352,7 @@ async function executeBackup({
   // Transition & pruning run only after the new copy is completely published, and only for the lock holder.
   let pruned = 'ok';
   let waitingForConfirmation = false;
+  let confirmed = false;
   if (!lock.held()) {
     pruned = 'skipped';
   } else {
@@ -365,25 +367,26 @@ async function executeBackup({
             entries,
             currentRecipient: config.recipient,
           });
+          confirmed = validation.valid;
           const plan = selectTransitionRetention({
             entries,
             keepCount: config.keepCount,
             encrypt: true,
-            confirmed: validation.valid,
+            confirmed,
+            confirmedFile: confirmed ? validation.state.file : null,
           });
           waitingForConfirmation = plan.waitingForConfirmation;
           for (const old of plan.remove) {
+            if (onBeforePruneRemove) onBeforePruneRemove(old, plan);
             removeCopyWithMeta(config.backupDir, old);
           }
-          if (
-            validation.valid &&
-            !listBackups(config.backupDir).some((entry) => !entry.encrypted)
-          ) {
+          if (confirmed && !listBackups(config.backupDir).some((entry) => !entry.encrypted)) {
             clearConfirmationState(config.backupDir);
           }
         } else {
           const { remove } = selectRetention(entries, config.keepCount);
           for (const old of remove) {
+            if (onBeforePruneRemove) onBeforePruneRemove(old, { remove });
             removeCopyWithMeta(config.backupDir, old);
           }
           clearConfirmationState(config.backupDir);
@@ -391,6 +394,7 @@ async function executeBackup({
       } else {
         const { remove } = selectRetention(entries, config.keepCount);
         for (const old of remove) {
+          if (onBeforePruneRemove) onBeforePruneRemove(old, { remove });
           removeCopyWithMeta(config.backupDir, old);
         }
         // Any successful unencrypted publication starts a fresh unencrypted baseline and
@@ -400,10 +404,32 @@ async function executeBackup({
     } catch {
       pruned = 'incomplete';
       waitingForConfirmation =
-        config.encrypt && listBackups(config.backupDir).some((entry) => !entry.encrypted);
+        config.encrypt &&
+        !confirmed &&
+        listBackups(config.backupDir).some((entry) => !entry.encrypted);
     }
   }
-  return { name, sizeBytes: meta.sizeBytes, verify: 'ok', pruned, waitingForConfirmation };
+  const retained = existsSync(path.join(config.backupDir, name));
+  let keptFile = name;
+  if (!retained) {
+    try {
+      const survivingEncrypted = listBackups(config.backupDir)
+        .filter((entry) => entry.encrypted)
+        .sort((a, b) => b.time - a.time || (a.name < b.name ? 1 : -1));
+      keptFile = survivingEncrypted[0]?.name ?? null;
+    } catch {
+      keptFile = null;
+    }
+  }
+  return {
+    name: retained ? name : null,
+    retained,
+    keptFile,
+    sizeBytes: retained ? meta.sizeBytes : null,
+    verify: 'ok',
+    pruned,
+    waitingForConfirmation,
+  };
 }
 
 // Containers a previous run recorded and could not clear. Each is reconciled from the state the
@@ -489,6 +515,7 @@ export async function runBackup({
   env = process.env,
   publishCopy = writePrivateCopy,
   onBeforeMetaRename = null,
+  onBeforePruneRemove = null,
   projectRoot = REPO_ROOT,
 }) {
   // Check git ignore before creating or modifying backupDir so a non-ignored path stays untouched.
@@ -547,22 +574,24 @@ export async function runBackup({
       JSON.stringify({ pid: process.pid, backupKey: backupKey(config.backupDir) }),
       { mode: 0o600 }
     );
+    const backupOutcome = await executeBackup({
+      config,
+      docker,
+      now,
+      tempDir,
+      lock,
+      allowRowDrop,
+      env,
+      publishCopy,
+      onBeforeMetaRename,
+      onBeforePruneRemove,
+      projectRoot,
+    });
     result = {
       ok: true,
-      ...(await executeBackup({
-        config,
-        docker,
-        now,
-        tempDir,
-        lock,
-        allowRowDrop,
-        env,
-        publishCopy,
-        onBeforeMetaRename,
-        projectRoot,
-      })),
+      ...backupOutcome,
     };
-    saved = true; // publish is the last step that can fail; nothing after it can undo it
+    saved = backupOutcome.retained; // true only when the newly published copy remains on disk
   } catch (error) {
     result = classify(error);
   }

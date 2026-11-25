@@ -355,14 +355,15 @@ describe('retention', () => {
     assert.equal(selectRetention(entries, 5).keep.length, 5);
   });
 
-  it('B2 transition retention: preserves N plain copies + first and newest encrypted until confirmed, then returns to N', () => {
+  it('B2 transition retention: preserves up to N plain copies + first .age, fills only free N slots with other .age (max N+1, never N+2), and pins confirmed copy on cutover including N=1', () => {
+    const p3 = day(6, false);
     const p2 = day(5, false); // older plain
     const p1 = day(4, false); // newer plain
     const e1 = day(3, true); // first encrypted of transition
-    const e2 = day(2, true); // intermediate encrypted
+    const e2 = day(2, true); // second encrypted
     const e3 = day(1, true); // newest encrypted
 
-    // First encrypted run (unconfirmed): N plain + 1 encrypted (N+1)
+    // First encrypted run (unconfirmed): N=2 plain + 1 encrypted (N+1 = 3)
     const first = selectTransitionRetention({
       entries: [p2, p1, e1],
       keepCount: 2,
@@ -373,7 +374,7 @@ describe('retention', () => {
     assert.deepEqual(first.keep.sort(), [p2.name, p1.name, e1.name].sort());
     assert.deepEqual(first.remove, []);
 
-    // Repeated unconfirmed runs: keep N plain + first encrypted (e1) + newest encrypted (e3), prune e2 (bounded to N+2)
+    // Repeated unconfirmed runs when plainKept === N (N=2): keep N plain + first encrypted (e1), prune e2 and e3 (never N+2)
     const repeated = selectTransitionRetention({
       entries: [p2, p1, e1, e2, e3],
       keepCount: 2,
@@ -381,11 +382,42 @@ describe('retention', () => {
       confirmed: false,
     });
     assert.equal(repeated.waitingForConfirmation, true);
-    assert.deepEqual(repeated.keep.sort(), [p2.name, p1.name, e1.name, e3.name].sort());
-    assert.deepEqual(repeated.remove, [e2.name]);
+    assert.deepEqual(repeated.keep.sort(), [p2.name, p1.name, e1.name].sort());
+    assert.deepEqual(repeated.remove, [e2.name, e3.name]);
+
+    // N=1 unconfirmed: keeps 1 plain + first encrypted (N+1 = 2), prunes newer unconfirmed e2
+    const n1Unconfirmed = selectTransitionRetention({
+      entries: [p1, e1, e2],
+      keepCount: 1,
+      encrypt: true,
+      confirmed: false,
+    });
+    assert.equal(n1Unconfirmed.waitingForConfirmation, true);
+    assert.deepEqual(n1Unconfirmed.keep.sort(), [p1.name, e1.name].sort());
+    assert.deepEqual(n1Unconfirmed.remove, [e2.name]);
+
+    // When plainKept < N, other .age copies fill ONLY free slots in normal limit N (never exceeding N)
+    const freeSlots = selectTransitionRetention({
+      entries: [p1, e1, e2, e3],
+      keepCount: 3,
+      encrypt: true,
+      confirmed: false,
+    });
+    assert.equal(freeSlots.waitingForConfirmation, true);
+    assert.deepEqual(freeSlots.keep.sort(), [p1.name, e1.name, e3.name].sort());
+    assert.deepEqual(freeSlots.remove, [e2.name]);
+
+    // N=2 with plainKept=1 has 0 free slots after p1 + e1, so e2 is pruned (total = N = 2)
+    const zeroFreeSlots = selectTransitionRetention({
+      entries: [p1, e1, e2],
+      keepCount: 2,
+      encrypt: true,
+      confirmed: false,
+    });
+    assert.deepEqual(zeroFreeSlots.keep.sort(), [p1.name, e1.name].sort());
+    assert.deepEqual(zeroFreeSlots.remove, [e2.name]);
 
     // Excess plaintext (>N) still caps plaintext at N without deleting the newest N plaintext copies
-    const p3 = day(6, false);
     const excessPlain = selectTransitionRetention({
       entries: [p3, p2, p1, e1],
       keepCount: 2,
@@ -395,7 +427,7 @@ describe('retention', () => {
     assert.deepEqual(excessPlain.keep.sort(), [p2.name, p1.name, e1.name].sort());
     assert.deepEqual(excessPlain.remove, [p3.name]);
 
-    // Pre-transition encrypted copy older than newest plain is pruned so e1 remains first of transition
+    // Pre-transition encrypted copy older than newest plain is pruned when N+1 is full
     const eOld = day(7, true);
     const withOldEnc = selectTransitionRetention({
       entries: [eOld, p2, p1, e1, e2],
@@ -403,20 +435,44 @@ describe('retention', () => {
       encrypt: true,
       confirmed: false,
     });
-    assert.deepEqual(withOldEnc.keep.sort(), [p2.name, p1.name, e1.name, e2.name].sort());
-    assert.deepEqual(withOldEnc.remove, [eOld.name]);
+    assert.deepEqual(withOldEnc.keep.sort(), [p2.name, p1.name, e1.name].sort());
+    assert.deepEqual(withOldEnc.remove, [eOld.name, e2.name]);
 
-    // Confirmed: removes all plain copies and returns to N newest encrypted copies
+    // Confirmed cutover (N=2): keeps confirmed e1 + newest e4, removes intermediate e3 before plain p2/p1
     const e4 = day(0, true);
     const afterConfirm = selectTransitionRetention({
       entries: [p2, p1, e1, e3, e4],
       keepCount: 2,
       encrypt: true,
       confirmed: true,
+      confirmedFile: e1.name,
     });
     assert.equal(afterConfirm.waitingForConfirmation, false);
-    assert.deepEqual(afterConfirm.keep.sort(), [e3.name, e4.name].sort());
-    assert.deepEqual(afterConfirm.remove.sort(), [p2.name, p1.name, e1.name].sort());
+    assert.deepEqual(afterConfirm.keep.sort(), [e1.name, e4.name].sort());
+    assert.deepEqual(afterConfirm.remove, [e3.name, p2.name, p1.name]);
+
+    // Confirmed cutover (N=1): confirmed e1 takes priority over newly published e2; removes e2 before p1
+    const afterConfirmN1 = selectTransitionRetention({
+      entries: [p1, e1, e2],
+      keepCount: 1,
+      encrypt: true,
+      confirmed: true,
+      confirmedFile: e1.name,
+    });
+    assert.equal(afterConfirmN1.waitingForConfirmation, false);
+    assert.deepEqual(afterConfirmN1.keep, [e1.name]);
+    assert.deepEqual(afterConfirmN1.remove, [e2.name, p1.name]);
+
+    // Confirmed without a matching encrypted copy fails closed
+    assert.throws(() =>
+      selectTransitionRetention({
+        entries: [p1, e1],
+        keepCount: 1,
+        encrypt: true,
+        confirmed: true,
+        confirmedFile: 'clickmoji-20261120T000000Z.dump.age',
+      })
+    );
   });
 });
 

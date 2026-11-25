@@ -722,6 +722,74 @@ describe('B2 CLI explicit confirmation and transition flow', () => {
       await holder.exited;
     }
   });
+
+  it('repeated unconfirmed CLI run at N=2 caps at N+1 and reports kept first .age without claiming deleted copy was saved', async () => {
+    const oldPlain = seedBackups(sandbox.backupDir, 2, {
+      startDay: 2,
+      encrypted: false,
+      counts: { a: 10, b: 20 },
+    });
+    const first = await runCli(envFor(sandbox, db), [], { cli: sandbox.cli });
+    assert.equal(first.code, EXIT.ok, first.stderr + first.stdout);
+    const enc1 = listCopies(sandbox.backupDir).find((name) => name.endsWith('.dump.age'));
+    assert.ok(enc1);
+
+    await new Promise((resolve) => setTimeout(resolve, 1100));
+    const repeat = await runCli(envFor(sandbox, db), [], { cli: sandbox.cli });
+    assert.equal(repeat.code, EXIT.ok, repeat.stderr + repeat.stdout);
+    assert.deepEqual(listCopies(sandbox.backupDir).sort(), [...oldPlain, enc1].sort());
+    assert.match(
+      repeat.stdout,
+      new RegExp(
+        `^backup: ok verify=ok decrypt=unconfirmed kept=${enc1} new=pruned \\(${WAITING_CONFIRMATION_NOTE}\\)\n$`
+      )
+    );
+    const lastStatus = readStatus(sandbox).trim().split('\n').pop();
+    assert.match(
+      lastStatus,
+      new RegExp(
+        `verify=ok decrypt=unconfirmed kept=${enc1} new=pruned prune=ok \\(${WAITING_CONFIRMATION_NOTE}\\)$`
+      )
+    );
+  });
+
+  it('N=1 CLI cutover flow prioritizes confirmed ciphertext and clears plain copy and confirmation state', async () => {
+    const [p1] = seedBackups(sandbox.backupDir, 1, {
+      startDay: 2,
+      encrypted: false,
+      counts: { a: 10, b: 20 },
+    });
+    const envN1 = envFor(sandbox, db, { BACKUP_RETENTION_COUNT: '1' });
+    const first = await runCli(envN1, [], { cli: sandbox.cli });
+    assert.equal(first.code, EXIT.ok, first.stderr + first.stdout);
+    const enc1 = listCopies(sandbox.backupDir).find((name) => name.endsWith('.dump.age'));
+    assert.ok(enc1);
+    assert.deepEqual(listCopies(sandbox.backupDir).sort(), [p1, enc1].sort());
+
+    const confirm = await runCli(
+      {
+        PATH: process.env.PATH,
+        BACKUP_DIR: sandbox.backupDir,
+        BACKUP_STATUS_FILE: sandbox.statusFile,
+      },
+      ['--confirm-encrypted-restore', enc1],
+      { cli: sandbox.cli }
+    );
+    assert.equal(confirm.code, EXIT.ok, confirm.stderr + confirm.stdout);
+
+    await new Promise((resolve) => setTimeout(resolve, 1100));
+    const cutover = await runCli(envN1, [], { cli: sandbox.cli });
+    assert.equal(cutover.code, EXIT.ok, cutover.stderr + cutover.stdout);
+    assert.deepEqual(listCopies(sandbox.backupDir), [enc1]);
+    assert.equal(existsSync(path.join(sandbox.backupDir, p1)), false);
+    assert.equal(
+      existsSync(path.join(sandbox.backupDir, 'meta', ENCRYPTED_CONFIRM_STATE_NAME)),
+      false
+    );
+    assert.match(cutover.stdout, new RegExp(`^backup: ok verify=ok kept=${enc1} new=pruned\n$`));
+    const lastStatus = readStatus(sandbox).trim().split('\n').pop();
+    assert.match(lastStatus, new RegExp(`verify=ok kept=${enc1} new=pruned prune=ok$`));
+  });
 });
 
 function readDockerCalls() {

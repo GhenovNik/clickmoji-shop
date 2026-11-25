@@ -1511,31 +1511,144 @@ describe('docker management calls are bounded, and a hung call is a failure (B2,
 describe('B2: operator confirmation gate before purging unencrypted dumps', () => {
   const dayPlus = (hours) => new Date(NOW.getTime() + hours * 3_600_000);
 
-  it('keeps the full set of N unencrypted copies across repeated unconfirmed runs, keeps first .age available, and bounds growth to N+2', async () => {
+  it('caps unconfirmed retention at max(N, plainKept + 1), fills only free slots with other .age, and keeps baseline, status, and files consistent', async () => {
     const oldPlain = seedBackups(sandbox.backupDir, 2, {
+      startDay: 2,
+      encrypted: false,
+      counts: { a: 100, b: 20 },
+    });
+
+    const r1 = await runWithFake(
+      sandbox,
+      db,
+      { BACKUP_ENCRYPT: '1', FAKE_COUNTS: '{"a":100,"b":20}' },
+      NOW
+    );
+    assert.equal(r1.ok, true);
+    assert.equal(r1.retained, true);
+    assert.equal(r1.saved, true);
+    assert.equal(r1.waitingForConfirmation, true);
+    assert.deepEqual(listCopies(sandbox.backupDir).sort(), [...oldPlain, r1.name].sort());
+
+    // Repeated unconfirmed run when plainKept === N (N=2): r2 is pruned so total stays N+1=3 (never N+2)
+    // and status/baseline remain consistent with the surviving r1 (never claiming r2 was saved).
+    const r2Time = dayPlus(24);
+    const r2Name = 'clickmoji-20261125T120000Z.dump.age';
+    const r2 = await runWithFake(
+      sandbox,
+      db,
+      { BACKUP_ENCRYPT: '1', FAKE_COUNTS: '{"a":200,"b":20}' },
+      r2Time
+    );
+    assert.equal(r2.ok, true);
+    assert.equal(r2.retained, false);
+    assert.equal(r2.saved, false);
+    assert.equal(r2.name, null);
+    assert.equal(r2.keptFile, r1.name);
+    assert.equal(r2.waitingForConfirmation, true);
+    assert.deepEqual(
+      listCopies(sandbox.backupDir).sort(),
+      [...oldPlain, r1.name].sort(),
+      'first .age (r1) preserved, N plain intact, total capped at N+1'
+    );
+    assert.equal(existsSync(path.join(sandbox.backupDir, r2Name)), false);
+    assert.equal(existsSync(path.join(sandbox.backupDir, 'meta', `${r2Name}.json`)), false);
+    const r2StatusLine = readStatus(sandbox).trim().split('\n').pop();
+    assert.equal(r2StatusLine.includes(r2Name), false, 'status never names deleted copy');
+    assert.match(
+      r2StatusLine,
+      new RegExp(`verify=ok decrypt=unconfirmed kept=${r1.name} new=pruned prune=ok`)
+    );
+
+    // Baseline remained r1 (a=100), NOT deleted r2 (a=200): a=90 on r3 passes without drop!
+    const r3Name = 'clickmoji-20261126T120000Z.dump.age';
+    const r3 = await runWithFake(
+      sandbox,
+      db,
+      { BACKUP_ENCRYPT: '1', FAKE_COUNTS: '{"a":90,"b":20}' },
+      dayPlus(48)
+    );
+    assert.equal(r3.ok, true);
+    assert.equal(r3.retained, false);
+    assert.equal(r3.saved, false);
+    assert.equal(r3.keptFile, r1.name);
+    assert.deepEqual(listCopies(sandbox.backupDir).sort(), [...oldPlain, r1.name].sort());
+    assert.equal(existsSync(path.join(sandbox.backupDir, r3Name)), false);
+    assert.equal(existsSync(path.join(sandbox.backupDir, 'meta', `${r3Name}.json`)), false);
+
+    // Even with --allow-row-drop when fresh copy is pruned, baseline stays r1 (a=100), so subsequent a=10 still rejects.
+    const r4DropAllowed = await runWithFake(
+      sandbox,
+      db,
+      { BACKUP_ENCRYPT: '1', FAKE_COUNTS: '{"a":10,"b":20}' },
+      dayPlus(72),
+      { allowRowDrop: true }
+    );
+    assert.equal(r4DropAllowed.ok, true);
+    assert.equal(r4DropAllowed.retained, false);
+    const r5Rejected = await runWithFake(
+      sandbox,
+      db,
+      { BACKUP_ENCRYPT: '1', FAKE_COUNTS: '{"a":10,"b":20}' },
+      dayPlus(96)
+    );
+    assert.equal(r5Rejected.ok, false);
+    assert.equal(r5Rejected.exit, EXIT.suspicious);
+
+    // If status write fails when fresh copy is pruned (saved === false), report does NOT return statusSaved (5).
+    const statusFailPruned = await runWithFake(
+      sandbox,
+      db,
+      {
+        BACKUP_ENCRYPT: '1',
+        FAKE_COUNTS: '{"a":100,"b":20}',
+        FAKE_SWAP_STATUS: sandbox.statusFile,
+      },
+      dayPlus(120)
+    );
+    assert.equal(statusFailPruned.ok, true);
+    assert.equal(statusFailPruned.retained, false);
+    assert.equal(statusFailPruned.saved, false);
+    assert.equal(statusFailPruned.statusWritten, false);
+    assert.equal(statusFailPruned.exit, EXIT.failed);
+  });
+
+  it('fills only free slots in normal limit N when plainKept < N before confirmation', async () => {
+    const [p1] = seedBackups(sandbox.backupDir, 1, {
       startDay: 2,
       encrypted: false,
       counts: { a: 10, b: 20 },
     });
 
-    const r1 = await runWithFake(sandbox, db, { BACKUP_ENCRYPT: '1' }, NOW);
-    assert.equal(r1.ok, true);
-    assert.equal(r1.waitingForConfirmation, true);
-    assert.deepEqual(listCopies(sandbox.backupDir).sort(), [...oldPlain, r1.name].sort());
-
-    const r2 = await runWithFake(sandbox, db, { BACKUP_ENCRYPT: '1' }, dayPlus(24));
-    assert.equal(r2.ok, true);
-    assert.equal(r2.waitingForConfirmation, true);
-    assert.deepEqual(listCopies(sandbox.backupDir).sort(), [...oldPlain, r1.name, r2.name].sort());
-
-    const r3 = await runWithFake(sandbox, db, { BACKUP_ENCRYPT: '1' }, dayPlus(48));
-    assert.equal(r3.ok, true);
-    assert.equal(r3.waitingForConfirmation, true);
-    assert.deepEqual(
-      listCopies(sandbox.backupDir).sort(),
-      [...oldPlain, r1.name, r3.name].sort(),
-      'first .age (r1) preserved for operator check, intermediate r2 pruned, N plain intact'
+    // N=3, plainKept=1 -> r1 (2 <= 3), then r2 fills the 1 free slot (3 = N), then r3 replaces r2 while keeping p1 + r1.
+    const r1 = await runWithFake(
+      sandbox,
+      db,
+      { BACKUP_ENCRYPT: '1', BACKUP_RETENTION_COUNT: '3' },
+      NOW
     );
+    assert.equal(r1.ok, true);
+    assert.equal(r1.retained, true);
+    assert.deepEqual(listCopies(sandbox.backupDir).sort(), [p1, r1.name].sort());
+
+    const r2 = await runWithFake(
+      sandbox,
+      db,
+      { BACKUP_ENCRYPT: '1', BACKUP_RETENTION_COUNT: '3' },
+      dayPlus(24)
+    );
+    assert.equal(r2.retained, true);
+    assert.equal(r2.saved, true);
+    assert.deepEqual(listCopies(sandbox.backupDir).sort(), [p1, r1.name, r2.name].sort());
+
+    const r3 = await runWithFake(
+      sandbox,
+      db,
+      { BACKUP_ENCRYPT: '1', BACKUP_RETENTION_COUNT: '3' },
+      dayPlus(48)
+    );
+    assert.equal(r3.retained, true);
+    assert.deepEqual(listCopies(sandbox.backupDir).sort(), [p1, r1.name, r3.name].sort());
     assert.equal(existsSync(path.join(sandbox.backupDir, r2.name)), false);
   });
 
@@ -1700,20 +1813,32 @@ describe('B2: operator confirmation gate before purging unencrypted dumps', () =
       assert.equal(existsSync(path.join(sandbox.backupDir, p)), true, `${p} preserved`);
     }
 
-    // Also verify recipient mismatch after valid confirmation of r2 refuses cleanup
-    assert.equal((await runConfirmWithFake(sandbox, r2.name, {}, dayPlus(25))).ok, true);
-    const otherRecipientFile = path.join(sandbox.root, 'other-recipient.txt');
-    writeFileSync(otherRecipientFile, `age1${'p'.repeat(58)}\n`);
-    const r3 = await runWithFake(
-      sandbox,
-      db,
-      { BACKUP_ENCRYPT: '1', BACKUP_AGE_RECIPIENT_FILE: otherRecipientFile },
-      dayPlus(48)
-    );
-    assert.equal(r3.ok, true);
-    assert.equal(r3.waitingForConfirmation, true, 'recipient change refuses cleanup');
-    for (const p of oldPlain) {
-      assert.equal(existsSync(path.join(sandbox.backupDir, p)), true, `${p} preserved`);
+    // Also verify recipient mismatch after valid confirmation refuses cleanup
+    const mismatchSandbox = makeSandbox();
+    try {
+      const mPlain = seedBackups(mismatchSandbox.backupDir, 2, {
+        startDay: 2,
+        encrypted: false,
+        counts: { a: 10, b: 20 },
+      });
+      const m1 = await runWithFake(mismatchSandbox, db, { BACKUP_ENCRYPT: '1' }, NOW);
+      assert.equal(m1.ok, true);
+      assert.equal((await runConfirmWithFake(mismatchSandbox, m1.name, {}, dayPlus(1))).ok, true);
+      const otherRecipientFile = path.join(mismatchSandbox.root, 'other-recipient.txt');
+      writeFileSync(otherRecipientFile, `age1${'p'.repeat(58)}\n`);
+      const m2 = await runWithFake(
+        mismatchSandbox,
+        db,
+        { BACKUP_ENCRYPT: '1', BACKUP_AGE_RECIPIENT_FILE: otherRecipientFile },
+        dayPlus(24)
+      );
+      assert.equal(m2.ok, true);
+      assert.equal(m2.waitingForConfirmation, true, 'recipient change refuses cleanup');
+      for (const p of mPlain) {
+        assert.equal(existsSync(path.join(mismatchSandbox.backupDir, p)), true, `${p} preserved`);
+      }
+    } finally {
+      mismatchSandbox.cleanup();
     }
   });
 
@@ -1780,5 +1905,277 @@ describe('B2: operator confirmation gate before purging unencrypted dumps', () =
     assert.equal(res.key, 'confirmState');
     assert.equal(res.exit, EXIT.failed);
     assert.deepEqual(listCopies(sandbox.backupDir).sort(), [...oldPlain].sort());
+  });
+
+  it('N=1 confirmed cutover prioritizes confirmed ciphertext over newly published unconfirmed ciphertext and keeps baseline/status consistent', async () => {
+    const [p1] = seedBackups(sandbox.backupDir, 1, {
+      startDay: 2,
+      encrypted: false,
+      counts: { a: 100, b: 20 },
+    });
+    const r1 = await runWithFake(
+      sandbox,
+      db,
+      { BACKUP_ENCRYPT: '1', BACKUP_RETENTION_COUNT: '1', FAKE_COUNTS: '{"a":100,"b":20}' },
+      NOW
+    );
+    assert.equal(r1.ok, true);
+    assert.equal(r1.retained, true);
+    assert.deepEqual(listCopies(sandbox.backupDir).sort(), [p1, r1.name].sort());
+    assert.equal((await runConfirmWithFake(sandbox, r1.name, {}, dayPlus(1))).ok, true);
+
+    const r2Time = dayPlus(24);
+    const r2Name = 'clickmoji-20261125T120000Z.dump.age';
+    const r2 = await runWithFake(
+      sandbox,
+      db,
+      { BACKUP_ENCRYPT: '1', BACKUP_RETENTION_COUNT: '1', FAKE_COUNTS: '{"a":200,"b":20}' },
+      r2Time
+    );
+    assert.equal(r2.ok, true);
+    assert.equal(r2.waitingForConfirmation, false);
+    assert.equal(r2.retained, false);
+    assert.equal(r2.saved, false);
+    assert.equal(r2.name, null);
+    assert.equal(r2.keptFile, r1.name);
+    assert.deepEqual(listCopies(sandbox.backupDir), [r1.name], 'confirmed r1 kept at N=1');
+    assert.equal(existsSync(path.join(sandbox.backupDir, p1)), false);
+    assert.equal(existsSync(path.join(sandbox.backupDir, r2Name)), false);
+    assert.equal(existsSync(path.join(sandbox.backupDir, 'meta', `${r2Name}.json`)), false);
+    assert.equal(readConfirmationState(sandbox.backupDir), null);
+    const statusLine = readStatus(sandbox).trim().split('\n').pop();
+    assert.equal(statusLine.includes(r2Name), false, 'status never claims pruned r2 was saved');
+    assert.match(statusLine, new RegExp(`verify=ok kept=${r1.name} new=pruned prune=ok$`));
+
+    // Next run after cutover uses surviving r1 (a=100) as baseline, not pruned r2 (a=200),
+    // and now rotates normally under N=1.
+    const r3 = await runWithFake(
+      sandbox,
+      db,
+      { BACKUP_ENCRYPT: '1', BACKUP_RETENTION_COUNT: '1', FAKE_COUNTS: '{"a":90,"b":20}' },
+      dayPlus(48)
+    );
+    assert.equal(r3.ok, true);
+    assert.equal(r3.retained, true);
+    assert.equal(r3.saved, true);
+    assert.deepEqual(listCopies(sandbox.backupDir), [r3.name]);
+  });
+
+  it('cutover run with intermediate .age copies retains operator-confirmed ciphertext under limit N', async () => {
+    const [p1] = seedBackups(sandbox.backupDir, 1, {
+      startDay: 3,
+      encrypted: false,
+      counts: { a: 10, b: 20 },
+    });
+    const r1 = await runWithFake(
+      sandbox,
+      db,
+      { BACKUP_ENCRYPT: '1', BACKUP_RETENTION_COUNT: '3' },
+      NOW
+    );
+    assert.equal(r1.ok, true);
+    const r2 = await runWithFake(
+      sandbox,
+      db,
+      { BACKUP_ENCRYPT: '1', BACKUP_RETENTION_COUNT: '3' },
+      dayPlus(24)
+    );
+    assert.equal(r2.ok, true);
+    assert.deepEqual(listCopies(sandbox.backupDir).sort(), [p1, r1.name, r2.name].sort());
+    assert.equal((await runConfirmWithFake(sandbox, r1.name, {}, dayPlus(25))).ok, true);
+
+    // Lower to N=2 at cutover: confirmed r1 MUST remain alongside newest r3 (intermediate r2 and p1 removed).
+    const r3 = await runWithFake(
+      sandbox,
+      db,
+      { BACKUP_ENCRYPT: '1', BACKUP_RETENTION_COUNT: '2' },
+      dayPlus(48)
+    );
+    assert.equal(r3.ok, true);
+    assert.equal(r3.retained, true);
+    assert.deepEqual(listCopies(sandbox.backupDir).sort(), [r1.name, r3.name].sort());
+    assert.equal(existsSync(path.join(sandbox.backupDir, r2.name)), false);
+    assert.equal(existsSync(path.join(sandbox.backupDir, p1)), false);
+  });
+
+  it('cutover requires full publication before cleanup and preserves an available verified copy across every cleanup interruption point', async () => {
+    const runInjected = (env, atIso, hookBody) => {
+      const child = launchLocked(
+        sandbox.backupDir,
+        [
+          process.execPath,
+          '--input-type=module',
+          '-e',
+          `
+          import { loadConfig } from ${JSON.stringify(path.resolve('scripts/backup/config.mjs'))};
+          import { DockerRunner } from ${JSON.stringify(path.resolve('scripts/backup/docker.mjs'))};
+          import { heldLock } from ${JSON.stringify(path.resolve('scripts/backup/lock.mjs'))};
+          import { runBackup } from ${JSON.stringify(path.resolve('scripts/backup/pipeline.mjs'))};
+          const env = ${JSON.stringify(env)};
+          const config = loadConfig(env);
+          const lock = heldLock(config.backupDir, process.env);
+          const docker = new DockerRunner({ bin: config.dockerBin, containerEnv: config.containerEnv, timeoutMs: config.dockerTimeoutMs, env });
+          await runBackup({
+            config, docker, lock,
+            now: () => new Date(${JSON.stringify(atIso)}),
+            tempRoot: ${JSON.stringify(sandbox.tmp)},
+            projectRoot: ${JSON.stringify(sandbox.repo)},
+            ${hookBody}
+          });
+          `,
+        ],
+        { env, stdio: ['ignore', 'pipe', 'pipe'] }
+      );
+      return new Promise((resolve) => child.on('close', (_code, sig) => resolve(sig)));
+    };
+
+    // 1. N=1: incomplete publication (SIGKILL before meta rename) never runs cleanup.
+    const [p1] = seedBackups(sandbox.backupDir, 1, {
+      startDay: 2,
+      encrypted: false,
+      counts: { a: 100, b: 20 },
+    });
+    const r1 = await runWithFake(
+      sandbox,
+      db,
+      { BACKUP_ENCRYPT: '1', BACKUP_RETENTION_COUNT: '1', FAKE_COUNTS: '{"a":100,"b":20}' },
+      NOW
+    );
+    assert.equal((await runConfirmWithFake(sandbox, r1.name, {}, dayPlus(1))).ok, true);
+    const n1Env = envFor(sandbox, db, {
+      BACKUP_ENCRYPT: '1',
+      BACKUP_RETENTION_COUNT: '1',
+      FAKE_COUNTS: '{"a":100,"b":20}',
+    });
+    const r2Name = 'clickmoji-20261125T120000Z.dump.age';
+    const sigPub = await runInjected(
+      n1Env,
+      dayPlus(24).toISOString(),
+      `onBeforeMetaRename: () => process.kill(process.pid, 'SIGKILL')`
+    );
+    assert.equal(sigPub, 'SIGKILL');
+    assert.deepEqual(
+      listBackups(sandbox.backupDir)
+        .map((e) => e.name)
+        .sort(),
+      [p1, r1.name].sort(),
+      'incomplete publication keeps p1 and confirmed r1 intact'
+    );
+    assert.ok(readConfirmationState(sandbox.backupDir));
+
+    // 2. N=1: interrupt AFTER r2 is removed and BEFORE p1 is removed; both p1 and confirmed r1 survive.
+    const r3Time = dayPlus(48);
+    const r3Name = 'clickmoji-20261126T120000Z.dump.age';
+    const sigMidPrune = await runInjected(
+      n1Env,
+      r3Time.toISOString(),
+      `onBeforePruneRemove: (old, plan) => {
+        if (JSON.stringify(plan.remove) !== JSON.stringify([${JSON.stringify(r3Name)}, ${JSON.stringify(p1)}])) {
+          throw new Error('unexpected remove order: ' + JSON.stringify(plan.remove));
+        }
+        if (old === ${JSON.stringify(p1)}) process.kill(process.pid, 'SIGKILL');
+      }`
+    );
+    assert.equal(sigMidPrune, 'SIGKILL');
+    assert.equal(existsSync(path.join(sandbox.backupDir, r3Name)), false, 'r3 pruned first');
+    assert.deepEqual(
+      listBackups(sandbox.backupDir)
+        .map((e) => e.name)
+        .sort(),
+      [p1, r1.name].sort(),
+      'interrupt before p1 removal keeps both p1 and confirmed r1'
+    );
+    assert.ok(readConfirmationState(sandbox.backupDir));
+
+    // Next N=1 run recovers and completes cutover keeping confirmed r1.
+    const recoveredN1 = await runWithFake(
+      sandbox,
+      db,
+      { BACKUP_ENCRYPT: '1', BACKUP_RETENTION_COUNT: '1', FAKE_COUNTS: '{"a":100,"b":20}' },
+      dayPlus(72)
+    );
+    assert.equal(recoveredN1.ok, true);
+    assert.equal(recoveredN1.keptFile, r1.name);
+    assert.deepEqual(listCopies(sandbox.backupDir), [r1.name]);
+    assert.equal(readConfirmationState(sandbox.backupDir), null);
+
+    // 3. N=2: interrupt between removing p2 and p1 keeps newest plain p1, confirmed e1, and published e2;
+    //    orphan meta from an interrupted removeCopyWithMeta is also cleaned up on the recovery run.
+    const n2Sandbox = makeSandbox();
+    try {
+      const [pNew, pOld] = seedBackups(n2Sandbox.backupDir, 2, {
+        startDay: 2,
+        encrypted: false,
+        counts: { a: 10, b: 20 },
+      });
+      const e1 = await runWithFake(n2Sandbox, db, { BACKUP_ENCRYPT: '1' }, NOW);
+      assert.equal(e1.ok, true);
+      assert.equal((await runConfirmWithFake(n2Sandbox, e1.name, {}, dayPlus(1))).ok, true);
+      const n2Env = envFor(n2Sandbox, db, { BACKUP_ENCRYPT: '1' });
+      const e2Name = 'clickmoji-20261125T120000Z.dump.age';
+      const child = launchLocked(
+        n2Sandbox.backupDir,
+        [
+          process.execPath,
+          '--input-type=module',
+          '-e',
+          `
+          import { loadConfig } from ${JSON.stringify(path.resolve('scripts/backup/config.mjs'))};
+          import { DockerRunner } from ${JSON.stringify(path.resolve('scripts/backup/docker.mjs'))};
+          import { heldLock } from ${JSON.stringify(path.resolve('scripts/backup/lock.mjs'))};
+          import { runBackup } from ${JSON.stringify(path.resolve('scripts/backup/pipeline.mjs'))};
+          const env = ${JSON.stringify(n2Env)};
+          const config = loadConfig(env);
+          const lock = heldLock(config.backupDir, process.env);
+          const docker = new DockerRunner({ bin: config.dockerBin, containerEnv: config.containerEnv, timeoutMs: config.dockerTimeoutMs, env });
+          await runBackup({
+            config, docker, lock,
+            now: () => new Date(${JSON.stringify(dayPlus(24).toISOString())}),
+            tempRoot: ${JSON.stringify(n2Sandbox.tmp)},
+            projectRoot: ${JSON.stringify(n2Sandbox.repo)},
+            onBeforePruneRemove: (old, plan) => {
+              if (JSON.stringify(plan.remove) !== JSON.stringify([${JSON.stringify(pOld)}, ${JSON.stringify(pNew)}])) {
+                throw new Error('unexpected plain order: ' + JSON.stringify(plan.remove));
+              }
+              if (old === ${JSON.stringify(pNew)}) process.kill(process.pid, 'SIGKILL');
+            },
+          });
+          `,
+        ],
+        { env: n2Env, stdio: ['ignore', 'pipe', 'pipe'] }
+      );
+      const sigN2 = await new Promise((resolve) => child.on('close', (_c, sig) => resolve(sig)));
+      assert.equal(sigN2, 'SIGKILL');
+      assert.equal(existsSync(path.join(n2Sandbox.backupDir, pOld)), false);
+      assert.deepEqual(
+        listBackups(n2Sandbox.backupDir)
+          .map((e) => e.name)
+          .sort(),
+        [pNew, e1.name, e2Name].sort(),
+        'pNew, confirmed e1, and published e2 all survive mid-cleanup interruption'
+      );
+      // Simulate orphan meta left by crash between rmSync(dump) and rmSync(meta)
+      writeFileSync(
+        path.join(n2Sandbox.backupDir, 'meta', 'clickmoji-20261119T120000Z.dump.json'),
+        '{}'
+      );
+      assert.ok(readConfirmationState(n2Sandbox.backupDir));
+
+      const recoveredN2 = await runWithFake(n2Sandbox, db, { BACKUP_ENCRYPT: '1' }, dayPlus(48));
+      assert.equal(recoveredN2.ok, true);
+      assert.deepEqual(
+        listCopies(n2Sandbox.backupDir).sort(),
+        [e1.name, recoveredN2.name].sort(),
+        'confirmed e1 preserved alongside newest recovered copy'
+      );
+      assert.equal(
+        existsSync(path.join(n2Sandbox.backupDir, 'meta', 'clickmoji-20261119T120000Z.dump.json')),
+        false,
+        'orphan meta cleaned up'
+      );
+      assert.equal(readConfirmationState(n2Sandbox.backupDir), null);
+    } finally {
+      n2Sandbox.cleanup();
+    }
   });
 });

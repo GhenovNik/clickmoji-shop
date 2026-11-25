@@ -225,6 +225,13 @@ export function cleanupIncompletePublishes(backupDir) {
     for (const name of readdirSync(metaDir)) {
       if (name.startsWith('.partial-')) {
         rmSync(path.join(metaDir, name), { force: true });
+        continue;
+      }
+      if (name.endsWith('.json')) {
+        const copyName = name.slice(0, -'.json'.length);
+        if (BACKUP_NAME_PATTERN.test(copyName) && !existsSync(path.join(backupDir, copyName))) {
+          rmSync(path.join(metaDir, name), { force: true });
+        }
       }
     }
   }
@@ -233,6 +240,13 @@ export function cleanupIncompletePublishes(backupDir) {
 function formatOkDetail(result) {
   if (result.confirmFile) {
     return `confirm-encrypted-restore file=${result.confirmFile} sha256=${result.sha256}`;
+  }
+  if (result.retained === false) {
+    const kept = result.keptFile ? ` kept=${result.keptFile}` : '';
+    if (result.waitingForConfirmation) {
+      return `verify=${result.verify} decrypt=unconfirmed${kept} new=pruned prune=${result.pruned} (${WAITING_CONFIRMATION_NOTE})`;
+    }
+    return `verify=${result.verify}${kept} new=pruned prune=${result.pruned}`;
   }
   if (result.waitingForConfirmation) {
     return `size=${result.sizeBytes} verify=${result.verify} decrypt=unconfirmed file=${result.name} prune=${result.pruned} (${WAITING_CONFIRMATION_NOTE})`;
@@ -266,7 +280,13 @@ export function report(config, now, result, saved = false, statusFailedExit = EX
     ...result,
     saved,
     statusWritten,
-    exit: !statusWritten && saved ? statusFailedExit : outcomeExit,
+    exit: !statusWritten
+      ? saved
+        ? statusFailedExit
+        : result.ok
+          ? EXIT.failed
+          : outcomeExit
+      : outcomeExit,
   };
 }
 

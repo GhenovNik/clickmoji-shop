@@ -190,7 +190,8 @@ Verified production backups run via `npm run db:backup:verified` (`node scripts/
        ```
 
        - Existing accepted unencrypted `.dump` copies (up to `N`) are **not** deleted by normal pruning while waiting for confirmation.
-       - **Temporary limit exception:** with a full set of `N` unencrypted `.dump` copies, **one** additional `.dump.age` copy is temporarily permitted for operator verification (`N + 1`). If further unencrypted-waiting runs execute before confirmation, the first `.dump.age` copy of the transition remains preserved alongside the newest `.dump.age` copy (intermediate encrypted copies are pruned so disk usage stays bounded to at most `N + 2`).
+       - **Temporary limit exception:** with `plainKept` unencrypted `.dump` copies (up to `N`), the **first** `.dump.age` copy of the current transition is preserved for operator verification, and any other `.dump.age` copies may fill only free slots inside the normal limit `N`. Total retained copies are therefore capped at `max(N, plainKept + 1)` (at most `N + 1` when unencrypted copies fill `N`, never `N + 2`).
+       - If unencrypted copies and the first `.dump.age` copy already fill that cap and further unconfirmed runs execute, each run still dumps, verifies restore, and checks encryption, does not keep the newly produced `.dump.age`, preserves the existing `.dump` copies and first `.dump.age` copy (leaving the comparison baseline on the surviving copy), and reports `verify=ok decrypt=unconfirmed kept=<first .dump.age> new=pruned` without claiming the pruned copy was saved.
        - The status line and CLI output carry the reminder:
          `decrypt=unconfirmed (шифрование включено, открытые копии ждут подтверждения восстановления)`.
 
@@ -223,7 +224,7 @@ Verified production backups run via `npm run db:backup:verified` (`node scripts/
        npm run db:backup:verified
        ```
 
-       Only **after** the new `.dump.age` copy is verified and atomically published does the script verify the confirmed ciphertext fingerprint, automatically purge all prior unencrypted `.dump` copies, return to the unified retention limit `N` across encrypted copies, and clear the consumed confirmation state. If that run fails before publication (or is rejected by the row-drop guard), existing unencrypted `.dump` copies and the confirmation state remain intact.
+       Only **after** the new `.dump.age` copy is verified and atomically published does the script verify the confirmed ciphertext fingerprint, automatically purge unencrypted `.dump` copies, return to the unified retention limit `N` across encrypted copies, and clear the consumed confirmation state. On this cutover run that removes unencrypted copies, the **operator-confirmed** `.dump.age` copy is guaranteed to stay among the `N` retained copies (including `N = 1`, where the confirmed copy takes priority on that cutover run over the newly published unconfirmed ciphertext and the status/CLI report `kept=<confirmed .dump.age> new=pruned`; subsequent runs after unencrypted copies are gone apply standard `N`-copy retention). Excess unconfirmed encrypted copies are pruned before unencrypted copies (oldest-to-newest), and confirmation state is cleared only after unencrypted copies are removed, so no interruption point during cleanup destroys an available verified copy. If that run fails before full publication (or is rejected by the row-drop guard), existing unencrypted `.dump` copies and the confirmation state remain intact.
 
   - **Freshness threshold:** Computed as **interval + 1 day** (no separate threshold setting): `4 days` in development (`3 days + 1 day`), `2 days` once switched to daily production (`1 day + 1 day`).
 
