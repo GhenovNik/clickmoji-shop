@@ -247,12 +247,12 @@ describe('normalizeEmojiImage', { timeout: 30_000 }, () => {
     const prototype = Object.getPrototypeOf(sharp());
     const originalRaw = prototype.raw;
     const rawSpy = vi.spyOn(prototype, 'raw').mockImplementation(function (
-      this: sharp.Sharp,
+      this: ReturnType<typeof sharp>,
       ...args: unknown[]
     ) {
       const pipeline = originalRaw.apply(this, args);
       const originalToBuffer = pipeline.toBuffer;
-      pipeline.toBuffer = function (this: sharp.Sharp, ...bufferArgs: unknown[]) {
+      pipeline.toBuffer = function (this: ReturnType<typeof sharp>, ...bufferArgs: unknown[]) {
         const result = originalToBuffer.apply(this, bufferArgs);
         return result.then((output: { info?: { width: number; height: number } }) => {
           if (output.info)
