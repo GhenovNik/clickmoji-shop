@@ -9,20 +9,27 @@ import {
   libpqEnv,
   LIBPQ_ENV_NAMES,
   loadConfig,
+  parseCliArgs,
   parseDockerTimeout,
+  parseEncryptFlag,
+  parseRetentionCount,
   REPO_ROOT,
 } from '../config.mjs';
 import { Ledger, LedgerError } from '../ledger.mjs';
 import { DockerRunner } from '../docker.mjs';
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync, mkdirSync, symlinkSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import os from 'node:os';
 import {
   POSTGRES_BASE_DIGEST,
   POSTGRES_BASE_IMAGE,
   TOOLS_IMAGE,
   DROP_THRESHOLD_PERCENT,
-  RETENTION,
+  DEFAULT_RETENTION_COUNT,
+  EXIT,
 } from '../constants.mjs';
+import { verifyBackupDirGitIgnored } from '../git.mjs';
+import { listBackups } from '../pipeline.mjs';
 import {
   CONTAINER_DIR,
   cleanupArgs,
@@ -54,6 +61,7 @@ describe('config', () => {
     DATABASE_URL: syntheticDatabase().url,
     BACKUP_DIR: sandbox.backupDir,
     BACKUP_STATUS_FILE: sandbox.statusFile,
+    BACKUP_ENCRYPT: '1',
     BACKUP_AGE_RECIPIENT_FILE: recipientFile,
   });
 
@@ -85,16 +93,51 @@ describe('config', () => {
     );
   });
 
-  it('refuses backup paths inside the repository', () => {
+  it('allows gitignored backup dir inside repo while refusing status file and tmpdir inside repo', () => {
     const inside = path.join(REPO_ROOT, 'backups');
-    assert.throws(
-      () => loadConfig({ ...base(), BACKUP_DIR: inside }),
-      /BACKUP_DIR: путь внутри репозитория/
-    );
+    const config = loadConfig({ ...base(), BACKUP_DIR: inside });
+    assert.equal(config.backupDir, inside);
     assert.throws(
       () => loadConfig({ ...base(), BACKUP_STATUS_FILE: path.join(REPO_ROOT, 'status.log') }),
       /BACKUP_STATUS_FILE: путь внутри репозитория/
     );
+    assert.throws(
+      () => loadConfig({ ...base(), TMPDIR: path.join(REPO_ROOT, 'tmp') }),
+      /TMPDIR: путь внутри репозитория/
+    );
+    assert.throws(
+      () => loadConfig({ ...base(), TMPDIR: path.join(sandbox.backupDir, 'tmp') }),
+      /TMPDIR: путь внутри репозитория/
+    );
+  });
+
+  it('defaults to unencrypted mode without requiring BACKUP_AGE_RECIPIENT_FILE', () => {
+    const env = base();
+    delete env.BACKUP_ENCRYPT;
+    delete env.BACKUP_AGE_RECIPIENT_FILE;
+    const config = loadConfig(env);
+    assert.equal(config.encrypt, false);
+    assert.equal(config.recipientFile, null);
+    assert.equal(config.recipient, null);
+    assert.equal(config.keepCount, DEFAULT_RETENTION_COUNT);
+  });
+
+  it('parses BACKUP_ENCRYPT, BACKUP_RETENTION_COUNT and CLI args strictly', () => {
+    assert.equal(parseEncryptFlag(undefined), false);
+    assert.equal(parseEncryptFlag('0'), false);
+    assert.equal(parseEncryptFlag('1'), true);
+    assert.equal(parseEncryptFlag('true'), true);
+    assert.throws(() => parseEncryptFlag('maybe'), ConfigError);
+
+    assert.equal(parseRetentionCount(undefined), 2);
+    assert.equal(parseRetentionCount(' 7 '), 7);
+    for (const bad of ['0', '-1', '1.5', 'abc']) {
+      assert.throws(() => parseRetentionCount(bad), ConfigError, `rejects ${bad}`);
+    }
+
+    assert.deepEqual(parseCliArgs([]), { allowRowDrop: false });
+    assert.deepEqual(parseCliArgs(['--allow-row-drop']), { allowRowDrop: true });
+    assert.throws(() => parseCliArgs(['--unknown']), ConfigError);
   });
 
   it('refuses paths that docker --mount cannot carry', () => {
@@ -174,41 +217,129 @@ describe('config', () => {
 });
 
 describe('retention', () => {
-  const day = (n) => ({
-    name: `d${String(n).padStart(3, '0')}`,
-    time: new Date(Date.UTC(2026, 10, 24, 12) - n * 86_400_000),
-  });
+  const day = (n, encrypted = true) => {
+    const time = new Date(Date.UTC(2026, 10, 24, 12) - n * 86_400_000);
+    const stamp = time
+      .toISOString()
+      .replace(/[-:]/g, '')
+      .replace(/\.\d{3}Z$/, 'Z');
+    return {
+      name: `clickmoji-${stamp}${encrypted ? '.dump.age' : '.dump'}`,
+      time,
+    };
+  };
 
-  it('keeps exactly 14 of 100 daily copies: 7 daily, 4 weekly, 3 monthly', () => {
-    const entries = Array.from({ length: 100 }, (_, i) => day(i));
+  it('keeps exactly 2 newest of 10 copies by default', () => {
+    const entries = Array.from({ length: 10 }, (_, i) => day(i));
     const { keep, remove } = selectRetention(entries);
-    assert.equal(keep.length, 14);
-    assert.equal(remove.length, 86);
-    for (let i = 0; i < 7; i += 1)
-      assert.ok(keep.includes(`d${String(i).padStart(3, '0')}`), `newest day ${i} kept`);
+    assert.deepEqual(keep, [entries[0].name, entries[1].name]);
+    assert.equal(remove.length, 8);
   });
 
-  it('keeps everything when there are fewer than 14 copies in few periods', () => {
-    const entries = [day(0), day(1), day(2)];
+  it('keeps everything when there are fewer copies than the limit', () => {
+    const entries = [day(0)];
     assert.deepEqual(selectRetention(entries).remove, []);
   });
 
-  it('keeps one copy per day for the daily tier, even with several per day', () => {
-    const entries = [];
-    for (let n = 0; n < 100; n += 1) {
-      entries.push({ name: `a${n}`, time: new Date(day(n).time.getTime() + 3_600_000) });
-      entries.push({ name: `b${n}`, time: new Date(day(n).time.getTime()) });
+  it('recognizes both .dump and .dump.age across multiple copies per day and excludes temp names', () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'clickmoji-mixed-ret-'));
+    try {
+      const files = [
+        'clickmoji-20261124T120000Z.dump',
+        'clickmoji-20261124T090000Z.dump.age',
+        'clickmoji-20261123T120000Z.dump',
+        'clickmoji-20261122T120000Z.dump.age',
+        '.partial-clickmoji-20261125T120000Z.dump.age',
+        '.partial-clickmoji-20261125T120000Z.dump',
+        'dump.custom',
+        'clickmoji-20261125T120000Z.dump.tmp',
+      ];
+      for (const f of files) writeFileSync(path.join(dir, f), 'x');
+      const listed = listBackups(dir);
+      assert.equal(listed.length, 4, 'only recognized completed formats are listed');
+      const { keep, remove } = selectRetention(listed, 2);
+      assert.deepEqual(keep.sort(), [
+        'clickmoji-20261124T090000Z.dump.age',
+        'clickmoji-20261124T120000Z.dump',
+      ]);
+      assert.deepEqual(remove.sort(), [
+        'clickmoji-20261122T120000Z.dump.age',
+        'clickmoji-20261123T120000Z.dump',
+      ]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
     }
-    const { keep } = selectRetention(entries);
-    assert.equal(keep.length, 14);
-    const dayKeys = new Set(
-      entries.filter((e) => keep.includes(e.name)).map((e) => e.time.toISOString().slice(0, 10))
-    );
-    assert.equal(dayKeys.size, 14, 'no two kept copies share a calendar day');
   });
 
-  it('applies the policy constants', () => {
-    assert.deepEqual(RETENTION, { daily: 7, weekly: 4, monthly: 3 });
+  it('applies the default retention constant of 2 without weekly or monthly tiers', () => {
+    assert.equal(DEFAULT_RETENTION_COUNT, 2);
+    const entries = Array.from({ length: 10 }, (_, i) => day(i));
+    assert.equal(selectRetention(entries, 5).keep.length, 5);
+  });
+});
+
+describe('git check-ignore destination guard', () => {
+  it('accepts gitignored path and refuses non-ignored, .git, symlinked-unignored and unavailable git', () => {
+    const tmp = mkdtempSync(path.join(os.tmpdir(), 'clickmoji-git-guard-'));
+    try {
+      const repo = path.join(tmp, 'repo');
+      mkdirSync(repo);
+      assert.equal(spawnSync('git', ['init', '-q', repo]).status, 0);
+      writeFileSync(path.join(repo, '.gitignore'), '/backups/\n');
+      assert.equal(spawnSync('git', ['-C', repo, 'add', '.gitignore']).status, 0);
+      assert.equal(
+        spawnSync('git', [
+          '-C',
+          repo,
+          '-c',
+          'user.name=t',
+          '-c',
+          'user.email=t@e.invalid',
+          'commit',
+          '-q',
+          '-m',
+          'init',
+        ]).status,
+        0
+      );
+
+      // Ignored directory (even before creation) passes
+      const ignored = path.join(repo, 'backups');
+      const ok = verifyBackupDirGitIgnored({ backupDir: ignored });
+      assert.equal(ok.ok, true);
+      assert.equal(ok.inRepo, true);
+
+      // Non-ignored directory fails
+      const bad = verifyBackupDirGitIgnored({ backupDir: path.join(repo, 'plain-backups') });
+      assert.equal(bad.ok, false);
+      assert.equal(bad.key, 'notIgnored');
+      assert.equal(bad.exit, EXIT.failed);
+
+      // Repo root and .git directory fail
+      assert.equal(verifyBackupDirGitIgnored({ backupDir: repo }).key, 'notIgnored');
+      assert.equal(
+        verifyBackupDirGitIgnored({ backupDir: path.join(repo, '.git', 'backups') }).key,
+        'notIgnored'
+      );
+
+      // Symlink pointing to an unignored directory inside the repo fails on its physical path
+      const unignoredTarget = path.join(repo, 'exposed');
+      mkdirSync(unignoredTarget);
+      const link = path.join(tmp, 'alias-backups');
+      symlinkSync(unignoredTarget, link);
+      assert.equal(verifyBackupDirGitIgnored({ backupDir: link }).key, 'notIgnored');
+
+      // Unavailable git fails closed
+      const missingGit = verifyBackupDirGitIgnored({
+        backupDir: ignored,
+        gitBin: '/nonexistent/git-bin',
+      });
+      assert.equal(missingGit.ok, false);
+      assert.equal(missingGit.key, 'git');
+      assert.equal(missingGit.exit, EXIT.unavailable);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
   });
 });
 

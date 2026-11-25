@@ -10,15 +10,18 @@ import {
   readdirSync,
   readFileSync,
   rmSync,
+  statSync,
   utimesSync,
   writeFileSync,
 } from 'node:fs';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
-import { cleanupArgs } from '../docker.mjs';
+import { cleanupArgs, DockerRunner } from '../docker.mjs';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import { loadConfig } from '../config.mjs';
 import { LEDGER_NAME } from '../constants.mjs';
+import { heldLock, launchLocked } from '../lock.mjs';
+import { listBackups, runBackup, writePrivateCopy } from '../pipeline.mjs';
 import {
   containersLeft,
   daemonLog,
@@ -66,22 +69,58 @@ const tempLeft = () =>
   readdirSync(sandbox.tmp).filter((name) => name.startsWith('clickmoji-backup-'));
 
 describe('successful run', () => {
-  it('publishes a complete encrypted copy, prunes to 14 and leaves no plaintext', async () => {
-    const old = seedBackups(sandbox.backupDir, 100);
+  it('publishes a complete encrypted copy, prunes 10 fixtures to 2 newest and leaves no plaintext', async () => {
+    const old = seedBackups(sandbox.backupDir, 10);
     const result = await runWithFake(sandbox, db);
 
     assert.equal(result.ok, true);
     assert.equal(result.exit, EXIT.ok);
     assert.equal(result.name, NEW_NAME);
     const copies = listCopies(sandbox.backupDir);
-    assert.equal(copies.length, 14, 'exactly 14 copies remain');
-    assert.ok(copies.includes(NEW_NAME));
-    assert.equal(copies.filter((name) => old.includes(name)).length, 13);
+    assert.deepEqual(copies, [old[0], NEW_NAME], '2 newest copies remain');
     assert.equal(
       readFileSync(path.join(sandbox.backupDir, NEW_NAME), 'utf8'),
       'age-encryption.org/v1\nFAKE-CIPHERTEXT\n'
     );
     assert.deepEqual(tempLeft(), [], 'plaintext and temporary cluster removed');
+  });
+
+  it('respects explicit BACKUP_RETENTION_COUNT', async () => {
+    const old = seedBackups(sandbox.backupDir, 10);
+    const result = await runWithFake(sandbox, db, { BACKUP_RETENTION_COUNT: '5' });
+    assert.equal(result.ok, true);
+    const copies = listCopies(sandbox.backupDir);
+    assert.equal(copies.length, 5);
+    assert.ok(copies.includes(NEW_NAME));
+    for (const kept of old.slice(0, 4)) assert.ok(copies.includes(kept));
+  });
+
+  it('defaults to unencrypted pg_dump -Fc without age key, skips encrypt container, and shares limit with .age', async () => {
+    const existingAge = seedBackups(sandbox.backupDir, 2, { encrypted: true });
+    const env = envFor(sandbox, db);
+    delete env.BACKUP_ENCRYPT;
+    delete env.BACKUP_AGE_RECIPIENT_FILE;
+    const result = await startLockedRun({
+      backupDir: sandbox.backupDir,
+      env,
+      tempRoot: sandbox.tmp,
+    }).done;
+
+    assert.equal(result.ok, true);
+    assert.equal(result.name, 'clickmoji-20261124T120000Z.dump');
+    const copies = listCopies(sandbox.backupDir);
+    assert.deepEqual(copies, [existingAge[0], 'clickmoji-20261124T120000Z.dump']);
+    assert.equal(
+      readFileSync(path.join(sandbox.backupDir, 'clickmoji-20261124T120000Z.dump'), 'utf8'),
+      'FAKE-DUMP'
+    );
+    const created = readDockerLog(sandbox).filter((c) => c.argv[0] === 'create');
+    assert.equal(created.length, 2, 'only dump and verify containers ran');
+    assert.equal(
+      created.some((c) => c.argv.includes('age')),
+      false
+    );
+    assert.deepEqual(tempLeft(), [], 'intermediate dump.custom and temp cluster removed');
   });
 
   it('writes one status line with date, size and verification, and no secrets', async () => {
@@ -178,18 +217,52 @@ describe('failure paths keep old copies and clean up', () => {
   });
 });
 
-describe('drops against the previous good copy', () => {
-  it('flags a table that fell by more than 20% but still publishes the copy', async () => {
-    seedBackups(sandbox.backupDir, 1, { counts: { a: 100, b: 100 } });
+describe('drops against the previous accepted copy of any age', () => {
+  it('rejects a table that fell by more than 20%, preserves both old copies, and logs reason', async () => {
+    const old = seedBackups(sandbox.backupDir, 2, { counts: { a: 100, b: 100 } });
     const result = await runWithFake(sandbox, db, { FAKE_COUNTS: '{"a":10,"b":100}' });
+    assert.equal(result.ok, false);
     assert.equal(result.exit, EXIT.suspicious);
-    assert.equal(result.verify, 'suspicious');
-    assert.ok(listCopies(sandbox.backupDir).includes(NEW_NAME));
+    assert.equal(result.key, 'drop');
+    assert.deepEqual(listCopies(sandbox.backupDir).sort(), [...old].sort());
+    assert.ok(!listCopies(sandbox.backupDir).includes(NEW_NAME));
+    assert.match(readStatus(sandbox), /\tfailed\tсбой: число строк упало более чем на 20%\n$/);
+  });
+
+  it('compares against an accepted copy older than two days (e.g. 10 days old)', async () => {
+    const old = seedBackups(sandbox.backupDir, 2, {
+      startDay: 10,
+      counts: { a: 100, b: 100 },
+    });
+    const result = await runWithFake(sandbox, db, { FAKE_COUNTS: '{"a":50,"b":100}' });
+    assert.equal(result.ok, false);
+    assert.equal(result.exit, EXIT.suspicious);
+    assert.deepEqual(listCopies(sandbox.backupDir).sort(), [...old].sort());
+  });
+
+  it('single-run confirmation accepts the drop, updates baseline, and subsequent normal run passes', async () => {
+    const old = seedBackups(sandbox.backupDir, 2, {
+      startDay: 10,
+      counts: { a: 100, b: 100 },
+    });
+    const confirmed = await runWithFake(sandbox, db, { FAKE_COUNTS: '{"a":10,"b":100}' }, NOW, {
+      allowRowDrop: true,
+    });
+    assert.equal(confirmed.ok, true);
+    assert.equal(confirmed.exit, EXIT.ok);
+    assert.equal(confirmed.verify, 'ok');
+    assert.deepEqual(listCopies(sandbox.backupDir).sort(), [old[0], NEW_NAME].sort());
     const meta = JSON.parse(
       readFileSync(path.join(sandbox.backupDir, 'meta', `${NEW_NAME}.json`), 'utf8')
     );
-    assert.deepEqual(meta.flagged, ['a']);
-    assert.match(readStatus(sandbox), /\tsuspicious\t.*verify=suspicious/);
+    assert.equal(meta.verify, 'ok');
+    assert.deepEqual(meta.counts, { a: 10, b: 100 });
+
+    // Next normal run without confirmation uses updated baseline (a: 10) and succeeds.
+    const nextNow = new Date(NOW.getTime() + 86_400_000);
+    const next = await runWithFake(sandbox, db, { FAKE_COUNTS: '{"a":9,"b":100}' }, nextNow);
+    assert.equal(next.ok, true);
+    assert.equal(next.exit, EXIT.ok);
   });
 
   it('does not flag a fall of exactly 20%', async () => {
@@ -198,7 +271,240 @@ describe('drops against the previous good copy', () => {
       FAKE_COUNTS: '{"a":80}',
       FAKE_IDENTITIES: 'a\tid int4 NO',
     });
+    assert.equal(result.ok, true);
     assert.equal(result.verify, 'ok');
+  });
+});
+
+describe('encryption transition and atomic temp publish', () => {
+  it('enabling encryption deletes prior unencrypted copies only after first encrypted publish, leaving fewer than N', async () => {
+    const oldPlain = seedBackups(sandbox.backupDir, 2, {
+      encrypted: false,
+      counts: { a: 10, b: 20 },
+    });
+    const result = await runWithFake(sandbox, db, { BACKUP_ENCRYPT: '1' });
+    assert.equal(result.ok, true);
+    assert.deepEqual(listCopies(sandbox.backupDir), [NEW_NAME]);
+    for (const old of oldPlain) {
+      assert.equal(existsSync(path.join(sandbox.backupDir, old)), false);
+      assert.equal(existsSync(path.join(sandbox.backupDir, 'meta', `${old}.json`)), false);
+    }
+  });
+
+  it('enabling encryption preserves unencrypted copies when dump/verify/encrypt fails or row drop rejects', async () => {
+    const oldPlain = seedBackups(sandbox.backupDir, 2, {
+      encrypted: false,
+      counts: { a: 100, b: 100 },
+    });
+    const failed = await runWithFake(sandbox, db, {
+      BACKUP_ENCRYPT: '1',
+      FAKE_DOCKER_MODE: 'encrypt-fail',
+    });
+    assert.equal(failed.ok, false);
+    assert.deepEqual(listCopies(sandbox.backupDir).sort(), [...oldPlain].sort());
+
+    const rejected = await runWithFake(sandbox, db, {
+      BACKUP_ENCRYPT: '1',
+      FAKE_COUNTS: '{"a":10,"b":100}',
+    });
+    assert.equal(rejected.ok, false);
+    assert.equal(rejected.exit, EXIT.suspicious);
+    assert.deepEqual(listCopies(sandbox.backupDir).sort(), [...oldPlain].sort());
+  });
+
+  it('interrupted publish write leaves no partial or final copy, keeps old copies, and excludes partial names from retention', async () => {
+    const old = seedBackups(sandbox.backupDir, 2);
+    // Plant leftover partial files as if an earlier run crashed during write.
+    writeFileSync(
+      path.join(sandbox.backupDir, '.partial-clickmoji-20261125T000000Z.dump.age'),
+      'half'
+    );
+    writeFileSync(path.join(sandbox.backupDir, '.partial-clickmoji-20261125T000000Z.dump'), 'half');
+    assert.deepEqual(
+      listBackups(sandbox.backupDir)
+        .map((e) => e.name)
+        .sort(),
+      [...old].sort(),
+      'partial names excluded'
+    );
+
+    const env = envFor(sandbox, db);
+    const gate = path.join(sandbox.root, 'lock-ready');
+    const config = loadConfig(env);
+    // Run publishCopy failure directly under a real lock.
+    const holder = launchLocked(
+      sandbox.backupDir,
+      [
+        process.execPath,
+        '-e',
+        `import fs from 'node:fs'; fs.writeFileSync(${JSON.stringify(gate)}, ''); setInterval(()=>{}, 1000);`,
+      ],
+      { stdio: 'ignore' }
+    );
+    await until(() => existsSync(gate), 5000);
+    holder.kill('SIGKILL');
+    await new Promise((resolve) => holder.on('close', resolve));
+
+    const writer = launchLocked(
+      sandbox.backupDir,
+      [
+        process.execPath,
+        '--input-type=module',
+        '-e',
+        `
+        import { writeFileSync } from 'node:fs';
+        import { loadConfig } from ${JSON.stringify(path.resolve('scripts/backup/config.mjs'))};
+        import { DockerRunner } from ${JSON.stringify(path.resolve('scripts/backup/docker.mjs'))};
+        import { heldLock } from ${JSON.stringify(path.resolve('scripts/backup/lock.mjs'))};
+        import { runBackup } from ${JSON.stringify(path.resolve('scripts/backup/pipeline.mjs'))};
+        const env = ${JSON.stringify(env)};
+        const config = loadConfig(env);
+        const lock = heldLock(config.backupDir, process.env);
+        const docker = new DockerRunner({ bin: config.dockerBin, containerEnv: config.containerEnv, timeoutMs: config.dockerTimeoutMs, env });
+        const res = await runBackup({
+          config, docker, lock, now: () => new Date(${JSON.stringify(NOW.toISOString())}),
+          tempRoot: ${JSON.stringify(sandbox.tmp)},
+          publishCopy: (_src, dest) => { writeFileSync(dest, 'partial'); throw new Error('disk full'); },
+        });
+        console.log(JSON.stringify(res));
+        `,
+      ],
+      { env, stdio: ['ignore', 'pipe', 'pipe'] }
+    );
+    let out = '';
+    writer.stdout.on('data', (c) => {
+      out += c;
+    });
+    await new Promise((resolve) => writer.on('close', resolve));
+    const parsed = JSON.parse(out.trim().split('\n').pop());
+    assert.equal(parsed.ok, false);
+    assert.equal(parsed.key, 'publish');
+    assert.deepEqual(listCopies(sandbox.backupDir).sort(), [...old].sort());
+    assert.equal(existsSync(path.join(sandbox.backupDir, `.partial-${NEW_NAME}`)), false);
+    assert.equal(existsSync(path.join(sandbox.backupDir, NEW_NAME)), false);
+  });
+
+  it('partial file and directory permissions stay 0600/0700 even under permissive umask 0000', async () => {
+    mkdirSync(sandbox.backupDir, { recursive: true, mode: 0o755 });
+    chmodSync(sandbox.backupDir, 0o755);
+    const env = envFor(sandbox, db);
+    const writer = launchLocked(
+      sandbox.backupDir,
+      [
+        process.execPath,
+        '--input-type=module',
+        '-e',
+        `
+        import { statSync } from 'node:fs';
+        import { loadConfig } from ${JSON.stringify(path.resolve('scripts/backup/config.mjs'))};
+        import { DockerRunner } from ${JSON.stringify(path.resolve('scripts/backup/docker.mjs'))};
+        import { heldLock } from ${JSON.stringify(path.resolve('scripts/backup/lock.mjs'))};
+        import { runBackup, writePrivateCopy } from ${JSON.stringify(path.resolve('scripts/backup/pipeline.mjs'))};
+        process.umask(0o000);
+        const env = ${JSON.stringify(env)};
+        const config = loadConfig(env);
+        const lock = heldLock(config.backupDir, process.env);
+        const docker = new DockerRunner({ bin: config.dockerBin, containerEnv: config.containerEnv, timeoutMs: config.dockerTimeoutMs, env });
+        let partialMode = null;
+        const res = await runBackup({
+          config, docker, lock, now: () => new Date(${JSON.stringify(NOW.toISOString())}),
+          tempRoot: ${JSON.stringify(sandbox.tmp)},
+          publishCopy: (src, dest) => { writePrivateCopy(src, dest); partialMode = statSync(dest).mode & 0o777; },
+        });
+        console.log(JSON.stringify({ res, partialMode }));
+        `,
+      ],
+      { env, stdio: ['ignore', 'pipe', 'pipe'] }
+    );
+    let out = '';
+    writer.stdout.on('data', (c) => {
+      out += c;
+    });
+    await new Promise((resolve) => writer.on('close', resolve));
+    const { res, partialMode } = JSON.parse(out.trim().split('\n').pop());
+    assert.equal(res.ok, true);
+    assert.equal(partialMode, 0o600, 'partial file created with 0600 under umask 0000');
+    assert.equal(
+      statSync(sandbox.backupDir).mode & 0o777,
+      0o700,
+      'existing backupDir tightened to 0700'
+    );
+    assert.equal(
+      statSync(path.join(sandbox.backupDir, NEW_NAME)).mode & 0o777,
+      0o600,
+      'final file is 0600'
+    );
+    assert.equal(
+      statSync(path.join(sandbox.backupDir, 'meta', `${NEW_NAME}.json`)).mode & 0o777,
+      0o600,
+      'meta file is 0600'
+    );
+  });
+
+  it('re-checks git check-ignore right before publish and aborts if .gitignore drops backups mid-run', async () => {
+    const repo = path.join(sandbox.root, 'midrun-repo');
+    mkdirSync(repo);
+    assert.equal(spawnSync('git', ['init', '-q', repo]).status, 0);
+    writeFileSync(path.join(repo, '.gitignore'), '/backups/\n');
+    assert.equal(spawnSync('git', ['-C', repo, 'add', '.gitignore']).status, 0);
+    assert.equal(
+      spawnSync('git', [
+        '-C',
+        repo,
+        '-c',
+        'user.name=t',
+        '-c',
+        'user.email=t@e.invalid',
+        'commit',
+        '-q',
+        '-m',
+        'init',
+      ]).status,
+      0
+    );
+
+    const targetBackups = path.join(repo, 'backups');
+    // Flip .gitignore during the encrypt step (right before pre-publish git check-ignore).
+    const gitWrapper = path.join(sandbox.root, 'git-flip.mjs');
+    const flipState = path.join(sandbox.root, 'flipped');
+    writeFileSync(
+      gitWrapper,
+      `#!/usr/bin/env node
+import { spawnSync } from 'node:child_process';
+import { existsSync, readdirSync, writeFileSync } from 'node:fs';
+import path from 'node:path';
+const tmpRoot = ${JSON.stringify(sandbox.tmp)};
+const repo = ${JSON.stringify(repo)};
+const flipState = ${JSON.stringify(flipState)};
+if (!existsSync(flipState)) {
+  const dirs = readdirSync(tmpRoot).filter((d) => d.startsWith('clickmoji-backup-'));
+  for (const d of dirs) {
+    if (existsSync(path.join(tmpRoot, d, 'dump.age'))) {
+      writeFileSync(path.join(repo, '.gitignore'), '');
+      writeFileSync(flipState, '1');
+      break;
+    }
+  }
+}
+const r = spawnSync('git', process.argv.slice(2), { stdio: ['ignore', 'inherit', 'inherit'] });
+process.exit(r.status ?? 1);
+`,
+      { mode: 0o755 }
+    );
+    chmodSync(gitWrapper, 0o755);
+
+    const result = await runWithFake(sandbox, db, {
+      BACKUP_DIR: targetBackups,
+      BACKUP_GIT_BIN: gitWrapper,
+    });
+    assert.equal(result.ok, false);
+    assert.equal(result.key, 'notIgnored');
+    assert.equal(result.exit, EXIT.failed);
+    assert.deepEqual(listCopies(targetBackups), [], 'nothing published after mid-run unignore');
+    assert.match(
+      readStatus(sandbox),
+      /\tfailed\tсбой: каталог резервных копий не игнорируется git\n$/
+    );
   });
 });
 
@@ -622,11 +928,9 @@ describe('the status line can fail after the copy is saved', () => {
     assert.equal(result.exit, EXIT.statusFailed);
     assert.ok(listCopies(sandbox.backupDir).includes(NEW_NAME), 'the copy is there');
     assert.deepEqual(
-      listCopies(sandbox.backupDir)
-        .filter((name) => old.includes(name))
-        .sort(),
-      [...old].sort(),
-      'the copy is saved; retention keeps the three old copies'
+      listCopies(sandbox.backupDir).sort(),
+      [old[0], NEW_NAME].sort(),
+      'the copy is saved; retention keeps 2 newest copies'
     );
   });
 

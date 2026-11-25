@@ -15,7 +15,7 @@ import {
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { LEDGER_NAME } from '../constants.mjs';
+import { BACKUP_NAME_PATTERN, LEDGER_NAME } from '../constants.mjs';
 import { loadConfig } from '../config.mjs';
 import { LAUNCH_BUSY, LAUNCH_FAILED, launchLocked } from '../lock.mjs';
 import { reportBusy } from '../pipeline.mjs';
@@ -88,6 +88,7 @@ export function envFor(sandbox, db, extra = {}) {
     DATABASE_URL: db.url,
     BACKUP_DIR: sandbox.backupDir,
     BACKUP_STATUS_FILE: sandbox.statusFile,
+    BACKUP_ENCRYPT: '1',
     BACKUP_AGE_RECIPIENT_FILE: sandbox.recipientFile,
     BACKUP_DOCKER_BIN: FAKE_DOCKER,
     FAKE_DOCKER_LOG: sandbox.logFile,
@@ -122,7 +123,7 @@ export function daemonLog(sandbox) {
 // One backup run with the fake docker, as the lock holder in a child process (the way cli.mjs runs
 // it). `child` is the writer; `done` resolves to the run's result. A run that finds the lock held
 // reports busy, exactly as cli.mjs does.
-export function startLockedRun({ backupDir, env, now = NOW, tempRoot }) {
+export function startLockedRun({ backupDir, env, now = NOW, tempRoot, allowRowDrop = false }) {
   const child = launchLocked(backupDir, [process.execPath, RUN_LOCKED], {
     env,
     stdio: ['pipe', 'pipe', 'pipe'],
@@ -133,7 +134,7 @@ export function startLockedRun({ backupDir, env, now = NOW, tempRoot }) {
     stdout += chunk;
   });
   child.stderr.on('data', () => {});
-  child.stdin.end(JSON.stringify({ env, now: now.toISOString(), tempRoot }));
+  child.stdin.end(JSON.stringify({ env, now: now.toISOString(), tempRoot, allowRowDrop }));
   const done = new Promise((resolve, reject) => {
     child.on('error', reject);
     child.on('close', (code) => {
@@ -150,15 +151,25 @@ export function startLockedRun({ backupDir, env, now = NOW, tempRoot }) {
 }
 
 // Runs one fake-docker backup as the lock holder and returns its result.
-export function runWithFake(sandbox, db, extra = {}, now = NOW) {
+export function runWithFake(sandbox, db, extra = {}, now = NOW, { allowRowDrop = false } = {}) {
   const env = envFor(sandbox, db, extra);
-  return startLockedRun({ backupDir: sandbox.backupDir, env, now, tempRoot: sandbox.tmp }).done;
+  return startLockedRun({
+    backupDir: env.BACKUP_DIR,
+    env,
+    now,
+    tempRoot: sandbox.tmp,
+    allowRowDrop,
+  }).done;
 }
 
 // Spawns the real CLI and captures what it prints.
-export function runCli(env) {
+export function runCli(env, args = [], { cwd = undefined } = {}) {
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [CLI], { env, stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn(process.execPath, [CLI, ...args], {
+      env,
+      cwd,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
     let stdout = '';
     let stderr = '';
     child.stdout.on('data', (chunk) => {
@@ -172,23 +183,29 @@ export function runCli(env) {
   });
 }
 
-// Old copies, one per day going back from NOW, optionally with meta counts.
-export function seedBackups(backupDir, count, { counts = null } = {}) {
+// Old copies, going back from NOW, optionally with meta counts.
+export function seedBackups(
+  backupDir,
+  count,
+  { counts = null, encrypted = true, startDay = 1 } = {}
+) {
   mkdirSync(path.join(backupDir, 'meta'), { recursive: true });
   const names = [];
-  for (let day = 1; day <= count; day += 1) {
+  const suffix = encrypted ? '.dump.age' : '.dump';
+  for (let i = 0; i < count; i += 1) {
+    const day = startDay + i;
     const when = new Date(NOW.getTime() - day * 86_400_000);
     const iso = when
       .toISOString()
       .replace(/[-:]/g, '')
       .replace(/\.\d{3}Z$/, 'Z');
-    const name = `clickmoji-${iso}.dump.age`;
+    const name = `clickmoji-${iso}${suffix}`;
     writeFileSync(path.join(backupDir, name), `old ${day}`);
     names.push(name);
-    if (day === 1 && counts) {
+    if (i === 0 && counts) {
       writeFileSync(
         path.join(backupDir, 'meta', `${name}.json`),
-        JSON.stringify({ name, verify: 'ok', counts })
+        JSON.stringify({ name, encrypted, verify: 'ok', counts })
       );
     }
   }
@@ -198,7 +215,7 @@ export function seedBackups(backupDir, count, { counts = null } = {}) {
 export function listCopies(backupDir) {
   if (!existsSync(backupDir)) return [];
   return readdirSync(backupDir)
-    .filter((name) => name.endsWith('.dump.age'))
+    .filter((name) => BACKUP_NAME_PATTERN.test(name))
     .sort();
 }
 

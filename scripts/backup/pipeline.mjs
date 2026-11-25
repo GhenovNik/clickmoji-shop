@@ -1,29 +1,36 @@
-// One verified backup run: dump -> restore and compare -> encrypt -> publish -> prune.
-// Plaintext and the temporary PostgreSQL cluster live only in a private temp directory,
-// removed on success, failure and interruption. Old copies are pruned only after a new
-// copy is complete, and only the retention policy decides what is removed.
+// One verified backup run: dump -> restore and compare -> [encrypt] -> git check -> publish -> prune.
+// Plaintext and the temporary PostgreSQL cluster live only in a private temp directory outside any
+// repository, removed on success, failure and interruption. When encryption is off (default), the
+// verified custom-format dump is stored in backupDir as an explicit operator exception; when
+// encryption is enabled, only ciphertext enters backupDir, and after the first published encrypted
+// copy all prior recognized unencrypted copies are removed before pruning.
 import {
+  chmodSync,
   closeSync,
-  copyFileSync,
+  constants,
   existsSync,
+  fstatSync,
   fsyncSync,
   mkdirSync,
   mkdtempSync,
   openSync,
   readdirSync,
   readFileSync,
+  readSync,
   renameSync,
   rmSync,
   statSync,
   writeFileSync,
+  writeSync,
 } from 'node:fs';
 import crypto from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import {
+  BACKUP_ENCRYPTED_SUFFIX,
   BACKUP_NAME_PATTERN,
+  BACKUP_PLAIN_SUFFIX,
   BACKUP_PREFIX,
-  BACKUP_SUFFIX,
   BUILD_TIMEOUT_MS,
   DROP_THRESHOLD_PERCENT,
   EXIT,
@@ -39,7 +46,13 @@ import {
   parseIdentities,
   parseMigration,
 } from './compare.mjs';
-import { checkStatusTarget } from './config.mjs';
+import { checkStatusTarget, REPO_ROOT } from './config.mjs';
+import {
+  canonicalPath,
+  isInsidePath,
+  isTempRootUnsafeForGit,
+  verifyBackupDirGitIgnored,
+} from './git.mjs';
 import { pidAlive } from './lock.mjs';
 import { Ledger, LedgerError } from './ledger.mjs';
 import { selectRetention } from './retention.mjs';
@@ -88,6 +101,56 @@ function sha256(file) {
 function fsyncFile(file) {
   const fd = openSync(file, 'r');
   try {
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
+  }
+}
+
+function ensurePrivateDir(dir) {
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  chmodSync(dir, 0o700);
+}
+
+// Creates destFile with mode 0600 from its very creation (even under a permissive umask)
+// and copies sourceFile without exposing a world-readable intermediate file.
+export function writePrivateCopy(sourceFile, destFile) {
+  const flags = constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW;
+  const srcFd = openSync(sourceFile, 'r');
+  let destFd = null;
+  try {
+    destFd = openSync(destFile, flags, 0o600);
+    if ((fstatSync(destFd).mode & 0o777) !== 0o600) {
+      throw new Error('destination file permissions are not 0600');
+    }
+    const buf = Buffer.allocUnsafe(64 * 1024);
+    for (;;) {
+      const bytesRead = readSync(srcFd, buf, 0, buf.length, null);
+      if (bytesRead === 0) break;
+      let offset = 0;
+      while (offset < bytesRead) {
+        offset += writeSync(destFd, buf, offset, bytesRead - offset);
+      }
+    }
+    fsyncSync(destFd);
+  } finally {
+    if (destFd !== null) closeSync(destFd);
+    closeSync(srcFd);
+  }
+}
+
+function writePrivateText(destFile, text) {
+  const flags = constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW;
+  const fd = openSync(destFile, flags, 0o600);
+  try {
+    if ((fstatSync(fd).mode & 0o777) !== 0o600) {
+      throw new Error('metadata file permissions are not 0600');
+    }
+    const data = Buffer.from(text, 'utf8');
+    let offset = 0;
+    while (offset < data.length) {
+      offset += writeSync(fd, data, offset, data.length - offset);
+    }
     fsyncSync(fd);
   } finally {
     closeSync(fd);
@@ -150,6 +213,7 @@ async function sweepStaleTemp(tempRoot, backupDir, docker) {
 }
 
 // Completed copies in the backup directory, by the time in their file name.
+// Recognizes both unencrypted (.dump) and encrypted (.dump.age) copies and ignores temp files.
 export function listBackups(backupDir) {
   return readdirSync(backupDir)
     .map((name) => ({ name, match: BACKUP_NAME_PATTERN.exec(name) }))
@@ -157,36 +221,60 @@ export function listBackups(backupDir) {
     .map((entry) => {
       const raw = entry.match[1];
       const iso = `${raw.slice(0, 4)}-${raw.slice(4, 6)}-${raw.slice(6, 8)}T${raw.slice(9, 11)}:${raw.slice(11, 13)}:${raw.slice(13, 15)}Z`;
-      return { name: entry.name, time: new Date(iso) };
+      return {
+        name: entry.name,
+        time: new Date(iso),
+        encrypted: Boolean(entry.match[2]),
+      };
     });
 }
 
-// Row counts of the newest copy that passed or was flagged in verification, if any.
+function isValidCounts(counts) {
+  if (typeof counts !== 'object' || counts === null || Array.isArray(counts)) return false;
+  return Object.values(counts).every((value) => Number.isInteger(value) && value >= 0);
+}
+
+// Row counts of the newest accepted copy of any age, if any.
+// Unreadable or malformed metadata fails verification closed rather than ignoring the baseline.
 function readPreviousCounts(backupDir) {
   const metaDir = path.join(backupDir, META_DIR);
   if (!existsSync(metaDir)) return null;
-  const names = readdirSync(metaDir)
-    .filter((name) => name.endsWith('.json') && !name.startsWith('.partial-'))
-    .sort()
-    .reverse();
-  for (const name of names) {
+  const backups = listBackups(backupDir).sort(
+    (a, b) => b.time - a.time || (a.name < b.name ? 1 : -1)
+  );
+  for (const entry of backups) {
+    const metaPath = path.join(metaDir, `${entry.name}.json`);
+    let raw;
+    try {
+      raw = readFileSync(metaPath, 'utf8');
+    } catch (error) {
+      if (error.code === 'ENOENT') continue;
+      throw new StepError('verify', EXIT.failed);
+    }
     let meta;
     try {
-      meta = JSON.parse(readFileSync(path.join(metaDir, name), 'utf8'));
+      meta = JSON.parse(raw);
     } catch {
-      continue;
+      throw new StepError('verify', EXIT.failed);
     }
-    if (meta.verify === 'ok' || meta.verify === 'suspicious')
-      return new Map(Object.entries(meta.counts));
+    if (typeof meta !== 'object' || meta === null) {
+      throw new StepError('verify', EXIT.failed);
+    }
+    if (meta.verify === 'suspicious') continue;
+    if (meta.verify !== 'ok' || !isValidCounts(meta.counts)) {
+      throw new StepError('verify', EXIT.failed);
+    }
+    return new Map(Object.entries(meta.counts));
   }
   return null;
 }
 
-// Copy into the backup directory under a partial name, then rename. A reader never sees
-// a partial copy, and a failure leaves no partial files behind.
-function publish({ backupDir, encryptedFile, name, meta }) {
+// Copy into the backup directory under a partial name (0600 from creation), then rename.
+// A reader never sees a partial copy, and a failure leaves no partial files behind.
+function publish({ backupDir, sourceFile, name, meta, copyFile = writePrivateCopy }) {
+  ensurePrivateDir(backupDir);
   const metaDir = path.join(backupDir, META_DIR);
-  mkdirSync(metaDir, { recursive: true, mode: 0o700 });
+  ensurePrivateDir(metaDir);
   const partialDump = path.join(backupDir, `.partial-${name}`);
   const partialMeta = path.join(metaDir, `.partial-${name}.json`);
   const finalDump = path.join(backupDir, name);
@@ -194,9 +282,11 @@ function publish({ backupDir, encryptedFile, name, meta }) {
   let dumpMoved = false;
   try {
     if (existsSync(finalDump)) throw new Error('name taken');
-    copyFileSync(encryptedFile, partialDump);
+    rmSync(partialDump, { force: true });
+    rmSync(partialMeta, { force: true });
+    copyFile(sourceFile, partialDump);
     fsyncFile(partialDump);
-    writeFileSync(partialMeta, JSON.stringify(meta), { mode: 0o600 });
+    writePrivateText(partialMeta, JSON.stringify(meta));
     renameSync(partialDump, finalDump);
     dumpMoved = true;
     renameSync(partialMeta, finalMeta);
@@ -208,10 +298,24 @@ function publish({ backupDir, encryptedFile, name, meta }) {
   }
 }
 
+function removeCopyWithMeta(backupDir, name) {
+  rmSync(path.join(backupDir, name), { force: true });
+  rmSync(path.join(backupDir, META_DIR, `${name}.json`), { force: true });
+}
+
 // Throws StepError for a failed step, or Interrupted when the run is aborted.
 // The lock is checked again before the copy becomes visible and before anything is pruned:
 // a run that no longer holds it must not touch the shared backup names.
-async function executeBackup({ config, docker, now, tempDir, lock }) {
+async function executeBackup({
+  config,
+  docker,
+  now,
+  tempDir,
+  lock,
+  allowRowDrop = false,
+  env = process.env,
+  publishCopy = writePrivateCopy,
+}) {
   // A container step counts only when its start exited 0 AND the daemon has been seen to hold no
   // container of its name. A zero exit alone is not proof: the daemon may be unreachable or still
   // hold it. A failure of the runner itself (a ledger that cannot be written) is a containers failure.
@@ -276,49 +380,82 @@ async function executeBackup({ config, docker, now, tempDir, lock }) {
 
   const previous = readPreviousCounts(config.backupDir);
   const drops = previous ? findDrops(previous, counts, DROP_THRESHOLD_PERCENT) : [];
-  const verify = drops.length > 0 ? 'suspicious' : 'ok';
+  if (drops.length > 0 && !allowRowDrop) {
+    throw new StepError('drop', EXIT.suspicious);
+  }
 
-  const encryptedFile = path.join(tempDir, 'dump.age');
-  await run(
-    encryptArgs({
-      name: containerName('encrypt'),
-      workDir: tempDir,
-      recipientFile: config.recipientFile,
-    }),
-    'encrypt'
-  );
-  if (!isNonEmptyFile(encryptedFile)) throw new StepError('encrypt', EXIT.failed);
+  let sourceToPublish = dumpFile;
+  if (config.encrypt) {
+    const encryptedFile = path.join(tempDir, 'dump.age');
+    await run(
+      encryptArgs({
+        name: containerName('encrypt'),
+        workDir: tempDir,
+        recipientFile: config.recipientFile,
+      }),
+      'encrypt'
+    );
+    if (!isNonEmptyFile(encryptedFile)) throw new StepError('encrypt', EXIT.failed);
+    sourceToPublish = encryptedFile;
+  }
 
-  const name = `${BACKUP_PREFIX}${stamp(startedAt)}${BACKUP_SUFFIX}`;
+  // Re-check git ignore on the physical path right before writing to backupDir.
+  const gitCheck = verifyBackupDirGitIgnored({
+    backupDir: config.backupDir,
+    gitBin: config.gitBin,
+    env,
+    timeoutMs: config.dockerTimeoutMs,
+  });
+  if (!gitCheck.ok) throw new StepError(gitCheck.key, gitCheck.exit);
+  if (gitCheck.repoRoot && isInsidePath(canonicalPath(config.statusFile), gitCheck.repoRoot)) {
+    throw new StepError('notIgnored', EXIT.failed);
+  }
+
+  const suffix = config.encrypt ? BACKUP_ENCRYPTED_SUFFIX : BACKUP_PLAIN_SUFFIX;
+  const name = `${BACKUP_PREFIX}${stamp(startedAt)}${suffix}`;
   const meta = {
     name,
+    encrypted: config.encrypt,
     createdAt: startedAt.toISOString(),
-    sizeBytes: statSync(encryptedFile).size,
-    sha256: sha256(encryptedFile),
-    verify,
+    sizeBytes: statSync(sourceToPublish).size,
+    sha256: sha256(sourceToPublish),
+    verify: 'ok',
     migration,
     counts: Object.fromEntries(counts),
-    flagged: drops.map((drop) => drop.table),
+    flagged: [],
+    ...(drops.length > 0 ? { confirmedRowDrops: drops.map((drop) => drop.table) } : {}),
   };
   if (!lock.held()) throw new StepError('busy', EXIT.busy);
-  publish({ backupDir: config.backupDir, encryptedFile, name, meta });
+  publish({
+    backupDir: config.backupDir,
+    sourceFile: sourceToPublish,
+    name,
+    meta,
+    copyFile: publishCopy,
+  });
 
-  // Pruning runs only after the new copy is in place, and only for the lock holder.
+  // Transition & pruning run only after the new copy is completely published, and only for the lock holder.
   let pruned = 'ok';
   if (!lock.held()) {
     pruned = 'skipped';
   } else {
     try {
-      const { remove } = selectRetention(listBackups(config.backupDir));
+      // Enabling encryption purges all prior recognized unencrypted copies immediately after the
+      // first encrypted copy is safely published, then applies normal N-copy retention.
+      if (config.encrypt) {
+        for (const existing of listBackups(config.backupDir)) {
+          if (!existing.encrypted) removeCopyWithMeta(config.backupDir, existing.name);
+        }
+      }
+      const { remove } = selectRetention(listBackups(config.backupDir), config.keepCount);
       for (const old of remove) {
-        rmSync(path.join(config.backupDir, old), { force: true });
-        rmSync(path.join(config.backupDir, META_DIR, `${old}.json`), { force: true });
+        removeCopyWithMeta(config.backupDir, old);
       }
     } catch {
       pruned = 'incomplete';
     }
   }
-  return { name, sizeBytes: meta.sizeBytes, verify, pruned };
+  return { name, sizeBytes: meta.sizeBytes, verify: 'ok', pruned };
 }
 
 // Containers a previous run recorded and could not clear. Each is reconciled from the state the
@@ -389,19 +526,20 @@ function classify(error) {
   return { ok: false, key: 'internal', exit: EXIT.failed };
 }
 
-// `saved` is true when the encrypted copy was published, whatever happened to cleanup afterwards.
+// `saved` is true when the copy was published, whatever happened to cleanup afterwards.
 // A status line that cannot be written (the path no longer qualifies, or the write fails) is
 // reported as statusWritten: false. When the copy was saved, that gets its own exit code, so the
 // copy is not mistaken for a missing one.
 function report(config, now, result, saved = false) {
   const when = now();
+  const detailText = result.detail ?? (result.ok ? null : MESSAGES[result.key]);
   const line = result.ok
     ? formatStatusLine({
         now: when,
-        outcome: result.verify === 'suspicious' ? 'suspicious' : 'ok',
+        outcome: 'ok',
         detail: `size=${result.sizeBytes} verify=${result.verify} file=${result.name} prune=${result.pruned}`,
       })
-    : formatStatusLine({ now: when, outcome: 'failed', detail: MESSAGES[result.key] });
+    : formatStatusLine({ now: when, outcome: 'failed', detail: detailText });
   // The status path is checked again: a file may have been replaced since configuration.
   let statusWritten = true;
   try {
@@ -410,11 +548,7 @@ function report(config, now, result, saved = false) {
   } catch {
     statusWritten = false; // nothing is written to a path that no longer qualifies
   }
-  const outcomeExit = result.ok
-    ? result.verify === 'suspicious'
-      ? EXIT.suspicious
-      : EXIT.ok
-    : result.exit;
+  const outcomeExit = result.ok ? EXIT.ok : result.exit;
   return {
     ...result,
     saved,
@@ -434,8 +568,43 @@ export async function runBackup({
   lock,
   now = () => new Date(),
   tempRoot = os.tmpdir(),
+  allowRowDrop = false,
+  env = process.env,
+  publishCopy = writePrivateCopy,
 }) {
-  mkdirSync(config.backupDir, { recursive: true, mode: 0o700 });
+  // Check git ignore before creating or modifying backupDir so a non-ignored path stays untouched.
+  const gitCheck = verifyBackupDirGitIgnored({
+    backupDir: config.backupDir,
+    gitBin: config.gitBin,
+    env,
+    timeoutMs: config.dockerTimeoutMs,
+  });
+  if (!gitCheck.ok) {
+    return reportFailure(config, gitCheck.key, gitCheck.exit, now);
+  }
+  if (gitCheck.repoRoot && isInsidePath(canonicalPath(config.statusFile), gitCheck.repoRoot)) {
+    return reportFailure(config, 'notIgnored', EXIT.failed, now);
+  }
+
+  // Ensure temporary plaintext storage is strictly outside any repository and outside backupDir.
+  try {
+    const resolvedTmp = canonicalPath(tempRoot);
+    if (
+      isInsidePath(resolvedTmp, canonicalPath(REPO_ROOT)) ||
+      isInsidePath(resolvedTmp, canonicalPath(config.backupDir)) ||
+      isTempRootUnsafeForGit(resolvedTmp, {
+        gitBin: config.gitBin,
+        env,
+        timeoutMs: config.dockerTimeoutMs,
+      })
+    ) {
+      return reportFailure(config, 'cleanup', EXIT.failed, now);
+    }
+  } catch {
+    return reportFailure(config, 'cleanup', EXIT.failed, now);
+  }
+
+  ensurePrivateDir(config.backupDir);
   if (!lock?.held()) return reportBusy(config, now);
 
   const ledger = new Ledger(config.backupDir);
@@ -453,7 +622,19 @@ export async function runBackup({
       JSON.stringify({ pid: process.pid, backupKey: backupKey(config.backupDir) }),
       { mode: 0o600 }
     );
-    result = { ok: true, ...(await executeBackup({ config, docker, now, tempDir, lock })) };
+    result = {
+      ok: true,
+      ...(await executeBackup({
+        config,
+        docker,
+        now,
+        tempDir,
+        lock,
+        allowRowDrop,
+        env,
+        publishCopy,
+      })),
+    };
     saved = true; // publish is the last step that can fail; nothing after it can undo it
   } catch (error) {
     result = classify(error);
@@ -506,8 +687,12 @@ async function releaseQuietly(lock) {
   }
 }
 
+export function reportFailure(config, key, exit, now = () => new Date(), detail = undefined) {
+  return report(config, now, { ok: false, key, exit, detail });
+}
+
 // The outcome of a run that could not take the lock. Used by the entry point, which holds no lock
 // when another process does.
 export function reportBusy(config, now = () => new Date()) {
-  return report(config, now, { ok: false, key: 'busy', exit: EXIT.busy });
+  return reportFailure(config, 'busy', EXIT.busy, now);
 }

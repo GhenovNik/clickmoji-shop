@@ -8,7 +8,7 @@ import { runBackup } from '../pipeline.mjs';
 
 let input = '';
 for await (const chunk of process.stdin) input += chunk;
-const { env, now, tempRoot } = JSON.parse(input);
+const { env, now, tempRoot, allowRowDrop = false } = JSON.parse(input);
 
 const config = loadConfig(env);
 const lock = heldLock(config.backupDir, process.env);
@@ -24,5 +24,13 @@ for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
   });
 }
 
-const result = await runBackup({ config, docker, lock, now: () => new Date(now), tempRoot });
+const result = await runBackup({
+  config,
+  docker,
+  lock,
+  now: () => new Date(now),
+  tempRoot,
+  allowRowDrop,
+  env,
+});
 process.stdout.write(`${JSON.stringify(result)}\n`);

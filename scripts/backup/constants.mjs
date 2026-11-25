@@ -18,12 +18,14 @@ export const DROP_THRESHOLD_PERCENT = 20;
 export const DOCKER_TIMEOUT_MS = 20_000;
 export const BUILD_TIMEOUT_MS = 15 * 60_000;
 
-// Keep at most 7 daily, 4 weekly and 3 monthly copies (14 in total).
-export const RETENTION = Object.freeze({ daily: 7, weekly: 4, monthly: 3 });
+// Keep the N newest successful copies (default 2).
+export const DEFAULT_RETENTION_COUNT = 2;
 
 export const BACKUP_PREFIX = 'clickmoji-';
-export const BACKUP_SUFFIX = '.dump.age';
-export const BACKUP_NAME_PATTERN = /^clickmoji-(\d{8}T\d{6}Z)\.dump\.age$/;
+export const BACKUP_PLAIN_SUFFIX = '.dump';
+export const BACKUP_ENCRYPTED_SUFFIX = '.dump.age';
+export const BACKUP_SUFFIX = BACKUP_ENCRYPTED_SUFFIX;
+export const BACKUP_NAME_PATTERN = /^clickmoji-(\d{8}T\d{6}Z)\.dump(\.age)?$/;
 export const META_DIR = 'meta';
 export const LOCK_NAME = '.backup.lock';
 // Containers started by a run that the daemon has not yet been seen to remove (the recovery marker).
@@ -50,8 +52,11 @@ export const EXIT = Object.freeze({
 export const MESSAGES = Object.freeze({
   docker: 'сбой: docker недоступен',
   image: 'сбой: не удалось получить образ',
+  git: 'сбой: git недоступен',
+  notIgnored: 'сбой: каталог резервных копий не игнорируется git',
   dump: 'сбой: снятие не удалось',
   verify: 'сбой: проверка не пройдена',
+  drop: 'сбой: число строк упало более чем на 20%',
   encrypt: 'сбой: шифрование не удалось',
   publish: 'сбой: публикация не удалась',
   busy: 'сбой: уже выполняется другое снятие',

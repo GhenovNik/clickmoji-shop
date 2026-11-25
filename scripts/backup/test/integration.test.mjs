@@ -193,6 +193,7 @@ describe(
         DATABASE_URL: state.url,
         BACKUP_DIR: sandbox.backupDir,
         BACKUP_STATUS_FILE: sandbox.statusFile,
+        BACKUP_ENCRYPT: '1',
         BACKUP_AGE_RECIPIENT_FILE: sandbox.recipientFile,
       };
       const result = spawnSync(process.execPath, [CLI], { env, encoding: 'utf8' });
@@ -327,6 +328,7 @@ describe(
           DATABASE_URL: state.url,
           BACKUP_DIR: sandbox.backupDir,
           BACKUP_STATUS_FILE: sandbox.statusFile,
+          BACKUP_ENCRYPT: '1',
           BACKUP_AGE_RECIPIENT_FILE: sandbox.recipientFile,
         };
         child = spawn(process.execPath, [CLI], { env, stdio: ['ignore', 'pipe', 'pipe'] });

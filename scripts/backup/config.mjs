@@ -1,9 +1,12 @@
-// Configuration for the verified backup. Everything comes from the environment;
-// nothing has a default for the database address, the recipient, or the paths.
+// Configuration for the verified backup. Everything comes from the environment
+// (plus the single-run --allow-row-drop CLI flag); nothing has a default for the
+// database address or paths. Encryption is disabled by default (unencrypted pg_dump -Fc)
+// and enabled explicitly with BACKUP_ENCRYPT=1.
 import { lstatSync, readFileSync, realpathSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { DOCKER_TIMEOUT_MS } from './constants.mjs';
+import { DEFAULT_RETENTION_COUNT, DOCKER_TIMEOUT_MS } from './constants.mjs';
+import { canonicalPath, isInsidePath } from './git.mjs';
 
 export const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 
@@ -21,34 +24,12 @@ function requireAbsolute(env, name) {
   return path.resolve(value);
 }
 
-function isInside(child, parent) {
-  const relative = path.relative(parent, child);
-  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
-}
-
-// The path with every symlink resolved. Parts that do not exist yet are kept as written, after
-// the nearest existing ancestor has been resolved.
-function canonical(target) {
-  let current = path.resolve(target);
-  const missing = [];
-  for (;;) {
-    try {
-      return path.join(realpathSync(current), ...missing.reverse());
-    } catch (error) {
-      const parent = path.dirname(current);
-      if (error.code !== 'ENOENT' || parent === current) throw error;
-      missing.push(path.basename(current));
-      current = parent;
-    }
-  }
-}
-
 // The status file is only ever appended to. It must not be a place where backup data lives:
 // not inside the backup directory under any alias (symlinked parents included), not a symlink,
 // and not a hard link, since a second name for a file could be a copy or a copy's metadata.
 // Checked before anything runs, and again before each status write.
 export function checkStatusTarget(statusFile, backupDir) {
-  if (isInside(canonical(statusFile), canonical(backupDir))) {
+  if (isInsidePath(canonicalPath(statusFile), canonicalPath(backupDir))) {
     throw new ConfigError('BACKUP_STATUS_FILE: путь внутри каталога резервных копий');
   }
   let stat;
@@ -133,10 +114,53 @@ export function readRecipient(text) {
   return lines[0];
 }
 
-export function loadConfig(
-  env = process.env,
-  { repoRoot = REPO_ROOT, readFile = readFileSync } = {}
-) {
+export function parseEncryptFlag(raw) {
+  if (raw === undefined || raw.trim() === '') return false;
+  const value = raw.trim().toLowerCase();
+  if (value === '1' || value === 'true' || value === 'yes' || value === 'on') return true;
+  if (value === '0' || value === 'false' || value === 'no' || value === 'off') return false;
+  throw new ConfigError('BACKUP_ENCRYPT: ожидается 0 или 1');
+}
+
+export function parseRetentionCount(raw) {
+  if (raw === undefined || raw.trim() === '') return DEFAULT_RETENTION_COUNT;
+  const value = raw.trim();
+  if (!/^\d+$/.test(value)) {
+    throw new ConfigError('BACKUP_RETENTION_COUNT: нужно целое число не меньше 1');
+  }
+  const count = Number(value);
+  if (!Number.isSafeInteger(count) || count < 1) {
+    throw new ConfigError('BACKUP_RETENTION_COUNT: нужно целое число не меньше 1');
+  }
+  return count;
+}
+
+// Milliseconds a management docker call may take (see DOCKER_TIMEOUT_MS). Unset means the default.
+export function parseDockerTimeout(raw) {
+  if (raw === undefined || raw.trim() === '') return DOCKER_TIMEOUT_MS;
+  const value = raw.trim();
+  if (!/^\d+$/.test(value)) throw new ConfigError('BACKUP_DOCKER_TIMEOUT_MS: нужно целое число мс');
+  const ms = Number(value);
+  if (ms < 100 || ms > 600_000) throw new ConfigError('BACKUP_DOCKER_TIMEOUT_MS: от 100 до 600000');
+  return ms;
+}
+
+export function parseCliArgs(argv = []) {
+  let allowRowDrop = false;
+  for (const arg of argv) {
+    if (arg === '--allow-row-drop') {
+      allowRowDrop = true;
+    } else {
+      throw new ConfigError(`неизвестный параметр запуска: ${arg}`);
+    }
+  }
+  return { allowRowDrop };
+}
+
+// Loads status/backup target metadata before recipient validation so that when encryption
+// is enabled and the public key is missing or unreadable, the CLI can still record the
+// failure reason to BACKUP_STATUS_FILE when possible.
+export function loadBaseConfig(env = process.env, { repoRoot = REPO_ROOT } = {}) {
   const rawUrl = env.DATABASE_URL?.trim();
   if (!rawUrl) throw new ConfigError('DATABASE_URL не задан');
   let protocol;
@@ -154,41 +178,61 @@ export function loadConfig(
 
   const backupDir = requireAbsolute(env, 'BACKUP_DIR');
   const statusFile = requireAbsolute(env, 'BACKUP_STATUS_FILE');
-  const recipientFile = requireAbsolute(env, 'BACKUP_AGE_RECIPIENT_FILE');
 
-  for (const [name, target] of [
-    ['BACKUP_DIR', backupDir],
-    ['BACKUP_STATUS_FILE', statusFile],
-  ]) {
-    if (isInside(target, repoRoot)) throw new ConfigError(`${name}: путь внутри репозитория`);
+  const resolvedRepoRoot = canonicalPath(repoRoot);
+  if (
+    isInsidePath(statusFile, repoRoot) ||
+    isInsidePath(canonicalPath(statusFile), resolvedRepoRoot)
+  ) {
+    throw new ConfigError('BACKUP_STATUS_FILE: путь внутри репозитория');
   }
   checkStatusTarget(statusFile, backupDir);
 
-  let recipient;
-  try {
-    recipient = readRecipient(readFile(recipientFile, 'utf8'));
-  } catch (error) {
-    if (error instanceof ConfigError) throw error;
-    throw new ConfigError('BACKUP_AGE_RECIPIENT_FILE: файл не читается');
+  const rawTmp = env.TMPDIR?.trim();
+  if (rawTmp) {
+    if (!path.isAbsolute(rawTmp)) throw new ConfigError('TMPDIR: нужен абсолютный путь');
+    const resolvedTmp = canonicalPath(rawTmp);
+    if (
+      isInsidePath(resolvedTmp, resolvedRepoRoot) ||
+      isInsidePath(resolvedTmp, canonicalPath(backupDir))
+    ) {
+      throw new ConfigError('TMPDIR: путь внутри репозитория или каталога резервных копий');
+    }
   }
 
   return {
     containerEnv,
     backupDir,
     statusFile,
-    recipientFile,
-    recipient,
+    encrypt: parseEncryptFlag(env.BACKUP_ENCRYPT),
+    keepCount: parseRetentionCount(env.BACKUP_RETENTION_COUNT),
     dockerBin: env.BACKUP_DOCKER_BIN?.trim() || 'docker',
+    gitBin: env.BACKUP_GIT_BIN?.trim() || 'git',
     dockerTimeoutMs: parseDockerTimeout(env.BACKUP_DOCKER_TIMEOUT_MS),
   };
 }
 
-// Milliseconds a management docker call may take (see DOCKER_TIMEOUT_MS). Unset means the default.
-export function parseDockerTimeout(raw) {
-  if (raw === undefined || raw.trim() === '') return DOCKER_TIMEOUT_MS;
-  const value = raw.trim();
-  if (!/^\d+$/.test(value)) throw new ConfigError('BACKUP_DOCKER_TIMEOUT_MS: нужно целое число мс');
-  const ms = Number(value);
-  if (ms < 100 || ms > 600_000) throw new ConfigError('BACKUP_DOCKER_TIMEOUT_MS: от 100 до 600000');
-  return ms;
+export function loadConfig(
+  env = process.env,
+  { repoRoot = REPO_ROOT, readFile = readFileSync } = {}
+) {
+  const base = loadBaseConfig(env, { repoRoot });
+  let recipientFile = null;
+  let recipient = null;
+
+  if (base.encrypt) {
+    recipientFile = requireAbsolute(env, 'BACKUP_AGE_RECIPIENT_FILE');
+    try {
+      recipient = readRecipient(readFile(recipientFile, 'utf8'));
+    } catch (error) {
+      if (error instanceof ConfigError) throw error;
+      throw new ConfigError('BACKUP_AGE_RECIPIENT_FILE: файл не читается');
+    }
+  }
+
+  return {
+    ...base,
+    recipientFile,
+    recipient,
+  };
 }
