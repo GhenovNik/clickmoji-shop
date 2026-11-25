@@ -43,6 +43,15 @@ can build lists, add products, purchase, and read history, without registering.
   users stay keyed by `User.id`. The analytics cookie never authenticates or recovers an account.
   Milestones are stamped under the same per-guest lock, after the chain's newest row, so the
   chain's order holds under concurrent starts.
+- **Chain join on a new start.** A new guest start writes one `VISIT` on its funnel chain, under
+  the chain lock and in the guest creation transaction. That row ties the new guest to the chain.
+  When an older guest of the chain is cleaned up, its shared milestones (`VISIT`, `REGISTER`,
+  `LIST_CREATE`) move to the newest active guest of the chain: the earliest row of each type moves
+  unless the replacement already holds that type from an earlier moment. So the chain stays whole
+  even when the new guest adds no event before the older guest is cleaned. The newer guest is not
+  affected when the older one stays active, and the chain still follows retention when no active
+  guest remains. A guest created before this change has no such row; it becomes a replacement
+  only after it has a chain row of its own.
 
 ## Not in this change: guest to regular account
 

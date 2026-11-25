@@ -143,6 +143,7 @@ describe('POST /api/auth/guest', () => {
         return data;
       })
     ).toEqual([
+      { type: 'VISIT', userId: 'guest-user-1', guestId: visitGuestId },
       { type: 'REGISTER', userId: 'guest-user-1', guestId: visitGuestId },
       { type: 'LIST_CREATE', userId: 'guest-user-1', guestId: visitGuestId },
     ]);
@@ -317,41 +318,27 @@ describe('POST /api/auth/guest', () => {
     expect(doubles.funnelUpdateMany).toHaveBeenCalledTimes(2);
   });
 
-  it('moves the stale chain owner shared milestones to the new guest inside the creation transaction', async () => {
-    // An older, stale guest of this funnel chain owns VISIT and REGISTER (a second REGISTER is a leftover).
-    doubles.funnelFindMany.mockResolvedValue([
-      { id: 'evt-visit', type: 'VISIT' },
-      { id: 'evt-register', type: 'REGISTER' },
-      { id: 'evt-register-old', type: 'REGISTER' },
-    ]);
-    // After adoption the new guest owns the chain's REGISTER, so its once-per-guest check finds it.
-    doubles.funnelFindFirst.mockImplementation(async ({ where }: { where: { type?: string } }) =>
-      where.type === 'REGISTER' ? { id: 'evt-register' } : null
-    );
+  it('joins the funnel chain with its own VISIT inside the creation transaction and moves no milestone', async () => {
+    // The chain already has an older, stale guest that owns VISIT, REGISTER and LIST_CREATE.
+    doubles.funnelFindMany.mockResolvedValue([{ id: 'evt-visit', type: 'VISIT' }]);
 
-    const guestId = 'guest-adopt-0000000000001';
+    const guestId = 'guest-join-0000000000001';
     const cookie = `${FUNNEL_GUEST_COOKIE}=${signGuestId(guestId) ?? ''}`;
     const response = await POST(
       new Request('http://localhost:3000/api/auth/guest', { method: 'POST', headers: { cookie } })
     );
 
     expect(response.status).toBe(201);
-    expect(doubles.funnelFindMany).toHaveBeenCalledWith({
-      where: {
-        guestId,
-        type: { in: ['VISIT', 'REGISTER', 'LIST_CREATE'] },
-        user: expect.objectContaining({ isGuest: true, role: 'USER' }),
-      },
-      select: { id: true, type: true },
-      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
-    });
-    // Only the earliest row of each type moves, and only to the new guest.
+    // The start writes its VISIT on the chain for the new User, before the milestones are checked.
+    const creates = doubles.funnelCreate.mock.calls.map(([arg]) => arg.data);
+    expect(creates[0]).toMatchObject({ type: 'VISIT', userId: 'guest-user-1', guestId });
+    expect(creates.map((data) => data.type)).toEqual(['VISIT', 'REGISTER', 'LIST_CREATE']);
+    // No shared milestone of the older guest is moved by the start; the cleanup hand-off does that.
+    expect(doubles.funnelUpdateMany).toHaveBeenCalledTimes(1);
     expect(doubles.funnelUpdateMany).toHaveBeenCalledWith({
-      where: { id: { in: ['evt-visit', 'evt-register'] } },
+      where: { guestId, userId: null },
       data: { userId: 'guest-user-1' },
     });
-    // The REGISTER that adoption already gave the new guest is not written again.
-    expect(doubles.funnelCreate.mock.calls.map(([arg]) => arg.data.type)).toEqual(['LIST_CREATE']);
   });
 
   it('does not overwrite an existing regular user session', async () => {

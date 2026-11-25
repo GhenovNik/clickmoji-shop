@@ -99,68 +99,6 @@ export function activeGuestWhere(cutoff: Date): Prisma.UserWhereInput {
   };
 }
 
-const DAY_MS = 24 * 60 * 60 * 1000;
-
-/**
- * Cutoff that marks a guest as stale for a newer start of its funnel chain (see
- * `adoptGuestChainMilestones`). Uses the cleanup window; an invalid env value falls back to the
- * default, because failing to adopt only keeps the milestones where they are.
- */
-export function staleGuestCutoff(now: Date): Date {
-  let days = DEFAULT_GUEST_INACTIVE_DAYS;
-  try {
-    days = resolveGuestInactiveDays();
-  } catch {
-    days = DEFAULT_GUEST_INACTIVE_DAYS;
-  }
-  return new Date(now.getTime() - days * DAY_MS);
-}
-
-/**
- * Lets the newest guest start of a funnel chain take over the chain's shared milestones (VISIT,
- * REGISTER, LIST_CREATE) from guests that are already stale. The earliest such row of each type
- * moves to `userId`, so the replacement keeps the full funnel even if it adds nothing before the
- * stale guest is cleaned up.
- *
- * Only stale guest owners move. A guest that is still active keeps its milestones, so a repeated or
- * simultaneous start from a live session keeps the first owner's attribution. Ordinary-user rows
- * and unowned rows never move.
- *
- * Runs inside the transaction that creates the guest User, under the chain lock. A concurrent
- * cleanup either sees the moved rows (nothing left to cascade) or commits first.
- */
-export async function adoptGuestChainMilestones(
-  tx: Prisma.TransactionClient,
-  { userId, guestId, staleCutoff }: { userId: string; guestId: string; staleCutoff: Date }
-): Promise<number> {
-  await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${guestMilestoneLockKey(guestId)}, 0))`;
-
-  const owned = await tx.funnelEvent.findMany({
-    where: {
-      guestId,
-      type: { in: [...SHARED_MILESTONE_TYPES] },
-      user: inactiveGuestWhere(staleCutoff),
-    },
-    select: { id: true, type: true },
-    orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
-  });
-
-  const seenTypes = new Set<string>();
-  const ids: string[] = [];
-  for (const row of owned) {
-    if (seenTypes.has(row.type)) continue;
-    seenTypes.add(row.type);
-    ids.push(row.id);
-  }
-  if (ids.length === 0) return 0;
-
-  await tx.funnelEvent.updateMany({
-    where: { id: { in: ids } },
-    data: { userId },
-  });
-  return ids.length;
-}
-
 export type MilestoneHandOff = (
   input: { candidateIds: string[]; cutoff: Date },
   tx: Prisma.TransactionClient
@@ -168,14 +106,16 @@ export type MilestoneHandOff = (
 
 /**
  * Keeps the shared funnel milestones (VISIT, REGISTER, LIST_CREATE) of a funnel chain alive when a
- * stale guest that owns them is deleted. The chain is keyed by the signed funnel guestId. For each
- * stale guest's chain, the earliest such milestone of every type that an active replacement guest
- * does not hold yet moves to that replacement, which is the newest active guest of the chain (a
- * stale or ordinary user never qualifies). Chains without an active replacement are left alone, so
- * the stale guest's cascade removes them as before (retention).
+ * stale guest that owns them is deleted. The chain is keyed by the signed funnel guestId. Every new
+ * guest start writes a VISIT on its chain (see `recordGuestStartVisit`), so a guest started with it
+ * holds a row there. The newest active guest of the chain is the replacement: a stale or ordinary user
+ * never qualifies, and a chain without an active replacement is left alone, so the stale guest's
+ * cascade removes it as before (retention).
  *
- * A newer start adopts the chain of a stale owner as it is created (see
- * `adoptGuestChainMilestones`); this hand-off covers replacements that already hold events.
+ * For each stale guest's chain, the earliest row of each type moves to the replacement unless the
+ * replacement already holds that type from an earlier moment. Moving the earliest row keeps the
+ * chain's stage order: a later replacement VISIT never ends up before REGISTER or LIST_CREATE.
+ * Later rows of the stale guest are not moved and cascade with it.
  *
  * Runs inside the caller's transaction and takes the same per-chain advisory lock as the milestone
  * writers and guest starts, in sorted order. The caller deletes the guests in that same transaction,
@@ -194,7 +134,7 @@ export async function handOffSharedMilestones(
       type: { in: [...SHARED_MILESTONE_TYPES] },
       guestId: { not: null },
     },
-    select: { id: true, type: true, guestId: true },
+    select: { id: true, type: true, guestId: true, createdAt: true },
     orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
   });
   if (owned.length === 0) return 0;
@@ -229,17 +169,26 @@ export async function handOffSharedMilestones(
         userId: replacement.userId,
         type: { in: [...SHARED_MILESTONE_TYPES] },
       },
-      select: { type: true },
+      select: { type: true, createdAt: true },
     });
-    const heldTypes = new Set(held.map((row) => row.type));
+    const heldSince = new Map<string, number>();
+    for (const row of held) {
+      const at = heldSince.get(row.type);
+      const ms = row.createdAt.getTime();
+      if (at === undefined || ms < at) heldSince.set(row.type, ms);
+    }
 
+    // Rows arrive in chain order, so the first one of each type is the candidate's earliest.
+    const decided = new Set<string>();
     for (const row of byChain.get(guestId) ?? []) {
-      if (heldTypes.has(row.type)) continue;
+      if (decided.has(row.type)) continue;
+      decided.add(row.type);
+      const since = heldSince.get(row.type);
+      if (since !== undefined && since <= row.createdAt.getTime()) continue;
       await tx.funnelEvent.update({
         where: { id: row.id },
         data: { userId: replacement.userId },
       });
-      heldTypes.add(row.type);
       moved += 1;
     }
   }
@@ -309,8 +258,8 @@ export async function cleanupInactiveGuests({
     matchedCount += candidates.length;
     const candidateIds = candidates.map((row) => row.id);
     // One transaction: the hand-off and the conditional delete share the chain locks. A failure
-    // rolls both back (the guest stays with its milestones), and a start that adopts the chain
-    // waits for the commit, so it can never see its milestones cascade away.
+    // rolls both back (the guest stays with its milestones), and a start that joins the chain waits
+    // for the commit, so its own VISIT is never ahead of a cascade that removes the chain.
     const result = await db.$transaction(async (tx) => {
       await handOff({ candidateIds, cutoff }, tx);
       return tx.user.deleteMany({

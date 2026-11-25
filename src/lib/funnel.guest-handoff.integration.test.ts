@@ -6,10 +6,12 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
  * Real-PostgreSQL check that cleaning up a stale guest keeps the funnel of the active guest that
  * shares its signed funnel cookie.
  *
- * Start A, then Start B with the same cookie while A is stale, then the cleanup removes only A
- * before B has added anything. B must already own the chain's shared milestones and keep one full
- * chain after its first purchase, the ordinary chain that shares the cookie must keep its owner,
- * and once B is stale too the chain obeys retention.
+ * Start A, then Start B with the same cookie, then the cleanup removes A before B has added any
+ * item event (in either order A is stale or still fresh when B starts). B must take over the
+ * chain's shared milestones at that cleanup and keep one full chain after its first purchase. The
+ * inverse, where the newer guest ages and the older one stays active, must keep the older chain.
+ * The ordinary chain that shares the cookie keeps its owner, and once B is stale too the chain
+ * obeys retention.
  *
  * Runs only when INTEGRATION_DATABASE_URL points at a disposable local database, e.g.:
  *   INTEGRATION_DATABASE_URL=postgresql://postgres@127.0.0.1:<port>/clickmoji_handoff \
@@ -138,11 +140,12 @@ describe.skipIf(!url || !isLocal)(
       await recordFunnelEvent({ type: 'REGISTER', userId: ordinary.id, guestId });
       await recordFunnelEvent({ type: 'LIST_CREATE', userId: ordinary.id, guestId });
 
-      // Guest B starts with the same cookie (A's session is gone). The newest start takes over the
-      // chain's shared milestones at once, so B owns the full chain before it adds anything.
+      // Guest B starts with the same cookie (A's session is gone). Its start joins the chain with a
+      // VISIT of its own; the stale A still holds the shared milestones until its cleanup.
       const guestB = await start(guestId);
-      expect(await typesOwnedBy(guestA)).toEqual([]);
-      expect(await typesOwnedBy(guestB)).toEqual(['LIST_CREATE', 'REGISTER', 'VISIT']);
+      // A owns the browser's VISIT and its own start VISIT, plus REGISTER and LIST_CREATE.
+      expect(await typesOwnedBy(guestA)).toEqual(['LIST_CREATE', 'REGISTER', 'VISIT', 'VISIT']);
+      expect(await typesOwnedBy(guestB)).toEqual(['VISIT']);
 
       // A repeated start from B's live session only reuses B and writes nothing.
       doubles.auth.mockResolvedValueOnce({
@@ -152,7 +155,7 @@ describe.skipIf(!url || !isLocal)(
       const repeated = await POST(startRequest(guestId));
       expect(repeated.status).toBe(200);
       expect(((await repeated.json()) as { reused: boolean }).reused).toBe(true);
-      expect(await typesOwnedBy(guestB)).toEqual(['LIST_CREATE', 'REGISTER', 'VISIT']);
+      expect(await typesOwnedBy(guestB)).toEqual(['VISIT']);
 
       // Cleanup removes only the stale guest A. It owns nothing of the chain any more.
       const cleanup = await cleanupInactiveGuests({ db: prisma, inactiveDays: 30 });
@@ -160,7 +163,8 @@ describe.skipIf(!url || !isLocal)(
       expect(await prisma.user.findUnique({ where: { id: guestA } })).toBeNull();
       expect(await prisma.user.findUnique({ where: { id: guestB } })).not.toBeNull();
       expect(await prisma.user.findUnique({ where: { id: ordinary.id } })).not.toBeNull();
-      expect(await typesOwnedBy(guestB)).toEqual(['LIST_CREATE', 'REGISTER', 'VISIT']);
+      // B now holds the moved VISIT, REGISTER and LIST_CREATE, plus its own start VISIT.
+      expect(await typesOwnedBy(guestB)).toEqual(['LIST_CREATE', 'REGISTER', 'VISIT', 'VISIT']);
 
       // Only now does B buy: the first purchase lands on the chain that B already owns.
       await pause(5);
@@ -168,12 +172,13 @@ describe.skipIf(!url || !isLocal)(
       await pause(5);
       await recordFunnelEvent({ type: 'ITEM_PURCHASE', userId: guestB, guestId });
 
-      // B now owns one full guest chain, with no duplicate milestones.
+      // B now owns one full guest chain: one REGISTER and one LIST_CREATE, and VISIT rows only.
       expect(await typesOwnedBy(guestB)).toEqual([
         'ITEM_ADD',
         'ITEM_PURCHASE',
         'LIST_CREATE',
         'REGISTER',
+        'VISIT',
         'VISIT',
       ]);
 
@@ -195,6 +200,7 @@ describe.skipIf(!url || !isLocal)(
         'ITEM_PURCHASE',
         'LIST_CREATE',
         'REGISTER',
+        'VISIT',
         'VISIT',
       ]);
     });

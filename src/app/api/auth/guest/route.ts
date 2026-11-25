@@ -10,8 +10,7 @@ import {
   getServerTranslator,
   rateLimitResponse,
 } from '@/lib/auth-security';
-import { getGuestIdFromRequest, recordFunnelEvent } from '@/lib/funnel';
-import { adoptGuestChainMilestones, staleGuestCutoff } from '@/lib/guest-cleanup';
+import { getGuestIdFromRequest, recordFunnelEvent, recordGuestStartVisit } from '@/lib/funnel';
 import { recordGuestActivity } from '@/lib/guest-activity';
 import {
   buildGuestPlaceholderEmail,
@@ -86,7 +85,6 @@ export async function POST(request: Request) {
     const now = new Date();
     // Immutable issuance claim: the same clock instant that the guest row was created with.
     const sessionIssuedAt = currentSessionIssuedAtSeconds(now);
-    // Read before the transaction: the chain lock that adoption takes must cover the new User row.
     const guestId = getGuestIdFromRequest(request);
     const user = await prisma.$transaction(async (tx) => {
       const created = await tx.user.create({
@@ -110,15 +108,11 @@ export async function POST(request: Request) {
         },
       });
 
-      // A newer start takes over the shared milestones (VISIT, REGISTER, LIST_CREATE) of a chain
-      // whose guest is already stale, under the chain lock and in this transaction. The chain then
-      // stays whole even if no event of this guest follows before that stale guest is cleaned up.
+      // The new guest joins its funnel chain with a VISIT, under the chain lock and in this
+      // transaction. The chain's shared milestones stay where they are; a cleanup of an older guest
+      // of the chain hands them to this guest, even if it adds no event of its own before then.
       if (guestId) {
-        await adoptGuestChainMilestones(tx, {
-          userId: created.id,
-          guestId,
-          staleCutoff: staleGuestCutoff(now),
-        });
+        await recordGuestStartVisit(tx, { userId: created.id, guestId });
       }
 
       await tx.list.createMany({
