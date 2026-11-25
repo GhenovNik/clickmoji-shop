@@ -50,7 +50,9 @@ export default function UserForm({ user, onSubmit, onCancel }: UserFormProps) {
       <form onSubmit={handleSubmit} className="space-y-4">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Email *</label>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              {t('userForm.emailLabel')} *
+            </label>
             <input
               type="email"
               value={formData.email}

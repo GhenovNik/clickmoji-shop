@@ -15,6 +15,7 @@ const state = vi.hoisted(() => ({
   failCatalog: false,
   failCreate: false,
   failItem: false,
+  rateLimited: false,
   record: vi.fn(),
 }));
 
@@ -40,7 +41,13 @@ vi.mock('@/lib/auth-guards', () => ({
 
 vi.mock('@/lib/auth-security', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/auth-security')>();
-  return { ...actual, checkRateLimit: async () => ({ allowed: true, remaining: 1, resetAt: 0 }) };
+  return {
+    ...actual,
+    checkRateLimit: async () =>
+      state.rateLimited
+        ? { allowed: false, remaining: 0, resetAt: Date.now() + 60_000 }
+        : { allowed: true, remaining: 1, resetAt: 0 },
+  };
 });
 
 // The daily AI budget is covered by src/app/api/ai-daily-quota.test.ts.
@@ -106,12 +113,16 @@ const catalogProduct = (id: string, name: string, nameEn: string, categoryId: st
   createdAt: new Date('2026-01-01T00:00:00Z'),
 });
 
-async function runImportText(reply: string, text = 'Молоко\nЯйца\nХлеб белый') {
+async function runImportText(reply: string, text = 'Молоко\nЯйца\nХлеб белый', cookie?: string) {
   state.reply = reply;
   const response = await POST(
     new Request('http://localhost/api/lists/import-text', {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      // Without a cookie the server answers in its default language, English.
+      headers: {
+        'content-type': 'application/json',
+        ...(cookie ? { cookie } : {}),
+      },
       body: JSON.stringify({ text, listId: 'list-b' }),
     })
   );
@@ -144,6 +155,7 @@ beforeEach(() => {
   state.failCatalog = false;
   state.failCreate = false;
   state.failItem = false;
+  state.rateLimited = false;
   state.record.mockReset().mockResolvedValue(true);
   state.products = [
     catalogProduct('milk', 'Молоко', 'Milk', 'cat-dairy'),
@@ -198,7 +210,7 @@ describe('POST /api/lists/import-text with products that exist in the catalog', 
     expect(result.addedProductIds).toEqual(['milk', 'eggs']);
     expect(result.body.results.failed).toEqual([
       {
-        product: { nameRu: '???', nameEn: 'Unrecognized item' },
+        product: { nameRu: '???', nameEn: '' },
         reason: 'The AI returned an entry it could not recognise',
       },
     ]);
@@ -214,7 +226,7 @@ describe('POST /api/lists/import-text with products that exist in the catalog', 
     expect(result.status).toBe(200);
     expect(result.addedProductIds).toEqual(['milk']);
     const unrecognized = {
-      product: { nameRu: 'Нераспознанная позиция', nameEn: 'Unrecognized item' },
+      product: { nameRu: 'Unrecognized item', nameEn: '' },
       reason: 'The AI returned an entry it could not recognise',
     };
     expect(result.body.results.failed).toEqual([unrecognized, unrecognized]);
@@ -436,6 +448,99 @@ describe('import messages follow the request language', () => {
     );
     expect(oversizedRes.status).toBe(413);
     expect(await oversizedRes.json()).toEqual({ error: 'Request payload is too large' });
+    expect(state.prompts).toEqual([]);
+  });
+});
+
+describe('import report names follow the request language', () => {
+  it('names a malformed entry in Russian with the Russian fallback', async () => {
+    const result = await runImportText(
+      JSON.stringify([
+        milk,
+        { nameRu: { text: 'Сыр' }, nameEn: ['Cheese'], categoryName: 'Dairy' },
+      ]),
+      'Молоко\nСыр',
+      'NEXT_LOCALE=ru'
+    );
+
+    expect(result.body.results.failed).toEqual([
+      {
+        product: { nameRu: 'Нераспознанная позиция', nameEn: '' },
+        reason: 'ИИ вернул нераспознанную строку',
+      },
+    ]);
+  });
+
+  it('names a malformed entry in English and never invents an English product name', async () => {
+    const result = await runImportText(
+      JSON.stringify([milk, { nameRu: '???', nameEn: '', categoryName: 'Dairy', emoji: '' }]),
+      'Молоко\n???',
+      'NEXT_LOCALE=en'
+    );
+
+    expect(result.status).toBe(200);
+    expect(result.body.results.failed).toEqual([
+      {
+        product: { nameRu: '???', nameEn: '' },
+        reason: 'The AI returned an entry it could not recognise',
+      },
+    ]);
+  });
+
+  it('keeps a Russian product without an English name empty in English, not "Unrecognized item"', async () => {
+    const result = await runImportText(
+      JSON.stringify([
+        milk,
+        { nameRu: 'Хлеб бородинский', nameEn: '', categoryName: '', emoji: '' },
+      ]),
+      'Молоко\nХлеб бородинский',
+      'NEXT_LOCALE=en'
+    );
+
+    expect(result.status).toBe(200);
+    expect(result.body.results.failed).toEqual([
+      {
+        product: { nameRu: 'Хлеб бородинский', nameEn: '' },
+        reason: 'The AI returned an entry it could not recognise',
+      },
+    ]);
+    expect(JSON.stringify(result.body)).not.toContain('Unrecognized item');
+  });
+
+  it('names a malformed entry with the English fallback when the names are not strings', async () => {
+    const result = await runImportText(
+      JSON.stringify([
+        milk,
+        { nameRu: { text: 'Сыр' }, nameEn: ['Cheese'], categoryName: 'Dairy' },
+      ]),
+      'Молоко\nСыр',
+      'NEXT_LOCALE=en'
+    );
+
+    expect(result.body.results.failed).toEqual([
+      {
+        product: { nameRu: 'Unrecognized item', nameEn: '' },
+        reason: 'The AI returned an entry it could not recognise',
+      },
+    ]);
+  });
+
+  it('answers 429 with the rate-limit text in the request language', async () => {
+    state.rateLimited = true;
+    for (const [cookie, error] of [
+      ['NEXT_LOCALE=en', 'Too many attempts. Please try again later.'],
+      ['NEXT_LOCALE=ru', 'Слишком много попыток. Попробуйте позже.'],
+    ] as const) {
+      const response = await POST(
+        new Request('http://localhost/api/lists/import-text', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', cookie },
+          body: JSON.stringify({ text: 'Milk', listId: 'list-b' }),
+        })
+      );
+      expect(response.status).toBe(429);
+      expect(await response.json()).toEqual({ error });
+    }
     expect(state.prompts).toEqual([]);
   });
 });

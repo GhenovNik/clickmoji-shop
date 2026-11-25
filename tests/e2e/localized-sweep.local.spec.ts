@@ -15,7 +15,7 @@ const outDir = process.env.SWEEP_DIR ?? '';
 
 type Locale = 'ru' | 'en';
 type Mode = 'ok' | 'empty' | 'error';
-type Import = 'none' | 'error' | 'result';
+type Import = 'none' | 'error' | 'result' | 'rate' | 'large';
 
 type Scenario = {
   auth: boolean;
@@ -197,14 +197,20 @@ function historyFixture() {
   ];
 }
 
-// The server already picks the name for the request language (localizedName), so the mock does too.
+// Shaped like the route's real report (app/api/lists/import-text/route.ts): a name with no English
+// stays empty in the English interface, and an entry with no usable name gets the fallback in the
+// request language. The route's own tests pin these values for both languages.
 function importResult(locale: Locale) {
   const api = messages(locale, 'api');
   const categoryName = locale === 'en' ? 'Dairy' : 'Молочные продукты';
   const named = (product: (typeof products)[number]) =>
     locale === 'en' && product.nameEn ? product.nameEn : product.name;
   return {
-    message: lookup(api, 'import.summary').replace(/\{[^}]+\}/g, '1'),
+    message: lookup(api, 'import.summary')
+      .replace('{added}', '1')
+      .replace('{created}', '1')
+      .replace('{skipped}', '1')
+      .replace('{failed}', '2'),
     results: {
       added: [{ name: named(products[0]), category: categoryName, note: '2 шт' }],
       created: [{ name: locale === 'en' ? 'Feta' : 'Фета', category: categoryName }],
@@ -216,6 +222,10 @@ function importResult(locale: Locale) {
             '{category}',
             locale === 'en' ? 'Grocery' : 'Бакалея'
           ),
+        },
+        {
+          product: { nameRu: lookup(api, 'import.unrecognizedName'), nameEn: '' },
+          reason: lookup(api, 'import.unrecognizedEntry'),
         },
       ],
     },
@@ -293,6 +303,12 @@ async function setup(page: Page, context: BrowserContext, locale: Locale, scenar
       url.pathname === '/api/lists/import-text'
     ) {
       if (scenario.importText === 'error') return fail();
+      if (scenario.importText === 'rate') {
+        return json({ error: lookup(messages(locale, 'api'), 'rateLimited') }, 429);
+      }
+      if (scenario.importText === 'large') {
+        return json({ error: lookup(messages(locale, 'api'), 'import.payloadTooLarge') }, 413);
+      }
       if (scenario.importText === 'result') return json(importResult(locale));
       return json({ message: '', results: { added: [], created: [], skipped: [], failed: [] } });
     }
@@ -439,6 +455,24 @@ const screens: Screen[] = [
     id: 'import-result',
     path: `/lists/${E2E_LIST_ID}`,
     scenario: { auth: true, importText: 'result' },
+    steps: async (page, locale) => {
+      await openImport(page, locale);
+      await submitImport(page, locale);
+    },
+  },
+  {
+    id: 'import-rate-limited',
+    path: `/lists/${E2E_LIST_ID}`,
+    scenario: { auth: true, importText: 'rate' },
+    steps: async (page, locale) => {
+      await openImport(page, locale);
+      await submitImport(page, locale);
+    },
+  },
+  {
+    id: 'import-too-large',
+    path: `/lists/${E2E_LIST_ID}`,
+    scenario: { auth: true, importText: 'large' },
     steps: async (page, locale) => {
       await openImport(page, locale);
       await submitImport(page, locale);
