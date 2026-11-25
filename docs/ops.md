@@ -262,7 +262,7 @@ Verified production backups run via `npm run db:backup:verified` (`node scripts/
   - Always check the actual `createdAt` timestamps in `meta/<copy>.json` against the time of corruption or bad migration.
   - Restore from a retained backup whenever a **usable copy taken before the error** still exists (roughly 3–6 days back at 2 copies / every 3 days; in a daily 2-copy cycle, corruption noticed after 2 days has no pre-error copy).
   - When no usable pre-error copy exists, the only recovery option is **Neon point-in-time recovery (PITR)** within the Neon plan's restore window.
-  - **Confirmed Neon PITR restore window:** `<TBD: confirm Neon plan PITR restore window in task Г>`
+  - **Confirmed Neon PITR restore window:** See [Включение копий на Mac mini](#включение-копий-на-mac-mini).
 
 - **Direct restore commands (into a fresh empty PostgreSQL 17 target, never production):**
   - Unencrypted verified copy (`clickmoji-<UTC>.dump`):
@@ -361,7 +361,8 @@ Verified production backups run via `npm run db:backup:verified` (`node scripts/
 - **Статус-файл:** `~/Library/Logs/clickmoji-backup/status.tsv`, по одной строке на запуск, три поля через табуляцию: `<время UTC с миллисекундами>\t<ok|failed>\t<текст>`. Удачный запуск: `…\tok\tsize=<байты> verify=ok file=clickmoji-<UTC>.dump prune=<результат>`. Неудачный: `…\tfailed\tсбой: <причина>`; при отсутствии роли в связке: `…\tfailed\tсбой: нет роли только на чтение в связке ключей`. Для контроля давности пульт читает дату последней строки с `ok`. При интервале 3 дня порог составляет 4 суток. Адреса, пароли и данные в файле не попадают.
 - **Журнал launchd:** `~/Library/Logs/clickmoji-backup/launchd.log` (вывод `npm`; адрес базы в нём не появляется).
 - **Копии:** `~/Projects/clickmoji-shop/backups/`, каталог и файлы доступны только владельцу. Не выполнять `git clean -x` в основной копии.
-- **Глубина восстановления Neon (PITR):** `<TBD: confirm Neon plan PITR restore window in task Г>`. Тариф Neon не подтверждён: ВОПРОС: тариф Neon. Значение записывается сюда после подтверждения; до тех пор его не угадываем.
+- **Глубина восстановления Neon (PITR):** Neon Free: окно восстановления на момент времени до 6 часов, не больше 1 ГБ изменений на проект. Источник: [тарифы Neon](https://neon.com/docs/introduction/plans) и [окно восстановления](https://neon.com/docs/postgres/backup-restore/history-window), проверено 2026-11-25.
+- Если порчу заметили позже чем через 6 часов, восстановиться можно только из сохранившейся копии, сделанной до порчи (до 3–6 суток назад при штатном расписании).
 
 ### Production recovery
 
