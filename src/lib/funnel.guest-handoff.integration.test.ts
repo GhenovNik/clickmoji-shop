@@ -52,6 +52,7 @@ describe.skipIf(!url || !isLocal)(
   'stale guest cleanup keeps the active guest chain on PostgreSQL',
   () => {
     const guestId = `guest_pg17handoff_${randomUUID()}`;
+    const extraChainIds: string[] = [];
     const createdUserIds: string[] = [];
 
     let prisma: typeof import('@/lib/prisma').prisma;
@@ -116,7 +117,9 @@ describe.skipIf(!url || !isLocal)(
 
     afterAll(async () => {
       if (!prisma) return;
-      await prisma.funnelEvent.deleteMany({ where: { guestId } });
+      await prisma.funnelEvent.deleteMany({
+        where: { guestId: { in: [guestId, ...extraChainIds] } },
+      });
       await prisma.user.deleteMany({ where: { id: { in: createdUserIds } } });
       await prisma.$disconnect();
     });
@@ -213,6 +216,88 @@ describe.skipIf(!url || !isLocal)(
       const remaining = await chainRows();
       expect(remaining.every((row) => row.userId !== null)).toBe(true);
       expect(remaining.some((row) => row.userId === guestB.id)).toBe(false);
+    });
+
+    /** Count of one guest's chain rows per type, so duplicates show up. */
+    const ownedCounts = async (userId: string, chainId: string) => {
+      const rows = await prisma.funnelEvent.findMany({
+        where: { guestId: chainId, userId },
+        select: { type: true },
+      });
+      const counts: Record<string, number> = {};
+      for (const row of rows) counts[row.type] = (counts[row.type] ?? 0) + 1;
+      return counts;
+    };
+
+    const reportOf = async (chainId: string) => {
+      const rows = await prisma.funnelEvent.findMany({
+        where: { guestId: chainId },
+        select: FUNNEL_EVENT_REPORT_SELECT,
+        orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+      });
+      return aggregateFunnelWindow(toFunnelEventRecords(rows), 1, new Date(Date.now() + 60_000));
+    };
+
+    it('keeps one full chain for the newer guest when the older guest is cleaned in the normal start order', async () => {
+      // Visit, Start A, then Start B with the same cookie while A is still fresh. B adds nothing yet.
+      const chainId = `guest_pg17order_${randomUUID()}`;
+      extraChainIds.push(chainId);
+      await recordFunnelEvent({ type: 'VISIT', userId: null, guestId: chainId });
+      const guestA = await start(chainId);
+      const guestB = await start(chainId);
+
+      // A ages past the cutoff. Cleanup runs while B is fresh and has no item events.
+      await ageGuest(guestA, 45);
+      const cleanup = await cleanupInactiveGuests({ db: prisma, inactiveDays: 30 });
+      expect(cleanup.deletedCount).toBeGreaterThanOrEqual(1);
+      expect(await prisma.user.findUnique({ where: { id: guestA } })).toBeNull();
+      expect(await prisma.user.findUnique({ where: { id: guestB } })).not.toBeNull();
+
+      // B keeps exactly one REGISTER and one LIST_CREATE, and the chain still starts at its visit.
+      const owned = await ownedCounts(guestB, chainId);
+      expect(owned.REGISTER).toBe(1);
+      expect(owned.LIST_CREATE).toBe(1);
+      expect(owned.VISIT).toBeGreaterThanOrEqual(1);
+      const beforePurchase = await reportOf(chainId);
+      expect(beforePurchase.stages.map((stage) => stage.count)).toEqual([1, 1, 1, 0, 0]);
+
+      // B's first purchase lands on the chain it already owns.
+      await pause(5);
+      await recordFunnelEvent({ type: 'ITEM_ADD', userId: guestB, guestId: chainId });
+      await pause(5);
+      await recordFunnelEvent({ type: 'ITEM_PURCHASE', userId: guestB, guestId: chainId });
+
+      const chain = await reportOf(chainId);
+      expect(chain.stages.map((stage) => stage.count)).toEqual([1, 1, 1, 1, 1]);
+      expect(chain.overallRate).toBe(1);
+    });
+
+    it('keeps the older active guest chain when the newer guest ages first', async () => {
+      // Visit, Start A, Start B. A stays active; B is the one that ages and gets cleaned.
+      const chainId = `guest_pg17inverse_${randomUUID()}`;
+      extraChainIds.push(chainId);
+      await recordFunnelEvent({ type: 'VISIT', userId: null, guestId: chainId });
+      const guestA = await start(chainId);
+      const guestB = await start(chainId);
+      await ageGuest(guestB, 45);
+
+      const cleanup = await cleanupInactiveGuests({ db: prisma, inactiveDays: 30 });
+      expect(cleanup.deletedCount).toBeGreaterThanOrEqual(1);
+      expect(await prisma.user.findUnique({ where: { id: guestB } })).toBeNull();
+      expect(await prisma.user.findUnique({ where: { id: guestA } })).not.toBeNull();
+
+      // A still owns exactly one REGISTER and one LIST_CREATE, and completes the chain itself.
+      const owned = await ownedCounts(guestA, chainId);
+      expect(owned.REGISTER).toBe(1);
+      expect(owned.LIST_CREATE).toBe(1);
+      await pause(5);
+      await recordFunnelEvent({ type: 'ITEM_ADD', userId: guestA, guestId: chainId });
+      await pause(5);
+      await recordFunnelEvent({ type: 'ITEM_PURCHASE', userId: guestA, guestId: chainId });
+
+      const chain = await reportOf(chainId);
+      expect(chain.stages.map((stage) => stage.count)).toEqual([1, 1, 1, 1, 1]);
+      expect(chain.overallRate).toBe(1);
     });
   }
 );
