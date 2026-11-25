@@ -286,7 +286,10 @@ for (const height of [667, 812]) {
       );
       await tapWithoutScroll(page, last, scrollY);
       await expect(panel).toHaveCount(0);
-      await expect(page.getByRole('button', { name: 'Вариант 30', exact: true })).toBeVisible();
+      // The picked chip now carries its small English line in the accessible name (AGE-1667 Н1).
+      await expect(
+        page.getByRole('button', { name: 'Вариант 30 Variant 30', exact: true })
+      ).toBeVisible();
       await expectScrollUnchanged(page, scrollY, 'variant selection / close');
     });
 
@@ -426,7 +429,7 @@ for (const height of [667, 812]) {
       await expectButtonsReachable(page, [close], scrollY);
       await tapWithoutScroll(
         page,
-        panel.getByRole('button', { name: '🥛 Продукт 1', exact: true }),
+        panel.getByRole('button', { name: '🥛 Продукт 1 Milk', exact: true }),
         scrollY
       );
       await expectScrollUnchanged(page, scrollY, 'selecting product');

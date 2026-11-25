@@ -153,7 +153,9 @@ export default function ShoppingListItem({
           <LocalizedName
             names={namesOf(item.product)}
             locale={locale}
-            className="min-w-0"
+            // The list row's big line is 20px; the wrapper must not add a 24px strut above it,
+            // so a note row with an English line stays within the 64px compact row.
+            className={cn('min-w-0', view === 'list' && 'leading-5')}
             primaryClassName={cn(
               'font-bold text-base leading-5 truncate transition-all duration-300',
               view === 'grid' && 'text-xs leading-4',
