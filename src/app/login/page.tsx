@@ -23,6 +23,7 @@ function LoginForm() {
   const registered = searchParams.get('registered');
   const verified = searchParams.get('verified');
   const resetStatus = searchParams.get('reset');
+  const deleted = searchParams.get('deleted');
   const callbackUrl = safeCallbackUrl(searchParams.get('callbackUrl'));
 
   useEffect(() => {
@@ -187,6 +188,12 @@ function LoginForm() {
           {resetStatus === 'success' && (
             <div className="bg-green-50 text-green-600 px-4 py-3 rounded-lg text-sm mb-4">
               {t('login.resetSuccess')}
+            </div>
+          )}
+
+          {deleted === 'true' && (
+            <div className="bg-green-50 text-green-600 px-4 py-3 rounded-lg text-sm mb-4">
+              {t('login.accountDeleted')}
             </div>
           )}
 

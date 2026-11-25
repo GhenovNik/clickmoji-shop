@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { apiText } from '@/lib/api-messages';
 import { prisma } from '@/lib/prisma';
 import { requireUser } from '@/lib/auth-guards';
-import { visibleItemsWhere } from '@/lib/product-visibility';
+import { variantOfItemProduct, visibleItemsWhere } from '@/lib/product-visibility';
 
 // GET /api/lists/[listId] - fetch a shopping list.
 export async function GET(request: Request, { params }: { params: Promise<{ listId: string }> }) {
@@ -42,7 +42,14 @@ export async function GET(request: Request, { params }: { params: Promise<{ list
       return NextResponse.json({ error: await apiText(request, 'listNotFound') }, { status: 404 });
     }
 
-    return NextResponse.json(list);
+    // The item's product is visible, but a legacy variant may belong to another product (possibly
+    // another user's private one). Such a variant is neither serialized nor identified.
+    const items = list.items.map((item) => {
+      const variant = variantOfItemProduct(item.variant, item.productId);
+      return { ...item, variantId: variant?.id ?? null, variant };
+    });
+
+    return NextResponse.json({ ...list, items });
   } catch (error) {
     console.error('Error fetching list:', error);
     return NextResponse.json({ error: await apiText(request, 'fetchListFailed') }, { status: 500 });

@@ -1,7 +1,13 @@
 import crypto from 'crypto';
+import type { Prisma } from '@prisma/client';
 import { prisma } from './prisma';
 import { normalizeEmail } from './auth-security';
 import { isGuestEmail } from './guest';
+
+type TokenDbClient = Pick<
+  Prisma.TransactionClient,
+  'emailVerificationToken' | 'passwordResetToken' | 'user'
+>;
 
 const EMAIL_TOKEN_TTL_HOURS = 24;
 const PASSWORD_RESET_TTL_HOURS = 1;
@@ -90,10 +96,14 @@ export async function createPasswordResetToken(email: string) {
   return token;
 }
 
-export async function consumePasswordResetToken(email: string, token: string) {
+export async function consumePasswordResetToken(
+  email: string,
+  token: string,
+  db: TokenDbClient = prisma
+) {
   const normalizedEmail = normalizeEmail(email);
   const hashedToken = hashToken(token);
-  const record = await prisma.passwordResetToken.findFirst({
+  const record = await db.passwordResetToken.findFirst({
     where: {
       email: normalizedEmail,
       token: hashedToken,
@@ -105,11 +115,15 @@ export async function consumePasswordResetToken(email: string, token: string) {
   }
 
   if (record.expiresAt < new Date()) {
-    await prisma.passwordResetToken.delete({ where: { id: record.id } });
+    await db.passwordResetToken.deleteMany({ where: { id: record.id } });
     return { success: false, reason: 'expired' } as const;
   }
 
-  await prisma.passwordResetToken.delete({ where: { id: record.id } });
+  // Atomic claim: if a concurrent request already consumed or invalidated this token, count is 0.
+  const deleted = await db.passwordResetToken.deleteMany({ where: { id: record.id } });
+  if (deleted.count !== 1) {
+    return { success: false, reason: 'invalid' } as const;
+  }
 
   return { success: true } as const;
 }

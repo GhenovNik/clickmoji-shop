@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
 import { getToken } from 'next-auth/jwt';
+import { isSessionTokenFreshForUser } from '@/lib/guest';
+import { prisma } from '@/lib/prisma';
 import {
   checkRateLimit,
   getClientIp,
@@ -21,6 +23,8 @@ const publicRoutes = [
   '/register',
   '/forgot-password',
   '/reset-password',
+  '/terms',
+  '/privacy',
   '/manifest.json',
   '/sw.js',
   '/offline.html',
@@ -91,10 +95,27 @@ export default async function proxy(request: NextRequest) {
     secret: process.env.AUTH_SECRET || process.env.NEXTAUTH_SECRET,
   });
 
+  // The account row is the canonical source: the id bound into the token must still name a live
+  // account, and the token's immutable issuance claim must not predate that row. A deleted or
+  // recreated account, or a token without a complete claim set, is treated as signed out.
+  const hasCompleteIdentity =
+    typeof token?.id === 'string' && token.id.length > 0 && token.sub === token.id;
+  const account =
+    token && hasCompleteIdentity
+      ? await prisma.user.findUnique({
+          where: { id: token.id as string },
+          select: { id: true, createdAt: true, role: true, isGuest: true },
+        })
+      : null;
+  const activeAccount =
+    account && isSessionTokenFreshForUser(token?.sessionIssuedAt, account.createdAt)
+      ? account
+      : null;
   const hasE2EAuth = hasPlaywrightAuthBypass(request);
-  const isLoggedIn = Boolean(token) || hasE2EAuth;
-  const isGuest = !hasE2EAuth && Boolean(token?.isGuest);
-  const userRole = hasE2EAuth ? 'USER' : (token?.role as string | undefined);
+  const isLoggedIn = Boolean(activeAccount) || hasE2EAuth;
+  // Guest status comes from the DB label of the active account, never from the token alone.
+  const isGuest = !hasE2EAuth && Boolean(activeAccount?.isGuest);
+  const userRole = hasE2EAuth ? 'USER' : activeAccount?.role;
   const isPublicRoute = publicRoutes.includes(pathname) || isPublicCatalogRoute(pathname);
 
   if (pathname.startsWith('/admin')) {
@@ -119,7 +140,7 @@ export default async function proxy(request: NextRequest) {
   }
 
   if (isFunnelEntryRoute(pathname) && isDocumentGetRequest(request)) {
-    return recordEntryVisit(request, typeof token?.id === 'string' ? token.id : null);
+    return recordEntryVisit(request, activeAccount ? (token?.id as string) : null);
   }
 
   return NextResponse.next();

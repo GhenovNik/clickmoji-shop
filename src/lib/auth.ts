@@ -130,6 +130,8 @@ export const authOptions: NextAuthOptions = {
         authenticatedRole = existingUser.role ?? 'USER';
       }
 
+      // NextAuth passes this same object to the jwt callback on sign-in; the token must carry
+      // the DB id of the account that was just authorised, not the Google subject.
       user.id = authenticatedUserId;
       (user as typeof user & { role?: string; isGuest?: boolean }).role = authenticatedRole;
       (user as typeof user & { isGuest?: boolean }).isGuest = false;

@@ -23,11 +23,12 @@ import {
 } from './fixtures/modal-footer';
 
 // Local only, all API traffic is handled by mockAuthenticatedShopping + overrides.
-// Admin routes require the local-only JWT fixture secret on the Next server:
-// AUTH_SECRET=age-1541-local-only NEXTAUTH_SECRET=age-1541-local-only \
-//   DATABASE_URL='postgresql://fixture:fixture@127.0.0.1:1/modal-footer?connect_timeout=1' \
-//   npx playwright test tests/e2e/modal-footer.spec.ts --project=chromium --workers=1
-// No DB seed, provider request, setContent(), or component-only fake route is used.
+// Admin scenarios sign a session for a real admin row in an isolated loopback fixture
+// PostgreSQL (never a working database). The URL is validated by playwright.config.ts:
+//   MODAL_FOOTER_TEST_DATABASE_URL='postgresql://modal_footer_fixture:modal_footer_fixture@127.0.0.1:55432/clickmoji_modal_footer_test' \
+//   npx playwright test tests/e2e/modal-footer.spec.ts --project=modal-webkit --workers=1
+// Without that variable the non-admin scenarios still run and the admin ones fail loudly.
+// No provider request, setContent(), or component-only fake route is used.
 const productRoute = `/categories/${e2eCategory.id}/products?listId=${E2E_LIST_ID}`;
 const importTitle = 'Импорт списка';
 const addTitle = 'Добавить товар';
@@ -39,10 +40,14 @@ const unavailable =
 
 // Enter /lists by the real navigation after SessionProvider has loaded. Direct
 // cold navigation hits an unrelated pre-existing loading-session redirect race.
+// Phone widths hide the user name in the header (md:inline) and show the visible
+// "Аккаунт" link instead. The bottom nav renders that account item only for a signed-in
+// session, so it is the readiness signal, and it stays unambiguous next to the header link.
 async function goToLists(page: Page) {
   await page.goto('/categories');
-  await expect(page.getByText('E2E User', { exact: true })).toBeVisible();
-  await page.getByRole('navigation').getByRole('link', { name: 'Списки', exact: true }).tap();
+  const bottomNav = page.getByRole('navigation');
+  await expect(bottomNav.getByRole('link', { name: 'Аккаунт', exact: true })).toBeVisible();
+  await bottomNav.getByRole('link', { name: 'Списки', exact: true }).tap();
   await expect(page).toHaveURL('/lists');
 }
 
@@ -54,7 +59,9 @@ for (const height of [667, 812]) {
 
     test.beforeEach(async ({ baseURL, page }) => {
       // In particular, never send the test-only admin JWT to a deployed application.
-      expect(new URL(baseURL!).origin).toBe('http://localhost:3000');
+      const target = new URL(baseURL!);
+      expect(target.protocol).toBe('http:');
+      expect(target.hostname).toBe('localhost');
       const errors: string[] = [];
       browserErrors.set(page, errors);
       page.on('pageerror', (error) => errors.push(error.message));

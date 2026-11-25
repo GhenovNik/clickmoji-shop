@@ -87,7 +87,9 @@ async function send(email: string, content: EmailContent) {
     throw new Error('Resend is not configured');
   }
 
-  await resend.emails.send({ from: resendFromEmail, to: email, ...content });
+  const configuredSender = resendFromEmail.trim();
+  const address = configuredSender.match(/<([^<>]+)>$/)?.[1] ?? configuredSender;
+  await resend.emails.send({ from: `ClickMoji <${address}>`, to: email, ...content });
 }
 
 export async function sendVerificationEmail(request: EmailRequest) {

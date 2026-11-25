@@ -288,7 +288,19 @@ describe('guest session validation and deleted-user rejection', () => {
     expect(adminGuard).toBeInstanceOf(Response);
     expect((adminGuard as Response).status).toBe(401);
 
-    state.getToken.mockResolvedValue({ id: 'guest-1', role: 'USER', isGuest: true });
+    state.getToken.mockResolvedValue({
+      id: 'guest-1',
+      sub: 'guest-1',
+      role: 'USER',
+      isGuest: true,
+      sessionIssuedAt: Math.floor(Date.now() / 1000),
+    });
+    state.findUniqueUser.mockResolvedValue({
+      id: 'guest-1',
+      role: 'USER',
+      isGuest: true,
+      createdAt: new Date(Date.now() - 10 * 60 * 1000),
+    });
     const loginRes = await proxy(new NextRequest('http://localhost/login'));
     expect(loginRes.headers.get('location')).toBeNull();
 

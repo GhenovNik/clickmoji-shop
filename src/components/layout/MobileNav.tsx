@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useTranslations } from 'next-intl';
 import { useSession } from 'next-auth/react';
-import { ShoppingCart, History, Star, Grid, LogIn } from 'lucide-react';
+import { ShoppingCart, History, Star, Grid, LogIn, User } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 const authenticatedNavItems = [
@@ -12,6 +12,7 @@ const authenticatedNavItems = [
   { href: '/categories', label: 'categories', icon: Grid, emoji: '📁' },
   { href: '/categories/favorites', label: 'favorites', icon: Star, emoji: '⭐' },
   { href: '/history', label: 'history', icon: History, emoji: '📜' },
+  { href: '/account', label: 'account', icon: User, emoji: '👤' },
 ] as const;
 
 const anonymousNavItems = [

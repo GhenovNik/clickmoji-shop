@@ -44,21 +44,42 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: passwordError }, { status: 400 });
     }
 
-    const result = await consumePasswordResetToken(normalizedEmail, token);
-    if (!result.success) {
-      return NextResponse.json({ error: result.reason }, { status: 400 });
-    }
-
-    const user = await prisma.user.findUnique({ where: { email: normalizedEmail } });
-    if (!user || user.isGuest) {
-      return NextResponse.json({ error: t('api.auth.resetLinkInvalid') }, { status: 400 });
-    }
-
     const hashedPassword = await bcrypt.hash(password, 12);
-    await prisma.user.update({
-      where: { email: normalizedEmail },
-      data: { password: hashedPassword, emailVerified: user.emailVerified || new Date() },
+    const outcome = await prisma.$transaction(async (tx) => {
+      // Lock the user row before consuming reset tokens so reset, password change, and account
+      // deletion always lock `users` before `password_reset_tokens` and cannot deadlock.
+      const lockedUsers = await tx.$queryRaw<
+        Array<{ id: string; emailVerified: Date | null; isGuest: boolean }>
+      >`
+        SELECT id, "emailVerified", "isGuest" FROM users WHERE email = ${normalizedEmail} FOR UPDATE
+      `;
+      const user = lockedUsers[0];
+      // A guest row has no reset path: the DB label decides, not the placeholder address alone.
+      if (!user || user.isGuest) {
+        return { ok: false as const, reason: t('api.auth.resetLinkInvalid') };
+      }
+
+      const result = await consumePasswordResetToken(normalizedEmail, token, tx);
+      if (!result.success) {
+        return { ok: false as const, reason: result.reason };
+      }
+
+      await tx.user.update({
+        where: { id: user.id },
+        data: { password: hashedPassword, emailVerified: user.emailVerified || new Date() },
+      });
+
+      // Clear any remaining reset tokens for this email so stale links cannot be reused.
+      await tx.passwordResetToken.deleteMany({
+        where: { email: normalizedEmail },
+      });
+
+      return { ok: true as const };
     });
+
+    if (!outcome.ok) {
+      return NextResponse.json({ error: outcome.reason }, { status: 400 });
+    }
 
     return NextResponse.json({ message: t('api.auth.passwordUpdated') });
   } catch (error) {

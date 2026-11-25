@@ -6,6 +6,7 @@ import './globals.css';
 import Providers from '@/components/Providers';
 import PwaRegister from '@/components/PwaRegister';
 import MobileNav from '@/components/layout/MobileNav';
+import SiteFooter from '@/components/layout/SiteFooter';
 import UserMenu from '@/components/UserMenu';
 import Link from 'next/link';
 import { Home } from 'lucide-react';
@@ -24,10 +25,10 @@ const headingFont = Rubik({
 
 export const metadata: Metadata = {
   metadataBase: new URL(process.env.NEXT_PUBLIC_APP_URL || 'https://clickmoji-shop.vercel.app'),
-  applicationName: 'Clickmoji Shop',
+  applicationName: 'ClickMoji',
   title: {
-    default: 'Clickmoji Shop - Visual Shopping Lists',
-    template: '%s | Clickmoji Shop',
+    default: 'ClickMoji - Visual Shopping Lists',
+    template: '%s | ClickMoji',
   },
   description:
     'A mobile-first shopping list app with emoji-based product selection and AI-assisted catalog tools.',
@@ -38,8 +39,8 @@ export const metadata: Metadata = {
   openGraph: {
     type: 'website',
     url: '/',
-    siteName: 'Clickmoji Shop',
-    title: 'Clickmoji Shop - Visual Shopping Lists',
+    siteName: 'ClickMoji',
+    title: 'ClickMoji - Visual Shopping Lists',
     description:
       'Build and manage shopping lists with visual product selection, favorites, history, and AI-assisted catalog tools.',
     locale: 'en_US',
@@ -47,7 +48,7 @@ export const metadata: Metadata = {
   },
   twitter: {
     card: 'summary',
-    title: 'Clickmoji Shop - Visual Shopping Lists',
+    title: 'ClickMoji - Visual Shopping Lists',
     description: 'A mobile-first, emoji-first shopping list application.',
   },
   icons: {
@@ -94,6 +95,7 @@ export default async function RootLayout({
             <main className="pt-safe-main sm:pt-20 px-safe-4 max-w-7xl mx-auto min-h-screen">
               {children}
             </main>
+            <SiteFooter />
             <MobileNav />
           </Providers>
         </NextIntlClientProvider>

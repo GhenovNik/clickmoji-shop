@@ -1,8 +1,8 @@
-# Clickmoji Shop
+# ClickMoji
 
 [![CI](https://github.com/GhenovNik/clickmoji-shop/actions/workflows/ci.yml/badge.svg)](https://github.com/GhenovNik/clickmoji-shop/actions/workflows/ci.yml)
 
-Clickmoji Shop is a mobile-first shopping list application built around visual, emoji-based
+ClickMoji is a mobile-first shopping list application built around visual, emoji-based
 product selection. It combines public catalog browsing with personal lists, favorites, shopping
 history, product variants, and optional AI-assisted catalog tools.
 
@@ -27,8 +27,8 @@ history, product variants, and optional AI-assisted catalog tools.
 ## Screenshots
 
 <p align="center">
-  <img src="docs/assets/clickmoji-home.png" alt="Clickmoji Shop home screen" width="68%" />
-  <img src="docs/assets/clickmoji-catalog-mobile.png" alt="Clickmoji Shop mobile catalog" width="27%" />
+  <img src="docs/assets/clickmoji-home.png" alt="ClickMoji home screen" width="68%" />
+  <img src="docs/assets/clickmoji-catalog-mobile.png" alt="ClickMoji mobile catalog" width="27%" />
 </p>
 
 These screenshots are generated from the local production build with synthetic catalog data. They

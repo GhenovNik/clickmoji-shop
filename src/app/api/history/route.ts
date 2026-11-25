@@ -2,7 +2,12 @@ import { NextResponse } from 'next/server';
 import { apiText } from '@/lib/api-messages';
 import { prisma } from '@/lib/prisma';
 import { requireUser } from '@/lib/auth-guards';
-import { visibleProductsWhere } from '@/lib/product-visibility';
+import {
+  keepSnapshotVariant,
+  variantOfItemProduct,
+  visibleProductsWhere,
+  visibleVariantProductIds,
+} from '@/lib/product-visibility';
 import { lockOwnedList } from '@/lib/list-lock';
 
 export async function GET(request?: Request) {
@@ -41,10 +46,27 @@ export async function GET(request?: Request) {
         : [];
     const visibleIds = new Set(visibleProducts.map((product) => product.id));
 
+    // A snapshot's variant fields are returned only while the variant is visible through its own
+    // product and agrees with the snapshot product (the same check the account export applies).
+    const snapshotVariantIds = [
+      ...new Set(
+        history.flatMap((entry) =>
+          entry.items.map((item) => item.variantId).filter((id): id is string => !!id)
+        )
+      ),
+    ];
+    const visibleVariantIds = await visibleVariantProductIds(
+      prisma,
+      session.user.id,
+      snapshotVariantIds
+    );
+
     return NextResponse.json(
       history.map((entry) => ({
         ...entry,
-        items: entry.items.filter((item) => !!item.productId && visibleIds.has(item.productId)),
+        items: entry.items
+          .filter((item) => !!item.productId && visibleIds.has(item.productId))
+          .map((item) => keepSnapshotVariant(item, visibleVariantIds)),
       }))
     );
   } catch (error) {
@@ -123,24 +145,29 @@ export async function POST(request: Request) {
           listName: list.name,
           completedAt: new Date(),
           items: {
-            create: snapshotItems.map((item) => ({
-              productId: item.productId,
-              variantId: item.variantId,
-              productName: item.product.name,
-              productNameEn: item.product.nameEn || null,
-              productEmoji: item.product.emoji,
-              productImageUrl: item.product.imageUrl,
-              productImageUrlEn: item.product.imageUrlEn,
-              categoryName: item.product.category.name,
-              categoryNameEn: item.product.category.nameEn || null,
-              isCustom: item.product.isCustom,
-              variantName: item.variant?.name || null,
-              variantNameEn: item.variant?.nameEn || null,
-              variantEmoji: item.variant?.emoji || null,
-              note: item.note || null,
-              isPurchased: item.isPurchased,
-              addedAt: item.createdAt,
-            })),
+            create: snapshotItems.map((item) => {
+              // Only a variant of the item's own (visible) product is copied; a legacy foreign
+              // variant is neither identified nor copied into the snapshot.
+              const variant = variantOfItemProduct(item.variant, item.productId);
+              return {
+                productId: item.productId,
+                variantId: variant?.id ?? null,
+                productName: item.product.name,
+                productNameEn: item.product.nameEn || null,
+                productEmoji: item.product.emoji,
+                productImageUrl: item.product.imageUrl,
+                productImageUrlEn: item.product.imageUrlEn,
+                categoryName: item.product.category.name,
+                categoryNameEn: item.product.category.nameEn || null,
+                isCustom: item.product.isCustom,
+                variantName: variant?.name || null,
+                variantNameEn: variant?.nameEn || null,
+                variantEmoji: variant?.emoji || null,
+                note: item.note || null,
+                isPurchased: item.isPurchased,
+                addedAt: item.createdAt,
+              };
+            }),
           },
         },
         include: { items: true },

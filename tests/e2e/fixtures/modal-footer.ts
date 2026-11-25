@@ -1,27 +1,36 @@
 import { expect, type Locator, type Page, type TestInfo } from '@playwright/test';
 import { encode } from 'next-auth/jwt';
 import { E2E_AUTH_COOKIE, mockAuthenticatedShopping } from './auth';
-
-// Public test-only value, NOT an application credential. Start the local server with
-// AUTH_SECRET=age-1541-local-only NEXTAUTH_SECRET=age-1541-local-only.
-const LOCAL_ADMIN_SECRET = 'age-1541-local-only';
+import {
+  MODAL_FOOTER_ADMIN,
+  MODAL_FOOTER_AUTH_SECRET,
+  MODAL_FOOTER_DB_ENV,
+  requireModalFooterDatabaseUrl,
+} from './modal-footer-db-config';
 
 export async function mockModalAdmin(page: Page) {
+  // The admin row is seeded by the global setup into the isolated loopback fixture database.
+  // The proxy and auth() re-read that row by the id bound into the token, so fail here,
+  // loudly and early, when it is not configured instead of redirecting to /login.
+  requireModalFooterDatabaseUrl(process.env[MODAL_FOOTER_DB_ENV]);
   await mockAuthenticatedShopping(page);
   // The existing proxy intentionally treats the bypass cookie as USER, never ADMIN.
-  // A locally signed NextAuth fixture exercises the real /admin routes without a DB
-  // or changing the production proxy. All browser API calls remain intercepted.
+  // A NextAuth token signed with the local-only secret, bound to the real fixture admin
+  // row and stamped with sessionIssuedAt, exercises the real /admin routes and the DB-backed
+  // session checks. All browser API calls remain intercepted.
   await page.context().clearCookies({ name: E2E_AUTH_COOKIE });
   await page.context().addCookies([
     {
       name: 'next-auth.session-token',
       value: await encode({
-        secret: LOCAL_ADMIN_SECRET,
+        secret: MODAL_FOOTER_AUTH_SECRET,
         token: {
-          id: 'modal-admin',
-          sub: 'modal-admin',
+          id: MODAL_FOOTER_ADMIN.id,
+          sub: MODAL_FOOTER_ADMIN.id,
+          email: MODAL_FOOTER_ADMIN.email,
+          name: MODAL_FOOTER_ADMIN.name,
           role: 'ADMIN',
-          name: 'Modal fixture admin',
+          sessionIssuedAt: Math.floor(Date.now() / 1000),
         },
         maxAge: 3600,
       }),
@@ -36,7 +45,7 @@ export async function mockModalAdmin(page: Page) {
     route.fulfill({
       status: 200,
       json: {
-        user: { id: 'modal-admin', name: 'Modal fixture admin', role: 'ADMIN' },
+        user: { id: MODAL_FOOTER_ADMIN.id, name: MODAL_FOOTER_ADMIN.name, role: 'ADMIN' },
         expires: '2099-01-01T00:00:00.000Z',
       },
     })

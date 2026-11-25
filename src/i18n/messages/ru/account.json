@@ -1,0 +1,50 @@
+{
+  "page": {
+    "title": "Аккаунт",
+    "subtitle": "Профиль, пароль и удаление аккаунта",
+    "guestSubtitle": "Вы вошли как гость. Списки и история хранятся на сервере.",
+    "backHome": "На главную",
+    "loadError": "Не удалось загрузить данные аккаунта"
+  },
+  "profile": {
+    "title": "Профиль",
+    "nameLabel": "Имя",
+    "nameNotSet": "Не указано",
+    "emailLabel": "Электронная почта",
+    "createdAtLabel": "Дата регистрации",
+    "signInMethodLabel": "Способ входа",
+    "signInMethodPassword": "Электронная почта и пароль",
+    "signInMethodGoogle": "Google",
+    "signInMethodGuest": "Гость"
+  },
+  "password": {
+    "title": "Смена пароля",
+    "description": "Введите текущий пароль и задайте новый пароль для входа.",
+    "currentLabel": "Текущий пароль",
+    "currentPlaceholder": "Ваш текущий пароль",
+    "newLabel": "Новый пароль",
+    "confirmLabel": "Подтвердите новый пароль",
+    "submit": "Сменить пароль",
+    "submitting": "Сохраняем...",
+    "success": "Пароль обновлён.",
+    "currentRequired": "Введите текущий пароль",
+    "googleNoticeTitle": "Вход через Google",
+    "googleNoticeBody": "Вы входите через Google, отдельный пароль для ClickMoji не нужен."
+  },
+  "delete": {
+    "title": "Удаление аккаунта",
+    "description": "Аккаунт, списки, история, избранное и товары, которые вы добавили сами, будут удалены навсегда.",
+    "passwordPrompt": "Для подтверждения введите текущий пароль.",
+    "passwordLabel": "Текущий пароль",
+    "passwordPlaceholder": "Введите текущий пароль",
+    "phrasePrompt": "Для подтверждения введите слово {word}.",
+    "phraseLabel": "Слово подтверждения",
+    "phraseWord": "УДАЛИТЬ",
+    "submit": "Удалить аккаунт навсегда",
+    "submitting": "Удаляем...",
+    "deletedTitle": "Аккаунт удалён",
+    "deletedBody": "Аккаунт и ваши данные удалены. Вы вышли из ClickMoji.",
+    "toHome": "На главную",
+    "toLogin": "Войти снова"
+  }
+}
