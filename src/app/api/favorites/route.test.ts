@@ -85,6 +85,38 @@ describe('GET /api/favorites', () => {
   });
 });
 
+// AGE-1667 Ya3 review: the legacy English column is a write-only rollback mirror; the product a
+// favorite carries is read without it (a variant is already an explicit select).
+describe('favorites do not return the legacy English column', () => {
+  const omitted = { omit: { imageUrlEn: true } };
+
+  it('GET omits it on the product of a product favorite and of a starred variant', async () => {
+    db.favorite.findMany.mockResolvedValue([]);
+    db.variantFavorite.findMany.mockResolvedValue([]);
+
+    await GET();
+
+    expect(db.favorite.findMany.mock.calls[0][0].include.product).toMatchObject(omitted);
+    const variantSelect = db.variantFavorite.findMany.mock.calls[0][0].include.variant.select;
+    expect(variantSelect.product).toMatchObject(omitted);
+    expect(variantSelect).not.toHaveProperty('imageUrlEn');
+  });
+
+  it('POST omits it on the product it returns, and on the variant it returns', async () => {
+    db.product.findFirst.mockResolvedValue({ id: 'apple' });
+    db.favorite.upsert.mockResolvedValue({ id: 'f-1', productId: 'apple', product: apple });
+    await post({ productId: 'apple' });
+    expect(db.favorite.upsert.mock.calls[0][0].include.product).toMatchObject(omitted);
+
+    db.productVariant.findFirst.mockResolvedValue({ id: 'honeycrisp' });
+    db.variantFavorite.upsert.mockResolvedValue({ id: 'vf-1', usageCount: 1, variant: honeycrisp });
+    await post({ variantId: 'honeycrisp' });
+    expect(db.variantFavorite.upsert.mock.calls[0][0].select.variant.select).not.toHaveProperty(
+      'imageUrlEn'
+    );
+  });
+});
+
 describe('POST /api/favorites', () => {
   it('stars a visible variant on its own, without touching product favorites', async () => {
     db.productVariant.findFirst.mockResolvedValue({ id: 'honeycrisp' });

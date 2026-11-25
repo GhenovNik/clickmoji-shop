@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { apiText } from '@/lib/api-messages';
 import { prisma } from '@/lib/prisma';
+import { PRODUCT_OMIT } from '@/lib/catalog-omit';
 import { requireUser } from '@/lib/auth-guards';
 import { variantOfItemProduct, visibleItemsWhere } from '@/lib/product-visibility';
 import { lockOwnedList } from '@/lib/list-lock';
@@ -49,6 +50,7 @@ export async function PUT(
         include: {
           variant: { select: { id: true, productId: true } },
           product: {
+            omit: PRODUCT_OMIT,
             include: {
               category: true,
             },

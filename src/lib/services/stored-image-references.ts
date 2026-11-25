@@ -2,7 +2,8 @@ import { Prisma, type PrismaClient } from '@prisma/client';
 import { localizedImagesOf } from '../product-image';
 
 // Every picture URL the database still points at, from one place for every cleanup command:
-// the main picture and every dictionary entry of a product (whatever its language), a category
+// the main picture and every dictionary entry (whatever its language) of a product, of a variant
+// and of a history snapshot (a snapshot outlives its product and still shows its file), a category
 // picture whatever its isCustom flag says (the stored URL may be shown again), and every library
 // picture. A file key is the last path segment of an UploadThing URL.
 //
@@ -19,7 +20,10 @@ export function storedFileKey(url: string | null | undefined): string | null {
   }
 }
 
-type ReferenceReader = Pick<PrismaClient, 'product' | 'category' | 'emojiLibraryItem'>;
+type ReferenceReader = Pick<
+  PrismaClient,
+  'product' | 'productVariant' | 'listHistoryItem' | 'category' | 'emojiLibraryItem'
+>;
 
 // URLs the caller knows about besides the ones above. A failed read must throw: the cleanup stops
 // instead of deleting a file it could not prove unused.
@@ -31,12 +35,24 @@ export async function collectReferencedFileKeys(
   prisma: ReferenceReader,
   extraReferences?: ExtraReferences
 ) {
-  const [products, categories, libraryItems] = await Promise.all([
+  const [products, variants, history, categories, libraryItems] = await Promise.all([
     prisma.product.findMany({
       where: {
         OR: [{ imageUrl: { not: null } }, { localizedImages: { not: Prisma.DbNull } }],
       },
       select: { imageUrl: true, localizedImages: true },
+    }),
+    prisma.productVariant.findMany({
+      where: {
+        OR: [{ imageUrl: { not: null } }, { localizedImages: { not: Prisma.DbNull } }],
+      },
+      select: { imageUrl: true, localizedImages: true },
+    }),
+    prisma.listHistoryItem.findMany({
+      where: {
+        OR: [{ productImageUrl: { not: null } }, { localizedImages: { not: Prisma.DbNull } }],
+      },
+      select: { productImageUrl: true, localizedImages: true },
     }),
     prisma.category.findMany({
       where: { imageUrl: { not: null } },
@@ -52,6 +68,14 @@ export async function collectReferencedFileKeys(
       product.imageUrl,
       ...Object.values(localizedImagesOf(product.localizedImages)),
     ]),
+    ...variants.flatMap((variant) => [
+      variant.imageUrl,
+      ...Object.values(localizedImagesOf(variant.localizedImages)),
+    ]),
+    ...history.flatMap((item) => [
+      item.productImageUrl,
+      ...Object.values(localizedImagesOf(item.localizedImages)),
+    ]),
     ...extra,
     ...categories.map((category) => category.imageUrl),
     ...libraryItems.map((item) => item.imageUrl),
@@ -62,6 +86,8 @@ export async function collectReferencedFileKeys(
     keys,
     counts: {
       products: products.length,
+      variants: variants.length,
+      history: history.length,
       categories: categories.length,
       library: libraryItems.length,
     },

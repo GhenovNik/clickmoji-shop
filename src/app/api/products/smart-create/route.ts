@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
+import { PRODUCT_OMIT } from '@/lib/catalog-omit';
 import { requireUser } from '@/lib/auth-guards';
 import { visibleProductsWhere } from '@/lib/product-visibility';
 import {
@@ -152,6 +153,7 @@ export async function POST(request: Request) {
           },
         ],
       },
+      omit: PRODUCT_OMIT,
       include: {
         category: true,
       },
@@ -223,6 +225,7 @@ export async function POST(request: Request) {
         isGlobal: isGlobal,
         createdById: dbUser.id,
       },
+      omit: PRODUCT_OMIT,
       include: {
         category: true,
       },

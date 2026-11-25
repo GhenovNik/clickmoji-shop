@@ -48,8 +48,9 @@
   language's text keeps its Russian version in `localizedImages.ru`.
 - `imageUrlEn` is a legacy mirror of the English dictionary entry, kept until AGE-1667 Ya6. It is
   write-only: every writer under `src` stores it next to the dictionary (the way back to the
-  previous release), nothing under `src` reads it. The tooling that still reads it lives outside
-  `src` (see the decisions below).
+  previous release), nothing under `src` reads it, and no response carries it: a query that serves
+  a product, a variant or a history snapshot omits the column (`src/lib/catalog-omit.ts`, Prisma
+  `omit`). The tooling that still reads it lives outside `src` (see the decisions below).
 - History snapshots copy the English names and picture next to the Russian ones. Snapshots taken
   before this change keep only their Russian copy: they are not filled from today's catalogue.
 - Search (`src/lib/services/product-search.ts`) finds products by either language and ranks
@@ -71,11 +72,32 @@
   entry. `src/components/admin/image-language-list.test.tsx` adds an invented `xx` to the list
   only and checks the selector, the stored dictionary, the library grouping and the form.
 - **The list limits edits, never data.** Entries of a language that is not (or not yet) listed
-  survive every write: the product API replaces the listed languages with the edit and keeps the
+  survive every write: the product API applies the edit to the languages it names and keeps the
   rest as stored (`mergeLocalizedImages`), a history snapshot and a merged duplicate copy the whole
   dictionary, and the batch import changes only its `en` entry. An edit of an unlisted language is
   ignored, so a stale form can neither erase nor add one. Rows written before this change with a
   dictionary of unlisted languages keep them.
+- **A save is an edit, not a copy of what the form shows.** `PUT /api/products/[id]` takes
+  `localizedImages` as a per-language edit (`PictureEdit`): a string sets that language, `null`
+  (or a blank string) removes it, and a language that is not in the edit is left as stored. The
+  form (`ProductForm`) submits only the languages whose picture changed since it opened; the
+  "custom image" box turned off removes the pictures the form showed, by name. The legacy English
+  column is written only when English is in the edit (a new picture, or an explicit removal, both
+  clear or set the mirror together with the dictionary). Why: the previous release writes
+  `imageUrlEn` only, so a row can hold its sole English address there while the dictionary has
+  none; the form cannot show it, and a save that "spoke for" every listed language would have
+  mirrored the missing English entry into `null` and erased the address before the repeat
+  backfill could copy it. An ordinary edit leaves the address for the backfill; an explicit removal
+  clears both places, so the backfill finds nothing to bring back. A body whose `localizedImages`
+  cannot be read changes no picture language. The dictionary is read and rewritten under a row lock
+  (`SELECT ... FOR UPDATE`) in the same transaction as the variants, so a failed save leaves
+  nothing and a repeated request ends in the same state.
+- **Writers that cannot see the legacy column.** The history snapshot (`historyPictureFields`),
+  the catalogue cleanup and the batch import copy or replace pictures from the dictionary and
+  mirror the English entry; they do not read `imageUrlEn`, so a row whose English address is still
+  only in the legacy column keeps it on the product, but a snapshot or merge made from it has no
+  English entry. Run the backfill again after the switch (see the rollout order below) before the
+  catalogue cleanup or an import, and treat snapshots taken in the window as without English.
 - **No `imageUrlEn` read under `src`.** The batch import's compare-and-set (`emoji-batch-import.ts`)
   reads and conditions on the dictionary: a queue write applies only while the main picture is empty
   and the dictionary is exactly as read (`localizedImages` equals the value read, or SQL NULL), so a
@@ -87,16 +109,20 @@
   column left; both are tooling outside `src` with their own tests (`vitest` includes
   `scripts/lib`), and the parser reads `localizedImages.en` first, then `imageUrlEn` of an older
   export.
-- **Deletion safety.** `isStoredImageInUse` (runtime) keeps a file that any dictionary entry of any
-  product shows, listed language or not, and keeps the file when the check fails. Display and the
+- **Deletion safety.** `isStoredImageInUse` (runtime) keeps a file that is the main picture or any
+  dictionary entry (listed language or not) of any product, variant or history snapshot, or any
+  category or library picture, and keeps the file when any of these checks fails. A variant and a
+  history snapshot are references of their own: a file shown only there must not be deleted. Display and the
   rest of `src` do not read `imageUrlEn`, but a row can reference a file only there: the previous
   release writes the column alone, also between the Ya2 backfill and the switch of the code. So
   the guard carries one **transitional compatibility check**: `legacyEnglishReferenceExists`
   (`scripts/lib/legacy-picture-references.ts`), a boolean database count of products (other than the
-  one being edited) whose `imageUrlEn` is the file. It returns no legacy value, an error makes the
+  one being edited), variants and history snapshots whose legacy English column
+  (`imageUrlEn`, `imageUrlEn`, `productImageUrlEn`) is the file. It returns no legacy value, an error makes the
   guard answer "in use", and it is tested for legacy-only denial and for fail-closed. The offline
-  cleanup (`npm run db:files`) passes the legacy column to the shared collector through the same
-  module and stops when that read fails. **Ya6 removes both with the column** (the helper, its call
+  cleanup (`npm run db:files`) collects the same references (`collectReferencedFileKeys`: products,
+  variants, history snapshots, categories, library) and passes the legacy columns to the shared
+  collector through the same module; it stops when any read fails. **Ya6 removes both with the column** (the helper, its call
   in `isStoredImageInUse` and the cleanup's reader). Rollout order (run the Ya2 backfill, switch the
   code, run the backfill again, then any file cleanup) narrows the window but does not by itself
   make deletion safe: the check does, for as long as the column exists. The check and the delete

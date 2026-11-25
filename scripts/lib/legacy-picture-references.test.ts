@@ -4,49 +4,72 @@ import { describe, expect, it, vi } from 'vitest';
 import { collectReferencedFileKeys } from '../../src/lib/services/stored-image-references';
 import { legacyEnglishReferenceExists, legacyEnglishReferences } from './legacy-picture-references';
 
-function db(
-  products: Array<{
-    imageUrl?: string | null;
-    imageUrlEn?: string | null;
-    localizedImages?: unknown;
-  }>
-) {
+type Row = Record<string, unknown>;
+
+// Only the columns a query selects reach the caller, and a `{ not: null }` filter keeps the rows
+// that have the column, as in the database.
+function table(rows: Row[]) {
   return {
-    product: {
-      // Only the columns the query selects reach the caller, as in the database.
-      findMany: vi.fn(
-        async ({ where, select }: { where?: unknown; select: Record<string, true> }) =>
-          products
-            .filter((product) => {
-              const clause = where as { imageUrlEn?: unknown; OR?: unknown } | undefined;
-              return clause?.imageUrlEn ? product.imageUrlEn != null : true;
-            })
-            .map((product) =>
-              Object.fromEntries(
-                Object.keys(select).map((key) => [
-                  key,
-                  (product as Record<string, unknown>)[key] ?? null,
-                ])
-              )
-            )
-      ),
-    },
+    findMany: vi.fn(async ({ where, select }: { where?: Row; select: Record<string, true> }) =>
+      rows
+        .filter((row) =>
+          Object.entries(where ?? {}).every(([column, filter]) =>
+            filter && typeof filter === 'object' && 'not' in filter
+              ? row[column] != null
+              : row[column] === filter
+          )
+        )
+        .map((row) => Object.fromEntries(Object.keys(select).map((key) => [key, row[key] ?? null])))
+    ),
+  };
+}
+
+function db(
+  products: Row[],
+  variants: Row[] = [],
+  history: Row[] = []
+): Pick<
+  PrismaClient,
+  'product' | 'productVariant' | 'listHistoryItem' | 'category' | 'emojiLibraryItem'
+> {
+  return {
+    product: table(products),
+    productVariant: table(variants),
+    listHistoryItem: table(history),
     category: { findMany: vi.fn(async () => []) },
     emojiLibraryItem: { findMany: vi.fn(async () => []) },
-  } as unknown as Pick<PrismaClient, 'product' | 'category' | 'emojiLibraryItem'>;
+  } as never;
 }
 
 describe('legacyEnglishReferences', () => {
-  it('lists the legacy English URLs of products', async () => {
+  it('lists the legacy English URLs of products, variants and history snapshots', async () => {
     const urls = await legacyEnglishReferences(
-      db([{ imageUrlEn: 'https://utfs.io/f/a-en' }, { imageUrl: 'https://utfs.io/f/b' }])
+      db(
+        [{ imageUrlEn: 'https://utfs.io/f/a-en' }, { imageUrl: 'https://utfs.io/f/b' }],
+        [{ imageUrlEn: 'https://utfs.io/f/variant-en' }, { imageUrl: 'https://utfs.io/f/v' }],
+        [{ productImageUrlEn: 'https://utfs.io/f/history-en' }, { productImageUrl: 'x' }]
+      )
     );
-    expect(urls).toEqual(['https://utfs.io/f/a-en']);
+    expect(urls.sort()).toEqual([
+      'https://utfs.io/f/a-en',
+      'https://utfs.io/f/history-en',
+      'https://utfs.io/f/variant-en',
+    ]);
   });
 
-  it('keeps a file that only the legacy column references when passed to the collector', async () => {
-    const prisma = db([{ imageUrl: null, imageUrlEn: 'https://utfs.io/f/legacy-only' }]);
-
+  it.each([
+    ['a product', db([{ imageUrlEn: 'https://utfs.io/f/legacy-only' }]), 'product'],
+    [
+      'a variant',
+      db([], [{ imageUrl: null, imageUrlEn: 'https://utfs.io/f/legacy-only' }]),
+      'productVariant',
+    ],
+    [
+      'a history snapshot',
+      db([], [], [{ productImageUrl: null, productImageUrlEn: 'https://utfs.io/f/legacy-only' }]),
+      'listHistoryItem',
+    ],
+  ])('keeps a file that only the legacy column of %s references', async (_name, prisma) => {
     const without = await collectReferencedFileKeys(prisma);
     const withLegacy = await collectReferencedFileKeys(prisma, legacyEnglishReferences);
 
@@ -54,47 +77,84 @@ describe('legacyEnglishReferences', () => {
     expect(withLegacy.keys.has('legacy-only')).toBe(true);
   });
 
-  it('fails instead of returning an empty list when the read fails', async () => {
-    const prisma = db([]);
-    (prisma.product.findMany as unknown as ReturnType<typeof vi.fn>).mockRejectedValue(
-      new Error('connection lost')
-    );
-    await expect(legacyEnglishReferences(prisma)).rejects.toThrow('connection lost');
-  });
+  it.each(['product', 'productVariant', 'listHistoryItem'] as const)(
+    'fails instead of returning an empty list when the read of %s fails',
+    async (model) => {
+      const prisma = db([]);
+      (prisma[model].findMany as unknown as ReturnType<typeof vi.fn>).mockRejectedValue(
+        new Error('connection lost')
+      );
+      await expect(legacyEnglishReferences(prisma)).rejects.toThrow('connection lost');
+    }
+  );
 });
 
 describe('legacyEnglishReferenceExists', () => {
-  function counter(count: number) {
-    const product = { count: vi.fn(async () => count) };
+  function counters(counts: { product?: number; variant?: number; history?: number } = {}) {
+    const product = { count: vi.fn(async () => counts.product ?? 0) };
+    const productVariant = { count: vi.fn(async () => counts.variant ?? 0) };
+    const listHistoryItem = { count: vi.fn(async () => counts.history ?? 0) };
     return {
-      prisma: { product } as unknown as Pick<PrismaClient, 'product'>,
-      count: product.count,
+      prisma: { product, productVariant, listHistoryItem } as unknown as Pick<
+        PrismaClient,
+        'product' | 'productVariant' | 'listHistoryItem'
+      >,
+      product,
+      productVariant,
+      listHistoryItem,
     };
   }
 
-  it('is a boolean from a database count and returns no legacy value', async () => {
-    const found = counter(2);
+  it('is a boolean from database counts and returns no legacy value', async () => {
+    const found = counters({ product: 2 });
     expect(await legacyEnglishReferenceExists(found.prisma, 'https://utfs.io/f/a')).toBe(true);
-    expect(found.count).toHaveBeenCalledWith({ where: { imageUrlEn: 'https://utfs.io/f/a' } });
+    expect(found.product.count).toHaveBeenCalledWith({
+      where: { imageUrlEn: 'https://utfs.io/f/a' },
+    });
+    expect(found.productVariant.count).toHaveBeenCalledWith({
+      where: { imageUrlEn: 'https://utfs.io/f/a' },
+    });
+    expect(found.listHistoryItem.count).toHaveBeenCalledWith({
+      where: { productImageUrlEn: 'https://utfs.io/f/a' },
+    });
 
-    expect(await legacyEnglishReferenceExists(counter(0).prisma, 'https://utfs.io/f/a')).toBe(
+    expect(await legacyEnglishReferenceExists(counters().prisma, 'https://utfs.io/f/a')).toBe(
       false
     );
   });
 
-  it('leaves the excepted product out of the count', async () => {
-    const none = counter(0);
+  it.each([['variant'], ['history']] as const)(
+    'is true when only a %s holds the address',
+    async (kind) => {
+      expect(
+        await legacyEnglishReferenceExists(counters({ [kind]: 1 }).prisma, 'https://utfs.io/f/a')
+      ).toBe(true);
+    }
+  );
+
+  it('leaves the excepted product out of the product count only', async () => {
+    const none = counters();
     await legacyEnglishReferenceExists(none.prisma, 'https://utfs.io/f/a', 'p1');
-    expect(none.count).toHaveBeenCalledWith({
+    expect(none.product.count).toHaveBeenCalledWith({
       where: { imageUrlEn: 'https://utfs.io/f/a', id: { not: 'p1' } },
+    });
+    // A variant or snapshot of that product still shows the file.
+    expect(none.productVariant.count).toHaveBeenCalledWith({
+      where: { imageUrlEn: 'https://utfs.io/f/a' },
+    });
+    expect(none.listHistoryItem.count).toHaveBeenCalledWith({
+      where: { productImageUrlEn: 'https://utfs.io/f/a' },
     });
   });
 
-  it('fails instead of answering "unused" when the count fails', async () => {
-    const failing = counter(0);
-    failing.count.mockRejectedValue(new Error('connection lost'));
-    await expect(
-      legacyEnglishReferenceExists(failing.prisma, 'https://utfs.io/f/a')
-    ).rejects.toThrow('connection lost');
-  });
+  it.each(['product', 'productVariant', 'listHistoryItem'] as const)(
+    'fails instead of answering "unused" when the count of %s fails',
+    async (model) => {
+      const failing = counters();
+      failing[model].count.mockRejectedValue(new Error('connection lost'));
+      await expect(
+        legacyEnglishReferenceExists(failing.prisma, 'https://utfs.io/f/a')
+      ).rejects.toThrow('connection lost');
+    }
+  );
 });

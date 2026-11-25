@@ -281,7 +281,8 @@ describe('AC-2 unchecking the custom-image checkbox clears the picture', () => {
     await waitFor(() => expect(onSubmit).toHaveBeenCalled());
     const [data, imageUrl] = onSubmit.mock.calls[0]!;
     expect(data).toMatchObject({ isCustom: false, imageUrl: '' });
-    expect(data.localizedImages).toEqual({});
+    // The saved English picture is removed explicitly.
+    expect(data.localizedImages).toEqual({ en: null });
     expect(imageUrl ?? '').toBe('');
   });
 
@@ -313,7 +314,7 @@ describe('AC-2 unchecking the custom-image checkbox clears the picture', () => {
     await waitFor(() => expect(onSubmit).toHaveBeenCalled());
     const [data, imageUrl] = onSubmit.mock.calls[0]!;
     expect(data.isCustom).toBe(false);
-    expect(data.localizedImages).toEqual({});
+    expect(data.localizedImages).toEqual({ en: null });
     expect(data.imageUrl || null).toBeNull();
     expect(imageUrl ?? '').toBe('');
     expect(calls.some(({ url }) => url.includes('/api/emoji/upload'))).toBe(false);
@@ -332,11 +333,9 @@ describe('AC-3 keeping the custom image', () => {
 
     await waitFor(() => expect(onSubmit).toHaveBeenCalled());
     const [data, imageUrl] = onSubmit.mock.calls[0]!;
-    expect(data).toMatchObject({
-      isCustom: true,
-      imageUrl: 'https://utfs.io/f/old.webp',
-      localizedImages: { en: 'https://utfs.io/f/old-en.webp' },
-    });
+    expect(data).toMatchObject({ isCustom: true, imageUrl: 'https://utfs.io/f/old.webp' });
+    // Nothing was touched, so no picture language is submitted: the server keeps them all.
+    expect(data.localizedImages).toEqual({});
     expect(imageUrl).toBe('https://utfs.io/f/old.webp');
   });
 });

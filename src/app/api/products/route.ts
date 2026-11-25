@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { apiText } from '@/lib/api-messages';
 import { prisma } from '@/lib/prisma';
 import { requireAdmin } from '@/lib/auth-guards';
+import { PRODUCT_OMIT, VARIANT_OMIT } from '@/lib/catalog-omit';
 import { auth } from '@/lib/auth';
 import { visibleProductsWhere } from '@/lib/product-visibility';
 import { getRequestLocale } from '@/lib/auth-security';
@@ -25,8 +26,9 @@ export async function GET(request: Request) {
       // Return the full visible catalog when no category is selected.
       const products = await prisma.product.findMany({
         where: accessFilter,
+        omit: PRODUCT_OMIT,
         include: {
-          variants: true,
+          variants: { omit: VARIANT_OMIT },
           category: {
             select: {
               id: true,
@@ -50,8 +52,9 @@ export async function GET(request: Request) {
         categoryId,
         ...accessFilter,
       },
+      omit: PRODUCT_OMIT,
       include: {
-        variants: true,
+        variants: { omit: VARIANT_OMIT },
         category: {
           select: {
             id: true,
@@ -136,8 +139,9 @@ export async function POST(request: Request) {
             }
           : undefined,
       },
+      omit: PRODUCT_OMIT,
       include: {
-        variants: true,
+        variants: { omit: VARIANT_OMIT },
         category: true,
       },
     });

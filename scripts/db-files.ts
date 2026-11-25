@@ -101,6 +101,8 @@ async function cleanupUnusedImages(isDryRun: boolean) {
   console.log(`✅ Found ${usedFileKeys.size} files in use`);
   console.log(`   - Categories with a picture: ${counts.categories}`);
   console.log(`   - Products with a picture: ${counts.products}`);
+  console.log(`   - Variants with a picture: ${counts.variants}`);
+  console.log(`   - History rows with a picture: ${counts.history}`);
   console.log(`   - Library: ${counts.library}\n`);
 
   console.log('☁️  Fetching files from UploadThing...');

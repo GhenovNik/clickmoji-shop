@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { apiText } from '@/lib/api-messages';
 import { prisma } from '@/lib/prisma';
+import { HISTORY_ITEM_OMIT, PRODUCT_OMIT, VARIANT_OMIT } from '@/lib/catalog-omit';
 import { requireUser } from '@/lib/auth-guards';
 import {
   keepSnapshotVariant,
@@ -19,7 +20,7 @@ export async function GET(request?: Request) {
 
     const history = await prisma.listHistory.findMany({
       where: { userId: session.user.id },
-      include: { items: true },
+      include: { items: { omit: HISTORY_ITEM_OMIT } },
       orderBy: { completedAt: 'desc' },
       take: 50,
     });
@@ -114,11 +115,12 @@ export async function POST(request: Request) {
         where: { listId: list.id },
         include: {
           product: {
+            omit: PRODUCT_OMIT,
             include: {
               category: true,
             },
           },
-          variant: true,
+          variant: { omit: VARIANT_OMIT },
         },
       });
 
@@ -170,7 +172,7 @@ export async function POST(request: Request) {
             }),
           },
         },
-        include: { items: true },
+        include: { items: { omit: HISTORY_ITEM_OMIT } },
       });
 
       await tx.item.deleteMany({

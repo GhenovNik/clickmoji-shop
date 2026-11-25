@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { apiText } from '@/lib/api-messages';
 import { prisma } from '@/lib/prisma';
+import { HISTORY_ITEM_OMIT } from '@/lib/catalog-omit';
 import { requireUser } from '@/lib/auth-guards';
 import { visibleProductsWhere } from '@/lib/product-visibility';
 import { getGuestIdFromRequest, recordFunnelEvent } from '@/lib/funnel';
@@ -20,7 +21,7 @@ export async function POST(
 
     const history = await prisma.listHistory.findUnique({
       where: { id: historyId, userId: session.user.id },
-      include: { items: true },
+      include: { items: { omit: HISTORY_ITEM_OMIT } },
     });
 
     if (!history) {

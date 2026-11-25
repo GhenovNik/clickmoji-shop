@@ -59,7 +59,11 @@ describe('a picture language added only to the list (xx)', () => {
     expect(productImageUrl({ imageUrl: MAIN, localizedImages: { xx: XX } }, 'xx')).toBe(XX);
 
     // The edit of the new language is accepted; an entry of an unlisted language is kept untouched.
-    expect(mergeLocalizedImages({ fr: FR, en: EN }, { xx: XX })).toEqual({ fr: FR, xx: XX });
+    expect(mergeLocalizedImages({ fr: FR, en: EN }, { xx: XX })).toEqual({
+      fr: FR,
+      en: EN,
+      xx: XX,
+    });
 
     const [group] = groupLibraryItems([
       {
@@ -116,7 +120,8 @@ describe('a picture language added only to the list (xx)', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Сохранить изменения' }));
 
     await waitFor(() => expect(onSubmit).toHaveBeenCalled());
-    expect(onSubmit.mock.calls[0]![0]).toMatchObject({ localizedImages: { en: EN } });
+    // Only the removed language is in the edit; English was not touched, so it is not sent.
+    expect(onSubmit.mock.calls[0]![0].localizedImages).toEqual({ xx: null });
   });
 
   it('shows a field for the main language too: its picture is a dictionary entry when the main one carries other text', async () => {
@@ -128,7 +133,7 @@ describe('a picture language added only to the list (xx)', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Сохранить изменения' }));
 
     await waitFor(() => expect(onSubmit).toHaveBeenCalled());
-    expect(onSubmit.mock.calls[0]![0]).toMatchObject({ localizedImages: { en: EN } });
-    expect(onSubmit.mock.calls[0]![0].localizedImages).not.toHaveProperty('ru');
+    expect(onSubmit.mock.calls[0]![0].localizedImages).toEqual({ ru: null });
+    expect(onSubmit.mock.calls[0]![0].localizedImages).not.toHaveProperty('en');
   });
 });

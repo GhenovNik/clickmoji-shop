@@ -7,6 +7,7 @@ import { localizedName } from '@/lib/catalog-name';
 import { IMAGE_LANGUAGES } from '@/lib/image-languages';
 import { imageLanguageLabel } from '@/lib/image-language-label';
 import { localizedImagesOf, type LocalizedImages } from '@/lib/product-image';
+import type { PictureEdit as LocalizedImageEdit } from '@/lib/picture-storage';
 import EmojiPicker from '../shared/EmojiPicker';
 import ImagePreviewButton from '../shared/ImagePreviewButton';
 
@@ -46,7 +47,8 @@ interface ProductFormProps {
   onCancel: () => void;
 }
 
-export type FormData = {
+// What the form works on: the pictures of the listed languages as the admin sees them.
+type FormState = {
   name: string;
   nameEn: string;
   emoji: string;
@@ -55,9 +57,18 @@ export type FormData = {
   imageUrl: string;
   // Language of the text on imageUrl: null = not labelled, 'none' = no text, otherwise a language.
   imageTextLocale: string | null;
-  // Pictures in the other picture languages, by language; a language without an entry has none.
+  // Pictures in the picture languages, by language; a language without an entry has none.
   localizedImages: LocalizedImages;
   variants?: ProductVariant[];
+};
+
+// What the form submits: the same fields, but the pictures are an EDIT, not the whole dictionary.
+// A language the admin changed carries its new URL, or `null` for a picture the admin removed; a
+// language the admin did not touch is absent. The form shows only what the dictionary holds, so a
+// picture that only the legacy English column still holds (written by the previous release) is
+// invisible to it: submitting "everything I can see" would erase that address.
+export type FormData = Omit<FormState, 'localizedImages'> & {
+  localizedImages: LocalizedImageEdit;
 };
 
 // The wording of one picture-language field.
@@ -84,7 +95,7 @@ function readAsDataUrl(file: File, failureMessage: string) {
 export default function ProductForm({ product, categories, onSubmit, onCancel }: ProductFormProps) {
   const t = useTranslations('admin');
   const locale = useLocale();
-  const [formData, setFormData] = useState<FormData>({
+  const [formData, setFormData] = useState<FormState>({
     name: product?.name || '',
     nameEn: product?.nameEn || '',
     emoji: product?.emoji || '',
@@ -227,12 +238,29 @@ export default function ProductForm({ product, categories, onSubmit, onCancel }:
     return uploadData.imageUrl as string;
   };
 
+  // The pictures to submit: only the languages whose picture the admin changed since the form
+  // opened (a new URL, or `null` for a removal). Untouched languages are absent, so the server
+  // keeps them as stored, a picture the form never showed included.
+  const pictureEdit = (): LocalizedImageEdit => {
+    const edit: LocalizedImageEdit = {};
+    for (const language of IMAGE_LANGUAGES) {
+      if (languageChanged(language)) edit[language] = formData.localizedImages[language] ?? null;
+    }
+    return edit;
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    // FR-2: an unchecked custom-image box saves no picture; the stored file is not deleted.
+    // FR-2: an unchecked custom-image box saves no picture; the stored file is not deleted. The
+    // pictures the form showed are removed explicitly; nothing else is touched.
     if (!formData.isCustom) {
-      await onSubmit({ ...formData, imageUrl: '', imageTextLocale: null, localizedImages: {} }, '');
+      const removed: LocalizedImageEdit = {};
+      for (const language of Object.keys(savedImage.localizedImages)) removed[language] = null;
+      await onSubmit(
+        { ...formData, imageUrl: '', imageTextLocale: null, localizedImages: removed },
+        ''
+      );
       return;
     }
 
@@ -267,7 +295,7 @@ export default function ProductForm({ product, categories, onSubmit, onCancel }:
       setUploading(false);
     }
 
-    await onSubmit({ ...formData, imageUrl }, imageUrl);
+    await onSubmit({ ...formData, imageUrl, localizedImages: pictureEdit() }, imageUrl);
   };
 
   const updateVariant = (index: number, key: keyof ProductVariant, value: string) => {

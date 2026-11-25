@@ -1,11 +1,15 @@
+import type { Prisma } from '@prisma/client';
 import { NextResponse } from 'next/server';
 import { apiText } from '@/lib/api-messages';
 import { prisma } from '@/lib/prisma';
 import { requireAdmin } from '@/lib/auth-guards';
+import { PRODUCT_OMIT, VARIANT_OMIT } from '@/lib/catalog-omit';
 import {
+  editsEnglish,
   legacyEnglishOf,
   localizedImagesForStorage,
   mergeLocalizedImages,
+  pictureEditOf,
 } from '@/lib/picture-storage';
 
 // Replaced or deleted pictures are not removed from UploadThing here. Between checking that
@@ -35,22 +39,35 @@ export async function PUT(
       variants,
     } = body;
 
+    // `localizedImages` is an edit of the languages the admin touched (see `PictureEdit`), not the
+    // whole dictionary. A body without a readable edit leaves every picture language alone.
+    const pictureEdit = pictureEditOf(localizedImages);
+
+    // One transaction: the picture languages, the mirror and the variants are saved together or
+    // not at all, and a retry of the same request ends in the same state.
     const product = await prisma.$transaction(async (tx) => {
-      // The edit speaks for the listed picture languages; entries of other languages stay as stored.
-      const mergedPictures =
-        localizedImages !== undefined
-          ? mergeLocalizedImages(
-              (
-                await tx.product.findUnique({
-                  where: { id: productId },
-                  select: { localizedImages: true },
-                })
-              )?.localizedImages,
-              localizedImages
-            )
-          : undefined;
+      let pictureData: Prisma.ProductUpdateInput = {};
+      if (pictureEdit && Object.keys(pictureEdit).length > 0) {
+        // The dictionary is read, changed and written back: hold the row so a concurrent edit of
+        // another language cannot be overwritten by this one's stale copy.
+        await tx.$queryRaw`SELECT id FROM products WHERE id = ${productId} FOR UPDATE`;
+        const stored = await tx.product.findUnique({
+          where: { id: productId },
+          select: { localizedImages: true },
+        });
+        const pictures = mergeLocalizedImages(stored?.localizedImages, pictureEdit);
+        pictureData = {
+          localizedImages: localizedImagesForStorage(pictures),
+          // The legacy English column is a rollback mirror of the English entry. It follows an
+          // edit of English (a new picture, or an explicit removal) and is left as stored when
+          // English is not in the edit: a row written by the previous release may keep its only
+          // English address there until the backfill copies it into the dictionary.
+          ...(editsEnglish(pictureEdit) && { imageUrlEn: legacyEnglishOf(pictures) }),
+        };
+      }
       const updatedProduct = await tx.product.update({
         where: { id: productId },
+        omit: PRODUCT_OMIT,
         data: {
           ...(name && { name }),
           ...(nameEn && { nameEn }),
@@ -59,10 +76,7 @@ export async function PUT(
           ...(isCustom !== undefined && { isCustom }),
           ...(imageUrl !== undefined && { imageUrl }),
           ...(imageTextLocale !== undefined && { imageTextLocale: imageTextLocale || null }),
-          ...(mergedPictures !== undefined && {
-            localizedImages: localizedImagesForStorage(mergedPictures),
-            imageUrlEn: legacyEnglishOf(mergedPictures),
-          }),
+          ...pictureData,
         },
       });
 
@@ -116,7 +130,8 @@ export async function PUT(
 
       const updatedWithRelations = await tx.product.findUnique({
         where: { id: productId },
-        include: { variants: true, category: true },
+        omit: PRODUCT_OMIT,
+        include: { variants: { omit: VARIANT_OMIT }, category: true },
       });
 
       return updatedWithRelations ?? updatedProduct;

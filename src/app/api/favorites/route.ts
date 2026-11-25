@@ -1,16 +1,21 @@
 import { NextResponse } from 'next/server';
 import { apiText } from '@/lib/api-messages';
 import { prisma } from '@/lib/prisma';
+import { PRODUCT_OMIT } from '@/lib/catalog-omit';
 import { requireUser } from '@/lib/auth-guards';
 import { visibleProductsWhere } from '@/lib/product-visibility';
 
-const productInclude = {
-  category: {
-    select: {
-      id: true,
-      name: true,
-      nameEn: true,
-      emoji: true,
+// The product of a favorite: its pictures come from the dictionary (the legacy column is omitted).
+const productArgs = {
+  omit: PRODUCT_OMIT,
+  include: {
+    category: {
+      select: {
+        id: true,
+        name: true,
+        nameEn: true,
+        emoji: true,
+      },
     },
   },
 } as const;
@@ -40,7 +45,7 @@ export async function GET(request?: Request) {
           userId: session.user.id,
           product: visibleProductsWhere(session.user.id),
         },
-        include: { product: { include: productInclude } },
+        include: { product: productArgs },
       }),
       prisma.variantFavorite.findMany({
         where: {
@@ -48,7 +53,7 @@ export async function GET(request?: Request) {
           variant: { product: visibleProductsWhere(session.user.id) },
         },
         include: {
-          variant: { select: { ...variantSelect, product: { include: productInclude } } },
+          variant: { select: { ...variantSelect, product: productArgs } },
         },
       }),
     ]);
@@ -144,7 +149,7 @@ export async function POST(request: Request) {
         productId,
         usageCount: 1,
       },
-      include: { product: { include: productInclude } },
+      include: { product: productArgs },
     });
 
     return NextResponse.json({ ...favorite, variant: null });
