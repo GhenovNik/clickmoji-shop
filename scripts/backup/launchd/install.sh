@@ -66,6 +66,7 @@ mkdir -p "$AGENTS_DIR" "$STATE_DIR"
 chmod 700 "$STATE_DIR"
 
 TMP_PLIST="$AGENTS_DIR/.$LABEL.plist.tmp.$$"
+PREV_PLIST="$AGENTS_DIR/.$LABEL.plist.prev.$$"
 trap 'rm -f "$TMP_PLIST"' EXIT
 sed \
   -e "s|__LABEL__|$LABEL|g" \
@@ -78,14 +79,67 @@ sed \
 if command -v plutil >/dev/null 2>&1; then
   plutil -lint "$TMP_PLIST" >/dev/null || fail "plist не прошёл проверку plutil"
 fi
-mv -f "$TMP_PLIST" "$PLIST"
+# Order matters. The old job and the old plist stay untouched until bootout has succeeded. After that the
+# old plist is moved aside (same bytes, same file), the new one is put in place and bootstrapped. Any
+# failure from that point goes through rollback, which puts the old plist back and reloads the old job
+# if it was loaded before. A job that was not loaded before is never loaded by a rollback.
+was_loaded=0
+if launchctl print "$DOMAIN/$LABEL" >/dev/null 2>&1; then was_loaded=1; fi
+had_plist=0
+if [ -e "$PLIST" ] || [ -L "$PLIST" ]; then had_plist=1; fi
+moved_old=0
+placed_new=0
+
+recovery_failed() {
+  printf 'install: ВОССТАНОВЛЕНИЕ НЕ УДАЛОСЬ: %s\n' "$1" >&2
+  printf 'install: агент %s может быть не загружен; проверьте %s и повторите install.sh\n' "$LABEL" "$PLIST" >&2
+  if [ "$moved_old" -eq 1 ]; then
+    printf 'install: прежний plist сохранён в %s\n' "$PREV_PLIST" >&2
+  fi
+  exit 2
+}
+
+rollback() {
+  printf 'install: %s\n' "$1" >&2
+  if [ "$placed_new" -eq 1 ]; then
+    rm -f "$PLIST" || recovery_failed "не удалось убрать новый plist $PLIST"
+    placed_new=0
+  fi
+  if [ "$moved_old" -eq 1 ]; then
+    mv -f "$PREV_PLIST" "$PLIST" || recovery_failed "не удалось вернуть прежний plist из $PREV_PLIST"
+    moved_old=0
+  fi
+  if [ "$was_loaded" -eq 1 ]; then
+    if launchctl bootstrap "$DOMAIN" "$PLIST" && launchctl print "$DOMAIN/$LABEL" >/dev/null 2>&1; then
+      printf 'install: прежний агент восстановлен из прежнего plist; новая настройка не установлена\n' >&2
+      exit 1
+    fi
+    recovery_failed "прежний агент не загрузился обратно после отката"
+  fi
+  printf 'install: откат выполнен; агент %s не установлен\n' "$LABEL" >&2
+  exit 1
+}
+
+if [ "$had_plist" -eq 1 ]; then
+  if [ "$was_loaded" -eq 1 ]; then
+    launchctl bootout "$DOMAIN/$LABEL" || fail "launchctl bootout не выполнен; прежний агент и plist не тронуты"
+  fi
+  mv -f "$PLIST" "$PREV_PLIST" || rollback "не удалось отложить прежний plist"
+  moved_old=1
+elif [ "$was_loaded" -eq 1 ]; then
+  launchctl bootout "$DOMAIN/$LABEL" || fail "launchctl bootout не выполнен; прежний агент не тронут"
+fi
+
+mv -f "$TMP_PLIST" "$PLIST" || rollback "не удалось записать новый plist"
+placed_new=1
 trap - EXIT
 
-# Replace a loaded agent; a job that is not loaded is simply bootstrapped.
-if launchctl print "$DOMAIN/$LABEL" >/dev/null 2>&1; then
-  launchctl bootout "$DOMAIN/$LABEL" || fail "launchctl bootout не выполнен; агент не заменён"
+if ! launchctl bootstrap "$DOMAIN" "$PLIST"; then
+  rollback "launchctl bootstrap нового агента не выполнен"
 fi
-launchctl bootstrap "$DOMAIN" "$PLIST" || fail "launchctl bootstrap не выполнен; см. $PLIST"
+if [ "$moved_old" -eq 1 ]; then
+  rm -f "$PREV_PLIST"
+fi
 
 printf 'install: агент %s установлен, интервал %s с, статус: %s\n' "$LABEL" "$INTERVAL" \
   "$STATE_DIR/status.tsv"

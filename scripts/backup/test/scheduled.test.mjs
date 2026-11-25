@@ -1,6 +1,7 @@
 // Scheduled copy wrapper and launchd installer (AGE-1669). Fake security, npm and launchctl
 // only: no Keychain, no database, no LaunchAgent is touched. HOME is a sandbox, so the paths the
-// scripts derive from it stay inside the sandbox. The database address below is generated per run.
+// scripts derive from it stay inside the sandbox. The database addresses below are generated per run
+// and point only at localhost.
 import { spawnSync } from 'node:child_process';
 import crypto from 'node:crypto';
 import {
@@ -28,21 +29,56 @@ const WRAPPER = path.join(REPO_ROOT, 'scripts', 'backup', 'run-scheduled.sh');
 const INSTALL = path.join(REPO_ROOT, 'scripts', 'backup', 'launchd', 'install.sh');
 const UNINSTALL = path.join(REPO_ROOT, 'scripts', 'backup', 'launchd', 'uninstall.sh');
 const LABEL = 'com.clickmoji.db-backup';
+const SERVICE = 'clickmoji-backup-readonly';
+const ACCOUNT = 'clickmoji';
 const FAILED_TEXT = 'сбой: нет роли только на чтение в связке ключей';
 const STATUS_LINE =
   /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z\tfailed\tсбой: нет роли только на чтение в связке ключей\n$/;
+const RECOVERY_FAILED = 'ВОССТАНОВЛЕНИЕ НЕ УДАЛОСЬ';
 
 const roots = [];
 after(() => {
   for (const root of roots) rmSync(root, { recursive: true, force: true });
 });
 
-const FAKE_SECURITY = `#!/bin/sh
-# Fake macOS security: records its argv, then prints and exits as the test asks.
-printf '%s\\n' "$*" > "$FAKE_RECORD_DIR/security-argv"
-if [ -n "\${FAKE_SECURITY_STDERR:-}" ]; then printf '%s\\n' "$FAKE_SECURITY_STDERR" >&2; fi
-if [ -n "\${FAKE_SECURITY_OUTPUT:-}" ]; then printf '%s\\n' "$FAKE_SECURITY_OUTPUT"; fi
-exit "\${FAKE_SECURITY_EXIT:-0}"
+// Fake macOS security, written in Node so it can match records exactly. It logs its argv, then looks
+// up the fixture table in FAKE_KEYCHAIN_FILE. A row is: keychain path, service, account, secret, joined
+// by tabs. A lookup must match service and account exactly; when a keychain path is given it must also
+// match that keychain. Without a keychain path any keychain matches, as the search list would. The
+// first matching row is printed, and a miss exits 44 with a diagnostic that the wrapper must not show.
+const FAKE_SECURITY = `#!/usr/bin/env node
+const fs = require('node:fs');
+const path = require('node:path');
+const args = process.argv.slice(2);
+fs.writeFileSync(path.join(process.env.FAKE_RECORD_DIR, 'security-argv'), args.join(' ') + '\\n');
+let service = '';
+let account = '';
+let keychain = '';
+for (let i = 0; i < args.length; i += 1) {
+  if (args[i] === '-s') {
+    i += 1;
+    service = args[i];
+  } else if (args[i] === '-a') {
+    i += 1;
+    account = args[i];
+  } else if (args[i] !== 'find-generic-password' && args[i] !== '-w' && !args[i].startsWith('-')) {
+    keychain = args[i];
+  }
+}
+const rows = fs
+  .readFileSync(process.env.FAKE_KEYCHAIN_FILE, 'utf8')
+  .split('\\n')
+  .filter((line) => line !== '')
+  .map((line) => line.split('\\t'));
+const hit = rows.find(
+  ([kc, svc, acct]) => svc === service && acct === account && (keychain === '' || kc === keychain)
+);
+if (!hit) {
+  process.stderr.write('security: SecKeychainSearchCopyNext: The specified item could not be found.\\n');
+  process.exit(44);
+}
+process.stdout.write(hit[3] + '\\n');
+process.exit(0);
 `;
 
 // Fake npm: records only booleans and the fixed settings it was given, never the address itself.
@@ -57,6 +93,8 @@ exit "\${FAKE_NPM_EXIT:-0}"
 `;
 
 // Fake launchctl: the loaded state is a marker file; every call is logged with its arguments.
+// FAKE_BOOTSTRAP_FAIL_ALL makes every bootstrap fail; FAKE_BOOTSTRAP_FAIL_WHEN makes a bootstrap fail
+// only when the plist it loads contains that fixed text.
 const FAKE_LAUNCHCTL = `#!/bin/sh
 state="$FAKE_RECORD_DIR/loaded"
 printf '%s\\n' "$*" >> "$FAKE_RECORD_DIR/launchctl.log"
@@ -67,6 +105,8 @@ case "$1" in
     if [ ! -f "$state" ]; then exit 113; fi
     rm -f "$state"; exit 0 ;;
   bootstrap)
+    if [ -n "\${FAKE_BOOTSTRAP_FAIL_ALL:-}" ]; then exit 5; fi
+    if [ -n "\${FAKE_BOOTSTRAP_FAIL_WHEN:-}" ] && grep -q -F -- "$FAKE_BOOTSTRAP_FAIL_WHEN" "$3"; then exit 5; fi
     if [ -f "$state" ]; then exit 37; fi
     if [ ! -f "$3" ]; then exit 2; fi
     touch "$state"; exit 0 ;;
@@ -80,9 +120,11 @@ function makeSandbox() {
   const home = path.join(root, 'home');
   const bin = path.join(root, 'bin');
   const record = path.join(root, 'record');
+  const keychainFile = path.join(root, 'keychain.tsv');
   mkdirSync(path.join(home, 'Projects'), { recursive: true });
   mkdirSync(bin);
   mkdirSync(record);
+  writeFileSync(keychainFile, '');
   for (const [name, body] of [
     ['security', FAKE_SECURITY],
     ['npm', FAKE_NPM],
@@ -92,7 +134,24 @@ function makeSandbox() {
     writeFileSync(file, body);
     chmodSync(file, 0o755);
   }
-  return { root, home, bin, record };
+  return { root, home, bin, record, keychainFile };
+}
+
+// The login keychain path the wrapper must name, and a second keychain that holds decoy records.
+function loginKeychain(sandbox) {
+  return path.join(sandbox.home, 'Library', 'Keychains', 'login.keychain-db');
+}
+
+function otherKeychain(sandbox) {
+  return path.join(sandbox.home, 'Library', 'Keychains', 'old-login.keychain-db');
+}
+
+// Replaces the fixture table. Each row is { keychain, service, account, secret }.
+function setKeychainRows(sandbox, rows) {
+  const text = rows
+    .map((row) => [row.keychain, row.service, row.account, row.secret].join('\t') + '\n')
+    .join('');
+  writeFileSync(sandbox.keychainFile, text);
 }
 
 // A fake main checkout: the sandbox's ~/Projects/clickmoji-shop points at the real repository.
@@ -111,6 +170,7 @@ function baseEnv(sandbox, extra = {}) {
     PATH: `${sandbox.bin}:${process.env.PATH}`,
     LANG: 'C',
     FAKE_RECORD_DIR: sandbox.record,
+    FAKE_KEYCHAIN_FILE: sandbox.keychainFile,
     ...extra,
   };
 }
@@ -134,26 +194,43 @@ function filesUnder(dir) {
   return out;
 }
 
+// The fixture table holds the test's own addresses by design, so it is the one file skipped here.
 function assertNoSecretOnDisk(sandbox, secret) {
   for (const file of filesUnder(sandbox.root)) {
+    if (file === sandbox.keychainFile) continue;
     assert.equal(readText(file).includes(secret), false, `secret found in ${path.basename(file)}`);
   }
 }
 
 describe('run-scheduled.sh', () => {
-  it('passes the Keychain address only in npm environment and writes no secret anywhere', () => {
+  it('reads only the intended record and passes it only in npm environment', () => {
     const sandbox = makeSandbox();
-    const secret = randomSecretUrl();
-    const env = baseEnv(sandbox, {
-      FAKE_SECURITY_OUTPUT: secret,
-      FAKE_EXPECTED_URL: secret,
-    });
+    const intended = randomSecretUrl();
+    // Two decoys share the service. One is in another keychain and comes first in the table, so a
+    // lookup without an explicit keychain would return it. The other is in the login keychain under
+    // a different account.
+    setKeychainRows(sandbox, [
+      {
+        keychain: otherKeychain(sandbox),
+        service: SERVICE,
+        account: ACCOUNT,
+        secret: randomSecretUrl(),
+      },
+      { keychain: loginKeychain(sandbox), service: SERVICE, account: ACCOUNT, secret: intended },
+      {
+        keychain: loginKeychain(sandbox),
+        service: SERVICE,
+        account: 'clickmoji-admin',
+        secret: randomSecretUrl(),
+      },
+    ]);
+    const env = baseEnv(sandbox, { FAKE_EXPECTED_URL: intended });
     const result = run(WRAPPER, [], env);
 
     assert.equal(result.status, 0, result.stderr);
     assert.equal(
       readText(path.join(sandbox.record, 'security-argv')).trim(),
-      'find-generic-password -s clickmoji-backup-readonly -w'
+      `find-generic-password -s ${SERVICE} -a ${ACCOUNT} -w ${loginKeychain(sandbox)}`
     );
     assert.equal(readText(path.join(sandbox.record, 'npm-argv')).trim(), 'run db:backup:verified');
     assert.equal(readText(path.join(sandbox.record, 'npm-url')).trim(), 'match');
@@ -177,21 +254,43 @@ describe('run-scheduled.sh', () => {
     assert.ok(npmEnv.includes('BACKUP_ENCRYPT=0\n'), npmEnv);
     assert.ok(npmEnv.includes('BACKUP_RETENTION_COUNT=2\n'), npmEnv);
 
-    assert.equal(result.stdout.includes(secret), false);
-    assert.equal(result.stderr.includes(secret), false);
-    assertNoSecretOnDisk(sandbox, secret);
+    assert.equal(result.stdout.includes(intended), false);
+    assert.equal(result.stderr.includes(intended), false);
+    assertNoSecretOnDisk(sandbox, intended);
+  });
+
+  it('does not run npm when only wrong-keychain or wrong-account records exist', () => {
+    const sandbox = makeSandbox();
+    // Neither decoy is the intended record: one is in another keychain, one in the login keychain
+    // under another account. Nothing should be used, so npm must not run.
+    setKeychainRows(sandbox, [
+      {
+        keychain: otherKeychain(sandbox),
+        service: SERVICE,
+        account: ACCOUNT,
+        secret: randomSecretUrl(),
+      },
+      {
+        keychain: loginKeychain(sandbox),
+        service: SERVICE,
+        account: 'clickmoji-admin',
+        secret: randomSecretUrl(),
+      },
+    ]);
+    const result = run(WRAPPER, [], baseEnv(sandbox, { FAKE_EXPECTED_URL: randomSecretUrl() }));
+
+    assert.equal(result.status, 1);
+    assert.equal(existsSync(path.join(sandbox.record, 'npm-argv')), false, 'npm must not run');
+    assert.ok(result.stdout.includes(FAILED_TEXT), result.stdout);
+    assert.match(
+      readText(path.join(sandbox.home, 'Library', 'Logs', 'clickmoji-backup', 'status.tsv')),
+      STATUS_LINE
+    );
   });
 
   it('records a failed Keychain lookup in the status format and never runs npm', () => {
     const sandbox = makeSandbox();
-    const diagnostic =
-      'security: SecKeychainSearchCopyNext: The specified item could not be found.';
-    const env = baseEnv(sandbox, {
-      FAKE_SECURITY_EXIT: '44',
-      FAKE_SECURITY_STDERR: diagnostic,
-      FAKE_EXPECTED_URL: randomSecretUrl(),
-    });
-    const result = run(WRAPPER, [], env);
+    const result = run(WRAPPER, [], baseEnv(sandbox, { FAKE_EXPECTED_URL: randomSecretUrl() }));
 
     assert.equal(result.status, 1);
     assert.equal(existsSync(path.join(sandbox.record, 'npm-argv')), false, 'npm must not run');
@@ -209,8 +308,10 @@ describe('run-scheduled.sh', () => {
   it('treats an empty Keychain value as a missing role and writes the same status line', () => {
     // An empty value with exit 0 is the same failure as a lookup that found nothing.
     const sandbox = makeSandbox();
-    const env = baseEnv(sandbox, { FAKE_SECURITY_EXIT: '0', FAKE_SECURITY_OUTPUT: '' });
-    const result = run(WRAPPER, [], env);
+    setKeychainRows(sandbox, [
+      { keychain: loginKeychain(sandbox), service: SERVICE, account: ACCOUNT, secret: '' },
+    ]);
+    const result = run(WRAPPER, [], baseEnv(sandbox));
 
     assert.equal(result.status, 1);
     assert.equal(existsSync(path.join(sandbox.record, 'npm-argv')), false, 'npm must not run');
@@ -223,11 +324,10 @@ describe('run-scheduled.sh', () => {
   it('keeps the exit code of a failed copy and leaves the status file to the copy itself', () => {
     const sandbox = makeSandbox();
     const secret = randomSecretUrl();
-    const env = baseEnv(sandbox, {
-      FAKE_SECURITY_OUTPUT: secret,
-      FAKE_EXPECTED_URL: secret,
-      FAKE_NPM_EXIT: '3',
-    });
+    setKeychainRows(sandbox, [
+      { keychain: loginKeychain(sandbox), service: SERVICE, account: ACCOUNT, secret },
+    ]);
+    const env = baseEnv(sandbox, { FAKE_EXPECTED_URL: secret, FAKE_NPM_EXIT: '3' });
     const result = run(WRAPPER, [], env);
 
     assert.equal(result.status, 3);
@@ -245,7 +345,7 @@ describe('run-scheduled.sh', () => {
     writeFileSync(elsewhere, 'unchanged\n');
     symlinkSync(elsewhere, path.join(logDir, 'status.tsv'));
 
-    const result = run(WRAPPER, [], baseEnv(sandbox, { FAKE_SECURITY_EXIT: '44' }));
+    const result = run(WRAPPER, [], baseEnv(sandbox));
 
     assert.equal(result.status, 1);
     assert.equal(readText(elsewhere), 'unchanged\n');
@@ -255,13 +355,26 @@ describe('run-scheduled.sh', () => {
 });
 
 describe('launchd installer and remover', () => {
+  // Every file in the LaunchAgents directory, so a leftover temporary or backup copy shows up.
+  function agentDirFiles(sandbox) {
+    return readdirSync(path.join(sandbox.home, 'Library', 'LaunchAgents')).sort();
+  }
+
+  function plistPath(sandbox) {
+    return path.join(sandbox.home, 'Library', 'LaunchAgents', `${LABEL}.plist`);
+  }
+
+  function launchctlCalls(sandbox) {
+    return readText(path.join(sandbox.record, 'launchctl.log')).trim().split('\n');
+  }
+
   it('installs the agent with the default interval and no run at load', () => {
     const sandbox = makeSandbox();
     linkMainCheckout(sandbox);
     const result = run(INSTALL, [], baseEnv(sandbox));
 
     assert.equal(result.status, 0, result.stderr);
-    const plist = readText(path.join(sandbox.home, 'Library', 'LaunchAgents', `${LABEL}.plist`));
+    const plist = readText(plistPath(sandbox));
     assert.match(plist, new RegExp(`<key>StartInterval</key>\\s*<integer>259200</integer>`));
     assert.match(plist, /<key>RunAtLoad<\/key>\s*<false\/>/);
     assert.ok(plist.includes(`<string>${WRAPPER}</string>`));
@@ -277,6 +390,7 @@ describe('launchd installer and remover', () => {
       /^bootstrap gui\/\d+ .*\.plist$/m
     );
     assert.ok(existsSync(path.join(sandbox.record, 'loaded')));
+    assert.deepEqual(agentDirFiles(sandbox), [`${LABEL}.plist`]);
   });
 
   it('replaces a loaded agent with bootout before bootstrap, and takes a configured interval', () => {
@@ -291,7 +405,7 @@ describe('launchd installer and remover', () => {
     );
     assert.equal(second.status, 0, second.stderr);
 
-    const calls = readText(path.join(sandbox.record, 'launchctl.log')).trim().split('\n');
+    const calls = launchctlCalls(sandbox);
     const bootoutAt = calls.findIndex((line) => line.startsWith('bootout'));
     const bootstrapAt = calls.findLastIndex((line) => line.startsWith('bootstrap'));
     assert.equal(calls.filter((line) => line.startsWith('bootout')).length, 1);
@@ -300,9 +414,12 @@ describe('launchd installer and remover', () => {
       bootoutAt >= 0 && bootoutAt < bootstrapAt,
       'bootout comes before the second bootstrap'
     );
-    const plist = readText(path.join(sandbox.home, 'Library', 'LaunchAgents', `${LABEL}.plist`));
-    assert.match(plist, /<key>StartInterval<\/key>\s*<integer>3600<\/integer>/);
+    assert.match(
+      readText(plistPath(sandbox)),
+      /<key>StartInterval<\/key>\s*<integer>3600<\/integer>/
+    );
     assert.ok(existsSync(path.join(sandbox.record, 'loaded')));
+    assert.deepEqual(agentDirFiles(sandbox), [`${LABEL}.plist`]);
   });
 
   it('refuses an invalid interval before writing anything', () => {
@@ -322,24 +439,93 @@ describe('launchd installer and remover', () => {
     const result = run(INSTALL, [], baseEnv(sandbox));
 
     assert.equal(result.status, 1);
-    assert.equal(
-      existsSync(path.join(sandbox.home, 'Library', 'LaunchAgents', `${LABEL}.plist`)),
-      false
-    );
+    assert.equal(existsSync(plistPath(sandbox)), false);
     assert.equal(existsSync(path.join(sandbox.record, 'launchctl.log')), false);
   });
 
-  it('keeps the old agent and does not bootstrap when bootout fails', () => {
+  it('keeps the old plist byte for byte and the loaded agent when bootout fails', () => {
     const sandbox = makeSandbox();
     linkMainCheckout(sandbox);
     assert.equal(run(INSTALL, [], baseEnv(sandbox)).status, 0);
+    const oldPlist = readFileSync(plistPath(sandbox));
 
-    const result = run(INSTALL, [], baseEnv(sandbox, { FAKE_BOOTOUT_FAIL: '1' }));
-    assert.equal(result.status, 1);
-    const bootstraps = readText(path.join(sandbox.record, 'launchctl.log'))
-      .split('\n')
-      .filter((l) => l.startsWith('bootstrap'));
+    const result = run(
+      INSTALL,
+      [],
+      baseEnv(sandbox, { CLICKMOJI_BACKUP_INTERVAL_SECONDS: '3600', FAKE_BOOTOUT_FAIL: '1' })
+    );
+
+    assert.equal(result.status, 1, result.stderr);
+    assert.ok(result.stderr.includes('прежний агент и plist не тронуты'), result.stderr);
+    assert.deepEqual(readFileSync(plistPath(sandbox)), oldPlist, 'old plist unchanged');
+    assert.ok(existsSync(path.join(sandbox.record, 'loaded')), 'old job still loaded');
+    const bootstraps = launchctlCalls(sandbox).filter((l) => l.startsWith('bootstrap'));
     assert.equal(bootstraps.length, 1, 'no second bootstrap');
+    assert.deepEqual(agentDirFiles(sandbox), [`${LABEL}.plist`], 'no temporary copies left');
+  });
+
+  it('restores the old plist and reloads the old job when bootstrap of the new one fails', () => {
+    const sandbox = makeSandbox();
+    linkMainCheckout(sandbox);
+    assert.equal(run(INSTALL, [], baseEnv(sandbox)).status, 0);
+    const oldPlist = readFileSync(plistPath(sandbox));
+
+    const result = run(
+      INSTALL,
+      [],
+      baseEnv(sandbox, {
+        CLICKMOJI_BACKUP_INTERVAL_SECONDS: '3600',
+        FAKE_BOOTSTRAP_FAIL_WHEN: '<integer>3600</integer>',
+      })
+    );
+
+    assert.equal(result.status, 1, result.stderr);
+    assert.ok(result.stderr.includes('прежний агент восстановлен'), result.stderr);
+    assert.equal(result.stderr.includes(RECOVERY_FAILED), false);
+    assert.deepEqual(
+      readFileSync(plistPath(sandbox)),
+      oldPlist,
+      'old plist restored byte for byte'
+    );
+    assert.ok(existsSync(path.join(sandbox.record, 'loaded')), 'old job reloaded');
+    // A launchctl print follows the restore; only the state-changing calls are compared.
+    const changing = launchctlCalls(sandbox)
+      .map((line) => line.split(' ')[0])
+      .filter((verb) => verb === 'bootout' || verb === 'bootstrap');
+    assert.deepEqual(
+      changing.slice(-3),
+      ['bootout', 'bootstrap', 'bootstrap'],
+      'bootout, failed new bootstrap, then the restore'
+    );
+    assert.deepEqual(agentDirFiles(sandbox), [`${LABEL}.plist`], 'no temporary copies left');
+  });
+
+  it('leaves no agent and no plist when the first install fails to bootstrap', () => {
+    const sandbox = makeSandbox();
+    linkMainCheckout(sandbox);
+
+    const result = run(INSTALL, [], baseEnv(sandbox, { FAKE_BOOTSTRAP_FAIL_ALL: '1' }));
+
+    assert.equal(result.status, 1, result.stderr);
+    assert.equal(result.stderr.includes(RECOVERY_FAILED), false);
+    assert.equal(existsSync(path.join(sandbox.record, 'loaded')), false, 'not loaded');
+    assert.equal(existsSync(plistPath(sandbox)), false, 'no plist left behind');
+    assert.deepEqual(agentDirFiles(sandbox), [], 'a later run starts clean');
+  });
+
+  it('reports a failed restore with its own exit code and keeps the old plist on disk', () => {
+    const sandbox = makeSandbox();
+    linkMainCheckout(sandbox);
+    assert.equal(run(INSTALL, [], baseEnv(sandbox)).status, 0);
+    const oldPlist = readFileSync(plistPath(sandbox));
+
+    // Every bootstrap fails, so the restore of the old job fails as well.
+    const result = run(INSTALL, [], baseEnv(sandbox, { FAKE_BOOTSTRAP_FAIL_ALL: '1' }));
+
+    assert.equal(result.status, 2, result.stderr);
+    assert.ok(result.stderr.includes(RECOVERY_FAILED), result.stderr);
+    assert.deepEqual(readFileSync(plistPath(sandbox)), oldPlist, 'old plist kept for recovery');
+    assert.equal(existsSync(path.join(sandbox.record, 'loaded')), false, 'job is not loaded');
   });
 
   it('removes the agent, is idempotent, and keeps the status file and copies', () => {
@@ -351,10 +537,7 @@ describe('launchd installer and remover', () => {
 
     const first = run(UNINSTALL, [], baseEnv(sandbox));
     assert.equal(first.status, 0, first.stderr);
-    assert.equal(
-      existsSync(path.join(sandbox.home, 'Library', 'LaunchAgents', `${LABEL}.plist`)),
-      false
-    );
+    assert.equal(existsSync(plistPath(sandbox)), false);
     assert.equal(existsSync(path.join(sandbox.record, 'loaded')), false);
 
     const second = run(UNINSTALL, [], baseEnv(sandbox));

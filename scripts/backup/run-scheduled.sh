@@ -3,7 +3,8 @@
 # installed from scripts/backup/launchd, or by hand from the main checkout.
 #
 # The read-only database address is read from the login Keychain (generic password, service
-# clickmoji-backup-readonly). It is held in one shell variable and passed only in the environment of
+# clickmoji-backup-readonly, account clickmoji, keychain $HOME/Library/Keychains/login.keychain-db).
+# It is held in one shell variable and passed only in the environment of
 # the single npm process. It never appears in argv, a file, a log or a status line. security's own
 # diagnostics are discarded, so a lookup failure prints only the fixed status text.
 #
@@ -23,8 +24,13 @@ TMP_DIR="$HOME/Library/Caches/clickmoji-backup/tmp"
 mkdir -p "$STATE_DIR" "$TMP_DIR"
 chmod 700 "$STATE_DIR" "$TMP_DIR"
 
+# The lookup names the account and the login keychain explicitly, so it matches exactly the item
+# that docs/ops.md tells the operator to store. Without the keychain argument security would search
+# the whole keychain list and could return another item with the same service. There is no retry
+# with a looser query: a miss is the fixed failure below.
+LOGIN_KEYCHAIN="$HOME/Library/Keychains/login.keychain-db"
 lookup_status=0
-database_url="$(security find-generic-password -s clickmoji-backup-readonly -w 2>/dev/null)" || lookup_status=$?
+database_url="$(security find-generic-password -s clickmoji-backup-readonly -a clickmoji -w "$LOGIN_KEYCHAIN" 2>/dev/null)" || lookup_status=$?
 
 if [ "$lookup_status" -ne 0 ] || [ -z "$database_url" ]; then
   database_url=""
