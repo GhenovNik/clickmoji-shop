@@ -113,7 +113,7 @@ The server, never the browser, decides which path a round trip takes:
 - **Arm.** `POST /api/auth/guest-upgrade` checks that the caller is a live guest (409 otherwise) and
   sets `clickmoji_guest_upgrade_arm`: a signed, httpOnly, SameSite Lax cookie bound to that guest's
   `User.id`, valid for 120 seconds. The register page calls it, then `signIn('google', { callbackUrl,
-  guestUpgrade: 'explicit' })`.
+guestUpgrade: 'explicit' })`.
 - **Start.** The request names the start. `next-auth/react` sends every `signIn` option as a form
   field of the POST, so the explicit start is the POST body field `guestUpgrade=explicit`. Only that
   POST takes the explicit path, and it requires the arm cookie and the armed live guest. It consumes
