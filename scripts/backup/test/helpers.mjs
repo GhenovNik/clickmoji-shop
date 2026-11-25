@@ -16,8 +16,14 @@ import {
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { BACKUP_NAME_PATTERN, LEDGER_NAME, PROJECT_NAME } from '../constants.mjs';
-import { loadConfig } from '../config.mjs';
+import {
+  BACKUP_NAME_PATTERN,
+  CONFIRMED_RECIPIENT_STATE_NAME,
+  LEDGER_NAME,
+  META_DIR,
+  PROJECT_NAME,
+} from '../constants.mjs';
+import { loadConfig, readRecipient } from '../config.mjs';
 import { LAUNCH_BUSY, LAUNCH_FAILED, launchLocked } from '../lock.mjs';
 import { reportBusy } from '../pipeline.mjs';
 
@@ -186,6 +192,7 @@ export function startLockedRun({
   tempRoot,
   allowRowDrop = false,
   confirmFile = null,
+  confirmSha256 = null,
   projectRoot,
 }) {
   const child = launchLocked(backupDir, [process.execPath, RUN_LOCKED], {
@@ -206,6 +213,7 @@ export function startLockedRun({
       tempRoot,
       allowRowDrop,
       confirmFile,
+      confirmSha256,
       projectRoot,
     })
   );
@@ -248,7 +256,7 @@ export function runConfirmWithFake(
   confirmFile,
   extra = {},
   now = NOW,
-  { projectRoot = sandbox.repo } = {}
+  { projectRoot = sandbox.repo, sha256 = undefined } = {}
 ) {
   const env = {
     PATH: process.env.PATH,
@@ -256,12 +264,20 @@ export function runConfirmWithFake(
     BACKUP_STATUS_FILE: sandbox.statusFile,
     ...extra,
   };
+  let resolvedSha256 = sha256;
+  if (resolvedSha256 === undefined) {
+    const targetPath = path.join(sandbox.backupDir, confirmFile);
+    resolvedSha256 = existsSync(targetPath)
+      ? crypto.createHash('sha256').update(readFileSync(targetPath)).digest('hex')
+      : '0'.repeat(64);
+  }
   return startLockedRun({
     mode: 'confirm',
     backupDir: env.BACKUP_DIR,
     env,
     now,
     confirmFile,
+    confirmSha256: resolvedSha256,
     projectRoot,
   }).done;
 }
@@ -287,14 +303,41 @@ export function runCli(env, args = [], { cwd = undefined, cli = CLI } = {}) {
   });
 }
 
+// Records a durable confirmed-recipient policy matching recipientFile for steady-state tests
+// that seed already-established encrypted backups.
+export function seedConfirmedRecipient(backupDir, recipientFile, confirmedFile = null) {
+  mkdirSync(path.join(backupDir, META_DIR), { recursive: true, mode: 0o700 });
+  const key = readRecipient(readFileSync(recipientFile, 'utf8'));
+  const recipientSha256 = crypto.createHash('sha256').update(key).digest('hex');
+  const file =
+    confirmedFile ??
+    `clickmoji-${NOW.toISOString()
+      .replace(/[-:]/g, '')
+      .replace(/\.\d{3}Z$/, 'Z')}.dump.age`;
+  writeFileSync(
+    path.join(backupDir, META_DIR, CONFIRMED_RECIPIENT_STATE_NAME),
+    JSON.stringify({
+      version: 1,
+      recipientSha256,
+      confirmedAt: NOW.toISOString(),
+      file,
+      sha256: 'a'.repeat(64),
+    }),
+    { mode: 0o600 }
+  );
+  return recipientSha256;
+}
+
 // Old copies, going back from NOW, with committed acceptance metadata.
 // When `legacy` is true, writes the prior-version metadata shape (without `encrypted`).
 export function seedBackups(
   backupDir,
   count,
-  { counts = null, encrypted = true, startDay = 1, legacy = false } = {}
+  { counts = null, encrypted = true, startDay = 1, legacy = false, recipientFile = null } = {}
 ) {
   mkdirSync(path.join(backupDir, 'meta'), { recursive: true, mode: 0o700 });
+  const recipientSha256 =
+    encrypted && recipientFile ? seedConfirmedRecipient(backupDir, recipientFile) : null;
   const names = [];
   const suffix = encrypted ? '.dump.age' : '.dump';
   for (let i = 0; i < count; i += 1) {
@@ -329,6 +372,7 @@ export function seedBackups(
           sha256: hash,
           verify: 'ok',
           counts: rowCounts,
+          ...(recipientSha256 ? { recipientSha256 } : {}),
         };
     writeFileSync(path.join(backupDir, 'meta', `${name}.json`), JSON.stringify(meta), {
       mode: 0o600,

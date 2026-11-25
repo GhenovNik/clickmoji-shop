@@ -352,10 +352,14 @@ describe(
         ]);
         assert.notEqual(wrongDecrypt.status, 0, 'mismatched identity fails decryption');
 
-        // Explicit confirmation via CLI without DATABASE_URL or age keys
+        // Explicit confirmation via CLI with snapshot SHA-256 and without DATABASE_URL or age keys
+        const firstEncSha = crypto
+          .createHash('sha256')
+          .update(readFileSync(path.join(b2Sandbox.backupDir, firstEnc)))
+          .digest('hex');
         const confirmRes = spawnSync(
           process.execPath,
-          [b2Sandbox.cli, '--confirm-encrypted-restore', firstEnc],
+          [b2Sandbox.cli, '--confirm-encrypted-restore', firstEnc, '--sha256', firstEncSha],
           {
             env: {
               PATH: process.env.PATH,
@@ -415,7 +419,7 @@ describe(
 
     it('a stop during the active dump leaves no container, scratch, plaintext, and no copy changed', async () => {
       // Every copy present before the run, including the one the publish test left in this sandbox.
-      seedBackups(sandbox.backupDir, 3);
+      seedBackups(sandbox.backupDir, 3, { recipientFile: sandbox.recipientFile });
       const old = listCopies(sandbox.backupDir);
       const bytesBefore = old.map((name) =>
         readFileSync(path.join(sandbox.backupDir, name), 'utf8')

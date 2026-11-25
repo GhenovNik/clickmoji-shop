@@ -27,6 +27,8 @@ import {
 } from './constants.mjs';
 import { appendStatus, formatStatusLine } from './status.mjs';
 
+const SHA256_HEX = /^[0-9a-f]{64}$/;
+
 export class StepError extends Error {
   constructor(key, exit) {
     super(key);
@@ -126,13 +128,10 @@ export function inspectCompletedBackup(backupDir, name, match) {
     dumpLstat = lstatSync(dumpPath);
   } catch (error) {
     if (error.code === 'ENOENT') return { status: 'incomplete' };
-    throw new StepError('verify', EXIT.failed);
+    throw new StepError('corruptBackup', EXIT.failed);
   }
-  if (dumpLstat.isSymbolicLink() || !dumpLstat.isFile()) {
-    throw new StepError('verify', EXIT.failed);
-  }
-  if (dumpLstat.size <= 0) {
-    return { status: 'incomplete' };
+  if (dumpLstat.isSymbolicLink() || !dumpLstat.isFile() || dumpLstat.nlink > 1) {
+    throw new StepError('corruptBackup', EXIT.failed);
   }
 
   const metaPath = path.join(backupDir, META_DIR, `${name}.json`);
@@ -141,10 +140,10 @@ export function inspectCompletedBackup(backupDir, name, match) {
     metaLstat = lstatSync(metaPath);
   } catch (error) {
     if (error.code === 'ENOENT') return { status: 'incomplete' };
-    throw new StepError('verify', EXIT.failed);
+    throw new StepError('corruptBackup', EXIT.failed);
   }
-  if (metaLstat.isSymbolicLink() || !metaLstat.isFile()) {
-    throw new StepError('verify', EXIT.failed);
+  if (metaLstat.isSymbolicLink() || !metaLstat.isFile() || metaLstat.nlink > 1) {
+    throw new StepError('corruptBackup', EXIT.failed);
   }
 
   let raw;
@@ -152,29 +151,49 @@ export function inspectCompletedBackup(backupDir, name, match) {
     raw = readFileSync(metaPath, 'utf8');
   } catch (error) {
     if (error.code === 'ENOENT') return { status: 'incomplete' };
-    throw new StepError('verify', EXIT.failed);
+    throw new StepError('corruptBackup', EXIT.failed);
   }
   let meta;
   try {
     meta = JSON.parse(raw);
   } catch {
-    throw new StepError('verify', EXIT.failed);
+    throw new StepError('corruptBackup', EXIT.failed);
   }
   if (typeof meta !== 'object' || meta === null || Array.isArray(meta)) {
-    throw new StepError('verify', EXIT.failed);
+    throw new StepError('corruptBackup', EXIT.failed);
   }
   if (meta.name !== undefined && meta.name !== name) {
-    throw new StepError('verify', EXIT.failed);
+    throw new StepError('corruptBackup', EXIT.failed);
   }
   const encrypted = Boolean(match[2]);
   if (meta.encrypted !== undefined && meta.encrypted !== encrypted) {
-    throw new StepError('verify', EXIT.failed);
+    throw new StepError('corruptBackup', EXIT.failed);
   }
   if (meta.verify === 'suspicious') {
     return { status: 'legacy-suspicious' };
   }
   if (meta.verify !== 'ok' || !isValidCounts(meta.counts)) {
-    throw new StepError('verify', EXIT.failed);
+    throw new StepError('corruptBackup', EXIT.failed);
+  }
+  if (
+    !Number.isInteger(meta.sizeBytes) ||
+    meta.sizeBytes <= 0 ||
+    typeof meta.sha256 !== 'string' ||
+    !SHA256_HEX.test(meta.sha256)
+  ) {
+    throw new StepError('corruptBackup', EXIT.failed);
+  }
+  if (dumpLstat.size <= 0 || dumpLstat.size !== meta.sizeBytes) {
+    throw new StepError('corruptBackup', EXIT.failed);
+  }
+  let actualSha256;
+  try {
+    actualSha256 = sha256File(dumpPath);
+  } catch {
+    throw new StepError('corruptBackup', EXIT.failed);
+  }
+  if (actualSha256 !== meta.sha256) {
+    throw new StepError('corruptBackup', EXIT.failed);
   }
 
   return {
@@ -184,6 +203,10 @@ export function inspectCompletedBackup(backupDir, name, match) {
       time: parseStampTime(match[1]),
       encrypted,
       counts: new Map(Object.entries(meta.counts)),
+      recipientSha256:
+        typeof meta.recipientSha256 === 'string' && SHA256_HEX.test(meta.recipientSha256)
+          ? meta.recipientSha256
+          : null,
     },
   };
 }
@@ -241,15 +264,16 @@ function formatOkDetail(result) {
   if (result.confirmFile) {
     return `confirm-encrypted-restore file=${result.confirmFile} sha256=${result.sha256}`;
   }
+  const waitingNote = result.waitingNote ?? WAITING_CONFIRMATION_NOTE;
   if (result.retained === false) {
     const kept = result.keptFile ? ` kept=${result.keptFile}` : '';
     if (result.waitingForConfirmation) {
-      return `verify=${result.verify} decrypt=unconfirmed${kept} new=pruned prune=${result.pruned} (${WAITING_CONFIRMATION_NOTE})`;
+      return `verify=${result.verify} decrypt=unconfirmed${kept} new=pruned prune=${result.pruned} (${waitingNote})`;
     }
     return `verify=${result.verify}${kept} new=pruned prune=${result.pruned}`;
   }
   if (result.waitingForConfirmation) {
-    return `size=${result.sizeBytes} verify=${result.verify} decrypt=unconfirmed file=${result.name} prune=${result.pruned} (${WAITING_CONFIRMATION_NOTE})`;
+    return `size=${result.sizeBytes} verify=${result.verify} decrypt=unconfirmed file=${result.name} prune=${result.pruned} (${waitingNote})`;
   }
   return `size=${result.sizeBytes} verify=${result.verify} file=${result.name} prune=${result.pruned}`;
 }

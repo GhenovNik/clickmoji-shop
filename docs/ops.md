@@ -162,8 +162,9 @@ Verified production backups run via `npm run db:backup:verified` (`node scripts/
 
 - **What automated verification proves (and does not prove):**
   - Every run dumps the source database (`pg_dump --format=custom`), restores that plaintext `dump.custom` into a disposable PostgreSQL 17 cluster, and verifies schema identities, applied Prisma migration, and row counts (`verifyScope: "plaintext"` in `meta/<copy>.json`).
-  - When `BACKUP_ENCRYPT=1`, the script then encrypts `dump.custom` with `age` (`BACKUP_AGE_RECIPIENT_FILE`) and verifies non-empty ciphertext output before atomic publication.
-  - Automated runs hold **no private key** and therefore **do not prove decryption** of `.dump.age` with the operator's `age` identity. Proving `.dump.age` decryption and restore requires an explicit operator restore test and confirmation before old unencrypted `.dump` copies are deleted.
+  - Each published copy records `sizeBytes` and `sha256` in `meta/<copy>.json`. Before taking, confirming, or pruning any backup, the script verifies the exact byte size and `sha256` of existing accepted copies; any truncation, same-size byte substitution, or legacy record lacking a recorded digest (which is never auto-promoted by re-hashing) fails closed and preserves all existing copies intact.
+  - When `BACKUP_ENCRYPT=1`, the script snapshots the validated public key from `BACKUP_AGE_RECIPIENT_FILE` into the temporary run directory outside any repository, encrypts `dump.custom` with `age` using that exact snapshot, stamps the same snapshot's `recipientSha256`, and verifies non-empty ciphertext output before atomic publication.
+  - Automated runs hold **no private key** and therefore **do not prove decryption** of `.dump.age` with the operator's `age` identity. Proving `.dump.age` decryption and restore requires an explicit operator restore test and confirmation (binding the exact ciphertext `sha256` from the restored snapshot) before old unencrypted `.dump` copies are deleted or saved encrypted copies are rotated.
 
 - **Destination and Git guard (`BACKUP_DIR`):**
   - Store copies in `backups/` of the **main repository checkout** on the Mac mini (for example, `~/Projects/clickmoji-shop/backups/`), which is gitignored via `/backups/` in `.gitignore`.
@@ -189,34 +190,45 @@ Verified production backups run via `npm run db:backup:verified` (`node scripts/
        npm run db:backup:verified
        ```
 
-       - Existing accepted unencrypted `.dump` copies (up to `N`) are **not** deleted by normal pruning while waiting for confirmation.
-       - **Temporary limit exception:** with `plainKept` unencrypted `.dump` copies (up to `N`), the **first** `.dump.age` copy of the current transition is preserved for operator verification, and any other `.dump.age` copies may fill only free slots inside the normal limit `N`. Total retained copies are therefore capped at `max(N, plainKept + 1)` (at most `N + 1` when unencrypted copies fill `N`, never `N + 2`).
+       - Existing accepted unencrypted `.dump` copies are **not** deleted by normal pruning while waiting for confirmation. If `BACKUP_RETENTION_COUNT` is smaller than the number of existing accepted unencrypted `.dump` copies (for example `N=1` with 2 existing `.dump` copies), the backup run refuses early before publication with a reason instructing you to raise `BACKUP_RETENTION_COUNT` for the transition period (meanwhile, `--confirm-encrypted-restore` remains available if a `.dump.age` copy already exists).
+       - **Temporary limit exception:** with `plainKept` unencrypted `.dump` copies (`<= N`), the **first** `.dump.age` copy of the current transition is preserved for operator verification, and any other `.dump.age` copies may fill only free slots inside the normal limit `N`. Total retained copies are therefore capped at `max(N, plainKept + 1)` (at most `N + 1` when unencrypted copies fill `N`, never `N + 2`).
        - If unencrypted copies and the first `.dump.age` copy already fill that cap and further unconfirmed runs execute, each run still dumps, verifies restore, and checks encryption, does not keep the newly produced `.dump.age`, preserves the existing `.dump` copies and first `.dump.age` copy (leaving the comparison baseline on the surviving copy), and reports `verify=ok decrypt=unconfirmed kept=<first .dump.age> new=pruned` without claiming the pruned copy was saved.
+       - If starting directly with `BACKUP_ENCRYPT=1` and **no initial unencrypted copies**, runs up to `N` succeed with `decrypt=unconfirmed`, and any run that would evict an unconfirmed copy refuses early until the operator confirms decryption of a saved `.dump.age` copy (or raises `BACKUP_RETENTION_COUNT`).
        - The status line and CLI output carry the reminder:
-         `decrypt=unconfirmed (шифрование включено, открытые копии ждут подтверждения восстановления)`.
+         `decrypt=unconfirmed (шифрование включено, открытые копии ждут подтверждения восстановления)` (or `первая копия ждёт подтверждения восстановления` when no unencrypted copies exist).
 
-    3. **Decrypt and restore the first `.dump.age` copy into a separate empty PostgreSQL 17 database (never production):**
+    3. **Decrypt and restore the first `.dump.age` copy from a protected local snapshot into a separate empty PostgreSQL 17 database (never production):**
 
        ```sh
        # Set BACKUP_FILE to the first clickmoji-<UTC>.dump.age name and PGHOST/PGPORT/PGDATABASE/PGUSER/PGPASSWORD/PGSSLMODE
-       # to the disposable test target, and enter AGE_IDENTITY without shell echo:
-       printf '%s\n' "$AGE_IDENTITY" | pg_run -i -v "$BACKUP_DIR:/backup:ro" -e BACKUP_FILE "$IMAGE" sh -c '
+       # to the disposable test target, and enter AGE_IDENTITY without shell echo.
+       # Copy to a private 0700/0600 local snapshot outside the repository so the SHA-256 hash and
+       # age -d read the exact same ciphertext bytes:
+       SNAP_DIR=$(umask 077 && mktemp -d)
+       trap 'rm -rf "$SNAP_DIR"' EXIT
+       cp "$BACKUP_DIR/$BACKUP_FILE" "$SNAP_DIR/$BACKUP_FILE"
+       chmod 600 "$SNAP_DIR/$BACKUP_FILE"
+       RESTORED_SHA256=$(shasum -a 256 "$SNAP_DIR/$BACKUP_FILE" | awk '{print $1}')
+
+       printf '%s\n' "$AGE_IDENTITY" | pg_run -i -v "$SNAP_DIR:/snap:ro" -e BACKUP_FILE "$IMAGE" sh -c '
          set -eu
          set -o pipefail
          apk add --no-cache age >/dev/null
-         age -d -i /dev/stdin "/backup/$BACKUP_FILE" | pg_restore --no-owner --no-privileges --exit-on-error --dbname "$PGDATABASE"
+         age -d -i /dev/stdin "/snap/$BACKUP_FILE" | pg_restore --no-owner --no-privileges --exit-on-error --dbname "$PGDATABASE"
        '
+       rm -rf "$SNAP_DIR"
+       trap - EXIT
        ```
 
        Confirm the restored tables and data in that separate test database before proceeding.
 
-    4. **Record explicit operator confirmation (connects to no DB, requires no private key, deletes nothing):**
+    4. **Record explicit operator confirmation with the snapshot SHA-256 (connects to no DB, requires no private key, deletes nothing):**
 
        ```sh
-       npm run db:backup:verified -- --confirm-encrypted-restore clickmoji-<UTC>.dump.age
+       npm run db:backup:verified -- --confirm-encrypted-restore "$BACKUP_FILE" --sha256 "$RESTORED_SHA256"
        ```
 
-       (or `node scripts/backup/cli.mjs --confirm-encrypted-restore clickmoji-<UTC>.dump.age` with `BACKUP_DIR` and `BACKUP_STATUS_FILE` set). Under the shared `.backup.lock` and Git guard, this records the confirmation timestamp, filename, and exact ciphertext `sha256` into `backups/meta/.encrypted-restore-confirmed.json` (`0600`). Missing, incomplete, foreign, corrupted/substituted, or stale files (older than a newer `.dump`) are rejected without deleting anything.
+       (or `node scripts/backup/cli.mjs --confirm-encrypted-restore "$BACKUP_FILE" --sha256 "$RESTORED_SHA256"` with `BACKUP_DIR` and `BACKUP_STATUS_FILE` set). Under the shared `.backup.lock` and Git guard, this verifies that the on-disk `.dump.age` and its `meta/<copy>.json` still match `"$RESTORED_SHA256"` and records the confirmation into `backups/meta/.encrypted-restore-confirmed.json` (`0600`) as well as the durable confirmed public-key policy in `backups/meta/.confirmed-recipient.json` (`0600`). Missing, incomplete, foreign, corrupted/substituted, digest-mismatched, or stale files (older than a newer `.dump`) are rejected without deleting anything.
 
     5. **Run the next successful encrypted backup to complete the cutover:**
 
@@ -224,7 +236,7 @@ Verified production backups run via `npm run db:backup:verified` (`node scripts/
        npm run db:backup:verified
        ```
 
-       Only **after** the new `.dump.age` copy is verified and atomically published does the script verify the confirmed ciphertext fingerprint, automatically purge unencrypted `.dump` copies, return to the unified retention limit `N` across encrypted copies, and clear the consumed confirmation state. On this cutover run that removes unencrypted copies, the **operator-confirmed** `.dump.age` copy is guaranteed to stay among the `N` retained copies (including `N = 1`, where the confirmed copy takes priority on that cutover run over the newly published unconfirmed ciphertext and the status/CLI report `kept=<confirmed .dump.age> new=pruned`; subsequent runs after unencrypted copies are gone apply standard `N`-copy retention). Excess unconfirmed encrypted copies are pruned before unencrypted copies (oldest-to-newest), and confirmation state is cleared only after unencrypted copies are removed, so no interruption point during cleanup destroys an available verified copy. If that run fails before full publication (or is rejected by the row-drop guard), existing unencrypted `.dump` copies and the confirmation state remain intact.
+       Only **after** the new `.dump.age` copy is verified and atomically published does the script verify the confirmed ciphertext fingerprint, automatically purge unencrypted `.dump` copies, return to the unified retention limit `N` across encrypted copies, and clear the consumed transition state `.encrypted-restore-confirmed.json`. The durable recipient policy `.confirmed-recipient.json` remains in place across cutover, restarts, and temporary switches to `BACKUP_ENCRYPT=0`: any subsequent `BACKUP_ENCRYPT=1` run (or `--confirm-encrypted-restore`) with a different public key in `BACKUP_AGE_RECIPIENT_FILE` fails closed before dump, publication, or pruning (key rotation is outside Г0). On this cutover run that removes unencrypted copies, the **operator-confirmed** `.dump.age` copy is guaranteed to stay among the `N` retained copies (including `N = 1`, where the confirmed copy takes priority on that cutover run over the newly published unconfirmed ciphertext and the status/CLI report `kept=<confirmed .dump.age> new=pruned`; subsequent runs after unencrypted copies are gone apply standard `N`-copy retention). Excess unconfirmed encrypted copies are pruned before unencrypted copies (oldest-to-newest), and confirmation state is cleared only after unencrypted copies are removed, so no interruption point during cleanup destroys an available verified copy. If that run fails before full publication (or is rejected by the row-drop guard), existing unencrypted `.dump` copies and the confirmation state remain intact.
 
   - **Freshness threshold:** Computed as **interval + 1 day** (no separate threshold setting): `4 days` in development (`3 days + 1 day`), `2 days` once switched to daily production (`1 day + 1 day`).
 

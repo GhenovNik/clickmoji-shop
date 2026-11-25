@@ -144,9 +144,12 @@ export function parseDockerTimeout(raw) {
   return ms;
 }
 
+const SHA256_HEX = /^[0-9a-f]{64}$/i;
+
 export function parseCliArgs(argv = []) {
   let allowRowDrop = false;
   let confirmEncryptedRestore = null;
+  let confirmSha256 = null;
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === '--allow-row-drop') {
@@ -173,6 +176,29 @@ export function parseCliArgs(argv = []) {
         throw new ConfigError('--confirm-encrypted-restore: укажите имя файла копии');
       }
       confirmEncryptedRestore = value;
+    } else if (arg === '--sha256') {
+      if (confirmSha256 !== null) {
+        throw new ConfigError('повторный параметр --sha256');
+      }
+      const next = argv[i + 1];
+      if (!next || next.startsWith('--')) {
+        throw new ConfigError('--sha256: укажите SHA-256 снимка (64 hex-символа)');
+      }
+      const normalized = next.trim().toLowerCase();
+      if (!SHA256_HEX.test(normalized)) {
+        throw new ConfigError('--sha256: требуется SHA-256 из 64 шестнадцатеричных символов');
+      }
+      confirmSha256 = normalized;
+      i += 1;
+    } else if (arg.startsWith('--sha256=')) {
+      if (confirmSha256 !== null) {
+        throw new ConfigError('повторный параметр --sha256');
+      }
+      const normalized = arg.slice('--sha256='.length).trim().toLowerCase();
+      if (!SHA256_HEX.test(normalized)) {
+        throw new ConfigError('--sha256: требуется SHA-256 из 64 шестнадцатеричных символов');
+      }
+      confirmSha256 = normalized;
     } else {
       throw new ConfigError(`неизвестный параметр запуска: ${arg}`);
     }
@@ -180,8 +206,14 @@ export function parseCliArgs(argv = []) {
   if (confirmEncryptedRestore !== null && allowRowDrop) {
     throw new ConfigError('--confirm-encrypted-restore нельзя совмещать с --allow-row-drop');
   }
+  if (confirmSha256 !== null && confirmEncryptedRestore === null) {
+    throw new ConfigError('--sha256 используется только вместе с --confirm-encrypted-restore');
+  }
+  if (confirmEncryptedRestore !== null && confirmSha256 === null) {
+    throw new ConfigError('--confirm-encrypted-restore требует обязательный параметр --sha256');
+  }
   return confirmEncryptedRestore !== null
-    ? { allowRowDrop: false, confirmEncryptedRestore }
+    ? { allowRowDrop: false, confirmEncryptedRestore, confirmSha256 }
     : { allowRowDrop };
 }
 

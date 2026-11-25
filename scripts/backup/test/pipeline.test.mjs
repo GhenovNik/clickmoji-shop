@@ -19,11 +19,13 @@ import { spawn, spawnSync } from 'node:child_process';
 import { cleanupArgs, DockerRunner } from '../docker.mjs';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import { loadConfig } from '../config.mjs';
-import { confirmationPaths, readConfirmationState } from '../confirm.mjs';
+import { confirmationPaths, readConfirmationState, readRecipientPolicy } from '../confirm.mjs';
 import {
+  CONFIRMED_RECIPIENT_STATE_NAME,
   ENCRYPTED_CONFIRM_STATE_NAME,
   LEDGER_NAME,
   WAITING_CONFIRMATION_NOTE,
+  WAITING_FIRST_CONFIRMATION_NOTE,
 } from '../constants.mjs';
 import { heldLock, launchLocked } from '../lock.mjs';
 import { listBackups, runBackup, writePrivateCopy } from '../pipeline.mjs';
@@ -46,6 +48,7 @@ import {
   runConfirmWithFake,
   runWithFake,
   seedBackups,
+  seedConfirmedRecipient,
   syntheticDatabase,
 } from './helpers.mjs';
 import { EXIT, MESSAGES } from '../constants.mjs';
@@ -77,7 +80,7 @@ const tempLeft = () =>
 
 describe('successful run', () => {
   it('publishes a complete encrypted copy, prunes 10 fixtures to 2 newest and leaves no plaintext', async () => {
-    const old = seedBackups(sandbox.backupDir, 10);
+    const old = seedBackups(sandbox.backupDir, 10, { recipientFile: sandbox.recipientFile });
     const result = await runWithFake(sandbox, db);
 
     assert.equal(result.ok, true);
@@ -93,7 +96,7 @@ describe('successful run', () => {
   });
 
   it('respects explicit BACKUP_RETENTION_COUNT', async () => {
-    const old = seedBackups(sandbox.backupDir, 10);
+    const old = seedBackups(sandbox.backupDir, 10, { recipientFile: sandbox.recipientFile });
     const result = await runWithFake(sandbox, db, { BACKUP_RETENTION_COUNT: '5' });
     assert.equal(result.ok, true);
     const copies = listCopies(sandbox.backupDir);
@@ -132,7 +135,7 @@ describe('successful run', () => {
   });
 
   it('writes one status line with date, size and verification, and no secrets', async () => {
-    seedBackups(sandbox.backupDir, 3);
+    seedBackups(sandbox.backupDir, 3, { recipientFile: sandbox.recipientFile });
     await runWithFake(sandbox, db);
     const lines = readStatus(sandbox).trim().split('\n');
     assert.equal(lines.length, 1);
@@ -196,7 +199,7 @@ describe('failure paths keep old copies and clean up', () => {
 
   for (const [label, extra, key, exit] of failures) {
     it(`${label}: old copies intact, status says why, nothing left behind`, async () => {
-      const old = seedBackups(sandbox.backupDir, 100);
+      const old = seedBackups(sandbox.backupDir, 100, { recipientFile: sandbox.recipientFile });
       const result = await runWithFake(sandbox, db, extra);
 
       assert.equal(result.ok, false);
@@ -227,7 +230,10 @@ describe('failure paths keep old copies and clean up', () => {
 
 describe('drops against the previous accepted copy of any age', () => {
   it('rejects a table that fell by more than 20%, preserves both old copies, and logs reason', async () => {
-    const old = seedBackups(sandbox.backupDir, 2, { counts: { a: 100, b: 100 } });
+    const old = seedBackups(sandbox.backupDir, 2, {
+      counts: { a: 100, b: 100 },
+      recipientFile: sandbox.recipientFile,
+    });
     const result = await runWithFake(sandbox, db, { FAKE_COUNTS: '{"a":10,"b":100}' });
     assert.equal(result.ok, false);
     assert.equal(result.exit, EXIT.suspicious);
@@ -241,6 +247,7 @@ describe('drops against the previous accepted copy of any age', () => {
     const old = seedBackups(sandbox.backupDir, 2, {
       startDay: 10,
       counts: { a: 100, b: 100 },
+      recipientFile: sandbox.recipientFile,
     });
     const result = await runWithFake(sandbox, db, { FAKE_COUNTS: '{"a":50,"b":100}' });
     assert.equal(result.ok, false);
@@ -252,6 +259,7 @@ describe('drops against the previous accepted copy of any age', () => {
     const old = seedBackups(sandbox.backupDir, 2, {
       startDay: 10,
       counts: { a: 100, b: 100 },
+      recipientFile: sandbox.recipientFile,
     });
     const confirmed = await runWithFake(sandbox, db, { FAKE_COUNTS: '{"a":10,"b":100}' }, NOW, {
       allowRowDrop: true,
@@ -274,7 +282,10 @@ describe('drops against the previous accepted copy of any age', () => {
   });
 
   it('does not flag a fall of exactly 20%', async () => {
-    seedBackups(sandbox.backupDir, 1, { counts: { a: 100 } });
+    seedBackups(sandbox.backupDir, 1, {
+      counts: { a: 100 },
+      recipientFile: sandbox.recipientFile,
+    });
     const result = await runWithFake(sandbox, db, {
       FAKE_COUNTS: '{"a":80}',
       FAKE_IDENTITIES: 'a\tid int4 NO',
@@ -328,7 +339,7 @@ describe('encryption transition and atomic temp publish', () => {
   });
 
   it('interrupted publish write leaves no partial or final copy, keeps old copies, and excludes partial names from retention', async () => {
-    const old = seedBackups(sandbox.backupDir, 2);
+    const old = seedBackups(sandbox.backupDir, 2, { recipientFile: sandbox.recipientFile });
     // Plant leftover partial files as if an earlier run crashed during write.
     writeFileSync(
       path.join(sandbox.backupDir, '.partial-clickmoji-20261125T000000Z.dump.age'),
@@ -516,6 +527,7 @@ process.exit(r.status ?? 1);
     const old = seedBackups(sandbox.backupDir, 2, {
       startDay: 2,
       counts: { a: 100, b: 100 },
+      recipientFile: sandbox.recipientFile,
     });
     const [bName, aName] = old; // old[0] is day-2 (B, newer), old[1] is day-3 (A, older)
     const crashTime = new Date(NOW.getTime() - 86_400_000); // day-1 (C)
@@ -601,6 +613,7 @@ process.exit(r.status ?? 1);
       encrypted: true,
       legacy: true,
     });
+    seedConfirmedRecipient(sandbox.backupDir, sandbox.recipientFile, oldLegacy[0]);
     const [bName, aName] = oldLegacy;
 
     // Baseline check reads legacy B metadata without `encrypted` field and flags >20% drop.
@@ -740,7 +753,7 @@ describe('concurrency', () => {
 
 describe('interruption stops containers before anything is removed', () => {
   it('a stop with a dump in progress removes its container, then plaintext and lock; copies intact', async () => {
-    const old = seedBackups(sandbox.backupDir, 20);
+    const old = seedBackups(sandbox.backupDir, 20, { recipientFile: sandbox.recipientFile });
     const env = envFor(sandbox, db, { FAKE_DOCKER_MODE: 'interrupt' });
     const run = startLockedRun({
       backupDir: sandbox.backupDir,
@@ -989,7 +1002,7 @@ const nameOf = (call) => call.argv[call.argv.indexOf('--name') + 1];
 
 describe('a zero exit does not prove that the container is gone (B1a)', () => {
   it('an unconfirmed daemon after a zero-exit dump: nothing is verified, published or pruned', async () => {
-    const old = seedBackups(sandbox.backupDir, 100);
+    const old = seedBackups(sandbox.backupDir, 100, { recipientFile: sandbox.recipientFile });
     const before = old.map((name) => readFileSync(path.join(sandbox.backupDir, name), 'utf8'));
     const result = await runWithFake(sandbox, db, { FAKE_DOCKER_PS: 'fail' });
 
@@ -1016,7 +1029,7 @@ describe('a zero exit does not prove that the container is gone (B1a)', () => {
   });
 
   it('the next run proves that container gone before anything else, then completes', async () => {
-    seedBackups(sandbox.backupDir, 2);
+    seedBackups(sandbox.backupDir, 2, { recipientFile: sandbox.recipientFile });
     await runWithFake(sandbox, db, { FAKE_DOCKER_PS: 'fail' });
     const [leftover] = ledgerNames();
     assert.ok(leftover, 'a name is recorded');
@@ -1124,7 +1137,7 @@ describe('the cleanup fallback is a tracked container too (B1b)', () => {
 
 describe('the status line can fail after the copy is saved', () => {
   it('a saved copy keeps its bytes, exits with the status code, and says the status is missing', async () => {
-    const old = seedBackups(sandbox.backupDir, 3);
+    const old = seedBackups(sandbox.backupDir, 3, { recipientFile: sandbox.recipientFile });
     const result = await runWithFake(sandbox, db, { FAKE_SWAP_STATUS: sandbox.statusFile });
     assert.equal(result.ok, true);
     assert.equal(result.saved, true);
@@ -1195,7 +1208,7 @@ describe('stale scratch from a killed run is recovered, or the run fails closed 
 
   it('host deletion fails and the fallback is unconfirmed: no dump, publish or prune; the marker stays', async () => {
     try {
-      const old = seedBackups(sandbox.backupDir, 100);
+      const old = seedBackups(sandbox.backupDir, 100, { recipientFile: sandbox.recipientFile });
       const before = old.map((name) => readFileSync(path.join(sandbox.backupDir, name), 'utf8'));
       const stale = plantStale();
       const env = { ...failing, FAKE_DOCKER_PS: 'fail-cleanup' };
@@ -1232,7 +1245,7 @@ describe('stale scratch from a killed run is recovered, or the run fails closed 
 
   it('host deletion fails after a proven fallback: fails closed, keeps the marker, and recovers once the directory can be removed', async () => {
     try {
-      const old = seedBackups(sandbox.backupDir, 100);
+      const old = seedBackups(sandbox.backupDir, 100, { recipientFile: sandbox.recipientFile });
       const before = old.map((name) => readFileSync(path.join(sandbox.backupDir, name), 'utf8'));
       const stale = plantStale();
 
@@ -1302,7 +1315,7 @@ describe('a create whose answer is pending is never cleared by an empty listing 
       `a late create after ${failure} stays pending until it is seen and removed`,
       { timeout: 120_000 },
       async () => {
-        seedBackups(sandbox.backupDir, 2);
+        seedBackups(sandbox.backupDir, 2, { recipientFile: sandbox.recipientFile });
         const old = listCopies(sandbox.backupDir);
         const gate = path.join(sandbox.root, 'daemon-create.gate');
         const env = envFor(sandbox, db, {
@@ -1388,7 +1401,7 @@ describe('docker management calls are bounded, and a hung call is a failure (B2,
     'a version call that never answers ends the run as docker-unavailable: old copies intact, no scratch, no container',
     { timeout: 120_000 },
     async () => {
-      const old = seedBackups(sandbox.backupDir, 3);
+      const old = seedBackups(sandbox.backupDir, 3, { recipientFile: sandbox.recipientFile });
       const before = old.map((name) => readFileSync(path.join(sandbox.backupDir, name), 'utf8'));
       const started = Date.now();
       const result = await runWithFake(sandbox, db, { ...bounded, FAKE_DOCKER_HANG: 'version' });
@@ -1410,7 +1423,7 @@ describe('docker management calls are bounded, and a hung call is a failure (B2,
     'a ps that never answers after the dump: nothing verified, published or pruned; scratch kept; the next run proves it gone and completes',
     { timeout: 120_000 },
     async () => {
-      const old = seedBackups(sandbox.backupDir, 3);
+      const old = seedBackups(sandbox.backupDir, 3, { recipientFile: sandbox.recipientFile });
       const before = old.map((name) => readFileSync(path.join(sandbox.backupDir, name), 'utf8'));
       const result = await runWithFake(sandbox, db, { ...bounded, FAKE_DOCKER_HANG: 'ps' });
       assert.equal(result.ok, false);
@@ -1453,7 +1466,7 @@ describe('docker management calls are bounded, and a hung call is a failure (B2,
     'an rm that never answers while a dump is stopped: the container stays recorded, scratch kept, the next writer waits until removal answers',
     { timeout: 120_000 },
     async () => {
-      const old = seedBackups(sandbox.backupDir, 3);
+      const old = seedBackups(sandbox.backupDir, 3, { recipientFile: sandbox.recipientFile });
       const before = old.map((name) => readFileSync(path.join(sandbox.backupDir, name), 'utf8'));
       const env = envFor(sandbox, db, {
         FAKE_DOCKER_MODE: 'interrupt',
@@ -1832,8 +1845,9 @@ describe('B2: operator confirmation gate before purging unencrypted dumps', () =
         { BACKUP_ENCRYPT: '1', BACKUP_AGE_RECIPIENT_FILE: otherRecipientFile },
         dayPlus(24)
       );
-      assert.equal(m2.ok, true);
-      assert.equal(m2.waitingForConfirmation, true, 'recipient change refuses cleanup');
+      assert.equal(m2.ok, false);
+      assert.equal(m2.key, 'recipientMismatch');
+      assert.equal(m2.exit, EXIT.failed);
       for (const p of mPlain) {
         assert.equal(existsSync(path.join(mismatchSandbox.backupDir, p)), true, `${p} preserved`);
       }
@@ -2176,6 +2190,381 @@ describe('B2: operator confirmation gate before purging unencrypted dumps', () =
       assert.equal(readConfirmationState(n2Sandbox.backupDir), null);
     } finally {
       n2Sandbox.cleanup();
+    }
+  });
+});
+
+describe('r2 B1-B4 regressions and integrity guards', () => {
+  const dayPlus = (hours) => new Date(NOW.getTime() + hours * 3_600_000);
+
+  it('B1: refuses confirmation when entire consistent dump+meta pair is substituted between restore and confirm', async () => {
+    const oldPlain = seedBackups(sandbox.backupDir, 2, {
+      startDay: 3,
+      encrypted: false,
+      counts: { a: 10, b: 20 },
+    });
+    const r1 = await runWithFake(sandbox, db, { BACKUP_ENCRYPT: '1' }, NOW);
+    assert.equal(r1.ok, true);
+
+    // Operator computes SHA-256 of snapshot A during restore.
+    const r1Path = path.join(sandbox.backupDir, r1.name);
+    const snapshotASha = crypto.createHash('sha256').update(readFileSync(r1Path)).digest('hex');
+
+    // Before confirm runs, the entire consistent pair (dump + meta) at r1.name is replaced by B.
+    const bodyB = 'age-encryption.org/v1\nPAIR-B-CONSISTENT\n';
+    const r1MetaPath = path.join(sandbox.backupDir, 'meta', `${r1.name}.json`);
+    const metaB = JSON.parse(readFileSync(r1MetaPath, 'utf8'));
+    metaB.sizeBytes = Buffer.byteLength(bodyB);
+    metaB.sha256 = crypto.createHash('sha256').update(bodyB).digest('hex');
+    writeFileSync(r1Path, bodyB);
+    writeFileSync(r1MetaPath, JSON.stringify(metaB));
+
+    const confirmRes = await runConfirmWithFake(sandbox, r1.name, {}, dayPlus(1), {
+      sha256: snapshotASha,
+    });
+    assert.equal(confirmRes.ok, false);
+    assert.equal(confirmRes.key, 'confirmDigestMismatch');
+    assert.equal(confirmRes.exit, EXIT.failed);
+    assert.equal(readConfirmationState(sandbox.backupDir), null);
+    assert.equal(readRecipientPolicy(sandbox.backupDir), null);
+    assert.deepEqual(listCopies(sandbox.backupDir).sort(), [...oldPlain, r1.name].sort());
+  });
+
+  it('B2: snapshots recipient bytes for container & fingerprint, locks recipient across cutover/mode-switch/restart/purge-interrupt, and protects fresh no-plaintext runs', async () => {
+    // 1. Mid-run recipient file swap does not affect age input or recorded recipientSha256.
+    const origRecipient = readFileSync(sandbox.recipientFile, 'utf8')
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .find((l) => l && !l.startsWith('#'));
+    const origRecipientSha = crypto.createHash('sha256').update(origRecipient).digest('hex');
+    const swappedKey = `age1${'z'.repeat(58)}`;
+
+    const oldPlain = seedBackups(sandbox.backupDir, 1, {
+      startDay: 3,
+      encrypted: false,
+      counts: { a: 10, b: 20 },
+    });
+    const r1 = await runWithFake(
+      sandbox,
+      db,
+      {
+        BACKUP_ENCRYPT: '1',
+        FAKE_SWAP_RECIPIENT_FILE: sandbox.recipientFile,
+        FAKE_SWAP_RECIPIENT_VALUE: swappedKey,
+      },
+      NOW
+    );
+    assert.equal(r1.ok, true);
+    const encryptCall = readDockerLog(sandbox).find(
+      (call) => call.argv[0] === 'create' && call.argv.includes('age')
+    );
+    assert.equal(encryptCall.recipientUsed, origRecipient, 'age used the snapshotted recipient');
+    const r1Meta = JSON.parse(
+      readFileSync(path.join(sandbox.backupDir, 'meta', `${r1.name}.json`), 'utf8')
+    );
+    assert.equal(
+      r1Meta.recipientSha256,
+      origRecipientSha,
+      'metadata matches snapshotted recipient'
+    );
+    assert.deepEqual(tempLeft(), [], 'temp recipient snapshot cleaned up');
+
+    // Restore original recipient file and confirm r1 -> establishes durable recipient policy.
+    writeFileSync(sandbox.recipientFile, `${origRecipient}\n`);
+    assert.equal((await runConfirmWithFake(sandbox, r1.name, {}, dayPlus(1))).ok, true);
+
+    // Interrupt purge mid-cutover: policy and surviving copies remain intact, recovery completes cutover.
+    const n1Env = envFor(sandbox, db, { BACKUP_ENCRYPT: '1', BACKUP_RETENTION_COUNT: '2' });
+    const sigChild = launchLocked(
+      sandbox.backupDir,
+      [
+        process.execPath,
+        '--input-type=module',
+        '-e',
+        `
+        import { loadConfig } from ${JSON.stringify(path.resolve('scripts/backup/config.mjs'))};
+        import { DockerRunner } from ${JSON.stringify(path.resolve('scripts/backup/docker.mjs'))};
+        import { heldLock } from ${JSON.stringify(path.resolve('scripts/backup/lock.mjs'))};
+        import { runBackup } from ${JSON.stringify(path.resolve('scripts/backup/pipeline.mjs'))};
+        const env = ${JSON.stringify(n1Env)};
+        const config = loadConfig(env);
+        const lock = heldLock(config.backupDir, process.env);
+        const docker = new DockerRunner({ bin: config.dockerBin, containerEnv: config.containerEnv, timeoutMs: config.dockerTimeoutMs, env });
+        await runBackup({
+          config, docker, lock,
+          now: () => new Date(${JSON.stringify(dayPlus(24).toISOString())}),
+          tempRoot: ${JSON.stringify(sandbox.tmp)},
+          projectRoot: ${JSON.stringify(sandbox.repo)},
+          onBeforePruneRemove: () => process.kill(process.pid, 'SIGKILL'),
+        });
+        `,
+      ],
+      { env: n1Env, stdio: ['ignore', 'pipe', 'pipe'] }
+    );
+    assert.equal(
+      await new Promise((resolve) => sigChild.on('close', (_c, sig) => resolve(sig))),
+      'SIGKILL'
+    );
+    assert.equal(readRecipientPolicy(sandbox.backupDir)?.recipientSha256, origRecipientSha);
+    assert.equal(existsSync(path.join(sandbox.backupDir, oldPlain[0])), true);
+
+    const cutoverDone = await runWithFake(sandbox, db, { BACKUP_ENCRYPT: '1' }, dayPlus(48));
+    assert.equal(cutoverDone.ok, true);
+    assert.equal(existsSync(path.join(sandbox.backupDir, oldPlain[0])), false);
+    assert.equal(readConfirmationState(sandbox.backupDir), null);
+    assert.equal(readRecipientPolicy(sandbox.backupDir)?.recipientSha256, origRecipientSha);
+
+    // 2. Post-cutover recipient change refuses BEFORE docker/publish/prune.
+    const otherRecipientFile = path.join(sandbox.root, 'other-recipient.txt');
+    writeFileSync(otherRecipientFile, `${swappedKey}\n`);
+    const dockerBefore = readDockerLog(sandbox).length;
+    const copiesBefore = listCopies(sandbox.backupDir);
+    const rejectedChange = await runWithFake(
+      sandbox,
+      db,
+      { BACKUP_ENCRYPT: '1', BACKUP_AGE_RECIPIENT_FILE: otherRecipientFile },
+      dayPlus(72)
+    );
+    assert.equal(rejectedChange.ok, false);
+    assert.equal(rejectedChange.key, 'recipientMismatch');
+    assert.equal(rejectedChange.exit, EXIT.failed);
+    assert.equal(readDockerLog(sandbox).length, dockerBefore, 'refused before docker');
+    assert.deepEqual(listCopies(sandbox.backupDir), copiesBefore);
+
+    // 3. Mode switch ENCRYPT=1 -> ENCRYPT=0 -> ENCRYPT=1 preserves durable recipient policy.
+    const envPlain = envFor(sandbox, db);
+    delete envPlain.BACKUP_ENCRYPT;
+    delete envPlain.BACKUP_AGE_RECIPIENT_FILE;
+    const plainRun = await startLockedRun({
+      backupDir: sandbox.backupDir,
+      env: envPlain,
+      now: dayPlus(96),
+      tempRoot: sandbox.tmp,
+      projectRoot: sandbox.repo,
+    }).done;
+    assert.equal(plainRun.ok, true);
+    assert.equal(readRecipientPolicy(sandbox.backupDir)?.recipientSha256, origRecipientSha);
+
+    const backToWrongKey = await runWithFake(
+      sandbox,
+      db,
+      { BACKUP_ENCRYPT: '1', BACKUP_AGE_RECIPIENT_FILE: otherRecipientFile },
+      dayPlus(120)
+    );
+    assert.equal(backToWrongKey.ok, false);
+    assert.equal(backToWrongKey.key, 'recipientMismatch');
+
+    const backToOrigKey = await runWithFake(sandbox, db, { BACKUP_ENCRYPT: '1' }, dayPlus(144));
+    assert.equal(backToOrigKey.ok, true);
+    assert.equal(backToOrigKey.waitingForConfirmation, true);
+
+    // 4. Fresh start WITHOUT initial plaintext protects saved copies until first identity confirmation.
+    const fresh = makeSandbox();
+    try {
+      const f1 = await runWithFake(fresh, db, { BACKUP_ENCRYPT: '1' }, NOW);
+      assert.equal(f1.ok, true);
+      assert.equal(f1.waitingForConfirmation, true);
+      assert.equal(f1.waitingNote, WAITING_FIRST_CONFIRMATION_NOTE);
+
+      const f2 = await runWithFake(fresh, db, { BACKUP_ENCRYPT: '1' }, dayPlus(24));
+      assert.equal(f2.ok, true);
+      assert.equal(f2.waitingForConfirmation, true);
+      assert.deepEqual(listCopies(fresh.backupDir).sort(), [f1.name, f2.name].sort());
+
+      const callsBefore = readDockerLog(fresh).length;
+      const f3Blocked = await runWithFake(fresh, db, { BACKUP_ENCRYPT: '1' }, dayPlus(48));
+      assert.equal(f3Blocked.ok, false);
+      assert.equal(f3Blocked.key, 'confirmFirstEncrypted');
+      assert.equal(readDockerLog(fresh).length, callsBefore);
+      assert.deepEqual(listCopies(fresh.backupDir).sort(), [f1.name, f2.name].sort());
+
+      assert.equal((await runConfirmWithFake(fresh, f1.name, {}, dayPlus(49))).ok, true);
+      const f3Ok = await runWithFake(fresh, db, { BACKUP_ENCRYPT: '1' }, dayPlus(72));
+      assert.equal(f3Ok.ok, true);
+      assert.equal(f3Ok.waitingForConfirmation, false);
+      assert.deepEqual(listCopies(fresh.backupDir).sort(), [f2.name, f3Ok.name].sort());
+
+      // Confirming a different recipient after policy exists is also refused (no key rotation).
+      const wrongPolicySandbox = makeSandbox();
+      try {
+        const w1 = await runWithFake(wrongPolicySandbox, db, { BACKUP_ENCRYPT: '1' }, NOW);
+        assert.equal(
+          (await runConfirmWithFake(wrongPolicySandbox, w1.name, {}, dayPlus(1))).ok,
+          true
+        );
+        const w2MetaPath = path.join(wrongPolicySandbox.backupDir, 'meta', `${w1.name}.json`);
+        const w2Meta = JSON.parse(readFileSync(w2MetaPath, 'utf8'));
+        w2Meta.recipientSha256 = 'b'.repeat(64);
+        writeFileSync(w2MetaPath, JSON.stringify(w2Meta));
+        const rejectWrongConfirm = await runConfirmWithFake(
+          wrongPolicySandbox,
+          w1.name,
+          {},
+          dayPlus(2)
+        );
+        assert.equal(rejectWrongConfirm.ok, false);
+        assert.equal(rejectWrongConfirm.key, 'recipientMismatch');
+      } finally {
+        wrongPolicySandbox.cleanup();
+      }
+    } finally {
+      fresh.cleanup();
+    }
+  });
+
+  it('B3: two accepted plaintext copies with N=1 refuses early before publication across repeats while allowing confirm if .age exists', async () => {
+    const twoPlain = seedBackups(sandbox.backupDir, 2, {
+      startDay: 3,
+      encrypted: false,
+      counts: { a: 10, b: 20 },
+    });
+    const r1 = await runWithFake(
+      sandbox,
+      db,
+      { BACKUP_ENCRYPT: '1', BACKUP_RETENTION_COUNT: '1' },
+      NOW
+    );
+    const r2 = await runWithFake(
+      sandbox,
+      db,
+      { BACKUP_ENCRYPT: '1', BACKUP_RETENTION_COUNT: '1' },
+      dayPlus(24)
+    );
+    assert.equal(r1.ok, false);
+    assert.equal(r1.key, 'transitionLimitTooLow');
+    assert.equal(r2.ok, false);
+    assert.equal(r2.key, 'transitionLimitTooLow');
+    assert.equal(readDockerLog(sandbox).length, 0);
+    assert.deepEqual(listCopies(sandbox.backupDir).sort(), [...twoPlain].sort());
+
+    // Raise N=2 to create an encrypted copy, then lower back to N=1: confirm still works!
+    const encRun = await runWithFake(
+      sandbox,
+      db,
+      { BACKUP_ENCRYPT: '1', BACKUP_RETENTION_COUNT: '2' },
+      dayPlus(48)
+    );
+    assert.equal(encRun.ok, true);
+    assert.equal(
+      (
+        await runWithFake(
+          sandbox,
+          db,
+          { BACKUP_ENCRYPT: '1', BACKUP_RETENTION_COUNT: '1' },
+          dayPlus(72)
+        )
+      ).key,
+      'transitionLimitTooLow'
+    );
+    assert.equal((await runConfirmWithFake(sandbox, encRun.name, {}, dayPlus(73))).ok, true);
+
+    // After confirm, cutover at N=1 completes and keeps the confirmed encrypted copy.
+    const cutover = await runWithFake(
+      sandbox,
+      db,
+      { BACKUP_ENCRYPT: '1', BACKUP_RETENTION_COUNT: '1' },
+      dayPlus(96)
+    );
+    assert.equal(cutover.ok, true);
+    assert.deepEqual(listCopies(sandbox.backupDir), [encRun.name]);
+  });
+
+  it('B4: fails closed on non-zero truncation, same-size substitution, mid-run corruption before prune, and missing-digest records without rehashing', async () => {
+    // 1. Non-zero truncation of B preserves A and B
+    const [bName, aName] = seedBackups(sandbox.backupDir, 2, {
+      startDay: 2,
+      counts: { a: 10, b: 20 },
+      recipientFile: sandbox.recipientFile,
+    });
+    const bPath = path.join(sandbox.backupDir, bName);
+    const bOrig = readFileSync(bPath, 'utf8');
+    writeFileSync(bPath, bOrig.slice(0, 2)); // non-zero truncation ("ol")
+    const truncRes = await runWithFake(sandbox, db);
+    assert.equal(truncRes.ok, false);
+    assert.equal(truncRes.key, 'corruptBackup');
+    assert.equal(readDockerLog(sandbox).length, 0);
+    assert.deepEqual(listCopies(sandbox.backupDir).sort(), [aName, bName].sort());
+    assert.equal(existsSync(path.join(sandbox.backupDir, aName)), true);
+
+    // 2. Same-size substitution of B preserves A and B
+    const sameSize = 'X'.repeat(Buffer.byteLength(bOrig));
+    writeFileSync(bPath, sameSize);
+    const subRes = await runWithFake(sandbox, db);
+    assert.equal(subRes.ok, false);
+    assert.equal(subRes.key, 'corruptBackup');
+    assert.equal(readDockerLog(sandbox).length, 0);
+    assert.deepEqual(listCopies(sandbox.backupDir).sort(), [aName, bName].sort());
+
+    // 3. Mid-run corruption of B between preflight and publish fails closed before pruning A
+    writeFileSync(bPath, bOrig);
+    const env = envFor(sandbox, db);
+    const config = loadConfig(env);
+    const holder = launchLocked(
+      sandbox.backupDir,
+      [
+        process.execPath,
+        '--input-type=module',
+        '-e',
+        `
+        import { writeFileSync } from 'node:fs';
+        import { loadConfig } from ${JSON.stringify(path.resolve('scripts/backup/config.mjs'))};
+        import { DockerRunner } from ${JSON.stringify(path.resolve('scripts/backup/docker.mjs'))};
+        import { heldLock } from ${JSON.stringify(path.resolve('scripts/backup/lock.mjs'))};
+        import { runBackup, writePrivateCopy } from ${JSON.stringify(path.resolve('scripts/backup/pipeline.mjs'))};
+        const env = ${JSON.stringify(env)};
+        const config = loadConfig(env);
+        const lock = heldLock(config.backupDir, process.env);
+        const docker = new DockerRunner({ bin: config.dockerBin, containerEnv: config.containerEnv, timeoutMs: config.dockerTimeoutMs, env });
+        const res = await runBackup({
+          config, docker, lock,
+          now: () => new Date(${JSON.stringify(NOW.toISOString())}),
+          tempRoot: ${JSON.stringify(sandbox.tmp)},
+          projectRoot: ${JSON.stringify(sandbox.repo)},
+          publishCopy: (src, dest) => {
+            // Corrupt B right before publish completes
+            writeFileSync(${JSON.stringify(bPath)}, ${JSON.stringify(sameSize)});
+            writePrivateCopy(src, dest);
+          },
+        });
+        console.log(JSON.stringify(res));
+        `,
+      ],
+      { env, stdio: ['ignore', 'pipe', 'pipe'] }
+    );
+    let out = '';
+    holder.stdout.on('data', (c) => {
+      out += c;
+    });
+    await new Promise((resolve) => holder.on('close', resolve));
+    const midRunRes = JSON.parse(out.trim().split('\n').pop());
+    assert.equal(midRunRes.ok, false);
+    assert.equal(midRunRes.key, 'corruptBackup');
+    assert.equal(midRunRes.saved, true, 'newly published C remains on disk');
+    assert.equal(existsSync(path.join(sandbox.backupDir, aName)), true, 'working A was NOT pruned');
+    assert.equal(existsSync(bPath), true, 'B was NOT deleted');
+
+    // 4. Old record without digest/sizeBytes fails closed without auto-rehashing metadata
+    const legacyNoDigest = makeSandbox();
+    try {
+      const [legacyB, legacyA] = seedBackups(legacyNoDigest.backupDir, 2, {
+        startDay: 2,
+        counts: { a: 10, b: 20 },
+        recipientFile: legacyNoDigest.recipientFile,
+      });
+      const legacyMetaPath = path.join(legacyNoDigest.backupDir, 'meta', `${legacyB}.json`);
+      const stripped = JSON.parse(readFileSync(legacyMetaPath, 'utf8'));
+      delete stripped.sha256;
+      delete stripped.sizeBytes;
+      const strippedRaw = JSON.stringify(stripped);
+      writeFileSync(legacyMetaPath, strippedRaw);
+
+      const noDigestRes = await runWithFake(legacyNoDigest, db);
+      assert.equal(noDigestRes.ok, false);
+      assert.equal(noDigestRes.key, 'corruptBackup');
+      assert.equal(readFileSync(legacyMetaPath, 'utf8'), strippedRaw, 'metadata not auto-rehashed');
+      assert.deepEqual(listCopies(legacyNoDigest.backupDir).sort(), [legacyA, legacyB].sort());
+    } finally {
+      legacyNoDigest.cleanup();
     }
   });
 });

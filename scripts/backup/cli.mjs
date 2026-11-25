@@ -134,10 +134,11 @@ export async function main(env = process.env, argv = process.argv.slice(2)) {
       config,
       lock,
       fileName: cliOptions.confirmEncryptedRestore,
+      expectedSha256: cliOptions.confirmSha256,
       env,
     });
     const summary = result.ok
-      ? `backup: confirmed encrypted restore ${result.file} at ${result.confirmedAt}`
+      ? `backup: confirmed encrypted restore ${result.file} at ${result.confirmedAt} sha256=${result.sha256}`
       : `backup: ${MESSAGES[result.key]}`;
     process.stdout.write(`${summary}\n`);
     if (!result.statusWritten) {
@@ -167,13 +168,14 @@ export async function main(env = process.env, argv = process.argv.slice(2)) {
     allowRowDrop: cliOptions.allowRowDrop,
     env,
   });
+  const waitingNote = result.waitingNote ?? WAITING_CONFIRMATION_NOTE;
   const summary = result.ok
     ? result.retained === false
       ? result.waitingForConfirmation
-        ? `backup: ok verify=${result.verify} decrypt=unconfirmed kept=${result.keptFile ?? 'none'} new=pruned (${WAITING_CONFIRMATION_NOTE})`
+        ? `backup: ok verify=${result.verify} decrypt=unconfirmed kept=${result.keptFile ?? 'none'} new=pruned (${waitingNote})`
         : `backup: ok verify=${result.verify} kept=${result.keptFile ?? 'none'} new=pruned`
       : result.waitingForConfirmation
-        ? `backup: ok ${result.name} verify=${result.verify} decrypt=unconfirmed (${WAITING_CONFIRMATION_NOTE})`
+        ? `backup: ok ${result.name} verify=${result.verify} decrypt=unconfirmed (${waitingNote})`
         : `backup: ok ${result.name} verify=${result.verify}`
     : `backup: ${MESSAGES[result.key]}`;
   process.stdout.write(`${summary}\n`);

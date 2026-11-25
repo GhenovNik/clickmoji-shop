@@ -8,12 +8,25 @@ const isEncryptedEntry = (entry) =>
   typeof entry.encrypted === 'boolean' ? entry.encrypted : entry.name.endsWith('.dump.age');
 
 // entries: [{ name, time: Date }]. Returns the names to keep and to remove.
-export function selectRetention(entries, keepCount = DEFAULT_RETENTION_COUNT) {
+// When preferredRecipientSha256 is set, copies matching the confirmed recipient are prioritized
+// over unconfirmed/non-matching copies so old unconfirmed keys never evict confirmed copies.
+export function selectRetention(
+  entries,
+  keepCount = DEFAULT_RETENTION_COUNT,
+  { preferredRecipientSha256 = null } = {}
+) {
   if (!Number.isInteger(keepCount) || keepCount < 1) {
     throw new Error('keepCount must be an integer >= 1');
   }
-  const newestFirst = [...entries].sort(compareNewest);
-  const keepSet = new Set(newestFirst.slice(0, keepCount).map((entry) => entry.name));
+  const ranked = [...entries].sort((a, b) => {
+    if (preferredRecipientSha256) {
+      const aMatch = a.recipientSha256 === preferredRecipientSha256 ? 1 : 0;
+      const bMatch = b.recipientSha256 === preferredRecipientSha256 ? 1 : 0;
+      if (aMatch !== bMatch) return bMatch - aMatch;
+    }
+    return compareNewest(a, b);
+  });
+  const keepSet = new Set(ranked.slice(0, keepCount).map((entry) => entry.name));
   return {
     keep: entries.map((entry) => entry.name).filter((name) => keepSet.has(name)),
     remove: entries.map((entry) => entry.name).filter((name) => !keepSet.has(name)),
@@ -80,7 +93,10 @@ export function selectTransitionRetention({
     };
   }
 
-  const keptPlain = [...plain].sort(compareNewest).slice(0, keepCount);
+  if (plain.length > keepCount) {
+    throw new Error('keepCount cannot be smaller than unencrypted backups before confirmation');
+  }
+  const keptPlain = [...plain].sort(compareNewest);
   const latestPlain = keptPlain[0];
   const transitionEncrypted = encrypted
     .filter((entry) => compareOldest(entry, latestPlain) > 0)
@@ -94,11 +110,10 @@ export function selectTransitionRetention({
     .slice(0, freeEncryptedSlots);
   const keptEncrypted = firstEncrypted ? [firstEncrypted, ...otherEncrypted] : otherEncrypted;
   const keepSet = new Set([...keptPlain, ...keptEncrypted].map((entry) => entry.name));
-  const removePlain = plain.filter((entry) => !keepSet.has(entry.name)).sort(compareOldest);
   const removeEncrypted = encrypted.filter((entry) => !keepSet.has(entry.name)).sort(compareOldest);
   return {
     keep: entries.map((entry) => entry.name).filter((name) => keepSet.has(name)),
-    remove: [...removePlain, ...removeEncrypted].map((entry) => entry.name),
+    remove: removeEncrypted.map((entry) => entry.name),
     waitingForConfirmation: true,
   };
 }

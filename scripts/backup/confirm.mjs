@@ -3,7 +3,12 @@
 import { lstatSync, readFileSync, renameSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import { REPO_ROOT } from './config.mjs';
-import { ENCRYPTED_CONFIRM_STATE_NAME, EXIT, META_DIR } from './constants.mjs';
+import {
+  CONFIRMED_RECIPIENT_STATE_NAME,
+  ENCRYPTED_CONFIRM_STATE_NAME,
+  EXIT,
+  META_DIR,
+} from './constants.mjs';
 import { canonicalPath, isInsidePath, verifyBackupDirGitIgnored } from './git.mjs';
 import {
   ensurePrivateDir,
@@ -32,9 +37,19 @@ export function confirmationPaths(backupDir) {
   };
 }
 
+export function recipientPolicyPaths(backupDir) {
+  const metaDir = path.join(backupDir, META_DIR);
+  return {
+    metaDir,
+    policyFile: path.join(metaDir, CONFIRMED_RECIPIENT_STATE_NAME),
+    partialFile: path.join(metaDir, `.partial-${CONFIRMED_RECIPIENT_STATE_NAME}`),
+  };
+}
+
 export function confirmationTargetPaths(backupDir) {
   const { stateFile, partialFile } = confirmationPaths(backupDir);
-  return [stateFile, partialFile];
+  const { policyFile, partialFile: partialPolicyFile } = recipientPolicyPaths(backupDir);
+  return [stateFile, partialFile, policyFile, partialPolicyFile];
 }
 
 function hasNewerPlainCopy(entries, targetTime, targetName) {
@@ -110,10 +125,15 @@ export function inspectEncryptedArtifact(backupDir, fileName) {
   } catch {
     throw new StepError('confirmCorrupt', EXIT.failed);
   }
-  if (meta.sizeBytes !== undefined && meta.sizeBytes !== dumpLstat.size) {
+  if (
+    !Number.isInteger(meta.sizeBytes) ||
+    meta.sizeBytes <= 0 ||
+    typeof meta.sha256 !== 'string' ||
+    !SHA256_HEX.test(meta.sha256)
+  ) {
     throw new StepError('confirmCorrupt', EXIT.failed);
   }
-  if (meta.sha256 !== undefined && meta.sha256 !== actualSha256) {
+  if (meta.sizeBytes !== dumpLstat.size || meta.sha256 !== actualSha256) {
     throw new StepError('confirmCorrupt', EXIT.failed);
   }
 
@@ -187,12 +207,64 @@ export function readConfirmationState(backupDir) {
   };
 }
 
+// Reads the durable confirmed recipient policy. Returns null on ENOENT, throws
+// StepError('recipientPolicy') when symlinked, hardlinked, unreadable, or malformed (fail closed).
+export function readRecipientPolicy(backupDir) {
+  const { policyFile } = recipientPolicyPaths(backupDir);
+  let stat;
+  try {
+    stat = lstatSync(policyFile);
+  } catch (error) {
+    if (error.code === 'ENOENT') return null;
+    throw new StepError('recipientPolicy', EXIT.failed);
+  }
+  if (stat.isSymbolicLink() || !stat.isFile() || stat.nlink > 1) {
+    throw new StepError('recipientPolicy', EXIT.failed);
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(readFileSync(policyFile, 'utf8'));
+  } catch {
+    throw new StepError('recipientPolicy', EXIT.failed);
+  }
+  if (
+    typeof parsed !== 'object' ||
+    parsed === null ||
+    Array.isArray(parsed) ||
+    parsed.version !== 1 ||
+    typeof parsed.recipientSha256 !== 'string' ||
+    !SHA256_HEX.test(parsed.recipientSha256) ||
+    typeof parsed.confirmedAt !== 'string' ||
+    Number.isNaN(Date.parse(parsed.confirmedAt)) ||
+    typeof parsed.file !== 'string' ||
+    !ENCRYPTED_NAME_PATTERN.test(parsed.file) ||
+    typeof parsed.sha256 !== 'string' ||
+    !SHA256_HEX.test(parsed.sha256)
+  ) {
+    throw new StepError('recipientPolicy', EXIT.failed);
+  }
+  return {
+    version: 1,
+    recipientSha256: parsed.recipientSha256,
+    confirmedAt: parsed.confirmedAt,
+    file: parsed.file,
+    sha256: parsed.sha256,
+  };
+}
+
 // Validates that an existing confirmation authorizes purging prior unencrypted copies for the
 // current transition: target file still exists, matches exact sha256/sizeBytes/metaSha256,
-// matches recipient (when recorded), and no accepted unencrypted copy is newer than it.
-export function validateConfirmationForTransition({ backupDir, entries, currentRecipient = null }) {
+// matches recipient (when recorded) and durable recipient policy, and no accepted unencrypted copy is newer.
+export function validateConfirmationForTransition({
+  backupDir,
+  entries,
+  currentRecipient = null,
+  recipientPolicy = undefined,
+}) {
   const state = readConfirmationState(backupDir);
   if (!state) return { valid: false, reason: 'missing', state: null };
+
+  const policy = recipientPolicy === undefined ? readRecipientPolicy(backupDir) : recipientPolicy;
 
   const match = ENCRYPTED_NAME_PATTERN.exec(state.file);
   const targetTime = parseStampTime(match[1]);
@@ -223,30 +295,44 @@ export function validateConfirmationForTransition({ backupDir, entries, currentR
     return { valid: false, reason: 'recipient-mismatch', state };
   }
 
+  if (policy && state.recipientSha256 !== policy.recipientSha256) {
+    return { valid: false, reason: 'recipient-mismatch', state };
+  }
+
   return { valid: true, reason: 'ok', state };
 }
 
-function writeConfirmationState(backupDir, record) {
-  const { metaDir, stateFile, partialFile } = confirmationPaths(backupDir);
+function writeAtomicMetaJson(backupDir, targetFile, partialFile, record, errorKey) {
+  const { metaDir } = confirmationPaths(backupDir);
   ensurePrivateDir(backupDir);
   ensurePrivateDir(metaDir);
   try {
-    const existing = lstatSync(stateFile);
+    const existing = lstatSync(targetFile);
     if (existing.isSymbolicLink() || !existing.isFile() || existing.nlink > 1) {
-      throw new StepError('confirmState', EXIT.failed);
+      throw new StepError(errorKey, EXIT.failed);
     }
   } catch (error) {
     if (error instanceof StepError) throw error;
-    if (error.code !== 'ENOENT') throw new StepError('confirmState', EXIT.failed);
+    if (error.code !== 'ENOENT') throw new StepError(errorKey, EXIT.failed);
   }
   try {
     rmSync(partialFile, { force: true });
     writePrivateText(partialFile, JSON.stringify(record));
-    renameSync(partialFile, stateFile);
+    renameSync(partialFile, targetFile);
   } catch {
     rmSync(partialFile, { force: true });
-    throw new StepError('confirmState', EXIT.failed);
+    throw new StepError(errorKey, EXIT.failed);
   }
+}
+
+function writeConfirmationState(backupDir, record) {
+  const { stateFile, partialFile } = confirmationPaths(backupDir);
+  writeAtomicMetaJson(backupDir, stateFile, partialFile, record, 'confirmState');
+}
+
+function writeRecipientPolicy(backupDir, record) {
+  const { policyFile, partialFile } = recipientPolicyPaths(backupDir);
+  writeAtomicMetaJson(backupDir, policyFile, partialFile, record, 'recipientPolicy');
 }
 
 export function clearConfirmationState(backupDir) {
@@ -261,6 +347,7 @@ export function confirmEncryptedRestore({
   config,
   lock,
   fileName,
+  expectedSha256,
   now = () => new Date(),
   env = process.env,
   projectRoot = REPO_ROOT,
@@ -290,8 +377,24 @@ export function confirmEncryptedRestore({
   let saved = false;
   let result;
   try {
+    const normalizedExpected =
+      typeof expectedSha256 === 'string' ? expectedSha256.trim().toLowerCase() : '';
+    if (!SHA256_HEX.test(normalizedExpected)) {
+      throw new StepError('confirmDigestMismatch', EXIT.failed);
+    }
+    readConfirmationState(config.backupDir);
+    const existingPolicy = readRecipientPolicy(config.backupDir);
     const entries = listBackups(config.backupDir);
     const artifact = inspectEncryptedArtifact(config.backupDir, fileName);
+    if (artifact.sha256 !== normalizedExpected) {
+      throw new StepError('confirmDigestMismatch', EXIT.failed);
+    }
+    if (
+      existingPolicy &&
+      (!artifact.recipientSha256 || artifact.recipientSha256 !== existingPolicy.recipientSha256)
+    ) {
+      throw new StepError('recipientMismatch', EXIT.failed);
+    }
     if (hasNewerPlainCopy(entries, artifact.time, artifact.file)) {
       throw new StepError('confirmStale', EXIT.failed);
     }
@@ -307,6 +410,15 @@ export function confirmEncryptedRestore({
       ...(artifact.recipientSha256 ? { recipientSha256: artifact.recipientSha256 } : {}),
     };
     if (!lock.held()) throw new StepError('busy', EXIT.busy);
+    if (artifact.recipientSha256) {
+      writeRecipientPolicy(config.backupDir, {
+        version: 1,
+        recipientSha256: artifact.recipientSha256,
+        confirmedAt,
+        file: artifact.file,
+        sha256: artifact.sha256,
+      });
+    }
     writeConfirmationState(config.backupDir, record);
     saved = true;
     result = {

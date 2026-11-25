@@ -2,6 +2,7 @@
 import assert from 'node:assert/strict';
 import { fixtureUrl } from './helpers.mjs';
 import { readFileSync } from 'node:fs';
+import crypto from 'node:crypto';
 import path from 'node:path';
 import { describe, it } from 'node:test';
 import {
@@ -27,11 +28,12 @@ import {
   TOOLS_IMAGE,
   DROP_THRESHOLD_PERCENT,
   DEFAULT_RETENTION_COUNT,
+  CONFIRMED_RECIPIENT_STATE_NAME,
   ENCRYPTED_CONFIRM_STATE_NAME,
   EXIT,
 } from '../constants.mjs';
 import { verifyBackupDirGitIgnored } from '../git.mjs';
-import { listBackups } from '../pipeline.mjs';
+import { listBackups, StepError } from '../pipeline.mjs';
 import {
   CONTAINER_DIR,
   cleanupArgs,
@@ -137,24 +139,60 @@ describe('config', () => {
       assert.throws(() => parseRetentionCount(bad), ConfigError, `rejects ${bad}`);
     }
 
+    const sha = 'a'.repeat(64);
     assert.deepEqual(parseCliArgs([]), { allowRowDrop: false });
     assert.deepEqual(parseCliArgs(['--allow-row-drop']), { allowRowDrop: true });
     assert.deepEqual(
-      parseCliArgs(['--confirm-encrypted-restore', 'clickmoji-20261124T120000Z.dump.age']),
-      { allowRowDrop: false, confirmEncryptedRestore: 'clickmoji-20261124T120000Z.dump.age' }
+      parseCliArgs([
+        '--confirm-encrypted-restore',
+        'clickmoji-20261124T120000Z.dump.age',
+        '--sha256',
+        sha.toUpperCase(),
+      ]),
+      {
+        allowRowDrop: false,
+        confirmEncryptedRestore: 'clickmoji-20261124T120000Z.dump.age',
+        confirmSha256: sha,
+      }
     );
     assert.deepEqual(
-      parseCliArgs(['--confirm-encrypted-restore=clickmoji-20261124T120000Z.dump.age']),
-      { allowRowDrop: false, confirmEncryptedRestore: 'clickmoji-20261124T120000Z.dump.age' }
+      parseCliArgs([
+        `--sha256=${sha}`,
+        '--confirm-encrypted-restore=clickmoji-20261124T120000Z.dump.age',
+      ]),
+      {
+        allowRowDrop: false,
+        confirmEncryptedRestore: 'clickmoji-20261124T120000Z.dump.age',
+        confirmSha256: sha,
+      }
     );
     for (const badArgs of [
       ['--unknown'],
       ['--confirm-encrypted-restore'],
+      ['--confirm-encrypted-restore', 'clickmoji-20261124T120000Z.dump.age'],
       ['--confirm-encrypted-restore', ''],
       ['--confirm-encrypted-restore='],
-      ['--confirm-encrypted-restore', '--allow-row-drop'],
-      ['--allow-row-drop', '--confirm-encrypted-restore', 'clickmoji-20261124T120000Z.dump.age'],
-      ['--confirm-encrypted-restore', 'a.dump.age', '--confirm-encrypted-restore', 'b.dump.age'],
+      ['--sha256', sha],
+      ['--confirm-encrypted-restore', 'a.dump.age', '--sha256'],
+      ['--confirm-encrypted-restore', 'a.dump.age', '--sha256', 'not-hex'],
+      ['--confirm-encrypted-restore', 'a.dump.age', '--sha256=abc'],
+      ['--confirm-encrypted-restore', 'a.dump.age', '--sha256', sha, '--sha256', sha],
+      ['--confirm-encrypted-restore', '--allow-row-drop', '--sha256', sha],
+      [
+        '--allow-row-drop',
+        '--confirm-encrypted-restore',
+        'clickmoji-20261124T120000Z.dump.age',
+        '--sha256',
+        sha,
+      ],
+      [
+        '--confirm-encrypted-restore',
+        'a.dump.age',
+        '--confirm-encrypted-restore',
+        'b.dump.age',
+        '--sha256',
+        sha,
+      ],
     ]) {
       assert.throws(() => parseCliArgs(badArgs), ConfigError, `rejects ${badArgs.join(' ')}`);
     }
@@ -297,6 +335,7 @@ describe('retention', () => {
         'clickmoji-20261123T120000Z.dump',
         'clickmoji-20261122T120000Z.dump.age',
       ];
+      const xHash = crypto.createHash('sha256').update('x').digest('hex');
       for (const f of completed) {
         writeFileSync(path.join(dir, f), 'x');
         // Omit `encrypted` on one legacy .dump.age entry to confirm prior-version compatibility.
@@ -306,13 +345,13 @@ describe('retention', () => {
                 name: f,
                 createdAt: '2026-11-22T12:00:00.000Z',
                 sizeBytes: 1,
-                sha256: '0'.repeat(64),
+                sha256: xHash,
                 verify: 'ok',
                 migration: '20261101000000_init',
                 counts: { a: 1 },
                 flagged: [],
               }
-            : { name: f, verify: 'ok', counts: { a: 1 } };
+            : { name: f, sizeBytes: 1, sha256: xHash, verify: 'ok', counts: { a: 1 } };
         writeFileSync(path.join(dir, 'meta', `${f}.json`), JSON.stringify(meta));
       }
       const unaccepted = [
@@ -417,15 +456,17 @@ describe('retention', () => {
     assert.deepEqual(zeroFreeSlots.keep.sort(), [p1.name, e1.name].sort());
     assert.deepEqual(zeroFreeSlots.remove, [e2.name]);
 
-    // Excess plaintext (>N) still caps plaintext at N without deleting the newest N plaintext copies
-    const excessPlain = selectTransitionRetention({
-      entries: [p3, p2, p1, e1],
-      keepCount: 2,
-      encrypt: true,
-      confirmed: false,
-    });
-    assert.deepEqual(excessPlain.keep.sort(), [p2.name, p1.name, e1.name].sort());
-    assert.deepEqual(excessPlain.remove, [p3.name]);
+    // Excess plaintext (>N) refuses before confirmation instead of deleting any plaintext copy (B3).
+    assert.throws(
+      () =>
+        selectTransitionRetention({
+          entries: [p3, p2, p1, e1],
+          keepCount: 2,
+          encrypt: true,
+          confirmed: false,
+        }),
+      /keepCount cannot be smaller than unencrypted backups before confirmation/
+    );
 
     // Pre-transition encrypted copy older than newest plain is pruned when N+1 is full
     const eOld = day(7, true);
@@ -473,6 +514,54 @@ describe('retention', () => {
         confirmedFile: 'clickmoji-20261120T000000Z.dump.age',
       })
     );
+  });
+
+  it('B4: fails closed on non-zero truncation, same-size byte substitution, and missing digest without modifying metadata', () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'clickmoji-integrity-unit-'));
+    try {
+      mkdirSync(path.join(dir, 'meta'), { recursive: true });
+      const name = 'clickmoji-20261124T120000Z.dump.age';
+      const orig = 'ORIGINAL-BYTES';
+      const origHash = crypto.createHash('sha256').update(orig).digest('hex');
+      const metaPath = path.join(dir, 'meta', `${name}.json`);
+
+      // 1. Non-zero truncation
+      writeFileSync(path.join(dir, name), 'ORIG');
+      writeFileSync(
+        metaPath,
+        JSON.stringify({
+          name,
+          encrypted: true,
+          sizeBytes: Buffer.byteLength(orig),
+          sha256: origHash,
+          verify: 'ok',
+          counts: { a: 1 },
+        })
+      );
+      assert.throws(
+        () => listBackups(dir),
+        (e) => e instanceof StepError && e.key === 'corruptBackup'
+      );
+
+      // 2. Same-size substitution
+      writeFileSync(path.join(dir, name), 'TAMPERED-BYTES');
+      assert.equal(Buffer.byteLength('TAMPERED-BYTES'), Buffer.byteLength(orig));
+      assert.throws(
+        () => listBackups(dir),
+        (e) => e instanceof StepError && e.key === 'corruptBackup'
+      );
+
+      // 3. Old record without digest/sizeBytes fails closed and does NOT auto-upgrade metadata by re-hashing
+      const rawNoDigest = JSON.stringify({ name, verify: 'ok', counts: { a: 1 } });
+      writeFileSync(metaPath, rawNoDigest);
+      assert.throws(
+        () => listBackups(dir),
+        (e) => e instanceof StepError && e.key === 'corruptBackup'
+      );
+      assert.equal(readFileSync(metaPath, 'utf8'), rawNoDigest, 'metadata never auto-rehashed');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 
@@ -609,23 +698,23 @@ describe('git check-ignore and main-checkout destination guard', () => {
         'notIgnored'
       );
 
-      // Exact check catches negated rules targeting confirmation state files under /backups/meta/
-      writeFileSync(
-        path.join(mainRepo, '.gitignore'),
-        `/backups/*\n!/backups/meta/\n!/backups/meta/${ENCRYPTED_CONFIRM_STATE_NAME}\n`
-      );
-      assert.equal(
-        verifyBackupDirGitIgnored({ backupDir: ignored, projectRoot: mainRepo }).key,
-        'notIgnored'
-      );
-      writeFileSync(
-        path.join(mainRepo, '.gitignore'),
-        `/backups/*\n!/backups/meta/\n!/backups/meta/.partial-${ENCRYPTED_CONFIRM_STATE_NAME}\n`
-      );
-      assert.equal(
-        verifyBackupDirGitIgnored({ backupDir: ignored, projectRoot: mainRepo }).key,
-        'notIgnored'
-      );
+      // Exact check catches negated rules targeting confirmation and recipient policy files under /backups/meta/
+      for (const stateFile of [
+        ENCRYPTED_CONFIRM_STATE_NAME,
+        `.partial-${ENCRYPTED_CONFIRM_STATE_NAME}`,
+        CONFIRMED_RECIPIENT_STATE_NAME,
+        `.partial-${CONFIRMED_RECIPIENT_STATE_NAME}`,
+      ]) {
+        writeFileSync(
+          path.join(mainRepo, '.gitignore'),
+          `/backups/*\n!/backups/meta/\n!/backups/meta/${stateFile}\n`
+        );
+        assert.equal(
+          verifyBackupDirGitIgnored({ backupDir: ignored, projectRoot: mainRepo }).key,
+          'notIgnored',
+          `must reject targeted negation for ${stateFile}`
+        );
+      }
 
       // Non-ignored mainRepo/backups fails with notIgnored
       writeFileSync(path.join(mainRepo, '.gitignore'), '');

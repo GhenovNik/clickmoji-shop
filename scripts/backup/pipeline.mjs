@@ -28,6 +28,8 @@ import {
   META_DIR,
   TEMP_MARKER,
   TEMP_PREFIX,
+  WAITING_CONFIRMATION_NOTE,
+  WAITING_FIRST_CONFIRMATION_NOTE,
 } from './constants.mjs';
 import {
   compareIdentities,
@@ -41,6 +43,7 @@ import {
   clearConfirmationState,
   confirmationTargetPaths,
   readConfirmationState,
+  readRecipientPolicy,
   validateConfirmationForTransition,
 } from './confirm.mjs';
 import {
@@ -146,13 +149,41 @@ async function sweepStaleTemp(tempRoot, backupDir, docker) {
   if (stuck) throw new StepError('cleanup', EXIT.failed);
 }
 
-// Row counts of the newest accepted copy of any age, if any.
-// Unreadable or malformed metadata fails verification closed rather than ignoring the baseline.
-function readPreviousCounts(backupDir) {
-  const backups = listBackups(backupDir).sort(
-    (a, b) => b.time - a.time || (a.name < b.name ? 1 : -1)
-  );
+// Row counts of the newest accepted copy of any age, if any, from already-verified entries.
+function latestCounts(entries) {
+  const backups = [...entries].sort((a, b) => b.time - a.time || (a.name < b.name ? 1 : -1));
   return backups[0]?.counts ?? null;
+}
+
+// Verifies existing backup integrity, durable confirmed-recipient policy, and transition/first-identity
+// retention bounds before taking a dump, publishing, or pruning any existing copy.
+function verifyPreRunState({ config, snapshotRecipientSha256 }) {
+  readConfirmationState(config.backupDir);
+  const recipientPolicy = readRecipientPolicy(config.backupDir);
+  const entries = listBackups(config.backupDir);
+
+  if (config.encrypt) {
+    if (recipientPolicy && recipientPolicy.recipientSha256 !== snapshotRecipientSha256) {
+      throw new StepError('recipientMismatch', EXIT.failed);
+    }
+    const plain = entries.filter((entry) => !entry.encrypted);
+    const encrypted = entries.filter((entry) => entry.encrypted);
+    if (plain.length > 0) {
+      const validation = validateConfirmationForTransition({
+        backupDir: config.backupDir,
+        entries,
+        currentRecipient: config.recipient,
+        recipientPolicy,
+      });
+      if (plain.length > config.keepCount && !validation.valid) {
+        throw new StepError('transitionLimitTooLow', EXIT.failed);
+      }
+    } else if (!recipientPolicy && encrypted.length >= config.keepCount) {
+      throw new StepError('confirmFirstEncrypted', EXIT.failed);
+    }
+  }
+
+  return { entries, recipientPolicy };
 }
 
 // Copy into the backup directory under a partial name (0600 from creation), then rename.
@@ -179,6 +210,9 @@ function publish({
     rmSync(partialMeta, { force: true });
     copyFile(sourceFile, partialDump);
     fsyncFile(partialDump);
+    if (statSync(partialDump).size !== meta.sizeBytes || sha256File(partialDump) !== meta.sha256) {
+      throw new Error('published digest mismatch');
+    }
     writePrivateText(partialMeta, JSON.stringify(meta));
     renameSync(partialDump, finalDump);
     dumpMoved = true;
@@ -207,9 +241,20 @@ async function executeBackup({
   onBeforeMetaRename = null,
   onBeforePruneRemove = null,
   projectRoot = REPO_ROOT,
+  publishedState = { name: null },
 }) {
-  // Fail closed early if an existing confirmation state file is corrupted, symlinked, or hardlinked.
-  readConfirmationState(config.backupDir);
+  // Snapshot the validated recipient key into tempDir (outside any repository) so container
+  // encryption and metadata fingerprinting always use the exact same bytes, even if the host
+  // recipient file changes mid-run.
+  const snapshotRecipientFile = config.encrypt ? path.join(tempDir, 'recipient.txt') : null;
+  const snapshotRecipientSha256 = config.encrypt ? sha256Text(config.recipient) : null;
+  if (config.encrypt) {
+    writePrivateText(snapshotRecipientFile, `${config.recipient}\n`);
+  }
+
+  // Fail closed early on corrupted confirmation/policy state, corrupted existing copies,
+  // recipient mismatch after confirmation, or incompatible transition/unconfirmed limits.
+  const initialPreflight = verifyPreRunState({ config, snapshotRecipientSha256 });
 
   // A container step counts only when its start exited 0 AND the daemon has been seen to hold no
   // container of its name. A zero exit alone is not proof: the daemon may be unreachable or still
@@ -273,7 +318,7 @@ async function executeBackup({
     if (!counts.has(table)) throw new StepError('verify', EXIT.failed);
   }
 
-  const previous = readPreviousCounts(config.backupDir);
+  const previous = latestCounts(initialPreflight.entries);
   const drops = previous ? findDrops(previous, counts, DROP_THRESHOLD_PERCENT) : [];
   if (drops.length > 0 && !allowRowDrop) {
     throw new StepError('drop', EXIT.suspicious);
@@ -286,7 +331,7 @@ async function executeBackup({
       encryptArgs({
         name: containerName('encrypt'),
         workDir: tempDir,
-        recipientFile: config.recipientFile,
+        recipientFile: snapshotRecipientFile,
       }),
       'encrypt'
     );
@@ -323,6 +368,10 @@ async function executeBackup({
     throw new StepError('notIgnored', EXIT.failed);
   }
 
+  // Re-verify existing backup integrity, recipient policy, and transition bounds immediately before
+  // publishing, in case any file changed during dump/verify/encrypt.
+  verifyPreRunState({ config, snapshotRecipientSha256 });
+
   const meta = {
     name,
     encrypted: config.encrypt,
@@ -331,8 +380,8 @@ async function executeBackup({
     sha256: sha256File(sourceToPublish),
     verify: 'ok',
     verifyScope: 'plaintext',
-    ...(config.encrypt && config.recipient
-      ? { recipientSha256: sha256Text(config.recipient) }
+    ...(config.encrypt && snapshotRecipientSha256
+      ? { recipientSha256: snapshotRecipientSha256 }
       : {}),
     migration,
     counts: Object.fromEntries(counts),
@@ -348,10 +397,12 @@ async function executeBackup({
     copyFile: publishCopy,
     onBeforeMetaRename,
   });
+  publishedState.name = name;
 
   // Transition & pruning run only after the new copy is completely published, and only for the lock holder.
   let pruned = 'ok';
   let waitingForConfirmation = false;
+  let waitingNote = null;
   let confirmed = false;
   if (!lock.held()) {
     pruned = 'skipped';
@@ -359,13 +410,18 @@ async function executeBackup({
     try {
       cleanupIncompletePublishes(config.backupDir);
       const entries = listBackups(config.backupDir);
+      const recipientPolicy = readRecipientPolicy(config.backupDir);
       if (config.encrypt) {
+        if (recipientPolicy && recipientPolicy.recipientSha256 !== snapshotRecipientSha256) {
+          throw new StepError('recipientMismatch', EXIT.failed);
+        }
         const hasPlain = entries.some((entry) => !entry.encrypted);
         if (hasPlain) {
           const validation = validateConfirmationForTransition({
             backupDir: config.backupDir,
             entries,
             currentRecipient: config.recipient,
+            recipientPolicy,
           });
           confirmed = validation.valid;
           const plan = selectTransitionRetention({
@@ -376,6 +432,7 @@ async function executeBackup({
             confirmedFile: confirmed ? validation.state.file : null,
           });
           waitingForConfirmation = plan.waitingForConfirmation;
+          waitingNote = waitingForConfirmation ? WAITING_CONFIRMATION_NOTE : null;
           for (const old of plan.remove) {
             if (onBeforePruneRemove) onBeforePruneRemove(old, plan);
             removeCopyWithMeta(config.backupDir, old);
@@ -384,12 +441,18 @@ async function executeBackup({
             clearConfirmationState(config.backupDir);
           }
         } else {
-          const { remove } = selectRetention(entries, config.keepCount);
+          const { remove } = selectRetention(entries, config.keepCount, {
+            preferredRecipientSha256: recipientPolicy?.recipientSha256 ?? null,
+          });
           for (const old of remove) {
             if (onBeforePruneRemove) onBeforePruneRemove(old, { remove });
             removeCopyWithMeta(config.backupDir, old);
           }
           clearConfirmationState(config.backupDir);
+          if (!recipientPolicy) {
+            waitingForConfirmation = true;
+            waitingNote = WAITING_FIRST_CONFIRMATION_NOTE;
+          }
         }
       } else {
         const { remove } = selectRetention(entries, config.keepCount);
@@ -398,15 +461,17 @@ async function executeBackup({
           removeCopyWithMeta(config.backupDir, old);
         }
         // Any successful unencrypted publication starts a fresh unencrypted baseline and
-        // invalidates any older encrypted-restore confirmation.
+        // invalidates any older encrypted-restore confirmation, while keeping durable recipient policy.
         clearConfirmationState(config.backupDir);
       }
-    } catch {
+    } catch (error) {
+      if (error instanceof StepError) throw error;
       pruned = 'incomplete';
       waitingForConfirmation =
         config.encrypt &&
         !confirmed &&
         listBackups(config.backupDir).some((entry) => !entry.encrypted);
+      if (waitingForConfirmation) waitingNote = WAITING_CONFIRMATION_NOTE;
     }
   }
   const retained = existsSync(path.join(config.backupDir, name));
@@ -429,6 +494,7 @@ async function executeBackup({
     verify: 'ok',
     pruned,
     waitingForConfirmation,
+    waitingNote,
   };
 }
 
@@ -565,6 +631,7 @@ export async function runBackup({
   let result;
   let saved = false;
   let tempDir = null;
+  const publishedState = { name: null };
   try {
     await recoverContainers(docker, ledger);
     await sweepStaleTemp(tempRoot, config.backupDir, docker);
@@ -586,6 +653,7 @@ export async function runBackup({
       onBeforeMetaRename,
       onBeforePruneRemove,
       projectRoot,
+      publishedState,
     });
     result = {
       ok: true,
@@ -594,6 +662,8 @@ export async function runBackup({
     saved = backupOutcome.retained; // true only when the newly published copy remains on disk
   } catch (error) {
     result = classify(error);
+    saved =
+      publishedState.name !== null && existsSync(path.join(config.backupDir, publishedState.name));
   }
 
   // Containers first. Until every container is proven gone, nothing may be removed under them.

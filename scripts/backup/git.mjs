@@ -9,6 +9,7 @@ import {
   BACKUP_ENCRYPTED_SUFFIX,
   BACKUP_PLAIN_SUFFIX,
   BACKUP_PREFIX,
+  CONFIRMED_RECIPIENT_STATE_NAME,
   DOCKER_TIMEOUT_MS,
   ENCRYPTED_CONFIRM_STATE_NAME,
   EXIT,
@@ -385,6 +386,8 @@ export function verifyBackupDirGitIgnored({
     `${physicalPath}/${META_DIR}/.partial-${BACKUP_PREFIX}probe${BACKUP_ENCRYPTED_SUFFIX}.json`,
     `${physicalPath}/${META_DIR}/${ENCRYPTED_CONFIRM_STATE_NAME}`,
     `${physicalPath}/${META_DIR}/.partial-${ENCRYPTED_CONFIRM_STATE_NAME}`,
+    `${physicalPath}/${META_DIR}/${CONFIRMED_RECIPIENT_STATE_NAME}`,
+    `${physicalPath}/${META_DIR}/.partial-${CONFIRMED_RECIPIENT_STATE_NAME}`,
   ];
 
   for (const target of targetPaths) {

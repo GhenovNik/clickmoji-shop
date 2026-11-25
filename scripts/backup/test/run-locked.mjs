@@ -16,6 +16,7 @@ const {
   tempRoot,
   allowRowDrop = false,
   confirmFile = null,
+  confirmSha256 = null,
   projectRoot,
 } = JSON.parse(input);
 
@@ -26,6 +27,7 @@ if (mode === 'confirm') {
     config,
     lock,
     fileName: confirmFile,
+    expectedSha256: confirmSha256,
     now: () => new Date(now),
     env,
     projectRoot,

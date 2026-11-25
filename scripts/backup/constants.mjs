@@ -37,11 +37,15 @@ export const LOCK_NAME = '.backup.lock';
 export const LEDGER_NAME = '.backup.ledger';
 // Operator confirmation state for the first restored encrypted copy before purging plaintext dumps.
 export const ENCRYPTED_CONFIRM_STATE_NAME = '.encrypted-restore-confirmed.json';
+// Durable policy storing the confirmed public age recipient across cutover, restarts, and mode switches.
+export const CONFIRMED_RECIPIENT_STATE_NAME = '.confirmed-recipient.json';
 export const TEMP_PREFIX = 'clickmoji-backup-';
 // Written into every temporary directory first; removed last, and never by a container's cleanup.
 export const TEMP_MARKER = 'owner.json';
 export const WAITING_CONFIRMATION_NOTE =
   'шифрование включено, открытые копии ждут подтверждения восстановления';
+export const WAITING_FIRST_CONFIRMATION_NOTE =
+  'шифрование включено, первая копия ждёт подтверждения восстановления';
 
 // Process exit codes.
 export const EXIT = Object.freeze({
@@ -71,9 +75,17 @@ export const MESSAGES = Object.freeze({
   publish: 'сбой: публикация не удалась',
   confirmTarget: 'сбой: копия для подтверждения отсутствует или не подходит',
   confirmCorrupt: 'сбой: копия для подтверждения повреждена или подменена',
+  confirmDigestMismatch: 'сбой: SHA-256 копии не совпадает с восстановленным снимком',
   confirmStale: 'сбой: копия устарела для текущего перехода к шифрованию',
   confirmState: 'сбой: состояние подтверждения повреждено',
   confirmStatusSaved: 'сбой: подтверждение сохранено, статус не записан',
+  recipientPolicy: 'сбой: политика подтверждённого получателя age повреждена',
+  recipientMismatch: 'сбой: публичный ключ age не совпадает с подтверждённым получателем',
+  transitionLimitTooLow:
+    'сбой: лимит BACKUP_RETENTION_COUNT слишком мал для периода перехода; поднимите BACKUP_RETENTION_COUNT на период перехода',
+  confirmFirstEncrypted:
+    'сбой: первая зашифрованная копия не подтверждена; подтвердите восстановление копии или поднимите BACKUP_RETENTION_COUNT',
+  corruptBackup: 'сбой: нарушена или не подтверждена целостность существующей резервной копии',
   busy: 'сбой: уже выполняется другое снятие',
   cleanup: 'сбой: очистка временной папки не удалась',
   containers: 'сбой: не удалось подтвердить остановку контейнера',

@@ -1,5 +1,6 @@
 // CLI tests: the real entry point as a child process, so what it prints is what we assert on.
 import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
 import {
   chmodSync,
   existsSync,
@@ -29,14 +30,17 @@ import {
   removalEvents,
   runCli,
   seedBackups,
+  seedConfirmedRecipient,
   spawnLockHolder,
   syntheticDatabase,
 } from './helpers.mjs';
 import {
+  CONFIRMED_RECIPIENT_STATE_NAME,
   ENCRYPTED_CONFIRM_STATE_NAME,
   EXIT,
   MESSAGES,
   WAITING_CONFIRMATION_NOTE,
+  WAITING_FIRST_CONFIRMATION_NOTE,
 } from '../constants.mjs';
 
 let sandbox;
@@ -82,7 +86,7 @@ describe('cli concurrency', () => {
 
 describe('cli failure outcomes', () => {
   it('docker unavailable: literal sanitized status, non-zero exit, old copies intact', async () => {
-    const old = seedBackups(sandbox.backupDir, 20);
+    const old = seedBackups(sandbox.backupDir, 20, { recipientFile: sandbox.recipientFile });
     const result = await runCli(envFor(sandbox, db, { FAKE_DOCKER_MODE: 'docker-down' }), [], {
       cli: sandbox.cli,
     });
@@ -97,7 +101,7 @@ describe('cli failure outcomes', () => {
   });
 
   it('image pull failed: explicit status, non-zero exit, old copies intact', async () => {
-    const old = seedBackups(sandbox.backupDir, 20);
+    const old = seedBackups(sandbox.backupDir, 20, { recipientFile: sandbox.recipientFile });
     const result = await runCli(envFor(sandbox, db, { FAKE_DOCKER_MODE: 'pull-fail' }), [], {
       cli: sandbox.cli,
     });
@@ -155,7 +159,7 @@ describe('cli failure outcomes', () => {
   });
 
   it('a successful run prints no address, credential or count', async () => {
-    seedBackups(sandbox.backupDir, 3);
+    seedBackups(sandbox.backupDir, 3, { recipientFile: sandbox.recipientFile });
     const result = await runCli(envFor(sandbox, db), [], { cli: sandbox.cli });
     assert.equal(result.code, EXIT.ok);
     assert.match(result.stdout, /^backup: ok clickmoji-\d{8}T\d{6}Z\.dump\.age verify=ok\n$/);
@@ -165,7 +169,7 @@ describe('cli failure outcomes', () => {
 
 describe('interruption after plaintext exists', () => {
   it('the writer SIGKILLed mid-run frees the lock at once, publishes nothing, and the next run recovers and completes', async () => {
-    const old = seedBackups(sandbox.backupDir, 20);
+    const old = seedBackups(sandbox.backupDir, 20, { recipientFile: sandbox.recipientFile });
     const env = envFor(sandbox, db, { FAKE_DOCKER_MODE: 'interrupt' });
     const child = spawn(process.execPath, [sandbox.cli], {
       env,
@@ -197,7 +201,7 @@ describe('interruption after plaintext exists', () => {
   });
 
   it('SIGTERM kills the dump container, removes plaintext and the cluster, releases the lock', async () => {
-    const old = seedBackups(sandbox.backupDir, 20);
+    const old = seedBackups(sandbox.backupDir, 20, { recipientFile: sandbox.recipientFile });
     const env = envFor(sandbox, db, { FAKE_DOCKER_MODE: 'interrupt' });
     const child = spawn(process.execPath, [sandbox.cli], {
       env,
@@ -314,7 +318,7 @@ describe('the status file cannot alias backup data', () => {
   it('a status file outside the tree, not linked, is accepted as before', async () => {
     mkdirSync(path.join(sandbox.root, 'logs'));
     writeFileSync(path.join(sandbox.root, 'logs', 'status.log'), '');
-    seedBackups(sandbox.backupDir, 1);
+    seedBackups(sandbox.backupDir, 1, { recipientFile: sandbox.recipientFile });
     const result = await runCli(
       envFor(sandbox, db, { BACKUP_STATUS_FILE: path.join(sandbox.root, 'logs', 'status.log') }),
       [],
@@ -511,6 +515,7 @@ globalThis.Date = class extends RealDate {
     const old = seedBackups(sandbox.backupDir, 2, {
       startDay: 10,
       counts: { a: 100, b: 100 },
+      recipientFile: sandbox.recipientFile,
     });
     const env = envFor(sandbox, db, { FAKE_COUNTS: '{"a":10,"b":100}' });
 
@@ -577,15 +582,23 @@ describe('B2 CLI explicit confirmation and transition flow', () => {
     assert.ok(enc1);
 
     // Explicit confirmation without DATABASE_URL, BACKUP_ENCRYPT, or BACKUP_AGE_RECIPIENT_FILE
+    const enc1Sha = crypto
+      .createHash('sha256')
+      .update(readFileSync(path.join(sandbox.backupDir, enc1)))
+      .digest('hex');
     const confirmEnv = {
       PATH: process.env.PATH,
       BACKUP_DIR: sandbox.backupDir,
       BACKUP_STATUS_FILE: sandbox.statusFile,
     };
     const dockerCallsBefore = readDockerCalls();
-    const confirmed = await runCli(confirmEnv, ['--confirm-encrypted-restore', enc1], {
-      cli: sandbox.cli,
-    });
+    const confirmed = await runCli(
+      confirmEnv,
+      ['--confirm-encrypted-restore', enc1, '--sha256', enc1Sha],
+      {
+        cli: sandbox.cli,
+      }
+    );
     assert.equal(confirmed.code, EXIT.ok, confirmed.stderr + confirmed.stdout);
     assert.match(confirmed.stdout, new RegExp(`confirmed encrypted restore ${enc1}`));
     assert.equal(readDockerCalls(), dockerCallsBefore, 'no docker called during confirmation');
@@ -595,10 +608,14 @@ describe('B2 CLI explicit confirmation and transition flow', () => {
       'confirmation deletes nothing'
     );
     const statePath = path.join(sandbox.backupDir, 'meta', ENCRYPTED_CONFIRM_STATE_NAME);
+    const policyPath = path.join(sandbox.backupDir, 'meta', CONFIRMED_RECIPIENT_STATE_NAME);
     assert.equal(existsSync(statePath), true);
+    assert.equal(existsSync(policyPath), true);
     assert.equal(statSync(statePath).mode & 0o777, 0o600);
+    assert.equal(statSync(policyPath).mode & 0o777, 0o600);
     const state = JSON.parse(readFileSync(statePath, 'utf8'));
     assert.equal(state.file, enc1);
+    assert.equal(state.sha256, enc1Sha);
     assert.match(state.confirmedAt, /^\d{4}-\d{2}-\d{2}T/);
 
     // Wait 1.1s so next CLI run gets a distinct second timestamp
@@ -611,11 +628,16 @@ describe('B2 CLI explicit confirmation and transition flow', () => {
     assert.ok(finalCopies.every((name) => name.endsWith('.dump.age')));
     for (const p of oldPlain) assert.equal(existsSync(path.join(sandbox.backupDir, p)), false);
     assert.equal(existsSync(statePath), false);
+    assert.equal(existsSync(policyPath), true, 'durable recipient policy survives cutover');
   });
 
   it('rejects missing, unencrypted, foreign, incomplete, tampered, and symlinked artifacts without writing confirmation or deleting anything', async () => {
     const oldPlain = seedBackups(sandbox.backupDir, 1, { startDay: 3, encrypted: false });
     const [validEnc] = seedBackups(sandbox.backupDir, 1, { startDay: 1, encrypted: true });
+    const validSha = crypto
+      .createHash('sha256')
+      .update(readFileSync(path.join(sandbox.backupDir, validEnc)))
+      .digest('hex');
     const orphanEnc = 'clickmoji-20261124T010000Z.dump.age';
     writeFileSync(path.join(sandbox.backupDir, orphanEnc), 'ORPHAN');
     const tamperedEnc = 'clickmoji-20261124T020000Z.dump.age';
@@ -641,6 +663,14 @@ describe('B2 CLI explicit confirmation and transition flow', () => {
     };
     const statePath = path.join(sandbox.backupDir, 'meta', ENCRYPTED_CONFIRM_STATE_NAME);
 
+    // Missing --sha256 is rejected at CLI argument parsing
+    const missingSha = await runCli(confirmEnv, ['--confirm-encrypted-restore', validEnc], {
+      cli: sandbox.cli,
+    });
+    assert.equal(missingSha.code, EXIT.failed);
+    assert.match(missingSha.stderr, /--sha256/);
+    assert.equal(existsSync(statePath), false);
+
     for (const badTarget of [
       'clickmoji-20261124T099999Z.dump.age', // missing / bad stamp
       'clickmoji-20261120T000000Z.dump.age', // missing
@@ -651,9 +681,13 @@ describe('B2 CLI explicit confirmation and transition flow', () => {
       tamperedEnc, // sha256 mismatch
       symlinkEnc, // symlink
     ]) {
-      const res = await runCli(confirmEnv, ['--confirm-encrypted-restore', badTarget], {
-        cli: sandbox.cli,
-      });
+      const res = await runCli(
+        confirmEnv,
+        ['--confirm-encrypted-restore', badTarget, '--sha256', validSha],
+        {
+          cli: sandbox.cli,
+        }
+      );
       assert.equal(res.code, EXIT.failed, `must reject ${badTarget}`);
       assert.equal(existsSync(statePath), false, `no state written for ${badTarget}`);
       assert.equal(existsSync(path.join(sandbox.backupDir, oldPlain[0])), true);
@@ -662,6 +696,10 @@ describe('B2 CLI explicit confirmation and transition flow', () => {
 
   it('enforces early Git guard (disabled git, non-ignored state path, non-main backups) and shared lock on --confirm-encrypted-restore', async () => {
     const [enc] = seedBackups(sandbox.backupDir, 1, { startDay: 1, encrypted: true });
+    const encSha = crypto
+      .createHash('sha256')
+      .update(readFileSync(path.join(sandbox.backupDir, enc)))
+      .digest('hex');
     const confirmEnv = {
       PATH: process.env.PATH,
       BACKUP_DIR: sandbox.backupDir,
@@ -672,7 +710,7 @@ describe('B2 CLI explicit confirmation and transition flow', () => {
     // 1. Git unavailable -> exit 4, writes status, no state file
     const noGit = await runCli(
       { ...confirmEnv, BACKUP_GIT_BIN: '/nonexistent/git-bin' },
-      ['--confirm-encrypted-restore', enc],
+      ['--confirm-encrypted-restore', enc, '--sha256', encSha],
       { cli: sandbox.cli }
     );
     assert.equal(noGit.code, EXIT.unavailable);
@@ -700,9 +738,13 @@ describe('B2 CLI explicit confirmation and transition flow', () => {
       ]).status,
       0
     );
-    const notIgnored = await runCli(confirmEnv, ['--confirm-encrypted-restore', enc], {
-      cli: sandbox.cli,
-    });
+    const notIgnored = await runCli(
+      confirmEnv,
+      ['--confirm-encrypted-restore', enc, '--sha256', encSha],
+      {
+        cli: sandbox.cli,
+      }
+    );
     assert.equal(notIgnored.code, EXIT.failed);
     assert.match(notIgnored.stdout, /не игнорируется git/);
     assert.equal(existsSync(statePath), false);
@@ -712,9 +754,13 @@ describe('B2 CLI explicit confirmation and transition flow', () => {
     const holder = spawnLockHolder(sandbox.backupDir, path.join(sandbox.root, 'gate'));
     assert.equal(await holder.acquired, true);
     try {
-      const busy = await runCli(confirmEnv, ['--confirm-encrypted-restore', enc], {
-        cli: sandbox.cli,
-      });
+      const busy = await runCli(
+        confirmEnv,
+        ['--confirm-encrypted-restore', enc, '--sha256', encSha],
+        {
+          cli: sandbox.cli,
+        }
+      );
       assert.equal(busy.code, EXIT.busy);
       assert.equal(existsSync(statePath), false);
     } finally {
@@ -766,13 +812,17 @@ describe('B2 CLI explicit confirmation and transition flow', () => {
     assert.ok(enc1);
     assert.deepEqual(listCopies(sandbox.backupDir).sort(), [p1, enc1].sort());
 
+    const enc1Sha = crypto
+      .createHash('sha256')
+      .update(readFileSync(path.join(sandbox.backupDir, enc1)))
+      .digest('hex');
     const confirm = await runCli(
       {
         PATH: process.env.PATH,
         BACKUP_DIR: sandbox.backupDir,
         BACKUP_STATUS_FILE: sandbox.statusFile,
       },
-      ['--confirm-encrypted-restore', enc1],
+      ['--confirm-encrypted-restore', enc1, '--sha256', enc1Sha],
       { cli: sandbox.cli }
     );
     assert.equal(confirm.code, EXIT.ok, confirm.stderr + confirm.stdout);
@@ -789,6 +839,145 @@ describe('B2 CLI explicit confirmation and transition flow', () => {
     assert.match(cutover.stdout, new RegExp(`^backup: ok verify=ok kept=${enc1} new=pruned\n$`));
     const lastStatus = readStatus(sandbox).trim().split('\n').pop();
     assert.match(lastStatus, new RegExp(`verify=ok kept=${enc1} new=pruned prune=ok$`));
+  });
+
+  it('r2 CLI B1/B2/B3/B4: digest-bound confirm, recipient policy lock, N=1 plain-transition preflight refusal, and integrity checks', async () => {
+    // B1: replacing consistent dump+meta pair between restore (sha256 A) and CLI confirm rejects under lock
+    const b1Plain = seedBackups(sandbox.backupDir, 1, { startDay: 3, encrypted: false });
+    const b1EncRes = await runCli(envFor(sandbox, db), [], { cli: sandbox.cli });
+    assert.equal(b1EncRes.code, EXIT.ok);
+    const b1Enc = listCopies(sandbox.backupDir).find((n) => n.endsWith('.dump.age'));
+    const restoredSnapshotSha = crypto
+      .createHash('sha256')
+      .update(readFileSync(path.join(sandbox.backupDir, b1Enc)))
+      .digest('hex');
+
+    // Substitute entire consistent pair (dump + meta) under the same filename
+    const pairB = 'age-encryption.org/v1\nSUBSTITUTED-CONSISTENT-PAIR\n';
+    const pairBMetaPath = path.join(sandbox.backupDir, 'meta', `${b1Enc}.json`);
+    const pairBMeta = JSON.parse(readFileSync(pairBMetaPath, 'utf8'));
+    pairBMeta.sizeBytes = Buffer.byteLength(pairB);
+    pairBMeta.sha256 = crypto.createHash('sha256').update(pairB).digest('hex');
+    writeFileSync(path.join(sandbox.backupDir, b1Enc), pairB);
+    writeFileSync(pairBMetaPath, JSON.stringify(pairBMeta));
+
+    const b1Rejected = await runCli(
+      {
+        PATH: process.env.PATH,
+        BACKUP_DIR: sandbox.backupDir,
+        BACKUP_STATUS_FILE: sandbox.statusFile,
+      },
+      ['--confirm-encrypted-restore', b1Enc, '--sha256', restoredSnapshotSha],
+      { cli: sandbox.cli }
+    );
+    assert.equal(b1Rejected.code, EXIT.failed);
+    assert.match(b1Rejected.stdout, new RegExp(MESSAGES.confirmDigestMismatch));
+    assert.equal(
+      existsSync(path.join(sandbox.backupDir, 'meta', ENCRYPTED_CONFIRM_STATE_NAME)),
+      false
+    );
+    assert.equal(existsSync(path.join(sandbox.backupDir, b1Plain[0])), true);
+
+    // B3: 2 accepted plain dumps + N=1 refuses early before docker, repeats preserve both, and confirm still works if .age exists
+    const b3Sandbox = makeSandbox();
+    try {
+      const twoPlain = seedBackups(b3Sandbox.backupDir, 2, { startDay: 2, encrypted: false });
+      const envN1 = envFor(b3Sandbox, db, { BACKUP_RETENTION_COUNT: '1' });
+      const r1 = await runCli(envN1, [], { cli: b3Sandbox.cli });
+      const r2 = await runCli(envN1, [], { cli: b3Sandbox.cli });
+      assert.equal(r1.code, EXIT.failed);
+      assert.equal(r2.code, EXIT.failed);
+      assert.match(r1.stdout, /BACKUP_RETENTION_COUNT/);
+      assert.deepEqual(listCopies(b3Sandbox.backupDir).sort(), [...twoPlain].sort());
+      assert.equal(
+        existsSync(b3Sandbox.logFile)
+          ? readFileSync(b3Sandbox.logFile, 'utf8').split('\n').filter(Boolean).length
+          : 0,
+        0,
+        'no docker call on early B3 preflight refusal'
+      );
+
+      // Temporarily raise N=2 to create .age, then drop back to N=1: confirm still succeeds!
+      const withN2 = await runCli(envFor(b3Sandbox, db, { BACKUP_RETENTION_COUNT: '2' }), [], {
+        cli: b3Sandbox.cli,
+      });
+      assert.equal(withN2.code, EXIT.ok);
+      const encFile = listCopies(b3Sandbox.backupDir).find((n) => n.endsWith('.dump.age'));
+      const encSha = crypto
+        .createHash('sha256')
+        .update(readFileSync(path.join(b3Sandbox.backupDir, encFile)))
+        .digest('hex');
+      // Still refuses backup run at N=1 before confirm
+      assert.equal((await runCli(envN1, [], { cli: b3Sandbox.cli })).code, EXIT.failed);
+      // Confirm succeeds even while N=1 (loadConfirmConfig ignores N)
+      const conf = await runCli(
+        {
+          PATH: process.env.PATH,
+          BACKUP_DIR: b3Sandbox.backupDir,
+          BACKUP_STATUS_FILE: b3Sandbox.statusFile,
+        },
+        ['--confirm-encrypted-restore', encFile, '--sha256', encSha],
+        { cli: b3Sandbox.cli }
+      );
+      assert.equal(conf.code, EXIT.ok);
+    } finally {
+      b3Sandbox.cleanup();
+    }
+
+    // B2 no-plaintext fresh mode + post-confirmation recipient lock + B4 CLI truncation check
+    const b2Fresh = makeSandbox();
+    try {
+      const envN1 = envFor(b2Fresh, db, { BACKUP_RETENTION_COUNT: '1' });
+      const first = await runCli(envN1, [], { cli: b2Fresh.cli });
+      assert.equal(first.code, EXIT.ok);
+      assert.match(first.stdout, new RegExp(WAITING_FIRST_CONFIRMATION_NOTE));
+      const [enc1] = listCopies(b2Fresh.backupDir);
+
+      // Second run at N=1 refuses before evicting unconfirmed enc1
+      await new Promise((resolve) => setTimeout(resolve, 1100));
+      const blockedEvict = await runCli(envN1, [], { cli: b2Fresh.cli });
+      assert.equal(blockedEvict.code, EXIT.failed);
+      assert.match(blockedEvict.stdout, new RegExp(MESSAGES.confirmFirstEncrypted));
+      assert.deepEqual(listCopies(b2Fresh.backupDir), [enc1]);
+
+      // Confirm enc1 with snapshot SHA-256
+      const enc1Sha = crypto
+        .createHash('sha256')
+        .update(readFileSync(path.join(b2Fresh.backupDir, enc1)))
+        .digest('hex');
+      const okConfirm = await runCli(
+        {
+          PATH: process.env.PATH,
+          BACKUP_DIR: b2Fresh.backupDir,
+          BACKUP_STATUS_FILE: b2Fresh.statusFile,
+        },
+        ['--confirm-encrypted-restore', enc1, '--sha256', enc1Sha],
+        { cli: b2Fresh.cli }
+      );
+      assert.equal(okConfirm.code, EXIT.ok);
+
+      // Changing recipient after confirmation fails closed before docker
+      const otherKey = path.join(b2Fresh.root, 'other.txt');
+      writeFileSync(otherKey, `age1${'p'.repeat(58)}\n`);
+      const wrongRec = await runCli(
+        envFor(b2Fresh, db, { BACKUP_RETENTION_COUNT: '1', BACKUP_AGE_RECIPIENT_FILE: otherKey }),
+        [],
+        { cli: b2Fresh.cli }
+      );
+      assert.equal(wrongRec.code, EXIT.failed);
+      assert.match(wrongRec.stdout, new RegExp(MESSAGES.recipientMismatch));
+      assert.deepEqual(listCopies(b2Fresh.backupDir), [enc1]);
+
+      // B4: same-size substitution on enc1 fails closed via CLI
+      const origLen = readFileSync(path.join(b2Fresh.backupDir, enc1)).length;
+      writeFileSync(path.join(b2Fresh.backupDir, enc1), 'X'.repeat(origLen));
+      const corruptCli = await runCli(envN1, [], { cli: b2Fresh.cli });
+      assert.equal(corruptCli.code, EXIT.failed);
+      assert.match(corruptCli.stdout, new RegExp(MESSAGES.corruptBackup));
+      assert.deepEqual(listCopies(b2Fresh.backupDir), [enc1]);
+    } finally {
+      b2Fresh.cleanup();
+    }
   });
 });
 
