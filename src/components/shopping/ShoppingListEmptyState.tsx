@@ -6,11 +6,14 @@ import { useTranslations } from 'next-intl';
 interface ShoppingListEmptyStateProps {
   listName: string;
   onImport: () => void;
+  /** Guests cannot use text import, so the page hides the action for them. */
+  showImport?: boolean;
 }
 
 export default function ShoppingListEmptyState({
   listName,
   onImport,
+  showImport = true,
 }: ShoppingListEmptyStateProps) {
   const t = useTranslations('lists');
 
@@ -44,13 +47,15 @@ export default function ShoppingListEmptyState({
               >
                 {t('emptyState.addProducts')}
               </Link>
-              <button
-                onClick={onImport}
-                className="inline-flex items-center justify-center gap-2 bg-gradient-to-r from-green-500 to-teal-600 hover:from-green-600 hover:to-teal-700 text-white px-8 py-3 rounded-xl font-semibold transition-all"
-              >
-                <span>📋</span>
-                <span>{t('emptyState.importFromText')}</span>
-              </button>
+              {showImport && (
+                <button
+                  onClick={onImport}
+                  className="inline-flex items-center justify-center gap-2 bg-gradient-to-r from-green-500 to-teal-600 hover:from-green-600 hover:to-teal-700 text-white px-8 py-3 rounded-xl font-semibold transition-all"
+                >
+                  <span>📋</span>
+                  <span>{t('emptyState.importFromText')}</span>
+                </button>
+              )}
             </div>
           </div>
         </div>

@@ -12,6 +12,8 @@ export type FunnelEventRecord = {
   guestId: string | null;
   userId: string | null;
   createdAt: Date;
+  /** Whether the event's User is a server-backed guest. Unknown (null/undefined) counts as not a guest. */
+  userIsGuest?: boolean | null;
 };
 
 export type FunnelStageSummary = {
@@ -60,7 +62,7 @@ type GuestUserLink = {
 function buildGuestLinks(sortedEvents: FunnelEventRecord[]): Map<string, GuestUserLink[]> {
   const links = new Map<string, GuestUserLink[]>();
   for (const event of sortedEvents) {
-    if (!event.guestId || !event.userId) continue;
+    if (!event.guestId || !event.userId || event.userIsGuest) continue;
     const list = links.get(event.guestId);
     const entry = { userId: event.userId, createdAtMs: event.createdAt.getTime() };
     if (list) {
@@ -72,10 +74,20 @@ function buildGuestLinks(sortedEvents: FunnelEventRecord[]): Map<string, GuestUs
   return links;
 }
 
+/**
+ * Identity of the person behind an event. A server-backed guest is one funnel chain per browser:
+ * a restarted guest session creates a new guest User, and concurrent starts can create several, but
+ * they all carry the same funnel guestId. So every event of a guest User is keyed by that guestId,
+ * and the chain counts as one person whichever User row wrote a step. Events of ordinary users keep
+ * their User.id key, and a visit without a User is linked to a non-guest user only.
+ */
 function resolvePersonKey(
   event: FunnelEventRecord,
   guestLinks: Map<string, GuestUserLink[]>
 ): string | null {
+  if (event.guestId && event.userIsGuest) {
+    return `guest:${event.guestId}`;
+  }
   if (event.userId) {
     return `user:${event.userId}`;
   }
@@ -170,25 +182,47 @@ export function buildFunnelReport(
   };
 }
 
+/** Columns the report reads, shared with the database-backed tests so both see the same records. */
+export const FUNNEL_EVENT_REPORT_SELECT = {
+  type: true,
+  guestId: true,
+  userId: true,
+  createdAt: true,
+  user: { select: { isGuest: true } },
+} as const;
+
+export type FunnelEventReportRow = {
+  type: FunnelEventType;
+  guestId: string | null;
+  userId: string | null;
+  createdAt: Date;
+  user: { isGuest: boolean } | null;
+};
+
+export function toFunnelEventRecords(rows: FunnelEventReportRow[]): FunnelEventRecord[] {
+  return rows.map((row) => ({
+    type: row.type,
+    guestId: row.guestId,
+    userId: row.userId,
+    createdAt: row.createdAt,
+    userIsGuest: row.user?.isGuest ?? null,
+  }));
+}
+
 export async function getFunnelReport(now: Date = new Date()): Promise<FunnelReport> {
   const maxDays = FUNNEL_WINDOWS[FUNNEL_WINDOWS.length - 1];
   const earliestWindowStart = new Date(now.getTime() - maxDays * MS_PER_DAY);
 
-  const events = await prisma.funnelEvent.findMany({
+  const rows = await prisma.funnelEvent.findMany({
     where: {
       createdAt: {
         gte: earliestWindowStart,
         lte: now,
       },
     },
-    select: {
-      type: true,
-      guestId: true,
-      userId: true,
-      createdAt: true,
-    },
+    select: FUNNEL_EVENT_REPORT_SELECT,
     orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
   });
 
-  return buildFunnelReport(events, now);
+  return buildFunnelReport(toFunnelEventRecords(rows), now);
 }

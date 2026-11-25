@@ -1,16 +1,44 @@
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { createTranslator } from 'next-intl';
 import { imageConfigDefault } from 'next/dist/shared/lib/image-config';
 import { ImageConfigContext } from 'next/dist/shared/lib/image-config-context.shared-runtime';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import nextConfig from '../../next.config';
 import { messages } from '@/i18n/messages';
 import type { Locale } from '@/i18n/config';
 
-const { getLocaleMock } = vi.hoisted(() => ({
-  getLocaleMock: vi.fn<() => Promise<Locale>>(async () => 'ru'),
+const { getLocaleMock, pushMock, refreshMock, updateSessionMock, useSessionMock } = vi.hoisted(
+  () => ({
+    getLocaleMock: vi.fn<() => Promise<Locale>>(async () => 'ru'),
+    pushMock: vi.fn(),
+    refreshMock: vi.fn(),
+    updateSessionMock: vi.fn(async () => null),
+    useSessionMock: vi.fn<
+      () => {
+        data: { user?: { id: string } } | null;
+        status: string;
+        update: () => Promise<null>;
+      }
+    >(),
+  })
+);
+
+vi.mock('next/navigation', () => ({
+  useRouter: () => ({ push: pushMock, refresh: refreshMock }),
+}));
+
+const { requestSessionRefreshMock } = vi.hoisted(() => ({
+  requestSessionRefreshMock: vi.fn(),
+}));
+
+vi.mock('@/components/Providers', () => ({
+  useRequestSessionRefresh: () => requestSessionRefreshMock,
+}));
+
+vi.mock('next-auth/react', () => ({
+  useSession: useSessionMock,
 }));
 
 vi.mock('next-intl/server', () => ({
@@ -30,6 +58,19 @@ import Home from './page';
 describe('Home landing page', () => {
   beforeEach(() => {
     getLocaleMock.mockReset();
+    pushMock.mockReset();
+    refreshMock.mockReset();
+    requestSessionRefreshMock.mockReset();
+    updateSessionMock.mockReset().mockResolvedValue(null);
+    useSessionMock.mockReset().mockReturnValue({
+      data: null,
+      status: 'unauthenticated',
+      update: updateSessionMock,
+    });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
   });
 
   for (const locale of ['ru', 'en'] as const) {
@@ -42,10 +83,9 @@ describe('Home landing page', () => {
       );
 
       const startLabel = locale === 'ru' ? 'Начать' : 'Start';
-      const links = screen.getAllByRole('link');
-      expect(links).toHaveLength(1);
-      expect(links[0]).toHaveAccessibleName(startLabel);
-      expect(links[0]).toHaveAttribute('href', '/categories');
+      expect(screen.queryAllByRole('link')).toHaveLength(0);
+      const startButton = screen.getByRole('button', { name: startLabel });
+      expect(startButton).toBeInTheDocument();
 
       for (const oldText of [
         /Открыть каталог|Open catalog/i,
@@ -73,6 +113,75 @@ describe('Home landing page', () => {
       });
     });
   }
+
+  it('creates a server guest session on Start click and navigates to categories', async () => {
+    getLocaleMock.mockResolvedValue('en');
+    const fetchMock = vi.fn(async () =>
+      Response.json({ user: { id: 'guest-1', role: 'USER', isGuest: true } }, { status: 201 })
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(
+      <ImageConfigContext.Provider value={{ ...imageConfigDefault, ...nextConfig.images }}>
+        {await Home()}
+      </ImageConfigContext.Provider>
+    );
+
+    const startButton = screen.getByRole('button', { name: 'Start' });
+    fireEvent.click(startButton);
+    fireEvent.click(startButton);
+
+    await waitFor(() => expect(pushMock).toHaveBeenCalledWith('/categories'));
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledWith('/api/auth/guest', { method: 'POST' });
+    expect(requestSessionRefreshMock).toHaveBeenCalledTimes(1);
+    expect(refreshMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('navigates directly to categories without calling /api/auth/guest when already signed in', async () => {
+    getLocaleMock.mockResolvedValue('ru');
+    useSessionMock.mockReturnValue({
+      data: { user: { id: 'existing-user' } },
+      status: 'authenticated',
+      update: updateSessionMock,
+    });
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(
+      <ImageConfigContext.Provider value={{ ...imageConfigDefault, ...nextConfig.images }}>
+        {await Home()}
+      </ImageConfigContext.Provider>
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Начать' }));
+
+    expect(pushMock).toHaveBeenCalledWith('/categories');
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('shows a localized alert and stays on / when guest session creation fails', async () => {
+    getLocaleMock.mockResolvedValue('en');
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        Response.json({ error: 'Too many attempts. Please try again later.' }, { status: 429 })
+      )
+    );
+
+    render(
+      <ImageConfigContext.Provider value={{ ...imageConfigDefault, ...nextConfig.images }}>
+        {await Home()}
+      </ImageConfigContext.Provider>
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Start' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Too many attempts. Please try again later.'
+    );
+    expect(pushMock).not.toHaveBeenCalled();
+  });
 
   it('ships all RU and EN landing screenshot assets and uses next/image without raw img tags', () => {
     for (const locale of ['ru', 'en'] as const) {

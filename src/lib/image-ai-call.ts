@@ -24,12 +24,16 @@ export type ImageAiCallOptions = {
  * Daily image units remain attempt-based (never refunded on failure) per docs/ai.md.
  */
 export async function runImageAiCall<T>(
-  user: { id: string; role: string | null | undefined },
+  user: { id: string; role: string | null | undefined; isGuest?: boolean },
   locale: Locale,
   operation: () => Promise<T>,
   options?: ImageAiCallOptions
 ): Promise<T | Response> {
-  const reservationUser = { id: user.id, role: user.role };
+  const reservationUser = {
+    id: user.id,
+    role: user.role,
+    ...(user.isGuest ? { isGuest: true } : {}),
+  };
   const now = new Date();
   let pricing: ResolvedImagePricingConfig;
   try {

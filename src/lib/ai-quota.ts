@@ -30,12 +30,13 @@ import { AiCostUnboundedError } from '@/lib/services/emoji-errors';
 // - POST /api/products/bulk-import (admin): 1 (text analysis of the whole batch)
 //
 // Limit per role, read on every request:
+// - GUEST (User.isGuest): always 0 (paid AI is off for guest accounts to prevent churn bypass)
 // - AI_DAILY_CALLS_PER_USER for USER, AI_DAILY_CALLS_PER_ADMIN for ADMIN
 // - unset, empty or not a plain non-negative integer: the default (30 / 300)
 // - 0: paid AI is off for that role (403, no provider call)
 // - N > 0: at most N units per UTC day (429 with Retry-After once used up)
 
-export const AI_DAILY_CALLS_DEFAULTS = { USER: 30, ADMIN: 300 } as const;
+export const AI_DAILY_CALLS_DEFAULTS = { USER: 30, ADMIN: 300, GUEST: 0 } as const;
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -45,7 +46,8 @@ export type AiQuotaDecision =
   | { allowed: true; used: number; limit: number }
   | { allowed: false; limit: number; resetAt: number };
 
-export function aiDailyLimit(role: Role): number {
+export function aiDailyLimit(role: Role, isGuest = false): number {
+  if (isGuest) return AI_DAILY_CALLS_DEFAULTS.GUEST;
   const isAdmin = role === 'ADMIN';
   const raw = isAdmin ? process.env.AI_DAILY_CALLS_PER_ADMIN : process.env.AI_DAILY_CALLS_PER_USER;
   const value = raw?.trim() ?? '';
@@ -64,13 +66,15 @@ function startOfUtcDay(now: Date) {
 export async function reserveAiCall({
   userId,
   role,
+  isGuest = false,
   now = new Date(),
 }: {
   userId: string;
   role: Role;
+  isGuest?: boolean;
   now?: Date;
 }): Promise<AiQuotaDecision> {
-  const limit = aiDailyLimit(role);
+  const limit = aiDailyLimit(role, isGuest);
   const windowStart = startOfUtcDay(now);
   const resetAt = windowStart.getTime() + DAY_MS;
 
@@ -96,7 +100,7 @@ export async function reserveAiCall({
  * non-null result as "skip the optional next call" instead (smart-create's image), see docs/ai.md.
  */
 export async function enforceAiQuota(
-  user: { id: string; role: Role },
+  user: { id: string; role: Role; isGuest?: boolean },
   locale: Locale = 'ru',
   now = new Date()
 ): Promise<Response | null> {
@@ -112,9 +116,12 @@ export async function enforceAiQuota(
     return NextResponse.json({ error: t('api.aiQuota.unavailable') }, { status: 503 });
   }
 
-  const dailyLimit = aiDailyLimit(user.role);
+  const dailyLimit = aiDailyLimit(user.role, Boolean(user.isGuest));
   if (dailyLimit === 0) {
-    return NextResponse.json({ error: t('api.aiQuota.disabled') }, { status: 403 });
+    return NextResponse.json(
+      { error: t(user.isGuest ? 'api.aiQuota.guestDisabled' : 'api.aiQuota.disabled') },
+      { status: 403 }
+    );
   }
 
   const ctx = getActiveAiQuotaContext();
@@ -161,7 +168,12 @@ export async function enforceAiQuota(
 
   let decision: AiQuotaDecision;
   try {
-    decision = await reserveAiCall({ userId: user.id, role: user.role, now });
+    decision = await reserveAiCall({
+      userId: user.id,
+      role: user.role,
+      isGuest: Boolean(user.isGuest),
+      now,
+    });
   } catch {
     try {
       await reconcileMonthlyAiBudget({

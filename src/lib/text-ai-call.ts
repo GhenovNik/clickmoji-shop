@@ -42,13 +42,17 @@ export class MonthlyBudgetBlockedError extends Error {
  * Accounting failures propagate so missing/mismatched settlements never appear successful.
  */
 export async function runTextAiCall<T>(
-  user: { id: string; role: string | null | undefined },
+  user: { id: string; role: string | null | undefined; isGuest?: boolean },
   locale: Locale,
   operation: () => Promise<T>,
   options?: TextAiCallOptions
 ): Promise<T | Response> {
   // Freeze both the owner and UTC windows before acquisition, not after the network call.
-  const reservationUser = { id: user.id, role: user.role };
+  const reservationUser = {
+    id: user.id,
+    role: user.role,
+    ...(user.isGuest ? { isGuest: true } : {}),
+  };
   const now = new Date();
   const windowStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
   const pricing = resolveTextCallPricingConfig({
