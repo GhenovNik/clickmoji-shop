@@ -253,7 +253,9 @@ export default function AccountPage() {
           <h1 className="text-2xl sm:text-3xl font-bold text-foreground font-heading">
             👤 {t('page.title')}
           </h1>
-          <p className="text-sm sm:text-base text-muted-foreground">{t('page.subtitle')}</p>
+          <p className="text-sm sm:text-base text-muted-foreground">
+            {t(profile.isGuest ? 'page.guestSubtitle' : 'page.subtitle')}
+          </p>
         </header>
 
         {/* Profile */}
@@ -264,16 +266,20 @@ export default function AccountPage() {
           </div>
 
           <dl className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
-            <div className="rounded-2xl bg-muted/40 p-3">
-              <dt className="text-xs text-muted-foreground">{t('profile.nameLabel')}</dt>
-              <dd className="font-medium text-foreground mt-0.5 break-words">
-                {profile.name || t('profile.nameNotSet')}
-              </dd>
-            </div>
-            <div className="rounded-2xl bg-muted/40 p-3">
-              <dt className="text-xs text-muted-foreground">{t('profile.emailLabel')}</dt>
-              <dd className="font-medium text-foreground mt-0.5 break-all">{profile.email}</dd>
-            </div>
+            {(!profile.isGuest || profile.name?.trim()) && (
+              <div className="rounded-2xl bg-muted/40 p-3">
+                <dt className="text-xs text-muted-foreground">{t('profile.nameLabel')}</dt>
+                <dd className="font-medium text-foreground mt-0.5 break-words">
+                  {profile.name || t('profile.nameNotSet')}
+                </dd>
+              </div>
+            )}
+            {!profile.isGuest && (
+              <div className="rounded-2xl bg-muted/40 p-3">
+                <dt className="text-xs text-muted-foreground">{t('profile.emailLabel')}</dt>
+                <dd className="font-medium text-foreground mt-0.5 break-all">{profile.email}</dd>
+              </div>
+            )}
             <div className="rounded-2xl bg-muted/40 p-3">
               <dt className="text-xs text-muted-foreground">{t('profile.signInMethodLabel')}</dt>
               <dd className="font-medium text-foreground mt-0.5">

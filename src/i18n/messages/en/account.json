@@ -2,6 +2,7 @@
   "page": {
     "title": "Account",
     "subtitle": "Profile, password, and account deletion",
+    "guestSubtitle": "You’re signed in as a guest. Your lists and history are stored on the server.",
     "backHome": "Back home",
     "loadError": "Failed to load account details"
   },

@@ -56,15 +56,15 @@ import TermsPage from '@/app/terms/page';
 import PrivacyPage from '@/app/privacy/page';
 import LoginPage from '@/app/login/page';
 
-function mockProfileFetch(hasPassword = true, isGuest = false) {
+function mockProfileFetch(hasPassword = true, isGuest = false, name = isGuest ? null : 'Alice') {
   return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = typeof input === 'string' ? input : input.toString();
     if (url === '/api/account' && (!init?.method || init.method === 'GET')) {
       return Response.json({
         user: {
           id: 'u1',
-          email: 'user@example.com',
-          name: 'Alice',
+          email: isGuest ? 'guest_fixture@guest.clickmoji.invalid' : 'user@example.com',
+          name,
           role: 'USER',
           createdAt: '2026-11-20T10:00:00.000Z',
           hasPassword,
@@ -151,10 +151,20 @@ describe('AccountPage', () => {
       expect(document.getElementById('currentPassword')).toBeNull();
       expect(document.getElementById('deleteConfirmation')).toBeNull();
       expect(document.getElementById('deletePassword')).toBeNull();
-      // The profile itself stays visible to the guest.
-      expect(screen.getByText('user@example.com')).toBeTruthy();
+      expect(screen.queryByText(/@guest\.clickmoji\.invalid/)).toBeNull();
+      expect(screen.queryByText(messages[locale].account.profile.emailLabel)).toBeNull();
+      expect(screen.queryByText(messages[locale].account.profile.nameLabel)).toBeNull();
+      expect(screen.getByText(messages[locale].account.page.guestSubtitle)).toBeTruthy();
+      expect(screen.queryByText(messages[locale].account.page.subtitle)).toBeNull();
     }
   );
+
+  it('keeps a supplied guest name visible', async () => {
+    vi.stubGlobal('fetch', mockProfileFetch(false, true, 'Alice'));
+    renderWithIntl(<AccountPage />, { locale: 'en' });
+    expect(await screen.findByText('Alice')).toBeTruthy();
+    expect(screen.getByText(messages.en.account.profile.nameLabel)).toBeTruthy();
+  });
 
   it.each(['ru', 'en'] as const)(
     'keeps a passwordless Google user on Google, with the notice and phrase deletion, in %s',
@@ -166,6 +176,9 @@ describe('AccountPage', () => {
         await screen.findByText(messages[locale].account.profile.signInMethodGoogle)
       ).toBeTruthy();
       expect(screen.queryByText(messages[locale].account.profile.signInMethodGuest)).toBeNull();
+      expect(screen.getByText('user@example.com')).toBeTruthy();
+      expect(screen.getByText('Alice')).toBeTruthy();
+      expect(screen.getByText(messages[locale].account.page.subtitle)).toBeTruthy();
       expect(screen.getByText(messages[locale].account.password.googleNoticeBody)).toBeTruthy();
       expect(screen.getByText(messages[locale].account.delete.title)).toBeTruthy();
       expect(document.getElementById('deleteConfirmation')).toBeTruthy();
