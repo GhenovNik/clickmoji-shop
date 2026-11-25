@@ -11,8 +11,10 @@ import { normalizeEmojiImage } from '@/lib/services/emoji-image-normalize';
 // already in place.
 //
 // A queue cell (AGE-1667) has a `target`. Its catalogue record is found by category and parent,
-// its library record remembers the target it was written for, and its catalogue write only
-// happens while the record still has no picture. Historical cells (no `target`) keep the old rules.
+// its library record is bound to the target it was written for at write (created once; a race is
+// decided by the winner), and its catalogue write only happens while the record still has no picture,
+// or, for an English picture added later to this cell's own Russian one, while its English slot is
+// empty. Historical cells (no `target`) keep the old rules.
 
 // What a cell's picture is for. Historical batches (no `target`) mean a product.
 export type ManifestTarget = 'product' | 'variant' | 'category';
@@ -426,23 +428,67 @@ function holds(current: Record<string, unknown> | null, picture: Record<string, 
   );
 }
 
-// A queue write changes a record only while it holds no picture. The emptiness check is made on
-// the read, and `writeIfEmpty` repeats it in the database condition, so a picture attached by hand
-// between the read and the write is never replaced.
+type PictureSlots = { imageUrl: string | null; imageUrlEn?: string | null };
+
+// A catalogue record as a queue write sees it. `write` applies a condition on its picture slots.
+type QueueRecord = {
+  current: PictureSlots | null;
+  read: () => Promise<PictureSlots | null>;
+  write: (where: PictureSlots) => Promise<{ count: number }>;
+  // Products and variants have an English picture slot; categories have none.
+  english: boolean;
+};
+
+function matches(record: object, expected: Record<string, unknown>) {
+  const fields = record as Record<string, unknown>;
+  return Object.entries(expected).every(([key, value]) => (fields[key] ?? null) === value);
+}
+
+// A queue write changes a record only while its picture slots are empty. The one exception is an
+// English picture added to a Russian one this cell stored itself (`stagedRu`, the library record it
+// owns): then only the empty English slot is filled. Each condition is repeated in the database
+// write, so a picture attached by hand between the read and the write is never replaced.
 async function writeQueuePicture(
-  current: { imageUrl: string | null; imageUrlEn?: string | null } | null,
+  record: QueueRecord,
   data: Record<string, unknown>,
-  writeIfEmpty: () => Promise<{ count: number }>
+  stagedRu?: string
 ): Promise<{ changed: boolean; conflict?: string }> {
+  const { current, read, write, english } = record;
   if (current !== null && holds(current, data)) return { changed: false };
-  if (current !== null && (current.imageUrl !== null || (current.imageUrlEn ?? null) !== null)) {
+
+  const free: PictureSlots = english ? { imageUrl: null, imageUrlEn: null } : { imageUrl: null };
+  let where: PictureSlots | undefined;
+  if (current === null || matches(current, free)) {
+    where = free;
+  } else if (
+    english &&
+    stagedRu !== undefined &&
+    current.imageUrl === stagedRu &&
+    data.imageUrl === stagedRu &&
+    (current.imageUrlEn ?? null) === null
+  ) {
+    where = { imageUrl: stagedRu, imageUrlEn: null };
+  }
+  if (where === undefined) {
     return { changed: false, conflict: 'уже есть картинка, которую эта пачка не записывает' };
   }
-  const { count } = await writeIfEmpty();
-  return count === 1
-    ? { changed: true }
-    : { changed: false, conflict: 'запись изменилась после чтения или её нет' };
+
+  const { count } = await write(where);
+  if (count === 1) return { changed: true };
+  // Another run may have written this very picture since the read: that is the state this run wants.
+  const after = await read();
+  if (after !== null && holds(after, data)) return { changed: false };
+  return { changed: false, conflict: 'запись изменилась после чтения или её нет' };
 }
+
+// Prisma's unique-constraint error. A library insert can collide on `sourceRef` or on the URL.
+function isUniqueViolation(error: unknown) {
+  return (
+    typeof error === 'object' && error !== null && (error as { code?: unknown }).code === 'P2002'
+  );
+}
+
+type Stored = { imageUrl: string } | { conflict: string };
 
 // Writes one cell. Pictures already stored under the cell reference are reused, so a re-run
 // uploads nothing, and a record that already holds the picture is left untouched.
@@ -484,13 +530,26 @@ export async function applyCell(
   let uploaded = 0;
   let changed = false;
 
+  const conflictOf = (conflict: string): AppliedCell => ({
+    ref,
+    name: cell.name,
+    uploaded,
+    changed,
+    product: 'conflict',
+    conflict,
+  });
+
+  // Stores one library record. A queue record is bound to its owner at write: it is created once,
+  // and an existing one is updated only while the same owner still holds it. When another run has
+  // created the reference first, that winner decides: its owner reuses its picture, any other owner
+  // is refused and the winner is left as it is.
   const store = async (
     locale: 'ru' | 'en' | null,
     image: Buffer,
     sourceRef: string,
     current: EmojiLibraryItem | null,
     existing: string | undefined
-  ) => {
+  ): Promise<Stored> => {
     const meta = {
       name: cell.name,
       nameEn: cell.nameEn,
@@ -500,41 +559,85 @@ export async function applyCell(
       groupKey: ref,
     };
     if (existing !== undefined && sameLibraryItem(current, { ...meta, imageUrl: existing })) {
-      return existing;
+      return { imageUrl: existing };
     }
+    if (queue && current !== null) {
+      // The owner was checked before any upload; this write keeps the reference bound to it.
+      const { count } = await prisma.emojiLibraryItem.updateMany({
+        where: { id: current.id, name: cell.name, tags: { equals: meta.tags } },
+        data: { ...meta, imageUrl: current.imageUrl },
+      });
+      if (count !== 1) return { conflict: `картинка ${sourceRef} изменилась во время записи` };
+      changed = true;
+      return { imageUrl: current.imageUrl };
+    }
+
     const imageUrl = existing ?? (await upload(image, locale === 'en' ? cell.nameEn : cell.name));
     const fresh = existing === undefined;
     if (fresh) uploaded++;
     const data: LibraryData = { ...meta, imageUrl };
-    try {
-      await prisma.emojiLibraryItem.upsert({
-        where: { sourceRef },
-        create: { sourceRef, ...data },
-        update: data,
-      });
-      changed = true;
-    } catch (error) {
-      // Without its library record a fresh upload would be orphaned and uploaded again on the
-      // next run, so it is removed before the error goes on.
+    // Without its library record a fresh upload would be orphaned and uploaded again on the next
+    // run, so it is removed before a failure goes on.
+    const discardFresh = async () => {
       if (fresh && discard) await discard(imageUrl).catch(() => undefined);
-      throw error;
+    };
+    try {
+      if (queue) {
+        await prisma.emojiLibraryItem.create({ data: { sourceRef, ...data } });
+      } else {
+        await prisma.emojiLibraryItem.upsert({
+          where: { sourceRef },
+          create: { sourceRef, ...data },
+          update: data,
+        });
+      }
+      changed = true;
+      return { imageUrl };
+    } catch (error) {
+      if (!queue || !isUniqueViolation(error)) {
+        await discardFresh();
+        throw error;
+      }
+      // Only this run's fresh upload is removed: the winner's record and its file stay.
+      let winner: EmojiLibraryItem | null;
+      try {
+        winner = await prisma.emojiLibraryItem.findUnique({ where: { sourceRef } });
+      } catch (readError) {
+        await discardFresh();
+        throw readError;
+      }
+      await discardFresh();
+      if (winner === null) return { conflict: `картинка ${sourceRef} изменилась во время записи` };
+      if (!ownsLibraryItem(winner, cell)) {
+        return { conflict: `картинка ${sourceRef} записана для другой цели («${winner.name}»)` };
+      }
+      return { imageUrl: winner.imageUrl };
     }
-    return imageUrl;
   };
 
   // A queue cell reuses the URL the record read above holds; a historical cell reuses the one the
-  // prefetch found.
-  const imageUrl = await store(
+  // prefetch found. A refused library record stops the cell before any catalogue write.
+  const ruStored = await store(
     textBatch ? 'ru' : null,
     images.ru,
     ref,
     ruCurrent,
     queue ? ruCurrent?.imageUrl : plan.stored.ru
   );
-  const imageUrlEn =
-    textBatch && images.en
-      ? await store('en', images.en, enRef, enCurrent, queue ? enCurrent?.imageUrl : plan.stored.en)
-      : null;
+  if ('conflict' in ruStored) return conflictOf(ruStored.conflict);
+  const imageUrl = ruStored.imageUrl;
+  let imageUrlEn: string | null = null;
+  if (textBatch && images.en) {
+    const enStored = await store(
+      'en',
+      images.en,
+      enRef,
+      enCurrent,
+      queue ? enCurrent?.imageUrl : plan.stored.en
+    );
+    if ('conflict' in enStored) return conflictOf(enStored.conflict);
+    imageUrlEn = enStored.imageUrl;
+  }
 
   // A text-free picture serves both languages, so it clears a stale English one. A Russian
   // label imported before its English sheet leaves an English picture already stored alone.
@@ -547,16 +650,22 @@ export async function applyCell(
   if (kind === 'link') {
     const { productId, productName } = plan.product;
     const data = { isCustom: true, ...picture };
-    const current = await prisma.product.findUnique({
-      where: { id: productId },
-      select: { imageUrl: true, imageUrlEn: true, isCustom: true },
-    });
+    const readProduct = () =>
+      prisma.product.findUnique({
+        where: { id: productId },
+        select: { imageUrl: true, imageUrlEn: true, isCustom: true },
+      });
+    const current = await readProduct();
     if (queue) {
-      const write = await writeQueuePicture(current, data, () =>
-        prisma.product.updateMany({
-          where: { id: productId, imageUrl: null, imageUrlEn: null },
-          data,
-        })
+      const write = await writeQueuePicture(
+        {
+          current,
+          english: true,
+          read: readProduct,
+          write: (where) => prisma.product.updateMany({ where: { id: productId, ...where }, data }),
+        },
+        data,
+        ruCurrent?.imageUrl
       );
       if (write.changed) changed = true;
       return {
@@ -591,17 +700,24 @@ export async function applyCell(
   }
   if (kind === 'variant') {
     const { variantId, productName, variantName } = plan.product;
-    const current = await prisma.productVariant.findUnique({
-      where: { id: variantId },
-      select: { imageUrl: true, imageUrlEn: true },
-    });
+    const readVariant = () =>
+      prisma.productVariant.findUnique({
+        where: { id: variantId },
+        select: { imageUrl: true, imageUrlEn: true },
+      });
+    const current = await readVariant();
     const name = `${productName} / ${variantName}`;
     if (queue) {
-      const write = await writeQueuePicture(current, picture, () =>
-        prisma.productVariant.updateMany({
-          where: { id: variantId, imageUrl: null, imageUrlEn: null },
-          data: picture,
-        })
+      const write = await writeQueuePicture(
+        {
+          current,
+          english: true,
+          read: readVariant,
+          write: (where) =>
+            prisma.productVariant.updateMany({ where: { id: variantId, ...where }, data: picture }),
+        },
+        picture,
+        ruCurrent?.imageUrl
       );
       if (write.changed) changed = true;
       return {
@@ -624,13 +740,22 @@ export async function applyCell(
     const { categoryId, categoryName } = plan.product;
     // Shown only when flagged custom, the same as a product picture.
     const data = { isCustom: true, imageUrl };
-    const current = await prisma.category.findUnique({
-      where: { id: categoryId },
-      select: { imageUrl: true, isCustom: true },
-    });
+    const readCategory = () =>
+      prisma.category.findUnique({
+        where: { id: categoryId },
+        select: { imageUrl: true, isCustom: true },
+      });
+    const current = await readCategory();
     if (queue) {
-      const write = await writeQueuePicture(current, data, () =>
-        prisma.category.updateMany({ where: { id: categoryId, imageUrl: null }, data })
+      const write = await writeQueuePicture(
+        {
+          current,
+          english: false,
+          read: readCategory,
+          write: (where) =>
+            prisma.category.updateMany({ where: { id: categoryId, ...where }, data }),
+        },
+        data
       );
       if (write.changed) changed = true;
       return {

@@ -554,6 +554,7 @@ describe('applyCell for variants and categories', () => {
     return {
       emojiLibraryItem: {
         upsert: vi.fn().mockResolvedValue({}),
+        create: vi.fn().mockResolvedValue({}),
         findUnique: vi.fn().mockResolvedValue(null),
       },
       product: {
@@ -656,7 +657,7 @@ describe('applyCell for variants and categories', () => {
     );
 
     expect(result).toMatchObject({ product: 'not-found', changed: true });
-    expect(prisma.emojiLibraryItem.upsert).toHaveBeenCalledTimes(1);
+    expect(prisma.emojiLibraryItem.create).toHaveBeenCalledTimes(1);
     expect(prisma.productVariant.update).not.toHaveBeenCalled();
     expect(prisma.category.update).not.toHaveBeenCalled();
   });
@@ -1149,7 +1150,11 @@ describe('queue writes are conditional on the state at write time (AGE-1667 B2)'
       const library = memoryLibrary();
       const { data, row } = catalogRow();
       const prisma = prismaWith(library, row);
-      await applyCell(prisma, run(false), vi.fn(async () => RU));
+      await applyCell(
+        prisma,
+        run(false),
+        vi.fn(async () => RU)
+      );
       data.imageUrl = MANUAL_RU;
 
       const result = await applyCell(
@@ -1158,7 +1163,8 @@ describe('queue writes are conditional on the state at write time (AGE-1667 B2)'
         vi.fn(async (image: Buffer) => (image.toString() === 'en' ? EN : RU))
       );
 
-      expect(result).toMatchObject({ product: 'conflict', changed: false });
+      // The English library record is written before the catalogue is read; only the catalogue refuses.
+      expect(result).toMatchObject({ product: 'conflict', changed: true, uploaded: 1 });
       expect(result.conflict).toBeDefined();
       expect(data).toMatchObject({ imageUrl: MANUAL_RU, imageUrlEn: null });
       expect(row.updateMany).toHaveBeenCalledTimes(1);
@@ -1168,7 +1174,11 @@ describe('queue writes are conditional on the state at write time (AGE-1667 B2)'
       const library = memoryLibrary();
       const { data, row } = catalogRow();
       const prisma = prismaWith(library, row);
-      await applyCell(prisma, run(false), vi.fn(async () => RU));
+      await applyCell(
+        prisma,
+        run(false),
+        vi.fn(async () => RU)
+      );
       data.imageUrlEn = MANUAL_EN;
 
       const result = await applyCell(
@@ -1177,7 +1187,8 @@ describe('queue writes are conditional on the state at write time (AGE-1667 B2)'
         vi.fn(async (image: Buffer) => (image.toString() === 'en' ? EN : RU))
       );
 
-      expect(result).toMatchObject({ product: 'conflict', changed: false });
+      // The English library record is written before the catalogue is read; only the catalogue refuses.
+      expect(result).toMatchObject({ product: 'conflict', changed: true, uploaded: 1 });
       expect(result.conflict).toBeDefined();
       expect(data).toMatchObject({ imageUrl: RU, imageUrlEn: MANUAL_EN });
       expect(row.updateMany).toHaveBeenCalledTimes(1);
@@ -1314,7 +1325,7 @@ describe('a reference is bound to one owner at write (AGE-1667 B3, round 3)', ()
     updateMany: vi.fn().mockResolvedValue({ count: 1 }),
   });
 
-  const cellOf =(overrides: Partial<ManifestCell>): ManifestCell => ({
+  const cellOf = (overrides: Partial<ManifestCell>): ManifestCell => ({
     cell: 1,
     target: 'product',
     category: 'Фрукты',
@@ -1406,7 +1417,12 @@ describe('a reference is bound to one owner at write (AGE-1667 B3, round 3)', ()
     const prisma = { emojiLibraryItem: library, product: pearRow } as unknown as PrismaClient;
 
     const [first, second] = await Promise.all([
-      applyCell(prisma, plan, vi.fn(async () => PEAR_FIRST), discard),
+      applyCell(
+        prisma,
+        plan,
+        vi.fn(async () => PEAR_FIRST),
+        discard
+      ),
       applyCell(
         prisma,
         plan,
