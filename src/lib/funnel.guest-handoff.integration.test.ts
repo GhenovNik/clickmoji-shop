@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import type { GuestCleanupDbClient, MilestoneHandOff } from './guest-cleanup';
 
 /**
  * Real-PostgreSQL check that cleaning up a stale guest keeps the funnel of the active guest that
@@ -66,6 +67,8 @@ describe.skipIf(!url || !isLocal)(
     let FUNNEL_EVENT_REPORT_SELECT: typeof import('./funnel-analytics').FUNNEL_EVENT_REPORT_SELECT;
     let toFunnelEventRecords: typeof import('./funnel-analytics').toFunnelEventRecords;
     let aggregateFunnelWindow: typeof import('./funnel-analytics').aggregateFunnelWindow;
+    let handOffSharedMilestones: typeof import('./guest-cleanup').handOffSharedMilestones;
+    let recordGuestActivity: typeof import('./guest-activity').recordGuestActivity;
 
     const startRequest = (cookieGuestId: string) => {
       const signed = signGuestId(cookieGuestId);
@@ -112,7 +115,8 @@ describe.skipIf(!url || !isLocal)(
       ({ prisma } = await import('@/lib/prisma'));
       ({ POST } = await import('@/app/api/auth/guest/route'));
       ({ signGuestId, FUNNEL_GUEST_COOKIE, recordFunnelEvent } = await import('./funnel'));
-      ({ cleanupInactiveGuests } = await import('./guest-cleanup'));
+      ({ cleanupInactiveGuests, handOffSharedMilestones } = await import('./guest-cleanup'));
+      ({ recordGuestActivity } = await import('./guest-activity'));
       ({ FUNNEL_EVENT_REPORT_SELECT, toFunnelEventRecords, aggregateFunnelWindow } =
         await import('./funnel-analytics'));
     });
@@ -304,6 +308,124 @@ describe.skipIf(!url || !isLocal)(
       const chain = await reportOf(chainId);
       expect(chain.stages.map((stage) => stage.count)).toEqual([1, 1, 1, 1, 1]);
       expect(chain.overallRate).toBe(1);
+    });
+
+    /** Owned rows of one user on one funnel chain, per type, sorted so duplicates show up. */
+    const chainTypesOf = async (userId: string, chainId: string) =>
+      (
+        await prisma.funnelEvent.findMany({
+          where: { guestId: chainId, userId },
+          select: { type: true },
+        })
+      )
+        .map((row) => row.type)
+        .sort();
+
+    /** Starts A on a fresh chain, ages it past the cutoff, then starts B, the fresh replacement. */
+    async function staleAWithFreshB(chainId: string) {
+      extraChainIds.push(chainId);
+      await recordFunnelEvent({ type: 'VISIT', userId: null, guestId: chainId });
+      const guestA = await start(chainId);
+      await ageGuest(guestA, 45);
+      const guestB = await start(chainId);
+      expect(await chainTypesOf(guestA, chainId)).toEqual([
+        'LIST_CREATE',
+        'REGISTER',
+        'VISIT',
+        'VISIT',
+      ]);
+      expect(await chainTypesOf(guestB, chainId)).toEqual(['VISIT']);
+      return { guestA, guestB };
+    }
+
+    it('does not move the milestones of a guest touched after the scan, and keeps its chain for later', async () => {
+      const chainId = `guest_pg17touchscan_${randomUUID()}`;
+      const { guestA, guestB } = await staleAWithFreshB(chainId);
+
+      // Cleanup selects A as a candidate; A's activity lands before the hand-off and the delete.
+      let touched = false;
+      const racing: GuestCleanupDbClient = {
+        $transaction: (run) => prisma.$transaction(run),
+        user: {
+          count: (args) => prisma.user.count(args),
+          findMany: async (args) => {
+            const rows = await prisma.user.findMany(args);
+            if (!touched) {
+              touched = true;
+              expect(await recordGuestActivity(guestA)).toBe(true);
+            }
+            return rows;
+          },
+          deleteMany: (args) => prisma.user.deleteMany(args),
+        },
+      };
+      await cleanupInactiveGuests({ db: racing, inactiveDays: 30 });
+      expect(touched).toBe(true);
+
+      // A is active again: it is not deleted, and its shared milestones stay on A, not on B.
+      expect(await prisma.user.findUnique({ where: { id: guestA } })).not.toBeNull();
+      expect(await chainTypesOf(guestA, chainId)).toEqual([
+        'LIST_CREATE',
+        'REGISTER',
+        'VISIT',
+        'VISIT',
+      ]);
+      expect(await chainTypesOf(guestB, chainId)).toEqual(['VISIT']);
+
+      // Later B expires while A is active: B hands nothing off, and A keeps the whole chain.
+      await ageGuest(guestB, 45);
+      const later = await cleanupInactiveGuests({ db: prisma, inactiveDays: 30 });
+      expect(later.deletedCount).toBeGreaterThanOrEqual(1);
+      expect(await prisma.user.findUnique({ where: { id: guestB } })).toBeNull();
+      expect(await chainTypesOf(guestA, chainId)).toEqual([
+        'LIST_CREATE',
+        'REGISTER',
+        'VISIT',
+        'VISIT',
+      ]);
+
+      // A's first purchase lands on the full chain it kept.
+      await pause(5);
+      await recordFunnelEvent({ type: 'ITEM_ADD', userId: guestA, guestId: chainId });
+      await pause(5);
+      await recordFunnelEvent({ type: 'ITEM_PURCHASE', userId: guestA, guestId: chainId });
+      const chain = await reportOf(chainId);
+      expect(chain.stages.map((stage) => stage.count)).toEqual([1, 1, 1, 1, 1]);
+    });
+
+    it('makes a touch that arrives during the hand-off wait for the commit, then find no guest', async () => {
+      const chainId = `guest_pg17touchlock_${randomUUID()}`;
+      const { guestA, guestB } = await staleAWithFreshB(chainId);
+
+      let pending: Promise<boolean> | undefined;
+      let settledBeforeCommit: boolean | undefined;
+      const handOffWithTouch: MilestoneHandOff = async (input, tx) => {
+        let settled = false;
+        pending = recordGuestActivity(guestA).finally(() => {
+          settled = true;
+        });
+        // The cleanup holds A's row here. The touch has to wait for the commit instead of landing.
+        await pause(300);
+        settledBeforeCommit = settled;
+        return handOffSharedMilestones(input, tx);
+      };
+
+      const cleanup = await cleanupInactiveGuests({
+        db: prisma,
+        inactiveDays: 30,
+        handOff: handOffWithTouch,
+      });
+      expect(settledBeforeCommit).toBe(false);
+      expect(await pending).toBe(false);
+      expect(cleanup.deletedCount).toBeGreaterThanOrEqual(1);
+      expect(await prisma.user.findUnique({ where: { id: guestA } })).toBeNull();
+      // A's shared milestones moved with its delete, so B now owns the full set.
+      expect(await chainTypesOf(guestB, chainId)).toEqual([
+        'LIST_CREATE',
+        'REGISTER',
+        'VISIT',
+        'VISIT',
+      ]);
     });
   }
 );
