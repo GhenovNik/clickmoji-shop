@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Records one failed scheduled run when the read-only database address cannot be read from the
-// login Keychain (AGE-1669, task Г). Called only by run-scheduled.sh, with BACKUP_DIR and
+// login Keychain (AGE-1669). Called only by run-scheduled.sh, with BACKUP_DIR and
 // BACKUP_STATUS_FILE in the environment. It needs no database address and never reads one.
 // The status line goes through the same checks and append protections as every other run.
 import { pathToFileURL } from 'node:url';

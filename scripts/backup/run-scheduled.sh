@@ -1,5 +1,5 @@
 #!/bin/bash
-# Scheduled verified copy of the Clickmoji database (AGE-1669, task Г). Started by the launchd agent
+# Scheduled verified copy of the Clickmoji database (AGE-1669). Started by the launchd agent
 # installed from scripts/backup/launchd, or by hand from the main checkout.
 #
 # The read-only database address is read from the login Keychain (generic password, service

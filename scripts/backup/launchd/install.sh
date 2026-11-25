@@ -1,5 +1,5 @@
 #!/bin/bash
-# Installs or refreshes the user LaunchAgent that runs scripts/backup/run-scheduled.sh (AGE-1669, task Г).
+# Installs or refreshes the user LaunchAgent that runs scripts/backup/run-scheduled.sh (AGE-1669).
 # Idempotent: running it again replaces the agent with the same settings. Run it from the main checkout
 # (~/Projects/clickmoji-shop); it refuses to install a job that would point at a worktree.
 #

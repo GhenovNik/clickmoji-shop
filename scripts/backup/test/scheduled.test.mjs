@@ -1,4 +1,4 @@
-// Scheduled copy wrapper and launchd installer (AGE-1669, task Г). Fake security, npm and launchctl
+// Scheduled copy wrapper and launchd installer (AGE-1669). Fake security, npm and launchctl
 // only: no Keychain, no database, no LaunchAgent is touched. HOME is a sandbox, so the paths the
 // scripts derive from it stay inside the sandbox. The database address below is generated per run.
 import { spawnSync } from 'node:child_process';
@@ -102,7 +102,7 @@ function linkMainCheckout(sandbox) {
 
 function randomSecretUrl() {
   const password = crypto.randomBytes(24).toString('hex');
-  return `postgres://clickmoji_backup_ro:${password}@ep-test-${crypto.randomBytes(4).toString('hex')}.example.invalid/clickmoji?sslmode=require`;
+  return `postgres://clickmoji_backup_ro:${password}@localhost/clickmoji?sslmode=require`;
 }
 
 function baseEnv(sandbox, extra = {}) {
