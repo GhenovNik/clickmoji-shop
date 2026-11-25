@@ -127,11 +127,31 @@ npx tsx scripts/emoji-import.ts --batch queue-001,queue-002,queue-text-001
 ```json
 {
   "replacements": [
-    { "category": "Напитки", "expectedImageUrl": "https://<старый адрес картинки>", "expectedIsCustom": true },
-    { "category": "Крупы и макароны", "expectedImageUrl": "https://<старый адрес картинки>", "expectedIsCustom": true },
-    { "category": "Орехи и Сухофрукты", "expectedImageUrl": "https://<старый адрес картинки>", "expectedIsCustom": true },
-    { "category": "Масла и соусы", "expectedImageUrl": "https://<старый адрес картинки>", "expectedIsCustom": true },
-    { "category": "Рыба и морепродукты", "expectedImageUrl": "https://<старый адрес картинки>", "expectedIsCustom": true }
+    {
+      "category": "Напитки",
+      "expectedImageUrl": "https://<старый адрес картинки>",
+      "expectedIsCustom": true
+    },
+    {
+      "category": "Крупы и макароны",
+      "expectedImageUrl": "https://<старый адрес картинки>",
+      "expectedIsCustom": true
+    },
+    {
+      "category": "Орехи и Сухофрукты",
+      "expectedImageUrl": "https://<старый адрес картинки>",
+      "expectedIsCustom": true
+    },
+    {
+      "category": "Масла и соусы",
+      "expectedImageUrl": "https://<старый адрес картинки>",
+      "expectedIsCustom": true
+    },
+    {
+      "category": "Рыба и морепродукты",
+      "expectedImageUrl": "https://<старый адрес картинки>",
+      "expectedIsCustom": true
+    }
   ]
 }
 ```
