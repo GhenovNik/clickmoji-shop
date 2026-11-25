@@ -161,7 +161,11 @@ export default function ShoppingListItem({
               view === 'grid' && 'text-xs leading-4',
               item.isPurchased ? 'line-through text-muted-foreground' : 'text-foreground'
             )}
-            secondaryClassName={cn('truncate', item.isPurchased && 'line-through')}
+            secondaryClassName={cn(
+              'truncate',
+              view === 'list' && 'leading-3',
+              item.isPurchased && 'line-through'
+            )}
           />
           {item.variant?.name && (
             <span className="max-w-1/2 truncate text-[10px] bg-secondary/10 text-secondary-foreground px-1.5 py-0.5 rounded-full font-bold">

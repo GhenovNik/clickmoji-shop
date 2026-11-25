@@ -34,7 +34,13 @@ export default function ShoppingCategoryGroup({
   const Chevron = expanded ? ChevronUp : ChevronDown;
 
   return (
-    <section className={cn('rounded-xl p-0.5 bg-indigo-100/60', purchased && 'bg-green-100/50')}>
+    <section
+      className={cn(
+        'rounded-xl p-0.5 bg-indigo-100/60',
+        view === 'list' && 'p-px',
+        purchased && 'bg-green-100/50'
+      )}
+    >
       <h3>
         <button
           type="button"
@@ -48,7 +54,10 @@ export default function ShoppingCategoryGroup({
           <LocalizedName
             names={namesOf(category)}
             locale={locale}
-            className="min-w-0 flex-1 truncate"
+            // Compact list only: 16px + 12px lines (28px header instead of 36px), so the three
+            // pending groups keep the seven items above the bottom navigation at 375x812.
+            className={cn('min-w-0 flex-1 truncate', view === 'list' && 'leading-4')}
+            secondaryClassName={view === 'list' ? 'leading-3' : undefined}
             suffix={` (${count})`}
           />
           <Chevron size={18} aria-hidden="true" />
