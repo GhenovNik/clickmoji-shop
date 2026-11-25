@@ -339,6 +339,17 @@ same_digest() {
   [ "${#1}" -eq 64 ] && [ "$1" = "$2" ]
 }
 
+# sequence_read_ok FILE: succeeds only for a complete SEQUENCE_SQL read: exactly one completion line whose two counts are
+# equal, and every other line a name and a value. A failed, partial or empty read fails. A database with no sequences
+# passes, because its complete read still prints the completion line with 0 and 0.
+sequence_read_ok() {
+  [ -s "$1" ] || return 1
+  awk -F '\t' '
+    $1 == "!complete" { done++; if (NF != 3 || $2 != $3) bad = 1; next }
+    NF != 2 { bad = 1 }
+    END { if (done == 1 && !bad) exit 0; exit 1 }' "$1"
+}
+
 # Every `checked_*` call below is a stop point: when it fails, the following lines of that step must not run.
 ```
 
@@ -379,10 +390,20 @@ MIGRATION_SQL="SELECT migration_name FROM public._prisma_migrations
 WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL
 ORDER BY migration_name DESC LIMIT 1;"
 
-# Sequence positions (a sequence advances on writes that the write counter below does not show).
-SEQUENCE_SQL="SELECT schemaname || '.' || sequencename || E'\t' || coalesce(last_value::text, 'null')
+# Sequence positions (a sequence advances on writes that the write counter below does not show). The first line is a
+# completion line: '!complete', the number of sequences in the catalogue and the number the pg_sequences view shows. A
+# view that hides a sequence from this role makes the two numbers differ. A failed, partial or empty read has no
+# completion line, and sequence_read_ok rejects it. A database without sequences prints only the line, with 0 and 0.
+SEQUENCE_SQL="SELECT '!complete' || E'\t' || (SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+  WHERE c.relkind = 'S' AND n.nspname NOT IN ('pg_catalog', 'information_schema')
+    AND n.nspname NOT LIKE 'pg_toast%' AND n.nspname NOT LIKE 'pg_temp%') || E'\t' || (SELECT count(*) FROM pg_sequences
+  WHERE schemaname NOT IN ('pg_catalog', 'information_schema') AND schemaname NOT LIKE 'pg_toast%'
+    AND schemaname NOT LIKE 'pg_temp%')
+UNION ALL
+SELECT schemaname || '.' || sequencename || E'\t' || coalesce(last_value::text, 'null')
 FROM pg_sequences
 WHERE schemaname NOT IN ('pg_catalog', 'information_schema') AND schemaname NOT LIKE 'pg_toast%'
+  AND schemaname NOT LIKE 'pg_temp%'
 ORDER BY 1;"
 
 # Write counter: rows inserted, updated or deleted through the statistics, all user schemas. It lags and it does not
@@ -851,7 +872,59 @@ WHERE c.relkind = 'S' AND n.nspname NOT IN ('pg_catalog', 'information_schema')
   AND has_sequence_privilege(:'role', c.oid, p.priv);
 SQL
 )
+
+# GRANTS_CHECK_SQL: the effective grants of the runtime role as one SHA-256, computed by the server from GRANTS_SQL's own
+# rows, sorted with COLLATE "C" (the same bytes as checked_sha256 ... sort). \gset stores the result in grants_ok.
+GRANTS_CHECK_SQL="WITH g(line) AS (${GRANTS_SQL%;})
+SELECT encode(sha256(convert_to(coalesce(string_agg(line, E'\n' ORDER BY line COLLATE \"C\"), '') || E'\n', 'UTF8')), 'hex')
+       = :'expected_sha' AS grants_ok
+FROM g \gset"
+
+# The reopen runs inside one transaction (reopen_barrier). The role and the expected hash come from the environment.
+REOPEN_PSQL='psql -X -q -A -t -v ON_ERROR_STOP=1 -v role="$RUNTIME_ROLE" -v expected_sha="$EXPECTED_GRANTS_SHA" -f -'
+
+# reopen_barrier OWNER_URL OPEN_FILE SNAPSHOT LABEL: reopens one database. OPEN_FILE (the saved GRANTs) and the exact
+# comparison run in ONE transaction, and COMMIT is reached only when the effective grants equal SNAPSHOT. A failed
+# statement, a mismatch or a failed read ends the transaction without COMMIT, and the barrier stays closed. Its success
+# line is not a reopen: the caller prints `... reopened, grants identical` only after an independent read agrees.
+reopen_barrier() {
+  load_libpq_env "$1" || return 1
+  EXPECTED_GRANTS_SHA=$(checked_sha256 "$3" sort) || return 1
+  export EXPECTED_GRANTS_SHA
+  {
+    printf '%s\n' 'BEGIN;'
+    cat "$2" || return 1
+    printf '%s\n' "$GRANTS_CHECK_SQL"
+    printf '%s\n' '\if :grants_ok' 'COMMIT;' '\else' 'ROLLBACK;' \
+      "DO \$reopen\$ BEGIN RAISE EXCEPTION 'reopen $4 refused: effective grants differ from the snapshot; rolled back'; END \$reopen\$;" \
+      '\endif'
+  } > "$DIFF_DIR/reopen-$4.sql" || return 1
+  # psql exits nonzero on the RAISE (ON_ERROR_STOP), and on any failed statement; only a COMMIT leaves it at 0.
+  if pg_run -i -e RUNTIME_ROLE -e EXPECTED_GRANTS_SHA "$IMAGE" sh -c "$REOPEN_PSQL" < "$DIFF_DIR/reopen-$4.sql"; then
+    echo "reopen $4: committed after the in-transaction comparison"
+  else
+    echo "reopen $4: refused or failed; the barrier stays closed" >&2
+    return 1
+  fi
+}
 ```
+
+Before the first barrier step, in this shell, the procedure creates its private directory **once** and enters the production
+owner URL without echo. Every later step uses the same `DIFF_DIR`: the snapshots taken here are what the reopen steps of
+_Switch_ and _Rollback_ compare against, so the directory is never created again in the same recovery (_Post-point changes_
+uses it as it is).
+
+```sh
+if [ -z "${DIFF_DIR:-}" ]; then
+  DIFF_DIR=$(mktemp -d "$HOME/recovery-diff-XXXXXX") && chmod 700 "$DIFF_DIR" || DIFF_DIR=''
+fi
+[ -n "$DIFF_DIR" ] && [ -d "$DIFF_DIR" ] && echo 'DIFF_DIR: ready'
+printf 'Owner URL of production (not echoed): '
+read -rs PROD_OWNER_URL
+echo
+```
+
+Stop unless `DIFF_DIR: ready` is printed. `PROD_OWNER_URL` is used only by the production close and reopen.
 
 Close **production** while the fence is being established (step 1, after the writers are stopped). The save and the check
 are reads through `prod_ro`; only the two changes use `PROD_OWNER_URL`. Each line is a stop point: do not run the next line
@@ -879,23 +952,25 @@ pg_run -i "$IMAGE" sh -c 'psql -X -q -1 -v ON_ERROR_STOP=1 -f -' < "$DIFF_DIR/ba
 prints_no_rows pg_run -i -e RUNTIME_ROLE "$IMAGE" sh -c "$BARRIER_PSQL" <<< "$BARRIER_CHECK_SQL" && echo "barrier target: closed"
 ```
 
-**Reopening** is done only at the step that allows it (_Switch_ step 7, or _Rollback_). Each database is reopened on its own
-and its effective grants are then compared with the snapshot taken before closing. Writers may use that database only after
-the line `... reopened, grants identical` is printed. Without it the barrier stays closed.
+**Reopening** is done only at the step that allows it (_Switch_ step 7, or _Rollback_), and each database is reopened on its
+own by `reopen_barrier`. The saved GRANTs and the exact comparison of the effective grants with the snapshot taken before
+closing run in **one transaction** (`ON_ERROR_STOP`): COMMIT is reached only when they are equal. A mismatch, a failed read
+or a failed statement rolls the transaction back, so the barrier stays closed and nothing is granted. After the commit, the
+grants are read again through an independent session and compared with the same snapshot. Writers may use that database
+only after the line `... reopened, grants identical` is printed. Without it the barrier stays closed.
 
 ```sh
 # Reopen production (PROD_OWNER_URL), only when the routing proof allows it.
-load_libpq_env "$PROD_OWNER_URL" && pg_run -i "$IMAGE" sh -c 'psql -X -q -1 -v ON_ERROR_STOP=1 -f -' < "$DIFF_DIR/barrier-prod-open.sql"
-checked_read "$DIFF_DIR/grants-prod-after-open.txt" prod_ro pg_run -i -e RUNTIME_ROLE "$IMAGE" sh -c "$BARRIER_PSQL" <<< "$GRANTS_SQL"
-cmp -s "$DIFF_DIR/grants-prod-pre-barrier.txt" "$DIFF_DIR/grants-prod-after-open.txt" && echo "production barrier: reopened, grants identical"
+reopen_barrier "$PROD_OWNER_URL" "$DIFF_DIR/barrier-prod-open.sql" "$DIFF_DIR/grants-prod-pre-barrier.txt" production \
+  && checked_read "$DIFF_DIR/grants-prod-after-open.txt" prod_ro pg_run -i -e RUNTIME_ROLE "$IMAGE" sh -c "$BARRIER_PSQL" <<< "$GRANTS_SQL" \
+  && cmp -s "$DIFF_DIR/grants-prod-pre-barrier.txt" "$DIFF_DIR/grants-prod-after-open.txt" && echo "production barrier: reopened, grants identical"
 ```
 
 ```sh
 # Reopen target (TARGET_URL), only at the step of _Switch_ or _Rollback_ that allows it.
-load_libpq_env "$TARGET_URL"
-pg_run -i "$IMAGE" sh -c 'psql -X -q -1 -v ON_ERROR_STOP=1 -f -' < "$DIFF_DIR/barrier-target-open.sql"
-checked_read "$DIFF_DIR/grants-target-after-open.txt" pg_run -i -e RUNTIME_ROLE "$IMAGE" sh -c "$BARRIER_PSQL" <<< "$GRANTS_SQL"
-cmp -s "$DIFF_DIR/grants-target-pre-barrier.txt" "$DIFF_DIR/grants-target-after-open.txt" && echo "target barrier: reopened, grants identical"
+reopen_barrier "$TARGET_URL" "$DIFF_DIR/barrier-target-open.sql" "$DIFF_DIR/grants-target-pre-barrier.txt" target \
+  && checked_read "$DIFF_DIR/grants-target-after-open.txt" pg_run -i -e RUNTIME_ROLE "$IMAGE" sh -c "$BARRIER_PSQL" <<< "$GRANTS_SQL" \
+  && cmp -s "$DIFF_DIR/grants-target-pre-barrier.txt" "$DIFF_DIR/grants-target-after-open.txt" && echo "target barrier: reopened, grants identical"
 ```
 
 #### Fence production
@@ -976,15 +1051,19 @@ that defines `FROZEN_AT`:
 ```sh
 FROZEN_AT='<UTC time of the last passing fence check>'
 WRITE_BASELINE=$(prod_ro pg_run -i "$IMAGE" sh -c 'psql -X -q -A -t -v ON_ERROR_STOP=1 -f -' <<< "$WRITE_COUNTER_SQL")
-SEQUENCE_BASELINE=$(prod_ro pg_run -i "$IMAGE" sh -c 'psql -X -q -A -t -v ON_ERROR_STOP=1 -f -' <<< "$SEQUENCE_SQL")
+# The sequence baseline is a checked read: a failed, partial or hidden-sequence read leaves SEQ_BASELINE unset (see sequence_read_ok).
+unset SEQ_BASELINE
+checked_read "$DIFF_DIR/seq-prod-baseline.txt" prod_ro pg_run -i "$IMAGE" sh -c 'psql -X -q -A -t -v ON_ERROR_STOP=1 -f -' <<< "$SEQUENCE_SQL" \
+  && sequence_read_ok "$DIFF_DIR/seq-prod-baseline.txt" && SEQ_BASELINE="$DIFF_DIR/seq-prod-baseline.txt"
 PRE_STOP_COUNTS=$(prod_ro pg_run "$IMAGE" psql -X -q -A -t -v ON_ERROR_STOP=1 -c "$COUNTS_SQL")
 PRE_STOP_IDENTITY_SHA=$(checked_digest "$IDENTITY_SQL" prod_ro psql_stdin)
 PRE_STOP_DIGEST=$(checked_digest "$ROWHASH_SQL" prod_ro psql_stdin)
 printf 'FROZEN_AT=%s write_baseline=%s identity=%s digest=%s\n' "$FROZEN_AT" "$WRITE_BASELINE" "$PRE_STOP_IDENTITY_SHA" "$PRE_STOP_DIGEST"
 ```
 
-Stop unless `PRE_STOP_IDENTITY_SHA` and `PRE_STOP_DIGEST` are both 64-character hashes and the other reads above printed
-their values. Record `FROZEN_AT`, `WRITE_BASELINE`, `SEQUENCE_BASELINE`, `PRE_STOP_COUNTS`, `PRE_STOP_IDENTITY_SHA` and
+Stop unless `PRE_STOP_IDENTITY_SHA` and `PRE_STOP_DIGEST` are both 64-character hashes, `SEQ_BASELINE` is set (the sequence
+baseline is complete) and the other reads above printed their values. Record `FROZEN_AT`, `WRITE_BASELINE`, the sequence
+baseline (`seq-prod-baseline.txt`), `PRE_STOP_COUNTS`, `PRE_STOP_IDENTITY_SHA` and
 `PRE_STOP_DIGEST` in the ticket. They are the old database's state for the rollback check. `PRE_STOP_DIGEST` is the one
 that counts: the counters are kept for the record and are never proof that nothing was written.
 
@@ -1012,12 +1091,12 @@ changed by the bad migration) cannot be meaningfully compared row by row. It is 
 explicit operator decision; it is not reconciled automatically.
 
 ```sh
-DIFF_DIR=$(mktemp -d "$HOME/recovery-diff-XXXXXX") && chmod 700 "$DIFF_DIR"
+# DIFF_DIR and the owner URL were set up once, in _Write barrier_. Nothing here creates DIFF_DIR again.
 
-# compare_post_point: every read, sort, comm and the sequence check runs in this function, in order. Each step returns
-# 1 when it fails, so no later step runs, and nothing is printed from it. The function first removes its own cmp-*
-# artifacts, so output left by an earlier run in the same DIFF_DIR can never be shown. Only the caller prints results,
-# and only after the function has returned 0.
+# compare_post_point: every read, sort, comm and sequence check runs in this function, in order. Each step returns 1
+# when it fails, so no later step runs. It first removes its own cmp-* artifacts, so output left by an earlier run in
+# the same DIFF_DIR can never be shown. It writes the whole report to cmp-report.txt in one step at the end, so a report
+# exists only when every step has passed. Only the caller shows it, and only after it has read the whole file.
 compare_post_point() {
   find "$DIFF_DIR" -maxdepth 1 -name 'cmp-*' -type f -exec rm -f {} + || return 1
   checked_read "$DIFF_DIR/cmp-identity-prod.txt" prod_ro psql_stdin <<< "$IDENTITY_SQL" || return 1
@@ -1027,7 +1106,8 @@ compare_post_point() {
   load_libpq_env "$TARGET_URL" || return 1
   checked_read "$DIFF_DIR/cmp-target.txt" psql_stdin <<< "$ROWHASH_SQL" || return 1
   checked_read "$DIFF_DIR/cmp-target-seq.txt" pg_run "$IMAGE" psql -X -q -A -t -v ON_ERROR_STOP=1 -c "$SEQUENCE_SQL" || return 1
-  printf '%s\n' "$SEQUENCE_BASELINE" > "$DIFF_DIR/cmp-prod-seq.txt" || return 1
+  sequence_read_ok "$DIFF_DIR/cmp-target-seq.txt" || return 1
+  sequence_read_ok "$SEQ_BASELINE" || return 1
   LC_ALL=C sort "$DIFF_DIR/cmp-identity-prod.txt" > "$DIFF_DIR/cmp-identity-prod.sorted" || return 1
   LC_ALL=C sort "$DIFF_DIR/cmp-identity-target.txt" > "$DIFF_DIR/cmp-identity-target.sorted" || return 1
   LC_ALL=C sort "$DIFF_DIR/cmp-prod.txt" > "$DIFF_DIR/cmp-prod.sorted" || return 1
@@ -1038,24 +1118,28 @@ compare_post_point() {
     | cut -d'|' -f1 | LC_ALL=C sort | uniq -c > "$DIFF_DIR/cmp-only-prod.out" || return 1
   LC_ALL=C comm -13 "$DIFF_DIR/cmp-prod.sorted" "$DIFF_DIR/cmp-target.sorted" \
     | cut -d'|' -f1 | LC_ALL=C sort | uniq -c > "$DIFF_DIR/cmp-only-target.out" || return 1
-  awk -F '\t' 'NR == FNR { tgt[$1] = $2; next } { if (!($1 in tgt)) print "missing in target: " $1; else if (tgt[$1] + 0 < $2 + 0) print "behind: " $1 }' \
-    "$DIFF_DIR/cmp-target-seq.txt" "$DIFF_DIR/cmp-prod-seq.txt" > "$DIFF_DIR/cmp-seq.out" || return 1
+  # Sequences: the completion lines are dropped and the rest are name<TAB>last_value. The two files are told apart by
+  # FILENAME, not by NR == FNR: with an empty target list NR == FNR would also hold for the production lines, and a
+  # missing sequence would pass.
+  awk -F '\t' '$1 != "!complete"' "$DIFF_DIR/cmp-target-seq.txt" > "$DIFF_DIR/cmp-target-seq.rows" || return 1
+  awk -F '\t' '$1 != "!complete"' "$SEQ_BASELINE" > "$DIFF_DIR/cmp-prod-seq.rows" || return 1
+  awk -F '\t' 'FILENAME == ARGV[1] { tgt[$1] = $2; next } { if (!($1 in tgt)) print "missing in target: " $1; else if (tgt[$1] + 0 < $2 + 0) print "behind: " $1 }' \
+    "$DIFF_DIR/cmp-target-seq.rows" "$DIFF_DIR/cmp-prod-seq.rows" > "$DIFF_DIR/cmp-seq.out" || return 1
   [ ! -s "$DIFF_DIR/cmp-seq.out" ] || return 1
-  return 0
+  { echo 'schema differs:' && cat "$DIFF_DIR/cmp-schema.out" \
+    && echo 'created or changed after RP (only in production):' && cat "$DIFF_DIR/cmp-only-prod.out" \
+    && echo 'deleted or changed after RP (only in target):' && cat "$DIFF_DIR/cmp-only-target.out" \
+    && echo 'sequences: no missing or behind sequence'; } > "$DIFF_DIR/cmp-report.tmp" || return 1
+  mv "$DIFF_DIR/cmp-report.tmp" "$DIFF_DIR/cmp-report.txt" || return 1
 }
 
-if compare_post_point; then
-  echo 'schema differs:'
-  cat "$DIFF_DIR/cmp-schema.out"
-  echo 'created or changed after RP (only in production):'
-  cat "$DIFF_DIR/cmp-only-prod.out"
-  echo 'deleted or changed after RP (only in target):'
-  cat "$DIFF_DIR/cmp-only-target.out"
-  echo 'sequences: no missing or behind sequence'
+# The report is read back whole and printed in one step. "complete" is printed only after that, never on failure.
+if compare_post_point && REPORT=$(cat "$DIFF_DIR/cmp-report.txt") && [ -n "$REPORT" ]; then
+  printf '%s\n' "$REPORT"
   echo 'post-point comparison: complete'
 else
   echo 'post-point comparison FAILED: cutover held; no comparison result is evidence' >&2
-  cat "$DIFF_DIR/cmp-seq.out" 2>/dev/null >&2
+  cat "$DIFF_DIR/cmp-seq.out" >&2 2>/dev/null   # diagnostic only, never evidence
   false
 fi
 ```
@@ -1063,9 +1147,12 @@ fi
 The `cmp-prod.txt` and `cmp-target.txt` files are rows of `table|md5`; they hold no row data. The `prod_ro` subshell loads
 the read-only production URL; the target then loads `TARGET_URL` in the main shell.
 
-The sequence positions are compared inside the same function. Every sequence of frozen production must exist in the target
-with a `last_value` at least as large, so ids used by production rows are never reused after writes resume. A missing or
-behind sequence is printed on failure (`cmp-seq.out`) and holds the cutover, like any other failed step.
+The sequence positions are compared inside the same function. Both lists must be complete reads (`sequence_read_ok`): the
+production list is the baseline recorded at `FROZEN_AT` (`seq-prod-baseline.txt`), the target list is read now. Every
+sequence of frozen production must exist in the target with a `last_value` at least as large, so ids used by production
+rows are never reused after writes resume. A missing or behind sequence is printed on failure (`cmp-seq.out`). A failed,
+partial or hidden-sequence read on either side, a missing or behind sequence, holds the cutover like any other failed
+step. A database with no sequences passes only when both reads are complete and empty.
 
 The counts in the two lists are the **decision input**. Write the decision in the ticket before any switch, with one of:
 
@@ -1420,6 +1507,18 @@ The synthetic drill must show these outcomes:
   with a failed sort, a failed `comm`, a missing or behind sequence, and with `cmp-*` artifacts left in the same `DIFF_DIR`
   by an earlier successful run. Each failure prints no comparison result and holds the cutover; a complete run prints
   `post-point comparison: complete`.
+- **Sequence and final read.** `compare_post_point` is run with: a target sequence missing; a target sequence behind
+  production; a target with no sequences while production has some (this must fail: it is the case an `NR == FNR` test
+  gets wrong); a sequence read that prints rows and then fails, or prints rows without the completion line; a sequence
+  baseline whose read failed (`SEQ_BASELINE` unset); and a report that cannot be read back (`cmp-report.txt` with mode
+  `000`, as a non-root user). Each prints no `post-point comparison: complete`. A database with no sequences on both
+  sides passes.
+- **Reopen refused, both directions.** `reopen_barrier` is run with an injected mismatch (one line of the snapshot changed)
+  and with an injected failure (an error in the saved open file). Each prints no `reopened` line, the runtime role's write
+  privilege stays absent, and an `INSERT` into a table of that database as the runtime role returns `permission denied`.
+  The same call with an unchanged snapshot commits, and the independent read prints `reopened, grants identical`.
+- **One directory.** A clean shell runs the production close, the fence and the post-point comparison in the order written,
+  with one `DIFF_DIR` created once; the production reopen then compares with the snapshot taken before the close.
 
 The Clickmoji migration and application checks apply only to an actual Clickmoji copy.
 
