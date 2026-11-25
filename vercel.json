@@ -1,1 +1,16 @@
-{ "$schema": "https://openapi.vercel.sh/vercel.json", "regions": ["pdx1"] }
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "regions": ["pdx1"],
+  "git": {
+    "deploymentEnabled": {
+      "feature/**": false,
+      "fix/**": false,
+      "chore/**": false,
+      "t3/**": false,
+      "dependabot/**": false,
+      "docs/**": false,
+      "test/**": false,
+      "refactor/**": false
+    }
+  }
+}
