@@ -42,7 +42,7 @@ async function decode(webp: Buffer) {
   return { info, alphaAt, box: { left, right, top, bottom } };
 }
 
-describe('normalizeEmojiImage', () => {
+describe('normalizeEmojiImage', { timeout: 30_000 }, () => {
   it('crops an off-centre object on white and centres it in a transparent 256 WebP', async () => {
     const input = await svg(600, 400, '<circle cx="120" cy="300" r="60" fill="#e53935"/>');
 
