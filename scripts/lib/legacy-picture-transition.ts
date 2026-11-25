@@ -2,31 +2,42 @@ import type { Prisma } from '@prisma/client';
 import { localizedImagesOf, type LocalizedImages } from '../../src/lib/product-image';
 
 // Transitional compatibility for the writers that COPY a picture set into a row that outlives its
-// source and cannot be rebuilt later (AGE-1667 Ya3, review round 2). It sits outside `src` for the
-// same reason as `legacy-picture-references.ts`: the application does not read the legacy English
-// column `products.imageUrlEn` / `product_variants.imageUrlEn`, but the previous release writes
-// that column alone, so until the backfill has copied it a row can hold its only English address
-// there. A history snapshot is the case that matters: it is taken once, from the catalogue as it is
-// at that moment, and never refilled from today's catalogue. A snapshot that missed the legacy
-// English address would show a different picture, or none, for ever.
+// source and cannot be rebuilt later (AGE-1667 Ya3, review rounds 2 and 3). It sits outside `src`
+// for the same reason as `legacy-picture-references.ts`: the application does not read the legacy
+// English column `products.imageUrlEn` / `product_variants.imageUrlEn`, but the previous release
+// writes that column alone. Until it is stopped and the backfill has run again, the two English
+// places of a row can disagree in three ways: the dictionary has none (only the old column holds
+// the address), the old writer replaced the address (A in the dictionary, B in the column), or it
+// cleared it (A in the dictionary, null in the column). A history snapshot is the case that
+// matters: it is taken once, from the catalogue as it is at that moment, and never refilled from
+// today's catalogue.
 //
-// The rule is the one the backfill applies, with the dictionary first: an English entry in the new
-// dictionary wins; the legacy value is used only when the dictionary has none. The result is a
-// plain dictionary, so the snapshot code downstream (`historyPictureFields`) stays unchanged and no
-// legacy value reaches a response or an ordinary read. Ya6 deletes this file with the columns.
+// The rule is the one the backfill applies (`planRow`), so a copy and the later backfill agree:
+// the legacy column is the source of the English entry, an explicit null included. Every English
+// write of the new release stores the dictionary entry and the column together in one statement
+// (the product API, the catalogue cleanup, the importer, the history snapshot), so the two can
+// differ only because the previous release wrote the column afterwards, and the column is then the
+// newer one. The result is a plain dictionary, so the snapshot code downstream
+// (`historyPictureFields`) stays unchanged and no legacy value reaches a response or an ordinary
+// read, which stays dictionary-only. Ya6 deletes this file with the columns.
 
 // The key of the English entry of the dictionary (`src/lib/image-languages.ts` lists the picture
 // languages; the legacy column is English by definition).
 const ENGLISH = 'en';
 
-// The dictionary of a row with its legacy English address filled in where the dictionary has no
-// English entry. Never changes another entry, never replaces an existing English one.
+// The dictionary of a row with its English entry taken from the legacy column: the column's address
+// replaces the dictionary's, an empty or null column removes it, every other language is kept as
+// stored. `imageUrlEn: undefined` means the caller did not read the column, and then nothing can be
+// folded in: the dictionary is returned as it is. A caller must read the column in the SAME
+// statement as the rest of the row (no later lookup), because an old writer can change it between
+// two reads.
 export function withLegacyEnglish(row: {
   localizedImages?: unknown;
   imageUrlEn?: string | null;
 }): LocalizedImages {
   const pictures = localizedImagesOf(row.localizedImages);
-  if (pictures[ENGLISH]) return pictures;
+  if (row.imageUrlEn === undefined) return pictures;
+  delete pictures[ENGLISH];
   const legacy = localizedImagesOf({ [ENGLISH]: row.imageUrlEn })[ENGLISH];
   return legacy ? { ...pictures, [ENGLISH]: legacy } : pictures;
 }

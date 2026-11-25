@@ -99,6 +99,15 @@ async function moveFavorites(tx: Tx, fromId: string, toId: string) {
   return favorites.length;
 }
 
+// The first language both sets name with different addresses, if any. A language only one side
+// has is not a conflict (it travels), and neither is the same address on both sides. The main
+// address is decided apart from the languages.
+function conflictingLanguage(kept: LocalizedImages, incoming: LocalizedImages) {
+  return Object.keys(incoming).find(
+    (language) => kept[language] && kept[language] !== incoming[language]
+  );
+}
+
 export async function applyCatalogCleanup(
   tx: Tx,
   plan: CatalogCleanupPlan,
@@ -129,6 +138,28 @@ export async function applyCatalogCleanup(
     }
     if (!keep) throw new Error(`Merge target ${label(keepRef)} not found`);
 
+    // The duplicate is deleted below, so nothing it holds may be lost silently. Its main address
+    // and each of its picture languages are decided apart (an English address is read through
+    // `withLegacyEnglish`: the legacy column of the same read is the source, an explicit null
+    // included, the way the backfill treats it):
+    // - the main address: the singular product's own wins, the duplicate's is taken only when the
+    //   singular product has none (the operator's rule of 2026-11-01);
+    // - each language: one that only the duplicate has moves over, whatever happens to the main
+    //   address; one that both have with different addresses stops the cleanup before anything
+    //   is moved or deleted, because dropping either side would be a guess.
+    const keepLanguages = withLegacyEnglish(keep);
+    const dropMain = drop.isCustom && drop.imageUrl ? drop.imageUrl : null;
+    const dropLanguages: LocalizedImages = drop.isCustom ? withLegacyEnglish(drop) : {};
+    const conflict = conflictingLanguage(keepLanguages, dropLanguages);
+    if (conflict) {
+      throw new Error(`Conflicting merge ${label(dropRef)} → ${label(keepRef)}: ${conflict}`);
+    }
+    const keepsMain = keep.isCustom && Boolean(keep.imageUrl);
+    const takesMain = dropMain !== null && !keepsMain;
+    const takesLanguages = Object.keys(dropLanguages).some(
+      (language) => keepLanguages[language] !== dropLanguages[language]
+    );
+
     await tx.productVariant.updateMany({
       where: { productId: drop.id },
       data: { productId: keep.id },
@@ -142,27 +173,27 @@ export async function applyCatalogCleanup(
       data: { productId: keep.id },
     });
     const favorites = await moveFavorites(tx, drop.id, keep.id);
-    // The duplicate's own picture is kept when the singular product has none.
-    // The duplicate is deleted below, so an English address that only its legacy column still
-    // holds is folded into the copied dictionary now (the dictionary wins; the previous release
-    // writes the column alone until the backfill has run).
-    if (!(keep.isCustom && keep.imageUrl) && drop.isCustom && drop.imageUrl) {
-      const dropPictures = withLegacyEnglish(drop);
+    if (takesMain || takesLanguages) {
+      // The singular product's own languages stay (read through the same rule, so its legacy-only
+      // English address is not erased when the mirror is rewritten); the duplicate's join them.
+      const merged = { ...keepLanguages, ...dropLanguages };
       await tx.product.update({
         where: { id: keep.id },
         data: {
           isCustom: true,
-          imageUrl: drop.imageUrl,
-          imageTextLocale: drop.imageTextLocale,
-          localizedImages: localizedImagesForStorage(dropPictures),
-          imageUrlEn: legacyEnglishOf(dropPictures),
+          ...(takesMain && { imageUrl: dropMain, imageTextLocale: drop.imageTextLocale }),
+          localizedImages: localizedImagesForStorage(merged),
+          imageUrlEn: legacyEnglishOf(merged),
         },
       });
     }
     await tx.product.delete({ where: { id: drop.id } });
     log(
       `merge ${label(dropRef)} → ${label(keepRef)}: ${items.count} list items, ` +
-        `${history.count} history items, ${favorites} favorites, ${drop.variants.length} variants`
+        `${history.count} history items, ${favorites} favorites, ${drop.variants.length} variants` +
+        (dropMain && keepsMain && dropMain !== keep.imageUrl
+          ? `; main picture of the duplicate not kept (${dropMain})`
+          : '')
     );
   }
 
@@ -206,13 +237,9 @@ export async function applyCatalogCleanup(
     if (existing?.imageUrl && pictures.imageUrl && existing.imageUrl !== pictures.imageUrl) {
       throw new Error(`Conflicting variant ${step.name}: imageUrl`);
     }
-    for (const language of Object.keys(pictures.localized)) {
-      const current = existingLocalized[language];
-      const next = pictures.localized[language];
-      if (current && next && current !== next) {
-        throw new Error(`Conflicting variant ${step.name}: ${language}`);
-      }
-    }
+    // The main address and each language are decided apart: a language only one side has moves.
+    const conflict = conflictingLanguage(existingLocalized, pictures.localized);
+    if (conflict) throw new Error(`Conflicting variant ${step.name}: ${conflict}`);
     const mergedLocalized = { ...existingLocalized, ...pictures.localized };
     const variant = existing
       ? await tx.productVariant.update({

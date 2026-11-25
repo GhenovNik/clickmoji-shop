@@ -146,7 +146,7 @@ describe.skipIf(!url)('catalog cleanup on disposable PostgreSQL', () => {
             : conflict === 'different RU'
               ? { name: 'Другое' }
               : conflict === 'picture conflict'
-                ? { localizedImages: { en: '/other.webp' } }
+                ? { localizedImages: { en: '/other.webp' }, imageUrlEn: '/other.webp' }
                 : {}
         ),
       });

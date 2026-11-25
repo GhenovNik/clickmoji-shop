@@ -216,7 +216,10 @@ describe('POST /api/history: legacy-only English picture (rollout window)', () =
     expect(snapshotOf('milk').productImageUrlEn).toBe(LEGACY);
   });
 
-  it('lets the dictionary win over the legacy column and keeps every other language', async () => {
+  // After the first backfill both places hold A. The previous release then writes the legacy
+  // column alone: a replacement (B) or an explicit clear (null). The legacy column is the newer
+  // one, so the snapshot takes it (the rule of the backfill), and every other language is kept.
+  it('takes the address an old writer put into the legacy column over the dictionary entry', async () => {
     legacyOnlyMilk({
       localizedImages: { en: 'https://utfs.io/f/milk-en-dictionary', ru: MAIN, xx: 'https://x' },
     });
@@ -224,13 +227,21 @@ describe('POST /api/history: legacy-only English picture (rollout window)', () =
     await complete();
 
     const row = snapshotOf('milk');
-    expect(row.localizedImages).toEqual({
-      en: 'https://utfs.io/f/milk-en-dictionary',
-      ru: MAIN,
-      xx: 'https://x',
+    expect(row.localizedImages).toEqual({ en: LEGACY, ru: MAIN, xx: 'https://x' });
+    expect(row.productImageUrlEn).toBe(LEGACY);
+  });
+
+  it('keeps no English address when an old writer cleared the legacy column', async () => {
+    legacyOnlyMilk({
+      localizedImages: { en: 'https://utfs.io/f/milk-en-dictionary', ru: MAIN },
+      imageUrlEn: null,
     });
-    expect(row.productImageUrlEn).toBe('https://utfs.io/f/milk-en-dictionary');
-    expect(JSON.stringify(row)).not.toContain('legacy');
+
+    await complete();
+
+    const row = snapshotOf('milk');
+    expect(row.localizedImages).toEqual({ ru: MAIN });
+    expect(row.productImageUrlEn).toBeNull();
   });
 
   it('adds nothing when the product has no legacy address and no English entry', async () => {

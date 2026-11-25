@@ -250,12 +250,12 @@ describe('routes that serve products, variants and history rows', () => {
     const read = db.calls.find(({ model, op }) => model === 'item' && op === 'findMany')!;
     expect(read.args.include.product).toMatchObject({ omit: { imageUrlEn: true } });
     expect(read.args.include.variant).toMatchObject({ omit: { imageUrlEn: true } });
-    // The dictionary wins over the legacy column the picture read selects: the snapshot carries
-    // the dictionary entry, never the legacy-only address.
+    // The legacy column the picture read selects is the source of the English entry (an old writer
+    // may have changed it after the dictionary was filled): the snapshot carries that address in
+    // its dictionary and its rollback column, and the response above carries no legacy field.
     const created = db.calls.find(({ model, op }) => model === 'listHistory' && op === 'create')!;
     const [row] = created.args.data.items.create;
-    expect(row.localizedImages).toEqual({ en: 'https://utfs.io/f/dictionary-en' });
-    expect(row.productImageUrlEn).toBe('https://utfs.io/f/dictionary-en');
-    expect(JSON.stringify(created.args)).not.toContain('legacy-only');
+    expect(row.localizedImages).toEqual({ en: LEGACY });
+    expect(row.productImageUrlEn).toBe(LEGACY);
   });
 });
