@@ -144,16 +144,17 @@ describe('guest session validation and deleted-user rejection', () => {
     const refreshed = await authOptions.callbacks!.jwt!({
       token: {
         id: 'guest-live-1',
+        sub: 'guest-live-1',
         role: 'USER',
         email: guestEmail,
         isGuest: true,
-        iat: iatSeconds,
+        sessionIssuedAt: iatSeconds,
       } as never,
     } as never);
     expect(refreshed).toMatchObject({ id: 'guest-live-1', role: 'USER', isGuest: true });
 
     state.auth.mockResolvedValue({
-      tokenIssuedAt: iatSeconds,
+      sessionIssuedAt: iatSeconds,
       user: { id: 'guest-live-1', role: 'USER', email: guestEmail, isGuest: true },
     });
     const guard = await requireUser();
@@ -191,16 +192,17 @@ describe('guest session validation and deleted-user rejection', () => {
       authOptions.callbacks!.jwt!({
         token: {
           id: 'guest-old-id',
+          sub: 'guest-old-id',
           role: 'USER',
           email: guestEmail,
           isGuest: true,
-          iat: oldIssuedAt,
+          sessionIssuedAt: oldIssuedAt,
         } as never,
       } as never)
     ).rejects.toThrow();
 
     state.auth.mockResolvedValue({
-      tokenIssuedAt: oldIssuedAt,
+      sessionIssuedAt: oldIssuedAt,
       user: { id: 'guest-old-id', role: 'USER', email: guestEmail, isGuest: true },
     });
     const guard = await requireUser();
@@ -222,15 +224,16 @@ describe('guest session validation and deleted-user rejection', () => {
       authOptions.callbacks!.jwt!({
         token: {
           id: 'user-recreated',
+          sub: 'user-recreated',
           role: 'USER',
           email: 'u@example.com',
-          iat: staleIat,
+          sessionIssuedAt: staleIat,
         } as never,
       } as never)
     ).rejects.toThrow();
 
     state.auth.mockResolvedValue({
-      tokenIssuedAt: staleIat,
+      sessionIssuedAt: staleIat,
       user: { id: 'user-recreated', role: 'USER', email: 'u@example.com' },
     });
     const guard = await requireUser();
@@ -242,7 +245,7 @@ describe('guest session validation and deleted-user rejection', () => {
     const now = Date.now();
     const iat = Math.floor((now - 10 * 60 * 1000) / 1000);
     state.auth.mockResolvedValue({
-      tokenIssuedAt: iat,
+      sessionIssuedAt: iat,
       user: { id: 'guest-active', role: 'USER', isGuest: true },
     });
     state.findUniqueUser.mockResolvedValue({
@@ -261,7 +264,7 @@ describe('guest session validation and deleted-user rejection', () => {
 
     state.updateManyUser.mockClear();
     state.auth.mockResolvedValue({
-      tokenIssuedAt: iat,
+      sessionIssuedAt: iat,
       user: { id: 'regular-user', role: 'USER', isGuest: false },
     });
     state.findUniqueUser.mockResolvedValue({
@@ -278,7 +281,7 @@ describe('guest session validation and deleted-user rejection', () => {
 
   it('blocks guests from admin guard/routes while allowing /login and /register in proxy', async () => {
     state.auth.mockResolvedValue({
-      tokenIssuedAt: Math.floor(Date.now() / 1000),
+      sessionIssuedAt: Math.floor(Date.now() / 1000),
       user: { id: 'guest-1', role: 'ADMIN', isGuest: true },
     });
     const adminGuard = await requireAdmin();
@@ -351,7 +354,7 @@ describe('guest AI limits and churn prevention', () => {
     const nowSec = Math.floor(Date.now() / 1000);
     for (const guestId of ['guest-churn-1', 'guest-churn-2']) {
       state.auth.mockResolvedValue({
-        tokenIssuedAt: nowSec,
+        sessionIssuedAt: nowSec,
         user: { id: guestId, role: 'USER', isGuest: true },
       });
       state.findUniqueUser.mockResolvedValue({

@@ -158,6 +158,39 @@ type FunnelEventDelegateLike = {
   }) => Promise<unknown>;
 };
 
+const GUEST_MILESTONE_LOCK_NAMESPACE = 'clickmoji:funnel-guest-milestone:v1:';
+
+/**
+ * Writes a once-per-guest milestone (REGISTER, LIST_CREATE). The check and the insert run in one
+ * transaction that first takes a transaction-scoped PostgreSQL advisory lock keyed by the funnel
+ * guestId. Concurrent starts from the same browser therefore run one after another: the second
+ * one's check sees the committed row. The lock is released at commit or rollback, and no schema
+ * change is needed.
+ */
+async function recordGuestMilestoneOnce(
+  type: FunnelEventType,
+  userId: string | null,
+  guestId: string
+): Promise<boolean> {
+  const lockKey = `${GUEST_MILESTONE_LOCK_NAMESPACE}${guestId}`;
+  return prisma.$transaction(async (tx) => {
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
+
+    const alreadyRecorded = await tx.funnelEvent.findFirst({
+      where: { type, guestId },
+      select: { id: true },
+    });
+    if (alreadyRecorded) {
+      return false;
+    }
+
+    await tx.funnelEvent.create({
+      data: { type, userId, guestId },
+    });
+    return true;
+  });
+}
+
 /**
  * Best-effort persistence for a funnel milestone. Never throws, and never logs PII or
  * private payloads if database writes fail.
@@ -174,22 +207,16 @@ export async function recordFunnelEvent(input: RecordFunnelEventInput): Promise<
   let recorded = false;
   try {
     funnelEvent = (prisma as unknown as { funnelEvent?: FunnelEventDelegateLike }).funnelEvent;
-    if (!funnelEvent || typeof funnelEvent.create !== 'function') {
-      logFunnelWriteFailure('record', input.type, new Error('Funnel event storage unavailable'));
-      return false;
-    }
 
-    // One milestone per funnel guestId: a repeated guest start from the same browser must not
-    // inflate REGISTER or LIST_CREATE. Skipped writes still correlate below.
-    const alreadyRecorded =
-      input.dedupeByGuest && guestId && typeof funnelEvent.findFirst === 'function'
-        ? await funnelEvent.findFirst({
-            where: { type: input.type, guestId },
-            select: { id: true },
-          })
-        : null;
-
-    if (!alreadyRecorded) {
+    if (input.dedupeByGuest && guestId) {
+      // One milestone per funnel guestId: a repeated or concurrent guest start from the same browser
+      // must not inflate REGISTER or LIST_CREATE. Skipped writes still correlate below.
+      recorded = await recordGuestMilestoneOnce(input.type, userId, guestId);
+    } else {
+      if (!funnelEvent || typeof funnelEvent.create !== 'function') {
+        logFunnelWriteFailure('record', input.type, new Error('Funnel event storage unavailable'));
+        return false;
+      }
       await funnelEvent.create({
         data: {
           type: input.type,

@@ -15,7 +15,7 @@ const url = process.env.INTEGRATION_DATABASE_URL;
 
 const authHolder = vi.hoisted(() => ({
   session: null as {
-    tokenIssuedAt?: number;
+    sessionIssuedAt?: number;
     user: { id: string; role: string; email?: string | null; isGuest?: boolean };
   } | null,
 }));
@@ -172,7 +172,7 @@ describe.skipIf(!url)('server guest shopping on PostgreSQL', () => {
     expect(refreshedJwt.isGuest).toBe(true);
 
     authHolder.session = {
-      tokenIssuedAt: decodedJwt!.iat as number,
+      sessionIssuedAt: decodedJwt!.sessionIssuedAt as number,
       user: {
         id: guestUser.id,
         role: 'USER',
@@ -301,7 +301,7 @@ describe.skipIf(!url)('server guest shopping on PostgreSQL', () => {
 
     // Other guest cannot access guestUser's list.
     authHolder.session = {
-      tokenIssuedAt: Math.floor(otherGuest.createdAt.getTime() / 1000),
+      sessionIssuedAt: Math.floor(otherGuest.createdAt.getTime() / 1000),
       user: { id: otherGuest.id, role: 'USER', email: otherGuest.email, isGuest: true },
     };
     const crossListRes = await routes.listById.GET(
@@ -375,7 +375,7 @@ describe.skipIf(!url)('server guest shopping on PostgreSQL', () => {
 
     const decoded = await decode({ token: sessionToken, secret: process.env.AUTH_SECRET! });
     authHolder.session = {
-      tokenIssuedAt: decoded!.iat as number,
+      sessionIssuedAt: decoded!.sessionIssuedAt as number,
       user: { id: guest.id, role: 'USER', email: decoded!.email as string, isGuest: true },
     };
     const guestHeaders = { 'content-type': 'application/json', ...startHeaders };

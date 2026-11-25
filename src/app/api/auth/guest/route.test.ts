@@ -33,6 +33,8 @@ vi.mock('@/lib/prisma', () => {
       updateMany: doubles.funnelUpdateMany,
       findFirst: doubles.funnelFindFirst,
     },
+    // Advisory lock taken before the once-per-guest milestone check (funnel.ts).
+    $executeRaw: async () => 0,
     $transaction: async <T>(run: (tx: unknown) => Promise<T>) => run(prisma),
   };
   return { prisma };
@@ -200,7 +202,7 @@ describe('POST /api/auth/guest', () => {
   it('reuses an existing active guest session without minting a second guest', async () => {
     const nowSec = Math.floor(Date.now() / 1000);
     doubles.auth.mockResolvedValue({
-      tokenIssuedAt: nowSec,
+      sessionIssuedAt: nowSec,
       user: { id: 'existing-guest', role: 'USER', isGuest: true },
     });
     doubles.findUniqueUser.mockResolvedValue({
@@ -263,7 +265,7 @@ describe('POST /api/auth/guest', () => {
   it('does not overwrite an existing regular user session', async () => {
     const nowSec = Math.floor(Date.now() / 1000);
     doubles.auth.mockResolvedValue({
-      tokenIssuedAt: nowSec,
+      sessionIssuedAt: nowSec,
       user: { id: 'regular-user', role: 'USER', isGuest: false },
     });
     doubles.findUniqueUser.mockResolvedValue({
@@ -288,7 +290,7 @@ describe('POST /api/auth/guest', () => {
 
   it('creates a new guest when an old session references a deleted guest row', async () => {
     doubles.auth.mockResolvedValue({
-      tokenIssuedAt: Math.floor(Date.now() / 1000),
+      sessionIssuedAt: Math.floor(Date.now() / 1000),
       user: { id: 'deleted-guest', role: 'USER', isGuest: true },
     });
     doubles.findUniqueUser.mockResolvedValue(null);
@@ -346,5 +348,64 @@ describe('POST /api/auth/guest', () => {
 
     expect(response.status).toBe(201);
     expect(response.headers.get('set-cookie')).toContain(`${NEXTAUTH_SESSION_COOKIE}=`);
+  });
+});
+
+describe('POST /api/auth/guest session claims', () => {
+  it('stamps the new guest token with the immutable issuance claim equal to the row creation second', async () => {
+    const response = await POST(
+      new Request('http://localhost:3000/api/auth/guest', { method: 'POST' })
+    );
+    expect(response.status).toBe(201);
+
+    const createData = doubles.createUser.mock.calls[0]?.[0]?.data as { createdAt: Date };
+    const cookieMatch = (response.headers.get('set-cookie') ?? '').match(
+      new RegExp(`${NEXTAUTH_SESSION_COOKIE}=([^;]+)`)
+    );
+    const decoded = await decode({ token: cookieMatch![1], secret: TEST_SECRET });
+    expect(decoded?.sessionIssuedAt).toBe(Math.floor(createData.createdAt.getTime() / 1000));
+  });
+
+  it('does not reuse a legacy session that carries only the standard iat (reauth required)', async () => {
+    const nowSec = Math.floor(Date.now() / 1000);
+    doubles.auth.mockResolvedValue({
+      tokenIssuedAt: nowSec,
+      sessionIssuedAt: undefined,
+      user: { id: 'legacy-guest', role: 'USER', isGuest: true },
+    });
+    doubles.findUniqueUser.mockResolvedValue({
+      id: 'legacy-guest',
+      role: 'USER',
+      isGuest: true,
+      createdAt: new Date((nowSec - 60) * 1000),
+    });
+
+    const response = await POST(
+      new Request('http://localhost:3000/api/auth/guest', { method: 'POST' })
+    );
+
+    expect(response.status).toBe(201);
+    expect(doubles.createUser).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not reuse a session whose issuance claim predates the row it names', async () => {
+    const createdAt = new Date('2026-11-25T10:00:05.000Z');
+    doubles.auth.mockResolvedValue({
+      sessionIssuedAt: Math.floor(createdAt.getTime() / 1000) - 1,
+      user: { id: 'recreated-guest', role: 'USER', isGuest: true },
+    });
+    doubles.findUniqueUser.mockResolvedValue({
+      id: 'recreated-guest',
+      role: 'USER',
+      isGuest: true,
+      createdAt,
+    });
+
+    const response = await POST(
+      new Request('http://localhost:3000/api/auth/guest', { method: 'POST' })
+    );
+
+    expect(response.status).toBe(201);
+    expect(doubles.createUser).toHaveBeenCalledTimes(1);
   });
 });

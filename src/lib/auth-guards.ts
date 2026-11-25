@@ -35,7 +35,7 @@ export async function requireUser(): Promise<GuardResult> {
     },
   });
 
-  if (!dbUser || !isSessionTokenFreshForUser(session.tokenIssuedAt, dbUser.createdAt)) {
+  if (!dbUser || !isSessionTokenFreshForUser(session.sessionIssuedAt, dbUser.createdAt)) {
     return NextResponse.json({ error: await apiText(undefined, 'unauthorized') }, { status: 401 });
   }
 

@@ -29,6 +29,14 @@ vi.mock('next/navigation', () => ({
   useRouter: () => ({ push: pushMock, refresh: refreshMock }),
 }));
 
+const { requestSessionRefreshMock } = vi.hoisted(() => ({
+  requestSessionRefreshMock: vi.fn(),
+}));
+
+vi.mock('@/components/Providers', () => ({
+  useRequestSessionRefresh: () => requestSessionRefreshMock,
+}));
+
 vi.mock('next-auth/react', () => ({
   useSession: useSessionMock,
 }));
@@ -52,6 +60,7 @@ describe('Home landing page', () => {
     getLocaleMock.mockReset();
     pushMock.mockReset();
     refreshMock.mockReset();
+    requestSessionRefreshMock.mockReset();
     updateSessionMock.mockReset().mockResolvedValue(null);
     useSessionMock.mockReset().mockReturnValue({
       data: null,
@@ -125,7 +134,7 @@ describe('Home landing page', () => {
     await waitFor(() => expect(pushMock).toHaveBeenCalledWith('/categories'));
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(fetchMock).toHaveBeenCalledWith('/api/auth/guest', { method: 'POST' });
-    expect(updateSessionMock).toHaveBeenCalledTimes(1);
+    expect(requestSessionRefreshMock).toHaveBeenCalledTimes(1);
     expect(refreshMock).toHaveBeenCalledTimes(1);
   });
 

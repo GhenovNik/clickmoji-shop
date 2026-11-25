@@ -2,7 +2,8 @@ import { DefaultSession } from 'next-auth';
 
 declare module 'next-auth' {
   interface Session {
-    tokenIssuedAt?: number;
+    /** Immutable initial-issuance time (Unix seconds), copied unchanged across refreshes. */
+    sessionIssuedAt?: number;
     user: {
       id: string;
       role: string;
@@ -21,5 +22,7 @@ declare module 'next-auth/jwt' {
     id: string;
     role: string;
     isGuest?: boolean;
+    /** Immutable initial-issuance time (Unix seconds). Set once at sign-in or guest creation. */
+    sessionIssuedAt?: number;
   }
 }

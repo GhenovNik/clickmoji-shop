@@ -7,7 +7,12 @@ import { authConfig } from './auth.config';
 import { isEmailVerificationRequired } from './email';
 import { normalizeEmail } from './auth-security';
 import { readGuestIdFromRequestScope, recordFunnelEvent } from './funnel';
-import { isGuestEmail, isSessionTokenFreshForUser } from './guest';
+import {
+  currentSessionIssuedAtSeconds,
+  isGuestEmail,
+  isSessionIssuedAtClaim,
+  isSessionTokenFreshForUser,
+} from './guest';
 
 const providers: NextAuthOptions['providers'] = [
   Credentials({
@@ -141,33 +146,46 @@ export const authOptions: NextAuthOptions = {
     },
     async jwt({ token, user, account }) {
       if (user) {
-        if (account?.provider === 'google' && user.email) {
-          const dbUser = await prisma.user.findUnique({
-            where: { email: normalizeEmail(user.email) },
-            select: { id: true, role: true, email: true, isGuest: true },
-          });
+        // Initial issuance: stamp the immutable claim once. Refreshes below copy it unchanged.
+        const sessionIssuedAt = currentSessionIssuedAtSeconds();
+
+        if (account?.provider === 'google') {
+          // The signIn callback already resolved or created the row and set user.id to its
+          // User.id. Identify it by that id; never look the account up by email again here.
+          const dbUser = user.id
+            ? await prisma.user.findUnique({
+                where: { id: user.id },
+                select: { id: true, role: true, email: true, isGuest: true },
+              })
+            : null;
           if (!dbUser || dbUser.isGuest) {
             throw new Error('Invalid OAuth user');
           }
           token.id = dbUser.id;
+          token.sub = dbUser.id;
           token.role = dbUser.role;
           token.email = dbUser.email;
           token.isGuest = dbUser.isGuest;
+          token.sessionIssuedAt = sessionIssuedAt;
           return token;
         }
 
         token.id = user.id;
+        token.sub = user.id;
         token.role = (user as typeof user & { role?: string }).role ?? 'USER';
         token.email = user.email;
         token.isGuest = Boolean((user as typeof user & { isGuest?: boolean }).isGuest);
+        token.sessionIssuedAt = sessionIssuedAt;
         return token;
       }
 
-      // Existing session refresh: identify strictly by User.id (never email fallback) and verify
-      // the JWT was issued at or after that row's creation second so deleted/recreated rows cannot
-      // inherit an older session.
-      if (typeof token.id !== 'string' || !token.id) {
-        throw new Error('Session token missing user id');
+      // Refresh of an existing session. Identify strictly by the stable User.id (never by email)
+      // and require the immutable issuance claim to be present and not older than the row itself.
+      // Tokens without the claim (issued before it existed) are rejected: the user signs in again.
+      const hasCompleteIdentity =
+        typeof token.id === 'string' && token.id.length > 0 && token.sub === token.id;
+      if (!hasCompleteIdentity || !isSessionIssuedAtClaim(token.sessionIssuedAt)) {
+        throw new Error('Session token incomplete');
       }
 
       const dbUser = await prisma.user.findUnique({
@@ -175,14 +193,10 @@ export const authOptions: NextAuthOptions = {
         select: { id: true, role: true, email: true, isGuest: true, createdAt: true },
       });
 
-      if (
-        !dbUser ||
-        !isSessionTokenFreshForUser(token.iat as number | undefined, dbUser.createdAt)
-      ) {
+      if (!dbUser || !isSessionTokenFreshForUser(token.sessionIssuedAt, dbUser.createdAt)) {
         throw new Error('Session user no longer valid');
       }
 
-      token.id = dbUser.id;
       token.role = dbUser.role;
       token.email = dbUser.email;
       token.isGuest = dbUser.isGuest;
@@ -195,8 +209,8 @@ export const authOptions: NextAuthOptions = {
         session.user.role = token.role as string;
         session.user.isGuest = Boolean(token.isGuest);
       }
-      if (typeof token.iat === 'number') {
-        session.tokenIssuedAt = token.iat;
+      if (isSessionIssuedAtClaim(token.sessionIssuedAt)) {
+        session.sessionIssuedAt = token.sessionIssuedAt;
       }
       return session;
     },

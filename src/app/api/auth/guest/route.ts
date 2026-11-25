@@ -13,6 +13,7 @@ import {
 import { getGuestIdFromRequest, recordFunnelEvent } from '@/lib/funnel';
 import {
   buildGuestPlaceholderEmail,
+  currentSessionIssuedAtSeconds,
   GUEST_SESSION_MAX_AGE_SECONDS,
   isSessionTokenFreshForUser,
   NEXTAUTH_SECURE_SESSION_COOKIE,
@@ -39,7 +40,7 @@ export async function POST(request: Request) {
       });
       if (
         existingUser &&
-        isSessionTokenFreshForUser(existingSession.tokenIssuedAt, existingUser.createdAt)
+        isSessionTokenFreshForUser(existingSession.sessionIssuedAt, existingUser.createdAt)
       ) {
         if (existingUser.isGuest) {
           await prisma.user
@@ -82,6 +83,8 @@ export async function POST(request: Request) {
     // Use the Node clock for createdAt so NextAuth JWT `iat` (encoded immediately after) is
     // guaranteed to be >= Math.floor(createdAt.getTime() / 1000) without DB-vs-app clock skew.
     const now = new Date();
+    // Immutable issuance claim: the same clock instant that the guest row was created with.
+    const sessionIssuedAt = currentSessionIssuedAtSeconds(now);
     const user = await prisma.$transaction(async (tx) => {
       const created = await tx.user.create({
         data: {
@@ -137,6 +140,7 @@ export async function POST(request: Request) {
         name: user.name,
         picture: user.image,
         sub: user.id,
+        sessionIssuedAt,
       },
       secret,
       maxAge: GUEST_SESSION_MAX_AGE_SECONDS,

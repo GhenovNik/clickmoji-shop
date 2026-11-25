@@ -19,21 +19,35 @@ export function isGuestEmail(email: string | null | undefined): boolean {
 }
 
 /**
- * Validates that a NextAuth JWT (`iat` in integer Unix seconds) was issued at or after the user
- * row's creation second. Using second granularity avoids false negatives when `user.createdAt` has
- * sub-second milliseconds in the same second as JWT `iat`.
+ * Seconds since epoch for the immutable `sessionIssuedAt` claim. It is stamped once at initial
+ * issuance (sign-in or guest creation) and copied unchanged by every refresh. NextAuth's standard
+ * `iat` is not usable for this: it is rewritten each time the token is re-packed.
+ */
+export function currentSessionIssuedAtSeconds(now: Date = new Date()): number {
+  return Math.floor(now.getTime() / 1000);
+}
+
+/** True only for a positive integer issuance claim; anything else marks the token incomplete. */
+export function isSessionIssuedAtClaim(value: unknown): value is number {
+  return typeof value === 'number' && Number.isInteger(value) && value > 0;
+}
+
+/**
+ * Validates that a session's immutable issuance claim (integer Unix seconds) was issued at or after
+ * the user row's creation second. Second granularity avoids false negatives when `user.createdAt`
+ * has sub-second milliseconds in the same second as the claim.
  */
 export function isSessionTokenFreshForUser(
-  tokenIssuedAtSeconds: number | undefined,
+  sessionIssuedAtSeconds: unknown,
   userCreatedAt: Date | null | undefined
 ): boolean {
-  if (typeof tokenIssuedAtSeconds !== 'number' || !Number.isFinite(tokenIssuedAtSeconds)) {
+  if (!isSessionIssuedAtClaim(sessionIssuedAtSeconds)) {
     return false;
   }
   if (!(userCreatedAt instanceof Date) || Number.isNaN(userCreatedAt.getTime())) {
     return false;
   }
-  return tokenIssuedAtSeconds >= Math.floor(userCreatedAt.getTime() / 1000);
+  return sessionIssuedAtSeconds >= Math.floor(userCreatedAt.getTime() / 1000);
 }
 
 /**

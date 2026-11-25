@@ -4,6 +4,7 @@ import { useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useSession } from 'next-auth/react';
 import { ArrowRight } from 'lucide-react';
+import { useRequestSessionRefresh } from '@/components/Providers';
 
 interface StartButtonProps {
   label: string;
@@ -17,7 +18,8 @@ interface StartButtonProps {
  */
 export default function StartButton({ label, errorLabel }: StartButtonProps) {
   const router = useRouter();
-  const { data: session, update } = useSession();
+  const { data: session } = useSession();
+  const requestSessionRefresh = useRequestSessionRefresh();
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState('');
   const pendingRef = useRef(false);
@@ -44,8 +46,8 @@ export default function StartButton({ label, errorLabel }: StartButtonProps) {
         return;
       }
 
-      // Refresh client session state so Header/MobileNav/Catalog immediately see the guest session.
-      await update().catch(() => null);
+      // Header, MobileNav and catalog read the client session: re-read it now, without a reload.
+      requestSessionRefresh();
       router.push('/categories');
       router.refresh();
     } catch {
