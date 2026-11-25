@@ -371,9 +371,10 @@ export async function storedPictures(prisma: PrismaClient, refs: string[]) {
   );
 }
 
+// Uploads one image and returns its URL. The import never deletes an uploaded file: a URL can be
+// published in ListHistoryItem or raced by another run, and an uploader URL alone proves nothing
+// about exclusive ownership (AGE-1667 B3). A write that fails may therefore leave an unreferenced file.
 export type Uploader = (image: Buffer, name: string) => Promise<string>;
-// Removes a file uploaded in this run whose library record could not be written.
-export type Discarder = (imageUrl: string) => Promise<void>;
 
 export type AppliedCell = {
   ref: string;
@@ -488,23 +489,6 @@ function isUniqueViolation(error: unknown) {
   );
 }
 
-// True only when no library record and no catalogue picture slot holds this URL. A read that fails
-// counts as held: a leftover file is kept rather than a live picture deleted (AGE-1667 B3).
-async function isUnattachedUrl(prisma: PrismaClient, url: string) {
-  try {
-    const slots = { OR: [{ imageUrl: url }, { imageUrlEn: url }] };
-    const [library, product, variant, category] = await Promise.all([
-      prisma.emojiLibraryItem.findUnique({ where: { imageUrl: url }, select: { id: true } }),
-      prisma.product.findFirst({ where: slots, select: { id: true } }),
-      prisma.productVariant.findFirst({ where: slots, select: { id: true } }),
-      prisma.category.findFirst({ where: { imageUrl: url }, select: { id: true } }),
-    ]);
-    return [library, product, variant, category].every((row) => row === null);
-  } catch {
-    return false;
-  }
-}
-
 type Stored = { imageUrl: string } | { conflict: string };
 
 // Writes one cell. Pictures already stored under the cell reference are reused, so a re-run
@@ -512,8 +496,7 @@ type Stored = { imageUrl: string } | { conflict: string };
 export async function applyCell(
   prisma: PrismaClient,
   plan: CellPlan,
-  upload: Uploader,
-  discard?: Discarder
+  upload: Uploader
 ): Promise<AppliedCell> {
   const { cell, ref, images } = plan;
   const textBatch = plan.batchKind === 'text';
@@ -590,16 +573,10 @@ export async function applyCell(
     }
 
     const imageUrl = existing ?? (await upload(image, locale === 'en' ? cell.nameEn : cell.name));
-    const fresh = existing === undefined;
-    if (fresh) uploaded++;
+    if (existing === undefined) uploaded++;
     const data: LibraryData = { ...meta, imageUrl };
-    // Without its library record a fresh upload would be orphaned and uploaded again on the next
-    // run, so it is removed before a failure goes on. A URL that any record already holds, under
-    // either unique key, is never removed: the file may be the one a live picture points to.
-    const discardFresh = async () => {
-      if (!fresh || !discard) return;
-      if (await isUnattachedUrl(prisma, imageUrl)) await discard(imageUrl).catch(() => undefined);
-    };
+    // A failed write leaves a fresh upload in place: no record proves this run owns its URL, and
+    // ListHistoryItem keeps published URLs readable outside the catalogue (AGE-1667 B3).
     try {
       if (queue) {
         await prisma.emojiLibraryItem.create({ data: { sourceRef, ...data } });
@@ -613,16 +590,10 @@ export async function applyCell(
       changed = true;
       return { imageUrl };
     } catch (error) {
-      if (!queue || !isUniqueViolation(error)) {
-        await discardFresh();
-        throw error;
-      }
-      // A failed read throws before any removal: without the winner the file is left, not deleted
-      // (AGE-1667 B3). Only this run's fresh upload is removed, and only when no record holds its URL.
+      if (!queue || !isUniqueViolation(error)) throw error;
       const winner: EmojiLibraryItem | null = await prisma.emojiLibraryItem.findUnique({
         where: { sourceRef },
       });
-      await discardFresh();
       if (winner === null) return { conflict: `картинка ${sourceRef} изменилась во время записи` };
       if (!ownsLibraryItem(winner, cell)) {
         return { conflict: `картинка ${sourceRef} записана для другой цели («${winner.name}»)` };

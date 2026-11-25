@@ -451,35 +451,30 @@ describe('applyCell', () => {
     });
   });
 
-  it('removes a fresh upload whose library record failed, so a re-run does not orphan it', async () => {
+  it('keeps a fresh upload whose library record failed: nothing is deleted remotely (AGE-1667 B3)', async () => {
     const prisma = fakePrisma();
     prisma.emojiLibraryItem.upsert.mockRejectedValueOnce(new Error('db down'));
     const upload = vi.fn(async () => 'https://utfs.io/f/fresh.webp');
-    const discard = vi.fn(async () => undefined);
 
-    await expect(
-      applyCell(prisma as unknown as PrismaClient, plan(), upload, discard)
-    ).rejects.toThrow('db down');
+    await expect(applyCell(prisma as unknown as PrismaClient, plan(), upload)).rejects.toThrow(
+      'db down'
+    );
 
-    expect(discard).toHaveBeenCalledWith('https://utfs.io/f/fresh.webp');
+    expect(upload).toHaveBeenCalledTimes(1);
     expect(prisma.product.create).not.toHaveBeenCalled();
   });
 
   it('never removes a picture that was already stored before this run', async () => {
     const prisma = fakePrisma();
     prisma.emojiLibraryItem.upsert.mockRejectedValueOnce(new Error('db down'));
-    const discard = vi.fn(async () => undefined);
 
     await expect(
       applyCell(
         prisma as unknown as PrismaClient,
         plan({ stored: { ru: 'https://utfs.io/f/old.webp' } }),
-        vi.fn(),
-        discard
+        vi.fn()
       )
     ).rejects.toThrow('db down');
-
-    expect(discard).not.toHaveBeenCalled();
   });
 
   it('leaves the product alone when the name is ambiguous', async () => {
@@ -1394,7 +1389,6 @@ describe('a reference is bound to one owner at write (AGE-1667 B3, round 3)', ()
     const apple = { id: 'apple', imageUrl: null, imageUrlEn: null, isCustom: false } as Row;
     const appleRow = liveRow(apple);
     const pear = catalogStub();
-    const discard = vi.fn(async () => undefined);
 
     const [first, second] = await Promise.all([
       applyCell(
@@ -1408,8 +1402,7 @@ describe('a reference is bound to one owner at write (AGE-1667 B3, round 3)', ()
           productId: 'apple',
           productName: 'Яблоко',
         }),
-        vi.fn(async () => APPLE_NEW),
-        discard
+        vi.fn(async () => APPLE_NEW)
       ),
       applyCell(
         {
@@ -1426,8 +1419,7 @@ describe('a reference is bound to one owner at write (AGE-1667 B3, round 3)', ()
         vi.fn(async () => {
           await written;
           return PEAR_FIRST;
-        }),
-        discard
+        })
       ),
     ]);
 
@@ -1435,7 +1427,6 @@ describe('a reference is bound to one owner at write (AGE-1667 B3, round 3)', ()
     expect(second).toMatchObject({ product: 'conflict', changed: false, uploaded: 1 });
     expect(second.conflict).toContain('записана для другой цели');
     expect(library.rows.get('queue-001#1')).toMatchObject({ imageUrl: APPLE_NEW, name: 'Яблоко' });
-    expect(discard.mock.calls).toEqual([[PEAR_FIRST]]);
     expect(apple).toMatchObject({ imageUrl: APPLE_NEW });
     expect(pear.updateMany).not.toHaveBeenCalled();
     expect(pear.update).not.toHaveBeenCalled();
@@ -1445,7 +1436,6 @@ describe('a reference is bound to one owner at write (AGE-1667 B3, round 3)', ()
     const { library, written } = racing();
     const pear = { id: 'pear', imageUrl: null, imageUrlEn: null, isCustom: false } as Row;
     const pearRow = liveRow(pear);
-    const discard = vi.fn(async () => undefined);
     const plan = planOf(cellOf({}), { kind: 'link', productId: 'pear', productName: 'Груша' });
     const prisma = {
       ...noCatalogue(),
@@ -1457,8 +1447,7 @@ describe('a reference is bound to one owner at write (AGE-1667 B3, round 3)', ()
       applyCell(
         prisma,
         plan,
-        vi.fn(async () => PEAR_FIRST),
-        discard
+        vi.fn(async () => PEAR_FIRST)
       ),
       applyCell(
         prisma,
@@ -1466,8 +1455,7 @@ describe('a reference is bound to one owner at write (AGE-1667 B3, round 3)', ()
         vi.fn(async () => {
           await written;
           return PEAR_SECOND;
-        }),
-        discard
+        })
       ),
     ]);
 
@@ -1479,14 +1467,13 @@ describe('a reference is bound to one owner at write (AGE-1667 B3, round 3)', ()
     }
     expect(library.create).toHaveBeenCalledTimes(2);
     expect(library.rows.get('queue-001#1')).toMatchObject({ imageUrl: PEAR_FIRST });
-    expect(discard.mock.calls).toEqual([[PEAR_SECOND]]);
     expect(pear.imageUrl).toBe(PEAR_FIRST);
     expect(pearRow.updateMany.mock.calls.map(([args]) => args.data.imageUrl)).not.toContain(
       PEAR_SECOND
     );
   });
 
-  it('deletes nothing when the winner cannot be read after a collision', async () => {
+  it('keeps the fresh upload when the winner cannot be read after a collision', async () => {
     const library = memoryLibrary([
       {
         sourceRef: 'queue-001#1',
@@ -1501,39 +1488,33 @@ describe('a reference is bound to one owner at write (AGE-1667 B3, round 3)', ()
     ]);
     library.findUnique.mockResolvedValueOnce(null).mockRejectedValueOnce(new Error('db read'));
     const pear = catalogStub();
-    const discard = vi.fn(async () => undefined);
 
     await expect(
       applyCell(
         { ...noCatalogue(), emojiLibraryItem: library, product: pear } as unknown as PrismaClient,
         planOf(cellOf({}), { kind: 'link', productId: 'pear', productName: 'Груша' }),
-        vi.fn(async () => PEAR_FIRST),
-        discard
+        vi.fn(async () => PEAR_FIRST)
       )
     ).rejects.toThrow('db read');
 
     // The winner is unknown, so the fresh upload might be the file it references: it is left.
-    expect(discard).not.toHaveBeenCalled();
     expect(library.rows.get('queue-001#1')).toMatchObject({ imageUrl: APPLE_NEW });
     expect(pear.updateMany).not.toHaveBeenCalled();
   });
 
-  it('discards its fresh upload when the insert fails for another reason', async () => {
+  it('keeps its fresh upload when the insert fails for another reason (AGE-1667 B3)', async () => {
     const library = memoryLibrary();
     library.create.mockRejectedValueOnce(new Error('db write'));
     const pear = catalogStub();
-    const discard = vi.fn(async () => undefined);
 
     await expect(
       applyCell(
         { ...noCatalogue(), emojiLibraryItem: library, product: pear } as unknown as PrismaClient,
         planOf(cellOf({}), { kind: 'link', productId: 'pear', productName: 'Груша' }),
-        vi.fn(async () => PEAR_FIRST),
-        discard
+        vi.fn(async () => PEAR_FIRST)
       )
     ).rejects.toThrow('db write');
 
-    expect(discard.mock.calls).toEqual([[PEAR_FIRST]]);
     expect(pear.updateMany).not.toHaveBeenCalled();
   });
 });
@@ -1579,42 +1560,35 @@ describe('a failed read after or before an upload never orphans a file (AGE-1667
     const prisma = fake();
     prisma.emojiLibraryItem.findUnique.mockRejectedValueOnce(new Error('db read'));
     const upload = vi.fn(async () => 'https://utfs.io/f/fresh.webp');
-    const discard = vi.fn(async () => undefined);
 
-    await expect(
-      applyCell(prisma as unknown as PrismaClient, plan(), upload, discard)
-    ).rejects.toThrow('db read');
+    await expect(applyCell(prisma as unknown as PrismaClient, plan(), upload)).rejects.toThrow(
+      'db read'
+    );
 
     expect(upload).not.toHaveBeenCalled();
-    expect(discard).not.toHaveBeenCalled();
   });
 
   it('never deletes a stored picture when a read fails', async () => {
     const prisma = fake();
     prisma.emojiLibraryItem.findUnique.mockRejectedValueOnce(new Error('db read'));
-    const discard = vi.fn(async () => undefined);
 
     await expect(
       applyCell(
         prisma as unknown as PrismaClient,
         plan({ ru: 'https://utfs.io/f/old.webp' }),
-        vi.fn(),
-        discard
+        vi.fn()
       )
     ).rejects.toThrow('db read');
-
-    expect(discard).not.toHaveBeenCalled();
   });
 
   it('keeps a fresh upload that its library record already references when a later read fails', async () => {
     const prisma = fake();
     prisma.product.findUnique.mockRejectedValueOnce(new Error('db read'));
     const upload = vi.fn(async () => 'https://utfs.io/f/fresh.webp');
-    const discard = vi.fn(async () => undefined);
 
-    await expect(
-      applyCell(prisma as unknown as PrismaClient, plan(), upload, discard)
-    ).rejects.toThrow('db read');
+    await expect(applyCell(prisma as unknown as PrismaClient, plan(), upload)).rejects.toThrow(
+      'db read'
+    );
 
     expect(upload).toHaveBeenCalledTimes(1);
     expect(prisma.emojiLibraryItem.create).toHaveBeenCalledWith({
@@ -1623,7 +1597,6 @@ describe('a failed read after or before an upload never orphans a file (AGE-1667
         imageUrl: 'https://utfs.io/f/fresh.webp',
       }),
     });
-    expect(discard).not.toHaveBeenCalled();
   });
 });
 
@@ -1706,17 +1679,11 @@ describe('an RU-only and an RU+EN cell of one target race (AGE-1667 B2, round 4)
       const prisma = prismaOf(kind, library, row);
       const pairUpload = vi.fn().mockResolvedValueOnce(RU_LOST).mockResolvedValueOnce(EN);
 
-      const pair = applyCell(
-        prisma,
-        planOf(kind, true),
-        pairUpload,
-        vi.fn(async () => undefined)
-      );
+      const pair = applyCell(prisma, planOf(kind, true), pairUpload);
       const ruOnly = await applyCell(
         prisma,
         planOf(kind, false),
-        vi.fn(async () => RU_WON),
-        vi.fn(async () => undefined)
+        vi.fn(async () => RU_WON)
       );
       release();
       const paired = await pair;
@@ -1742,13 +1709,11 @@ describe('an RU-only and an RU+EN cell of one target race (AGE-1667 B2, round 4)
       const record = liveRow(row);
       const prisma = prismaOf(kind, library, row);
       const upload = vi.fn(async () => 'https://utfs.io/f/unexpected.webp');
-      const discard = vi.fn(async () => undefined);
 
-      const again = await applyCell(prisma, planOf(kind, true), upload, discard);
+      const again = await applyCell(prisma, planOf(kind, true), upload);
 
       expect(again).toMatchObject({ changed: false, uploaded: 0, conflict: undefined });
       expect(upload).not.toHaveBeenCalled();
-      expect(discard).not.toHaveBeenCalled();
       expect(record.updateMany).not.toHaveBeenCalled();
     }
   );
@@ -1763,8 +1728,7 @@ describe('an RU-only and an RU+EN cell of one target race (AGE-1667 B2, round 4)
       const pair = await applyCell(
         prisma,
         planOf(kind, true),
-        vi.fn(async () => EN),
-        vi.fn(async () => undefined)
+        vi.fn(async () => EN)
       );
 
       expect(pair).toMatchObject({ product: 'conflict' });
@@ -1783,8 +1747,7 @@ describe('an RU-only and an RU+EN cell of one target race (AGE-1667 B2, round 4)
       const pair = await applyCell(
         prisma,
         planOf(kind, true),
-        vi.fn(async () => EN),
-        vi.fn(async () => undefined)
+        vi.fn(async () => EN)
       );
 
       expect(pair).toMatchObject({ product: 'conflict' });
@@ -1793,7 +1756,7 @@ describe('an RU-only and an RU+EN cell of one target race (AGE-1667 B2, round 4)
   );
 });
 
-describe('a collision on either unique key never deletes a live picture (AGE-1667 B3, round 4)', () => {
+describe('a collision on either unique key never removes a file (AGE-1667 B3, rounds 4-5)', () => {
   const REF = 'queue-001#1';
   const WON = 'https://utfs.io/f/won.webp';
   const OTHER = 'https://utfs.io/f/other-ref.webp';
@@ -1840,20 +1803,17 @@ describe('a collision on either unique key never deletes a live picture (AGE-166
       emojiLibraryItem: library,
       product: liveRow(pearRow),
     } as unknown as PrismaClient;
-    const discard = vi.fn(async () => undefined);
 
     const [first, second] = await Promise.all([
       applyCell(
         prisma,
         planOf(),
-        vi.fn(async () => WON),
-        discard
+        vi.fn(async () => WON)
       ),
       applyCell(
         prisma,
         planOf(),
-        vi.fn(async () => WON),
-        discard
+        vi.fn(async () => WON)
       ),
     ]);
 
@@ -1861,10 +1821,9 @@ describe('a collision on either unique key never deletes a live picture (AGE-166
     expect(second).toMatchObject({ product: 'linked', conflict: undefined });
     expect(library.rows.get(REF)).toMatchObject({ imageUrl: WON });
     expect(pearRow).toMatchObject({ imageUrl: WON });
-    expect(discard).not.toHaveBeenCalled();
   });
 
-  it('deletes nothing when the fresh URL already belongs to another reference', async () => {
+  it('keeps a fresh URL that already belongs to another reference', async () => {
     const library = memoryLibrary([
       {
         sourceRef: 'batch-009#2',
@@ -1883,22 +1842,19 @@ describe('a collision on either unique key never deletes a live picture (AGE-166
       emojiLibraryItem: library,
       product: pear,
     } as unknown as PrismaClient;
-    const discard = vi.fn(async () => undefined);
 
     const result = await applyCell(
       prisma,
       planOf(),
-      vi.fn(async () => FRESH),
-      discard
+      vi.fn(async () => FRESH)
     );
 
     expect(result).toMatchObject({ product: 'conflict' });
-    expect(discard).not.toHaveBeenCalled();
     expect(library.rows.get('batch-009#2')).toMatchObject({ imageUrl: FRESH });
     expect(pear.updateMany).not.toHaveBeenCalled();
   });
 
-  it('deletes nothing when the fresh URL is held by a catalogue record', async () => {
+  it('keeps a fresh URL held by a catalogue record', async () => {
     const library = memoryLibrary();
     library.create.mockRejectedValueOnce(new Error('db write'));
     const pear = liveRow({ id: 'pear', imageUrl: null, imageUrlEn: null, isCustom: false });
@@ -1910,22 +1866,19 @@ describe('a collision on either unique key never deletes a live picture (AGE-166
       product: pear,
       category,
     } as unknown as PrismaClient;
-    const discard = vi.fn(async () => undefined);
 
     await expect(
       applyCell(
         prisma,
         planOf(),
-        vi.fn(async () => FRESH),
-        discard
+        vi.fn(async () => FRESH)
       )
     ).rejects.toThrow('db write');
 
-    expect(discard).not.toHaveBeenCalled();
     expect(pear.updateMany).not.toHaveBeenCalled();
   });
 
-  it('deletes nothing when the reference check cannot read the URL', async () => {
+  it('keeps a fresh URL when the reference check cannot read it', async () => {
     const library = memoryLibrary();
     library.findUnique.mockResolvedValueOnce(null).mockRejectedValueOnce(new Error('db read'));
     library.create.mockRejectedValueOnce(new Error('db write'));
@@ -1935,21 +1888,17 @@ describe('a collision on either unique key never deletes a live picture (AGE-166
       emojiLibraryItem: library,
       product: pear,
     } as unknown as PrismaClient;
-    const discard = vi.fn(async () => undefined);
 
     await expect(
       applyCell(
         prisma,
         planOf(),
-        vi.fn(async () => FRESH),
-        discard
+        vi.fn(async () => FRESH)
       )
     ).rejects.toThrow('db write');
-
-    expect(discard).not.toHaveBeenCalled();
   });
 
-  it('deletes only the losing fresh upload when two distinct URLs race', async () => {
+  it('keeps both distinct fresh URLs when they race: the loser stays unreferenced, nothing is deleted', async () => {
     const library = memoryLibrary([], { afterRead: readBarrier(2) });
     const pear = liveRow({ id: 'pear', imageUrl: null, imageUrlEn: null, isCustom: false });
     const prisma = {
@@ -1957,31 +1906,28 @@ describe('a collision on either unique key never deletes a live picture (AGE-166
       emojiLibraryItem: library,
       product: pear,
     } as unknown as PrismaClient;
-    const discard = vi.fn(async () => undefined);
     const LOST = 'https://utfs.io/f/lost.webp';
 
     const [first, second] = await Promise.all([
       applyCell(
         prisma,
         planOf(),
-        vi.fn(async () => WON),
-        discard
+        vi.fn(async () => WON)
       ),
       applyCell(
         prisma,
         planOf(),
-        vi.fn(async () => LOST),
-        discard
+        vi.fn(async () => LOST)
       ),
     ]);
 
     expect(first.product).toBe('linked');
     expect(second.product).toBe('linked');
-    expect(discard.mock.calls).toEqual([[LOST]]);
+    expect(second.uploaded).toBe(1);
     expect(library.rows.get(REF)).toMatchObject({ imageUrl: WON });
   });
 
-  it('deletes nothing on a historical upsert that collides on the URL of another row', async () => {
+  it('keeps a fresh URL on a historical upsert that collides on the URL of another row', async () => {
     const prisma = {
       emojiLibraryItem: {
         // The reference is free, but the URL is taken by another row.
@@ -1998,7 +1944,6 @@ describe('a collision on either unique key never deletes a live picture (AGE-166
       productVariant: { findFirst: vi.fn().mockResolvedValue(null) },
       category: { findFirst: vi.fn().mockResolvedValue(null) },
     } as unknown as PrismaClient;
-    const discard = vi.fn(async () => undefined);
     const historical: CellPlan = {
       ref: 'batch-005#3',
       batch: 'batch-005',
@@ -2013,12 +1958,85 @@ describe('a collision on either unique key never deletes a live picture (AGE-166
       applyCell(
         prisma,
         historical,
-        vi.fn(async () => FRESH),
-        discard
+        vi.fn(async () => FRESH)
       )
     ).rejects.toThrow('imageUrl');
+  });
+});
 
-    expect(discard).not.toHaveBeenCalled();
+describe('a failed write removes nothing, RU and EN alike (AGE-1667 B3, round 5)', () => {
+  const RU = 'https://utfs.io/f/ru-history.webp';
+  const EN = 'https://utfs.io/f/en-history.webp';
+  const pearCell: ManifestCell = {
+    cell: 1,
+    target: 'product',
+    category: 'Фрукты',
+    name: 'Груша',
+    nameEn: 'Pear',
+    action: 'update-image',
+  };
+  // A text cell: a Russian and an English picture, each uploaded and then written as a library record.
+  const textPlan = (): CellPlan => ({
+    ref: 'queue-text-001#1',
+    batch: 'queue-text-001',
+    batchKind: 'text',
+    cell: pearCell,
+    images: { ru: Buffer.from('ru'), en: Buffer.from('en') },
+    stored: {},
+    product: { kind: 'link', productId: 'pear', productName: 'Груша' },
+  });
+
+  it('keeps the RU upload when its insert fails: a URL that only a history row may name is never removed', async () => {
+    // ListHistoryItem keeps productImageUrl and productImageUrlEn readable outside the catalogue.
+    // The import reads no history row and deletes no file, so the failed RU upload stays in place.
+    const library = memoryLibrary();
+    library.create.mockRejectedValueOnce(new Error('db write'));
+    const pear = liveRow({ id: 'pear', imageUrl: null, imageUrlEn: null, isCustom: false });
+    const upload = vi.fn(async (_image: Buffer, name: string) => (name === 'Pear' ? EN : RU));
+    const prisma = {
+      ...noCatalogue(),
+      emojiLibraryItem: library,
+      product: pear,
+    } as unknown as PrismaClient;
+
+    await expect(applyCell(prisma, textPlan(), upload)).rejects.toThrow('db write');
+
+    expect(upload).toHaveBeenCalledTimes(1);
+    expect(library.rows.size).toBe(0);
+    expect(pear.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('keeps the RU record and both uploads when the EN insert fails after the RU one was written', async () => {
+    const library = memoryLibrary();
+    const insert = library.create.getMockImplementation()!;
+    let inserts = 0;
+    library.create.mockImplementation(async (args: { data: LibraryData }) => {
+      if (++inserts === 2) throw new Error('db write en');
+      return insert(args);
+    });
+    const pear = liveRow({ id: 'pear', imageUrl: null, imageUrlEn: null, isCustom: false });
+    const upload = vi.fn(async (_image: Buffer, name: string) => (name === 'Pear' ? EN : RU));
+    const prisma = {
+      ...noCatalogue(),
+      emojiLibraryItem: library,
+      product: pear,
+    } as unknown as PrismaClient;
+
+    await expect(applyCell(prisma, textPlan(), upload)).rejects.toThrow('db write en');
+
+    expect(upload).toHaveBeenCalledTimes(2);
+    expect(library.rows.get('queue-text-001#1')).toMatchObject({ imageUrl: RU });
+    expect(library.rows.get('queue-text-001#1:en')).toBeUndefined();
+    expect(pear.updateMany).not.toHaveBeenCalled();
+  });
+});
+
+describe('the import has no remote delete path (AGE-1667 B3, round 5)', () => {
+  it('neither the service nor the import script removes an uploaded file', () => {
+    for (const file of ['src/lib/services/emoji-batch-import.ts', 'scripts/emoji-import.ts']) {
+      const source = readFileSync(join(process.cwd(), file), 'utf8');
+      expect(source, file).not.toMatch(/deleteFiles|discard|isUnattachedUrl/);
+    }
   });
 });
 

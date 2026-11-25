@@ -240,16 +240,11 @@ async function main() {
     const utapi = new UTApi();
     const upload = async (image: Buffer, name: string) =>
       (await uploadNormalizedEmojiImage({ imageBuffer: image, productName: name, utapi })).imageUrl;
-    // A fresh upload whose library record failed is removed, so the next run starts clean.
-    const discard = async (imageUrl: string) => {
-      const key = new URL(imageUrl).pathname.split('/').pop();
-      if (key) await utapi.deleteFiles(key);
-    };
     let uploaded = 0;
     let changed = 0;
     let conflicts = 0;
     for (const plan of plans) {
-      const result = await applyCell(prisma, plan, upload, discard);
+      const result = await applyCell(prisma, plan, upload);
       uploaded += result.uploaded;
       if (result.changed) changed++;
       if (result.product === 'conflict') conflicts++;
