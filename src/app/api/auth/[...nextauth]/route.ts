@@ -116,7 +116,10 @@ async function upgradeRoundTripState(
  * NextAuth receives is left intact. An unreadable body is an ordinary start.
  */
 async function requestsExplicitStart(request: NextRequest): Promise<boolean> {
-  const form = await request.clone().text().catch(() => '');
+  const form = await request
+    .clone()
+    .text()
+    .catch(() => '');
   return new URLSearchParams(form).get(GUEST_UPGRADE_START_FIELD) === GUEST_UPGRADE_START_VALUE;
 }
 
