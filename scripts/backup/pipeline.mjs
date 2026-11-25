@@ -1,15 +1,13 @@
-// One verified backup run: dump -> restore and compare -> encrypt -> publish -> prune.
-// Plaintext and the temporary PostgreSQL cluster live only in a private temp directory,
-// removed on success, failure and interruption. Old copies are pruned only after a new
-// copy is complete, and only the retention policy decides what is removed.
+// One verified backup run: dump -> restore and compare -> [encrypt] -> git check -> publish -> prune.
+// Plaintext and the temporary PostgreSQL cluster live only in a private temp directory outside any
+// repository, removed on success, failure and interruption. When encryption is off (default), the
+// verified custom-format dump is stored in backupDir as an explicit operator exception; when
+// encryption is enabled, only ciphertext enters backupDir, and prior unencrypted copies are purged
+// only after explicit operator restore confirmation AND the next successful encrypted publish.
 import {
-  closeSync,
-  copyFileSync,
   existsSync,
-  fsyncSync,
   mkdirSync,
   mkdtempSync,
-  openSync,
   readdirSync,
   readFileSync,
   renameSync,
@@ -21,16 +19,17 @@ import crypto from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import {
-  BACKUP_NAME_PATTERN,
+  BACKUP_ENCRYPTED_SUFFIX,
+  BACKUP_PLAIN_SUFFIX,
   BACKUP_PREFIX,
-  BACKUP_SUFFIX,
   BUILD_TIMEOUT_MS,
   DROP_THRESHOLD_PERCENT,
   EXIT,
   META_DIR,
-  MESSAGES,
   TEMP_MARKER,
   TEMP_PREFIX,
+  WAITING_CONFIRMATION_NOTE,
+  WAITING_FIRST_CONFIRMATION_NOTE,
 } from './constants.mjs';
 import {
   compareIdentities,
@@ -39,11 +38,23 @@ import {
   parseIdentities,
   parseMigration,
 } from './compare.mjs';
-import { checkStatusTarget } from './config.mjs';
+import { REPO_ROOT } from './config.mjs';
+import {
+  clearConfirmationState,
+  confirmationTargetPaths,
+  readConfirmationState,
+  readRecipientPolicy,
+  validateConfirmationForTransition,
+} from './confirm.mjs';
+import {
+  canonicalPath,
+  isInsidePath,
+  isTempRootUnsafeForGit,
+  verifyBackupDirGitIgnored,
+} from './git.mjs';
 import { pidAlive } from './lock.mjs';
 import { Ledger, LedgerError } from './ledger.mjs';
-import { selectRetention } from './retention.mjs';
-import { appendStatus, formatStatusLine } from './status.mjs';
+import { selectRetention, selectTransitionRetention } from './retention.mjs';
 import {
   buildImageArgs,
   cleanupArgs,
@@ -54,22 +65,24 @@ import {
   verifyArgs,
   versionArgs,
 } from './docker.mjs';
+import {
+  cleanupIncompletePublishes,
+  ensurePrivateDir,
+  fsyncFile,
+  listBackups,
+  removeCopyWithMeta,
+  report,
+  reportBusy,
+  reportFailure,
+  sha256File,
+  sha256Text,
+  stamp,
+  StepError,
+  writePrivateCopy,
+  writePrivateText,
+} from './storage.mjs';
 
-export class StepError extends Error {
-  constructor(key, exit) {
-    super(key);
-    this.key = key;
-    this.exit = exit;
-  }
-}
-
-// 20261124T120000Z: sorts chronologically and is safe in file names.
-export function stamp(date) {
-  return date
-    .toISOString()
-    .replace(/[-:]/g, '')
-    .replace(/\.\d{3}Z$/, 'Z');
-}
+export { listBackups, reportBusy, reportFailure, stamp, StepError, writePrivateCopy };
 
 const containerName = (step) => `clickmoji-backup-${step}-${crypto.randomBytes(6).toString('hex')}`;
 
@@ -78,19 +91,6 @@ function isNonEmptyFile(file) {
     return statSync(file).size > 0;
   } catch {
     return false;
-  }
-}
-
-function sha256(file) {
-  return crypto.createHash('sha256').update(readFileSync(file)).digest('hex');
-}
-
-function fsyncFile(file) {
-  const fd = openSync(file, 'r');
-  try {
-    fsyncSync(fd);
-  } finally {
-    closeSync(fd);
   }
 }
 
@@ -149,56 +149,74 @@ async function sweepStaleTemp(tempRoot, backupDir, docker) {
   if (stuck) throw new StepError('cleanup', EXIT.failed);
 }
 
-// Completed copies in the backup directory, by the time in their file name.
-export function listBackups(backupDir) {
-  return readdirSync(backupDir)
-    .map((name) => ({ name, match: BACKUP_NAME_PATTERN.exec(name) }))
-    .filter((entry) => entry.match)
-    .map((entry) => {
-      const raw = entry.match[1];
-      const iso = `${raw.slice(0, 4)}-${raw.slice(4, 6)}-${raw.slice(6, 8)}T${raw.slice(9, 11)}:${raw.slice(11, 13)}:${raw.slice(13, 15)}Z`;
-      return { name: entry.name, time: new Date(iso) };
-    });
+// Row counts of the newest accepted copy of any age, if any, from already-verified entries.
+function latestCounts(entries) {
+  const backups = [...entries].sort((a, b) => b.time - a.time || (a.name < b.name ? 1 : -1));
+  return backups[0]?.counts ?? null;
 }
 
-// Row counts of the newest copy that passed or was flagged in verification, if any.
-function readPreviousCounts(backupDir) {
-  const metaDir = path.join(backupDir, META_DIR);
-  if (!existsSync(metaDir)) return null;
-  const names = readdirSync(metaDir)
-    .filter((name) => name.endsWith('.json') && !name.startsWith('.partial-'))
-    .sort()
-    .reverse();
-  for (const name of names) {
-    let meta;
-    try {
-      meta = JSON.parse(readFileSync(path.join(metaDir, name), 'utf8'));
-    } catch {
-      continue;
+// Verifies existing backup integrity, durable confirmed-recipient policy, and transition/first-identity
+// retention bounds before taking a dump, publishing, or pruning any existing copy.
+function verifyPreRunState({ config, snapshotRecipientSha256 }) {
+  readConfirmationState(config.backupDir);
+  const recipientPolicy = readRecipientPolicy(config.backupDir);
+  const entries = listBackups(config.backupDir);
+
+  if (config.encrypt) {
+    if (recipientPolicy && recipientPolicy.recipientSha256 !== snapshotRecipientSha256) {
+      throw new StepError('recipientMismatch', EXIT.failed);
     }
-    if (meta.verify === 'ok' || meta.verify === 'suspicious')
-      return new Map(Object.entries(meta.counts));
+    const plain = entries.filter((entry) => !entry.encrypted);
+    const encrypted = entries.filter((entry) => entry.encrypted);
+    if (plain.length > 0) {
+      const validation = validateConfirmationForTransition({
+        backupDir: config.backupDir,
+        entries,
+        currentRecipient: config.recipient,
+        recipientPolicy,
+      });
+      if (plain.length > config.keepCount && !validation.valid) {
+        throw new StepError('transitionLimitTooLow', EXIT.failed);
+      }
+    } else if (!recipientPolicy && encrypted.length >= config.keepCount) {
+      throw new StepError('confirmFirstEncrypted', EXIT.failed);
+    }
   }
-  return null;
+
+  return { entries, recipientPolicy };
 }
 
-// Copy into the backup directory under a partial name, then rename. A reader never sees
-// a partial copy, and a failure leaves no partial files behind.
-function publish({ backupDir, encryptedFile, name, meta }) {
+// Copy into the backup directory under a partial name (0600 from creation), then rename.
+// A reader never sees a partial copy, and a failure leaves no partial files behind.
+function publish({
+  backupDir,
+  sourceFile,
+  name,
+  meta,
+  copyFile = writePrivateCopy,
+  onBeforeMetaRename = null,
+}) {
+  ensurePrivateDir(backupDir);
   const metaDir = path.join(backupDir, META_DIR);
-  mkdirSync(metaDir, { recursive: true, mode: 0o700 });
+  ensurePrivateDir(metaDir);
   const partialDump = path.join(backupDir, `.partial-${name}`);
   const partialMeta = path.join(metaDir, `.partial-${name}.json`);
   const finalDump = path.join(backupDir, name);
   const finalMeta = path.join(metaDir, `${name}.json`);
   let dumpMoved = false;
   try {
-    if (existsSync(finalDump)) throw new Error('name taken');
-    copyFileSync(encryptedFile, partialDump);
+    if (existsSync(finalDump) || existsSync(finalMeta)) throw new Error('name taken');
+    rmSync(partialDump, { force: true });
+    rmSync(partialMeta, { force: true });
+    copyFile(sourceFile, partialDump);
     fsyncFile(partialDump);
-    writeFileSync(partialMeta, JSON.stringify(meta), { mode: 0o600 });
+    if (statSync(partialDump).size !== meta.sizeBytes || sha256File(partialDump) !== meta.sha256) {
+      throw new Error('published digest mismatch');
+    }
+    writePrivateText(partialMeta, JSON.stringify(meta));
     renameSync(partialDump, finalDump);
     dumpMoved = true;
+    if (onBeforeMetaRename) onBeforeMetaRename(finalDump, partialMeta, finalMeta);
     renameSync(partialMeta, finalMeta);
   } catch {
     rmSync(partialDump, { force: true });
@@ -211,7 +229,33 @@ function publish({ backupDir, encryptedFile, name, meta }) {
 // Throws StepError for a failed step, or Interrupted when the run is aborted.
 // The lock is checked again before the copy becomes visible and before anything is pruned:
 // a run that no longer holds it must not touch the shared backup names.
-async function executeBackup({ config, docker, now, tempDir, lock }) {
+async function executeBackup({
+  config,
+  docker,
+  now,
+  tempDir,
+  lock,
+  allowRowDrop = false,
+  env = process.env,
+  publishCopy = writePrivateCopy,
+  onBeforeMetaRename = null,
+  onBeforePruneRemove = null,
+  projectRoot = REPO_ROOT,
+  publishedState = { name: null },
+}) {
+  // Snapshot the validated recipient key into tempDir (outside any repository) so container
+  // encryption and metadata fingerprinting always use the exact same bytes, even if the host
+  // recipient file changes mid-run.
+  const snapshotRecipientFile = config.encrypt ? path.join(tempDir, 'recipient.txt') : null;
+  const snapshotRecipientSha256 = config.encrypt ? sha256Text(config.recipient) : null;
+  if (config.encrypt) {
+    writePrivateText(snapshotRecipientFile, `${config.recipient}\n`);
+  }
+
+  // Fail closed early on corrupted confirmation/policy state, corrupted existing copies,
+  // recipient mismatch after confirmation, or incompatible transition/unconfirmed limits.
+  const initialPreflight = verifyPreRunState({ config, snapshotRecipientSha256 });
+
   // A container step counts only when its start exited 0 AND the daemon has been seen to hold no
   // container of its name. A zero exit alone is not proof: the daemon may be unreachable or still
   // hold it. A failure of the runner itself (a ledger that cannot be written) is a containers failure.
@@ -274,51 +318,184 @@ async function executeBackup({ config, docker, now, tempDir, lock }) {
     if (!counts.has(table)) throw new StepError('verify', EXIT.failed);
   }
 
-  const previous = readPreviousCounts(config.backupDir);
+  const previous = latestCounts(initialPreflight.entries);
   const drops = previous ? findDrops(previous, counts, DROP_THRESHOLD_PERCENT) : [];
-  const verify = drops.length > 0 ? 'suspicious' : 'ok';
+  if (drops.length > 0 && !allowRowDrop) {
+    throw new StepError('drop', EXIT.suspicious);
+  }
 
-  const encryptedFile = path.join(tempDir, 'dump.age');
-  await run(
-    encryptArgs({
-      name: containerName('encrypt'),
-      workDir: tempDir,
-      recipientFile: config.recipientFile,
-    }),
-    'encrypt'
-  );
-  if (!isNonEmptyFile(encryptedFile)) throw new StepError('encrypt', EXIT.failed);
+  let sourceToPublish = dumpFile;
+  if (config.encrypt) {
+    const encryptedFile = path.join(tempDir, 'dump.age');
+    await run(
+      encryptArgs({
+        name: containerName('encrypt'),
+        workDir: tempDir,
+        recipientFile: snapshotRecipientFile,
+      }),
+      'encrypt'
+    );
+    if (!isNonEmptyFile(encryptedFile)) throw new StepError('encrypt', EXIT.failed);
+    sourceToPublish = encryptedFile;
+  }
 
-  const name = `${BACKUP_PREFIX}${stamp(startedAt)}${BACKUP_SUFFIX}`;
+  const suffix = config.encrypt ? BACKUP_ENCRYPTED_SUFFIX : BACKUP_PLAIN_SUFFIX;
+  const name = `${BACKUP_PREFIX}${stamp(startedAt)}${suffix}`;
+
+  // Re-check git ignore on the exact physical temporary and final paths (including metadata and
+  // confirmation state) right before writing to backupDir.
+  const targetPaths = [
+    path.join(config.backupDir, `.partial-${name}`),
+    path.join(config.backupDir, name),
+    path.join(config.backupDir, META_DIR, `.partial-${name}.json`),
+    path.join(config.backupDir, META_DIR, `${name}.json`),
+    ...confirmationTargetPaths(config.backupDir),
+  ];
+  const gitCheck = verifyBackupDirGitIgnored({
+    backupDir: config.backupDir,
+    gitBin: config.gitBin,
+    env,
+    timeoutMs: config.dockerTimeoutMs,
+    projectRoot,
+    targetPaths,
+  });
+  if (!gitCheck.ok) throw new StepError(gitCheck.key, gitCheck.exit);
+  if (
+    (gitCheck.repoRoot && isInsidePath(canonicalPath(config.statusFile), gitCheck.repoRoot)) ||
+    (gitCheck.projectTopLevel &&
+      isInsidePath(canonicalPath(config.statusFile), gitCheck.projectTopLevel))
+  ) {
+    throw new StepError('notIgnored', EXIT.failed);
+  }
+
+  // Re-verify existing backup integrity, recipient policy, and transition bounds immediately before
+  // publishing, in case any file changed during dump/verify/encrypt.
+  verifyPreRunState({ config, snapshotRecipientSha256 });
+
   const meta = {
     name,
+    encrypted: config.encrypt,
     createdAt: startedAt.toISOString(),
-    sizeBytes: statSync(encryptedFile).size,
-    sha256: sha256(encryptedFile),
-    verify,
+    sizeBytes: statSync(sourceToPublish).size,
+    sha256: sha256File(sourceToPublish),
+    verify: 'ok',
+    verifyScope: 'plaintext',
+    ...(config.encrypt && snapshotRecipientSha256
+      ? { recipientSha256: snapshotRecipientSha256 }
+      : {}),
     migration,
     counts: Object.fromEntries(counts),
-    flagged: drops.map((drop) => drop.table),
+    flagged: [],
+    ...(drops.length > 0 ? { confirmedRowDrops: drops.map((drop) => drop.table) } : {}),
   };
   if (!lock.held()) throw new StepError('busy', EXIT.busy);
-  publish({ backupDir: config.backupDir, encryptedFile, name, meta });
+  publish({
+    backupDir: config.backupDir,
+    sourceFile: sourceToPublish,
+    name,
+    meta,
+    copyFile: publishCopy,
+    onBeforeMetaRename,
+  });
+  publishedState.name = name;
 
-  // Pruning runs only after the new copy is in place, and only for the lock holder.
+  // Transition & pruning run only after the new copy is completely published, and only for the lock holder.
   let pruned = 'ok';
+  let waitingForConfirmation = false;
+  let waitingNote = null;
+  let confirmed = false;
   if (!lock.held()) {
     pruned = 'skipped';
   } else {
     try {
-      const { remove } = selectRetention(listBackups(config.backupDir));
-      for (const old of remove) {
-        rmSync(path.join(config.backupDir, old), { force: true });
-        rmSync(path.join(config.backupDir, META_DIR, `${old}.json`), { force: true });
+      cleanupIncompletePublishes(config.backupDir);
+      const entries = listBackups(config.backupDir);
+      const recipientPolicy = readRecipientPolicy(config.backupDir);
+      if (config.encrypt) {
+        if (recipientPolicy && recipientPolicy.recipientSha256 !== snapshotRecipientSha256) {
+          throw new StepError('recipientMismatch', EXIT.failed);
+        }
+        const hasPlain = entries.some((entry) => !entry.encrypted);
+        if (hasPlain) {
+          const validation = validateConfirmationForTransition({
+            backupDir: config.backupDir,
+            entries,
+            currentRecipient: config.recipient,
+            recipientPolicy,
+          });
+          confirmed = validation.valid;
+          const plan = selectTransitionRetention({
+            entries,
+            keepCount: config.keepCount,
+            encrypt: true,
+            confirmed,
+            confirmedFile: confirmed ? validation.state.file : null,
+          });
+          waitingForConfirmation = plan.waitingForConfirmation;
+          waitingNote = waitingForConfirmation ? WAITING_CONFIRMATION_NOTE : null;
+          for (const old of plan.remove) {
+            if (onBeforePruneRemove) onBeforePruneRemove(old, plan);
+            removeCopyWithMeta(config.backupDir, old);
+          }
+          if (confirmed && !listBackups(config.backupDir).some((entry) => !entry.encrypted)) {
+            clearConfirmationState(config.backupDir);
+          }
+        } else {
+          const { remove } = selectRetention(entries, config.keepCount, {
+            preferredRecipientSha256: recipientPolicy?.recipientSha256 ?? null,
+          });
+          for (const old of remove) {
+            if (onBeforePruneRemove) onBeforePruneRemove(old, { remove });
+            removeCopyWithMeta(config.backupDir, old);
+          }
+          clearConfirmationState(config.backupDir);
+          if (!recipientPolicy) {
+            waitingForConfirmation = true;
+            waitingNote = WAITING_FIRST_CONFIRMATION_NOTE;
+          }
+        }
+      } else {
+        const { remove } = selectRetention(entries, config.keepCount);
+        for (const old of remove) {
+          if (onBeforePruneRemove) onBeforePruneRemove(old, { remove });
+          removeCopyWithMeta(config.backupDir, old);
+        }
+        // Any successful unencrypted publication starts a fresh unencrypted baseline and
+        // invalidates any older encrypted-restore confirmation, while keeping durable recipient policy.
+        clearConfirmationState(config.backupDir);
       }
-    } catch {
+    } catch (error) {
+      if (error instanceof StepError) throw error;
       pruned = 'incomplete';
+      waitingForConfirmation =
+        config.encrypt &&
+        !confirmed &&
+        listBackups(config.backupDir).some((entry) => !entry.encrypted);
+      if (waitingForConfirmation) waitingNote = WAITING_CONFIRMATION_NOTE;
     }
   }
-  return { name, sizeBytes: meta.sizeBytes, verify, pruned };
+  const retained = existsSync(path.join(config.backupDir, name));
+  let keptFile = name;
+  if (!retained) {
+    try {
+      const survivingEncrypted = listBackups(config.backupDir)
+        .filter((entry) => entry.encrypted)
+        .sort((a, b) => b.time - a.time || (a.name < b.name ? 1 : -1));
+      keptFile = survivingEncrypted[0]?.name ?? null;
+    } catch {
+      keptFile = null;
+    }
+  }
+  return {
+    name: retained ? name : null,
+    retained,
+    keptFile,
+    sizeBytes: retained ? meta.sizeBytes : null,
+    verify: 'ok',
+    pruned,
+    waitingForConfirmation,
+    waitingNote,
+  };
 }
 
 // Containers a previous run recorded and could not clear. Each is reconciled from the state the
@@ -389,40 +566,6 @@ function classify(error) {
   return { ok: false, key: 'internal', exit: EXIT.failed };
 }
 
-// `saved` is true when the encrypted copy was published, whatever happened to cleanup afterwards.
-// A status line that cannot be written (the path no longer qualifies, or the write fails) is
-// reported as statusWritten: false. When the copy was saved, that gets its own exit code, so the
-// copy is not mistaken for a missing one.
-function report(config, now, result, saved = false) {
-  const when = now();
-  const line = result.ok
-    ? formatStatusLine({
-        now: when,
-        outcome: result.verify === 'suspicious' ? 'suspicious' : 'ok',
-        detail: `size=${result.sizeBytes} verify=${result.verify} file=${result.name} prune=${result.pruned}`,
-      })
-    : formatStatusLine({ now: when, outcome: 'failed', detail: MESSAGES[result.key] });
-  // The status path is checked again: a file may have been replaced since configuration.
-  let statusWritten = true;
-  try {
-    checkStatusTarget(config.statusFile, config.backupDir);
-    appendStatus(config.statusFile, line);
-  } catch {
-    statusWritten = false; // nothing is written to a path that no longer qualifies
-  }
-  const outcomeExit = result.ok
-    ? result.verify === 'suspicious'
-      ? EXIT.suspicious
-      : EXIT.ok
-    : result.exit;
-  return {
-    ...result,
-    saved,
-    statusWritten,
-    exit: !statusWritten && saved ? EXIT.statusFailed : outcomeExit,
-  };
-}
-
 // The caller is the writer: it runs under the lock it was started with (see lock.mjs), passed in
 // as `lock`. Without a held lock nothing is done and the run is reported busy.
 // Never throws for an expected failure: the outcome is written to the status file and returned.
@@ -434,8 +577,52 @@ export async function runBackup({
   lock,
   now = () => new Date(),
   tempRoot = os.tmpdir(),
+  allowRowDrop = false,
+  env = process.env,
+  publishCopy = writePrivateCopy,
+  onBeforeMetaRename = null,
+  onBeforePruneRemove = null,
+  projectRoot = REPO_ROOT,
 }) {
-  mkdirSync(config.backupDir, { recursive: true, mode: 0o700 });
+  // Check git ignore before creating or modifying backupDir so a non-ignored path stays untouched.
+  const gitCheck = verifyBackupDirGitIgnored({
+    backupDir: config.backupDir,
+    gitBin: config.gitBin,
+    env,
+    timeoutMs: config.dockerTimeoutMs,
+    projectRoot,
+    targetPaths: confirmationTargetPaths(config.backupDir),
+  });
+  if (!gitCheck.ok) {
+    return reportFailure(config, gitCheck.key, gitCheck.exit, now);
+  }
+  if (
+    (gitCheck.repoRoot && isInsidePath(canonicalPath(config.statusFile), gitCheck.repoRoot)) ||
+    (gitCheck.projectTopLevel &&
+      isInsidePath(canonicalPath(config.statusFile), gitCheck.projectTopLevel))
+  ) {
+    return reportFailure(config, 'notIgnored', EXIT.failed, now);
+  }
+
+  // Ensure temporary plaintext storage is strictly outside any repository and outside backupDir.
+  try {
+    const resolvedTmp = canonicalPath(tempRoot);
+    if (
+      isInsidePath(resolvedTmp, canonicalPath(projectRoot)) ||
+      isInsidePath(resolvedTmp, canonicalPath(config.backupDir)) ||
+      isTempRootUnsafeForGit(resolvedTmp, {
+        gitBin: config.gitBin,
+        env,
+        timeoutMs: config.dockerTimeoutMs,
+      })
+    ) {
+      return reportFailure(config, 'cleanup', EXIT.failed, now);
+    }
+  } catch {
+    return reportFailure(config, 'cleanup', EXIT.failed, now);
+  }
+
+  ensurePrivateDir(config.backupDir);
   if (!lock?.held()) return reportBusy(config, now);
 
   const ledger = new Ledger(config.backupDir);
@@ -444,6 +631,7 @@ export async function runBackup({
   let result;
   let saved = false;
   let tempDir = null;
+  const publishedState = { name: null };
   try {
     await recoverContainers(docker, ledger);
     await sweepStaleTemp(tempRoot, config.backupDir, docker);
@@ -453,10 +641,29 @@ export async function runBackup({
       JSON.stringify({ pid: process.pid, backupKey: backupKey(config.backupDir) }),
       { mode: 0o600 }
     );
-    result = { ok: true, ...(await executeBackup({ config, docker, now, tempDir, lock })) };
-    saved = true; // publish is the last step that can fail; nothing after it can undo it
+    const backupOutcome = await executeBackup({
+      config,
+      docker,
+      now,
+      tempDir,
+      lock,
+      allowRowDrop,
+      env,
+      publishCopy,
+      onBeforeMetaRename,
+      onBeforePruneRemove,
+      projectRoot,
+      publishedState,
+    });
+    result = {
+      ok: true,
+      ...backupOutcome,
+    };
+    saved = backupOutcome.retained; // true only when the newly published copy remains on disk
   } catch (error) {
     result = classify(error);
+    saved =
+      publishedState.name !== null && existsSync(path.join(config.backupDir, publishedState.name));
   }
 
   // Containers first. Until every container is proven gone, nothing may be removed under them.
@@ -504,10 +711,4 @@ async function releaseQuietly(lock) {
   } catch {
     // Nothing more to do: the process is about to exit, and so is its hold on the lock.
   }
-}
-
-// The outcome of a run that could not take the lock. Used by the entry point, which holds no lock
-// when another process does.
-export function reportBusy(config, now = () => new Date()) {
-  return report(config, now, { ok: false, key: 'busy', exit: EXIT.busy });
 }

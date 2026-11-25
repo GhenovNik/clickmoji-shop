@@ -4,7 +4,8 @@
     "subtitle": "Visual shopping lists instead of plain text — tap product cards and check items off as you shop."
   },
   "actions": {
-    "start": "Start"
+    "start": "Start",
+    "startFailed": "Could not start shopping right now. Please try again."
   },
   "showcase": {
     "heading": "ClickMoji product screens",

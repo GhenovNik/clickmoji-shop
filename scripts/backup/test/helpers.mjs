@@ -4,6 +4,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import crypto from 'node:crypto';
 import {
   chmodSync,
+  cpSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -15,13 +16,20 @@ import {
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { LEDGER_NAME } from '../constants.mjs';
-import { loadConfig } from '../config.mjs';
+import {
+  BACKUP_NAME_PATTERN,
+  CONFIRMED_RECIPIENT_STATE_NAME,
+  LEDGER_NAME,
+  META_DIR,
+  PROJECT_NAME,
+} from '../constants.mjs';
+import { loadConfig, readRecipient } from '../config.mjs';
 import { LAUNCH_BUSY, LAUNCH_FAILED, launchLocked } from '../lock.mjs';
 import { reportBusy } from '../pipeline.mjs';
 
 export const HERE = path.dirname(fileURLToPath(import.meta.url));
-export const CLI = path.join(HERE, '..', 'cli.mjs');
+export const BACKUP_SRC = path.resolve(HERE, '..');
+export const CLI = path.join(BACKUP_SRC, 'cli.mjs');
 export const FAKE_DOCKER = path.join(HERE, 'fake-docker.mjs');
 export const LOCK_WORKER = path.join(HERE, 'lock-worker.mjs');
 export const RUN_LOCKED = path.join(HERE, 'run-locked.mjs');
@@ -39,16 +47,69 @@ function randomRecipient() {
   return text;
 }
 
+// Initializes an isolated synthetic project repository in a temp directory so tests exercise the
+// real git/project-identity guards without ever touching the real clickmoji-shop checkout or backups.
+export function makeProjectRepo(
+  repoDir,
+  { gitignore = '/backups/\n', projectName = PROJECT_NAME, copyScripts = true } = {}
+) {
+  mkdirSync(repoDir, { recursive: true });
+  if (spawnSync('git', ['init', '-q', repoDir]).status !== 0) {
+    throw new Error('git init failed in test sandbox');
+  }
+  writeFileSync(path.join(repoDir, '.gitignore'), gitignore);
+  const toAdd = ['.gitignore'];
+  if (projectName !== null) {
+    writeFileSync(path.join(repoDir, 'package.json'), JSON.stringify({ name: projectName }) + '\n');
+    toAdd.push('package.json');
+  }
+  if (copyScripts) {
+    const destScripts = path.join(repoDir, 'scripts', 'backup');
+    cpSync(BACKUP_SRC, destScripts, {
+      recursive: true,
+      filter: (src) => path.basename(src) !== 'test',
+    });
+    toAdd.push('scripts/backup');
+  }
+  if (spawnSync('git', ['-C', repoDir, 'add', ...toAdd]).status !== 0) {
+    throw new Error('git add failed in test sandbox');
+  }
+  if (
+    spawnSync('git', [
+      '-C',
+      repoDir,
+      '-c',
+      'user.name=t',
+      '-c',
+      'user.email=t@e.invalid',
+      'commit',
+      '-q',
+      '-m',
+      'init',
+    ]).status !== 0
+  ) {
+    throw new Error('git commit failed in test sandbox');
+  }
+  return {
+    repo: repoDir,
+    backupDir: path.join(repoDir, 'backups'),
+    cli: path.join(repoDir, 'scripts', 'backup', 'cli.mjs'),
+  };
+}
+
 export function makeSandbox() {
   const root = mkdtempSync(path.join(os.tmpdir(), 'clickmoji-backup-test-'));
   const tmp = path.join(root, 'tmp');
   mkdirSync(tmp);
+  const repoInfo = makeProjectRepo(path.join(root, 'repo'));
   const recipientFile = path.join(root, 'recipient.txt');
   writeFileSync(recipientFile, `# test recipient\n${randomRecipient()}\n`);
   return {
     root,
     tmp,
-    backupDir: path.join(root, 'backups'),
+    repo: repoInfo.repo,
+    cli: repoInfo.cli,
+    backupDir: repoInfo.backupDir,
     statusFile: path.join(root, 'status.log'),
     logFile: path.join(root, 'docker.log'),
     dockerState: path.join(root, 'docker-state'),
@@ -88,6 +149,7 @@ export function envFor(sandbox, db, extra = {}) {
     DATABASE_URL: db.url,
     BACKUP_DIR: sandbox.backupDir,
     BACKUP_STATUS_FILE: sandbox.statusFile,
+    BACKUP_ENCRYPT: '1',
     BACKUP_AGE_RECIPIENT_FILE: sandbox.recipientFile,
     BACKUP_DOCKER_BIN: FAKE_DOCKER,
     FAKE_DOCKER_LOG: sandbox.logFile,
@@ -122,7 +184,17 @@ export function daemonLog(sandbox) {
 // One backup run with the fake docker, as the lock holder in a child process (the way cli.mjs runs
 // it). `child` is the writer; `done` resolves to the run's result. A run that finds the lock held
 // reports busy, exactly as cli.mjs does.
-export function startLockedRun({ backupDir, env, now = NOW, tempRoot }) {
+export function startLockedRun({
+  mode = 'backup',
+  backupDir,
+  env,
+  now = NOW,
+  tempRoot,
+  allowRowDrop = false,
+  confirmFile = null,
+  confirmSha256 = null,
+  projectRoot,
+}) {
   const child = launchLocked(backupDir, [process.execPath, RUN_LOCKED], {
     env,
     stdio: ['pipe', 'pipe', 'pipe'],
@@ -133,7 +205,18 @@ export function startLockedRun({ backupDir, env, now = NOW, tempRoot }) {
     stdout += chunk;
   });
   child.stderr.on('data', () => {});
-  child.stdin.end(JSON.stringify({ env, now: now.toISOString(), tempRoot }));
+  child.stdin.end(
+    JSON.stringify({
+      mode,
+      env,
+      now: now.toISOString(),
+      tempRoot,
+      allowRowDrop,
+      confirmFile,
+      confirmSha256,
+      projectRoot,
+    })
+  );
   const done = new Promise((resolve, reject) => {
     child.on('error', reject);
     child.on('close', (code) => {
@@ -150,15 +233,63 @@ export function startLockedRun({ backupDir, env, now = NOW, tempRoot }) {
 }
 
 // Runs one fake-docker backup as the lock holder and returns its result.
-export function runWithFake(sandbox, db, extra = {}, now = NOW) {
+export function runWithFake(
+  sandbox,
+  db,
+  extra = {},
+  now = NOW,
+  { allowRowDrop = false, projectRoot = sandbox.repo } = {}
+) {
   const env = envFor(sandbox, db, extra);
-  return startLockedRun({ backupDir: sandbox.backupDir, env, now, tempRoot: sandbox.tmp }).done;
+  return startLockedRun({
+    backupDir: env.BACKUP_DIR,
+    env,
+    now,
+    tempRoot: sandbox.tmp,
+    allowRowDrop,
+    projectRoot,
+  }).done;
+}
+
+export function runConfirmWithFake(
+  sandbox,
+  confirmFile,
+  extra = {},
+  now = NOW,
+  { projectRoot = sandbox.repo, sha256 = undefined } = {}
+) {
+  const env = {
+    PATH: process.env.PATH,
+    BACKUP_DIR: sandbox.backupDir,
+    BACKUP_STATUS_FILE: sandbox.statusFile,
+    ...extra,
+  };
+  let resolvedSha256 = sha256;
+  if (resolvedSha256 === undefined) {
+    const targetPath = path.join(sandbox.backupDir, confirmFile);
+    resolvedSha256 = existsSync(targetPath)
+      ? crypto.createHash('sha256').update(readFileSync(targetPath)).digest('hex')
+      : '0'.repeat(64);
+  }
+  return startLockedRun({
+    mode: 'confirm',
+    backupDir: env.BACKUP_DIR,
+    env,
+    now,
+    confirmFile,
+    confirmSha256: resolvedSha256,
+    projectRoot,
+  }).done;
 }
 
 // Spawns the real CLI and captures what it prints.
-export function runCli(env) {
+export function runCli(env, args = [], { cwd = undefined, cli = CLI } = {}) {
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [CLI], { env, stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn(process.execPath, [cli, ...args], {
+      env,
+      cwd,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
     let stdout = '';
     let stderr = '';
     child.stdout.on('data', (chunk) => {
@@ -172,25 +303,80 @@ export function runCli(env) {
   });
 }
 
-// Old copies, one per day going back from NOW, optionally with meta counts.
-export function seedBackups(backupDir, count, { counts = null } = {}) {
-  mkdirSync(path.join(backupDir, 'meta'), { recursive: true });
+// Records a durable confirmed-recipient policy matching recipientFile for steady-state tests
+// that seed already-established encrypted backups.
+export function seedConfirmedRecipient(backupDir, recipientFile, confirmedFile = null) {
+  mkdirSync(path.join(backupDir, META_DIR), { recursive: true, mode: 0o700 });
+  const key = readRecipient(readFileSync(recipientFile, 'utf8'));
+  const recipientSha256 = crypto.createHash('sha256').update(key).digest('hex');
+  const file =
+    confirmedFile ??
+    `clickmoji-${NOW.toISOString()
+      .replace(/[-:]/g, '')
+      .replace(/\.\d{3}Z$/, 'Z')}.dump.age`;
+  writeFileSync(
+    path.join(backupDir, META_DIR, CONFIRMED_RECIPIENT_STATE_NAME),
+    JSON.stringify({
+      version: 1,
+      recipientSha256,
+      confirmedAt: NOW.toISOString(),
+      file,
+      sha256: 'a'.repeat(64),
+    }),
+    { mode: 0o600 }
+  );
+  return recipientSha256;
+}
+
+// Old copies, going back from NOW, with committed acceptance metadata.
+// When `legacy` is true, writes the prior-version metadata shape (without `encrypted`).
+export function seedBackups(
+  backupDir,
+  count,
+  { counts = null, encrypted = true, startDay = 1, legacy = false, recipientFile = null } = {}
+) {
+  mkdirSync(path.join(backupDir, 'meta'), { recursive: true, mode: 0o700 });
+  const recipientSha256 =
+    encrypted && recipientFile ? seedConfirmedRecipient(backupDir, recipientFile) : null;
   const names = [];
-  for (let day = 1; day <= count; day += 1) {
+  const suffix = encrypted ? '.dump.age' : '.dump';
+  for (let i = 0; i < count; i += 1) {
+    const day = startDay + i;
     const when = new Date(NOW.getTime() - day * 86_400_000);
     const iso = when
       .toISOString()
       .replace(/[-:]/g, '')
       .replace(/\.\d{3}Z$/, 'Z');
-    const name = `clickmoji-${iso}.dump.age`;
-    writeFileSync(path.join(backupDir, name), `old ${day}`);
+    const name = `clickmoji-${iso}${suffix}`;
+    const body = `old ${day}`;
+    writeFileSync(path.join(backupDir, name), body, { mode: 0o600 });
     names.push(name);
-    if (day === 1 && counts) {
-      writeFileSync(
-        path.join(backupDir, 'meta', `${name}.json`),
-        JSON.stringify({ name, verify: 'ok', counts })
-      );
-    }
+    const rowCounts = i === 0 && counts ? counts : {};
+    const sizeBytes = Buffer.byteLength(body);
+    const hash = crypto.createHash('sha256').update(body).digest('hex');
+    const meta = legacy
+      ? {
+          name,
+          createdAt: when.toISOString(),
+          sizeBytes,
+          sha256: hash,
+          verify: 'ok',
+          migration: '20261101000000_init',
+          counts: rowCounts,
+          flagged: [],
+        }
+      : {
+          name,
+          encrypted,
+          sizeBytes,
+          sha256: hash,
+          verify: 'ok',
+          counts: rowCounts,
+          ...(recipientSha256 ? { recipientSha256 } : {}),
+        };
+    writeFileSync(path.join(backupDir, 'meta', `${name}.json`), JSON.stringify(meta), {
+      mode: 0o600,
+    });
   }
   return names;
 }
@@ -198,7 +384,7 @@ export function seedBackups(backupDir, count, { counts = null } = {}) {
 export function listCopies(backupDir) {
   if (!existsSync(backupDir)) return [];
   return readdirSync(backupDir)
-    .filter((name) => name.endsWith('.dump.age'))
+    .filter((name) => BACKUP_NAME_PATTERN.test(name))
     .sort();
 }
 

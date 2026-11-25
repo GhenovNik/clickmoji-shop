@@ -46,7 +46,7 @@ test.describe('Public categories flows', () => {
   test('landing start CTA opens categories for anonymous users @smoke', async ({ page }) => {
     await page.goto('/');
 
-    await page.getByRole('main').getByRole('link', { name: 'Начать' }).click();
+    await page.getByRole('main').getByRole('button', { name: 'Начать' }).click();
 
     await expect(page).toHaveURL(/\/categories$/);
     await expect(page).not.toHaveURL(/\/login/);

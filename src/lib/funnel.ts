@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import type { Prisma } from '@prisma/client';
 import { cookies } from 'next/headers';
 import { prisma } from '@/lib/prisma';
 
@@ -140,9 +141,15 @@ export type RecordFunnelEventInput = {
   userId?: string | null;
   guestId?: string | null;
   correlateGuest?: boolean;
+  /** Skip the write when this funnel guestId already has an event of the same type. */
+  dedupeByGuest?: boolean;
 };
 
 type FunnelEventDelegateLike = {
+  findFirst?: (args: {
+    where: { type: FunnelEventType; guestId: string };
+    select: { id: true };
+  }) => Promise<unknown>;
   create?: (args: {
     data: { type: FunnelEventType; userId: string | null; guestId: string | null };
   }) => Promise<unknown>;
@@ -151,6 +158,101 @@ type FunnelEventDelegateLike = {
     data: { userId: string };
   }) => Promise<unknown>;
 };
+
+const GUEST_MILESTONE_LOCK_NAMESPACE = 'clickmoji:funnel-guest-milestone:v1:';
+
+/**
+ * Lock key of one funnel guest chain. Every writer of that chain's once-per-guest milestones, every
+ * guest start that joins the chain and the guest cleanup hand-off takes the same transaction-scoped
+ * advisory lock, so they run in turn.
+ */
+export function guestMilestoneLockKey(guestId: string): string {
+  return `${GUEST_MILESTONE_LOCK_NAMESPACE}${guestId}`;
+}
+
+/** Once-per-chain milestones that a guest owns and that the chain still needs after a replacement. */
+export const SHARED_MILESTONE_TYPES = ['VISIT', 'REGISTER', 'LIST_CREATE'] as const;
+
+/**
+ * Timestamp for the next row of a chain: the database clock, strictly after the newest row of that
+ * chain, so the chain's order is set by its writers. Call it while the chain lock is held.
+ */
+async function nextChainCreatedAt(tx: Prisma.TransactionClient, guestId: string): Promise<Date> {
+  // A transaction-start default could place a later row before an earlier one when two writers
+  // race, and equal times do not count as progression in the aggregator.
+  const newest = await tx.funnelEvent.findFirst({
+    where: { guestId },
+    orderBy: { createdAt: 'desc' },
+    select: { createdAt: true },
+  });
+  const [{ now }] = await tx.$queryRaw<{ now: Date }[]>`SELECT clock_timestamp() AS now`;
+  const floorMs = newest ? newest.createdAt.getTime() + 1 : 0;
+  return new Date(Math.max(now.getTime(), floorMs));
+}
+
+/**
+ * Records the VISIT of a new guest start on the funnel chain of the signed cookie. It runs inside
+ * the guest creation transaction, under the chain lock, and ties the new guest User to its chain:
+ * a cleanup of an older guest of that chain then hands the shared milestones to this guest.
+ *
+ * It is a genuine visit (a new server session entering the funnel), not a milestone. VISIT is a
+ * repeatable stage: the report counts each chain once per stage and ignores a VISIT that comes
+ * after the chain has progressed, so the extra row changes no count.
+ */
+export async function recordGuestStartVisit(
+  tx: Prisma.TransactionClient,
+  { userId, guestId }: { userId: string; guestId: string }
+): Promise<void> {
+  await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${guestMilestoneLockKey(guestId)}, 0))`;
+  await tx.funnelEvent.create({
+    data: {
+      type: 'VISIT',
+      userId,
+      guestId,
+      createdAt: await nextChainCreatedAt(tx, guestId),
+    },
+  });
+}
+
+/**
+ * Writes a once-per-guest milestone (REGISTER, LIST_CREATE). The check and the insert run in one
+ * transaction that first takes a transaction-scoped PostgreSQL advisory lock keyed by the funnel
+ * guestId. Concurrent starts from the same browser therefore run one after another: the second
+ * one's check sees the committed row. The lock is released at commit or rollback, and no schema
+ * change is needed.
+ *
+ * The check only counts rows owned by a guest User. An ordinary registration with the same signed
+ * cookie writes its own REGISTER and LIST_CREATE under the same funnel guestId; those belong to an
+ * ordinary person's chain and must not block the guest's first milestones. The owner is read from
+ * the User row the event points to, so no new column is needed. Ordinary-user events keep their
+ * User.id key in the report (see funnel-analytics.ts), so the two chains stay separate.
+ */
+async function recordGuestMilestoneOnce(
+  type: FunnelEventType,
+  userId: string | null,
+  guestId: string
+): Promise<boolean> {
+  const lockKey = guestMilestoneLockKey(guestId);
+  return prisma.$transaction(async (tx) => {
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
+
+    const alreadyRecorded = await tx.funnelEvent.findFirst({
+      where: { type, guestId, user: { isGuest: true } },
+      select: { id: true },
+    });
+    if (alreadyRecorded) {
+      return false;
+    }
+
+    // The lock serializes the whole guest chain, so the milestone is stamped after it.
+    const createdAt = await nextChainCreatedAt(tx, guestId);
+
+    await tx.funnelEvent.create({
+      data: { type, userId, guestId, createdAt },
+    });
+    return true;
+  });
+}
 
 /**
  * Best-effort persistence for a funnel milestone. Never throws, and never logs PII or
@@ -168,18 +270,25 @@ export async function recordFunnelEvent(input: RecordFunnelEventInput): Promise<
   let recorded = false;
   try {
     funnelEvent = (prisma as unknown as { funnelEvent?: FunnelEventDelegateLike }).funnelEvent;
-    if (!funnelEvent || typeof funnelEvent.create !== 'function') {
-      logFunnelWriteFailure('record', input.type, new Error('Funnel event storage unavailable'));
-      return false;
+
+    if (input.dedupeByGuest && guestId) {
+      // One milestone per funnel guestId: a repeated or concurrent guest start from the same browser
+      // must not inflate REGISTER or LIST_CREATE. Skipped writes still correlate below.
+      recorded = await recordGuestMilestoneOnce(input.type, userId, guestId);
+    } else {
+      if (!funnelEvent || typeof funnelEvent.create !== 'function') {
+        logFunnelWriteFailure('record', input.type, new Error('Funnel event storage unavailable'));
+        return false;
+      }
+      await funnelEvent.create({
+        data: {
+          type: input.type,
+          userId,
+          guestId,
+        },
+      });
+      recorded = true;
     }
-    await funnelEvent.create({
-      data: {
-        type: input.type,
-        userId,
-        guestId,
-      },
-    });
-    recorded = true;
   } catch (error) {
     logFunnelWriteFailure('record', input.type, error);
   }

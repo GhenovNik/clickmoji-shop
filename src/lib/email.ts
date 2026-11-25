@@ -3,6 +3,7 @@ import { createTranslator } from 'next-intl';
 import type { Locale } from '@/i18n/config';
 import { messages } from '@/i18n/messages';
 import { getAppBaseUrl } from './app-url';
+import { isGuestEmail } from './guest';
 
 const resendApiKey = process.env.RESEND_API_KEY;
 const resendFromEmail = process.env.RESEND_FROM_EMAIL;
@@ -79,6 +80,9 @@ export function buildPasswordResetEmail({ email, token, locale }: EmailRequest):
 }
 
 async function send(email: string, content: EmailContent) {
+  if (isGuestEmail(email)) {
+    throw new Error('Refusing outbound email to guest placeholder address');
+  }
   if (!resend || !resendFromEmail) {
     throw new Error('Resend is not configured');
   }
