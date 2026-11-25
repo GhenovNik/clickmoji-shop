@@ -52,7 +52,10 @@
   a product, a variant or a history snapshot omits the column (`src/lib/catalog-omit.ts`, Prisma
   `omit`). The tooling that still reads it lives outside `src` (see the decisions below).
 - History snapshots copy the English names and picture next to the Russian ones. Snapshots taken
-  before this change keep only their Russian copy: they are not filled from today's catalogue.
+  before this change keep only their Russian copy: they are not filled from today's catalogue. A
+  product whose English address is still only in the legacy column when its list is completed has
+  that address captured in the snapshot at that moment (see the transition protection below), so a
+  snapshot never depends on what the catalogue shows later.
 - Search (`src/lib/services/product-search.ts`) finds products by either language and ranks
   matches in the interface language first.
 - AI tools keep the shopper's own word in its language (Russian in `nameRu`, English in
@@ -92,12 +95,35 @@
   cannot be read changes no picture language. The dictionary is read and rewritten under a row lock
   (`SELECT ... FOR UPDATE`) in the same transaction as the variants, so a failed save leaves
   nothing and a repeated request ends in the same state.
-- **Writers that cannot see the legacy column.** The history snapshot (`historyPictureFields`),
-  the catalogue cleanup and the batch import copy or replace pictures from the dictionary and
-  mirror the English entry; they do not read `imageUrlEn`, so a row whose English address is still
-  only in the legacy column keeps it on the product, but a snapshot or merge made from it has no
-  English entry. Run the backfill again after the switch (see the rollout order below) before the
-  catalogue cleanup or an import, and treat snapshots taken in the window as without English.
+- **Transition protection for writers that copy a picture set.** A history snapshot is taken once
+  and never refilled from the catalogue, and a catalogue cleanup deletes the row it copies from, so
+  neither can wait for the repeat backfill to bring an English address from the legacy column. The
+  previous release writes that column alone, so until the switch (and the backfill after it) a
+  product can hold its only English address there. Two writers therefore fold it into the
+  dictionary before they copy, through one narrow helper outside `src`,
+  `scripts/lib/legacy-picture-transition.ts` (the same arrangement as the deletion guard below):
+  - **Completing a list** (`POST /api/history`). In the same transaction, the statement that
+    already decides which products are visible to the user (`readVisibleSnapshotPictures`) also
+    returns their main picture, its text language, the dictionary and the legacy English column,
+    so all of them come from one database snapshot and the number of queries is unchanged. The
+    helper returns a canonical dictionary: the English entry of the dictionary wins, and the legacy
+    address is used only when the dictionary has none (every other language is kept as stored). The
+    ordinary snapshot code (`historyPictureFields`) then copies that dictionary and mirrors its
+    English entry into the snapshot's rollback column; the legacy value is never a field of a
+    response or of any other read, and the application never reads it later to complete an old
+    snapshot. A product that is not visible to the user is not read and is not copied, so it has no
+    fallback either. A failed read rolls the whole completion back. Result: a legacy-only English
+    entry → switch → list completed → the same product shown again later: the history keeps the
+    address that was current at completion, whatever the catalogue holds afterwards.
+  - **Catalogue cleanup merges** (`src/lib/services/catalog-cleanup.ts`). The duplicate that is
+    folded into the singular product, the product that becomes a variant and an existing variant
+    that receives its picture are read through `withLegacyEnglish`, the same rule, before the
+    picture set is copied and the source row is deleted; a legacy-only English address that
+    differs from the one it would replace is reported as a conflict, like a dictionary one.
+    The batch import still does not read the legacy column: it only adds to a dictionary and never
+    deletes its source, so a row whose English address is still only in the legacy column keeps it on
+    the product. Snapshots taken before this protection existed are not repaired from today's
+    catalogue.
 - **No `imageUrlEn` read under `src`.** The batch import's compare-and-set (`emoji-batch-import.ts`)
   reads and conditions on the dictionary: a queue write applies only while the main picture is empty
   and the dictionary is exactly as read (`localizedImages` equals the value read, or SQL NULL), so a
@@ -122,8 +148,9 @@
   guard answer "in use", and it is tested for legacy-only denial and for fail-closed. The offline
   cleanup (`npm run db:files`) collects the same references (`collectReferencedFileKeys`: products,
   variants, history snapshots, categories, library) and passes the legacy columns to the shared
-  collector through the same module; it stops when any read fails. **Ya6 removes both with the column** (the helper, its call
-  in `isStoredImageInUse` and the cleanup's reader). Rollout order (run the Ya2 backfill, switch the
+  collector through the same module; it stops when any read fails. **Ya6 removes all of it with the column** (the helper, its call
+  in `isStoredImageInUse`, the cleanup's reader, and the transition helper with its two call sites:
+  the list completion and the catalogue cleanup). Rollout order (run the Ya2 backfill, switch the
   code, run the backfill again, then any file cleanup) narrows the window but does not by itself
   make deletion safe: the check does, for as long as the column exists. The check and the delete
   are still not atomic (AGE-1472).

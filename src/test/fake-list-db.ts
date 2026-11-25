@@ -14,6 +14,10 @@ export type FakeProduct = {
   name: string;
   emoji: string;
   imageUrl: string | null;
+  // Picture columns a snapshot copies; absent = null, as in a row that was never filled.
+  imageTextLocale?: string | null;
+  localizedImages?: unknown;
+  imageUrlEn?: string | null;
   isCustom: boolean;
   isGlobal: boolean;
   createdById: string | null;
@@ -122,7 +126,7 @@ export function createFakeListDb(seed: Partial<FakeState> = {}) {
 
   function select(row: Row, fields: Row | undefined) {
     if (!fields) return row;
-    return Object.fromEntries(Object.keys(fields).map((key) => [key, row[key]]));
+    return Object.fromEntries(Object.keys(fields).map((key) => [key, row[key] ?? null]));
   }
 
   function insertItem(data: Row): FakeItem {

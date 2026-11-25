@@ -233,6 +233,87 @@ describe('applyCatalogCleanup', () => {
     expect(db.variantFavorite.rows[0].variantId).toBe('existing');
   });
 
+  // The rows deleted by the cleanup cannot be rebuilt: an English address that only their legacy
+  // column holds (written by the previous release) must travel into the dictionary of the row that
+  // stays, because the backfill can no longer find it afterwards.
+  describe('legacy-only English pictures', () => {
+    const LEGACY = '/legacy-only-en.webp';
+
+    it('keeps the duplicate legacy-only English address on the product it merges into', async () => {
+      const db = catalogue();
+      Object.assign(
+        db.product.rows.find((row) => row.id === 'apples')!,
+        {
+          localizedImages: null,
+          imageUrlEn: LEGACY,
+        }
+      );
+      await run(db);
+      expect(db.product.rows.find((row) => row.id === 'apple')).toMatchObject({
+        imageUrl: '/apples.webp',
+        localizedImages: { en: LEGACY },
+        imageUrlEn: LEGACY,
+      });
+    });
+
+    it('lets the dictionary of the duplicate win over its legacy column', async () => {
+      const db = catalogue();
+      Object.assign(
+        db.product.rows.find((row) => row.id === 'apples')!,
+        {
+          localizedImages: { en: '/dictionary-en.webp', ru: '/apples-ru.webp' },
+          imageUrlEn: LEGACY,
+        }
+      );
+      await run(db);
+      expect(db.product.rows.find((row) => row.id === 'apple')).toMatchObject({
+        localizedImages: { en: '/dictionary-en.webp', ru: '/apples-ru.webp' },
+        imageUrlEn: '/dictionary-en.webp',
+      });
+    });
+
+    it('keeps the child legacy-only English address on the new variant', async () => {
+      const db = catalogue();
+      Object.assign(
+        db.product.rows.find((row) => row.id === 'honeycrisp')!,
+        {
+          localizedImages: null,
+          imageUrlEn: LEGACY,
+        }
+      );
+      await run(db);
+      expect(db.productVariant.rows[0]).toMatchObject({
+        imageUrl: '/hc.webp',
+        localizedImages: { en: LEGACY },
+        imageUrlEn: LEGACY,
+      });
+    });
+
+    it('does not erase the legacy-only English address of an existing variant it reuses', async () => {
+      const db = catalogue();
+      db.productVariant.rows.push(existingVariant({ imageUrlEn: LEGACY, localizedImages: null }));
+      Object.assign(
+        db.product.rows.find((row) => row.id === 'honeycrisp')!,
+        {
+          imageUrl: '/hc.webp',
+          localizedImages: { ru: '/hc-ru.webp' },
+        }
+      );
+      await run(db);
+      expect(db.productVariant.rows[0]).toMatchObject({
+        imageUrl: '/hc.webp',
+        localizedImages: { ru: '/hc-ru.webp', en: LEGACY },
+        imageUrlEn: LEGACY,
+      });
+    });
+
+    it('still refuses a legacy-only English address that differs from the child one', async () => {
+      const db = catalogue();
+      db.productVariant.rows.push(existingVariant({ imageUrlEn: LEGACY, localizedImages: null }));
+      await expect(run(db)).rejects.toThrow(/Conflicting variant.*en/);
+    });
+  });
+
   it('locks writers before any catalogue reads', async () => {
     const db = catalogue();
     const read = vi.spyOn(db.product, 'findMany');

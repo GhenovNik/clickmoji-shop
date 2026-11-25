@@ -106,7 +106,22 @@ function makeTx() {
       deleteMany: async () => ({ count: 1 }),
     },
     product: {
-      findMany: async (args: Row) => (record('product', 'findMany', args), [{ id: 'p1' }]),
+      // The picture read of POST /api/history selects the legacy column on purpose (a transition
+      // helper outside `src`); every other read gets the bare id.
+      findMany: async (args: Record<string, any>) => (
+        record('product', 'findMany', args),
+        [
+          args.select?.imageUrlEn
+            ? {
+                id: 'p1',
+                imageUrl: productRow().imageUrl,
+                imageTextLocale: null,
+                localizedImages: productRow().localizedImages,
+                imageUrlEn: LEGACY,
+              }
+            : { id: 'p1' },
+        ]
+      ),
     },
     listHistory: {
       create: async (args: Record<string, any>) => {
@@ -235,5 +250,12 @@ describe('routes that serve products, variants and history rows', () => {
     const read = db.calls.find(({ model, op }) => model === 'item' && op === 'findMany')!;
     expect(read.args.include.product).toMatchObject({ omit: { imageUrlEn: true } });
     expect(read.args.include.variant).toMatchObject({ omit: { imageUrlEn: true } });
+    // The dictionary wins over the legacy column the picture read selects: the snapshot carries
+    // the dictionary entry, never the legacy-only address.
+    const created = db.calls.find(({ model, op }) => model === 'listHistory' && op === 'create')!;
+    const [row] = created.args.data.items.create;
+    expect(row.localizedImages).toEqual({ en: 'https://utfs.io/f/dictionary-en' });
+    expect(row.productImageUrlEn).toBe('https://utfs.io/f/dictionary-en');
+    expect(JSON.stringify(created.args)).not.toContain('legacy-only');
   });
 });

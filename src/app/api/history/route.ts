@@ -11,6 +11,10 @@ import {
 } from '@/lib/product-visibility';
 import { lockOwnedList } from '@/lib/list-lock';
 import { historyPictureFields } from '@/lib/picture-storage';
+import {
+  readVisibleSnapshotPictures,
+  type SnapshotPictures,
+} from '../../../../scripts/lib/legacy-picture-transition';
 
 export async function GET(request?: Request) {
   try {
@@ -125,19 +129,22 @@ export async function POST(request: Request) {
       });
 
       // Items of another user's private product (legacy rows) are removed with the rest of the
-      // list but never copied into the snapshot.
-      const visibleProducts =
+      // list but never copied into the snapshot. The same statement reads the pictures of the
+      // visible products: the snapshot is never refilled later, so a product whose English
+      // address is still only in the legacy column (the previous release writes it alone) gets it
+      // folded into the dictionary here (the dictionary wins; see legacy-picture-transition.ts).
+      // A product that is not visible is not read, so it has no fallback either.
+      const pictures =
         items.length > 0
-          ? await tx.product.findMany({
-              where: {
-                id: { in: [...new Set(items.map((item) => item.productId))] },
-                ...visibleProductsWhere(userId),
-              },
-              select: { id: true },
+          ? await readVisibleSnapshotPictures(tx, {
+              id: { in: [...new Set(items.map((item) => item.productId))] },
+              ...visibleProductsWhere(userId),
             })
-          : [];
-      const visibleIds = new Set(visibleProducts.map((product) => product.id));
-      const snapshotItems = items.filter((item) => visibleIds.has(item.productId));
+          : new Map<string, SnapshotPictures>();
+      const snapshotItems = items.flatMap((item) => {
+        const productPictures = pictures.get(item.productId);
+        return productPictures ? [{ item, pictures: productPictures }] : [];
+      });
 
       if (snapshotItems.length === 0) return { status: 'empty' };
 
@@ -148,7 +155,7 @@ export async function POST(request: Request) {
           listName: list.name,
           completedAt: new Date(),
           items: {
-            create: snapshotItems.map((item) => {
+            create: snapshotItems.map(({ item, pictures: productPictures }) => {
               // Only a variant of the item's own (visible) product is copied; a legacy foreign
               // variant is neither identified nor copied into the snapshot.
               const variant = variantOfItemProduct(item.variant, item.productId);
@@ -158,7 +165,7 @@ export async function POST(request: Request) {
                 productName: item.product.name,
                 productNameEn: item.product.nameEn || null,
                 productEmoji: item.product.emoji,
-                ...historyPictureFields(item.product),
+                ...historyPictureFields(productPictures),
                 categoryName: item.product.category.name,
                 categoryNameEn: item.product.category.nameEn || null,
                 isCustom: item.product.isCustom,
