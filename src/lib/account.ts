@@ -409,8 +409,7 @@ export type DeleteAccountResult =
   | { status: 'password_required' }
   | { status: 'incorrect_password' }
   | { status: 'confirmation_required' }
-  | { status: 'concurrent_change' }
-  | { status: 'cross_owner_references' };
+  | { status: 'concurrent_change' };
 
 export function isValidDeleteConfirmationPhrase(confirmation: string | undefined): boolean {
   if (typeof confirmation !== 'string') return false;
@@ -419,53 +418,68 @@ export function isValidDeleteConfirmationPhrase(confirmation: string | undefined
 }
 
 class AccountDeleteAbortedError extends Error {
-  constructor(
-    public readonly status: 'not_found' | 'concurrent_change' | 'cross_owner_references'
-  ) {
+  constructor(public readonly status: 'not_found' | 'concurrent_change') {
     super(`Account deletion aborted: ${status}`);
   }
 }
 
-// Other users' rows that the deletion would cascade or SetNull: Item.productId (cascade),
-// Item.variantId (SetNull), Favorite (cascade), VariantFavorite (cascade), ListHistoryItem.productId
-// and variantId (SetNull), ListHistory.listId (SetNull). Any hit means the deletion must not run.
-async function hasCrossOwnerReferences(
+// Other users' rows that point at this account's private products: Item.productId (cascade),
+// Item.variantId (SetNull; an independent FK, so the variant may sit under another product),
+// Favorite and VariantFavorite (cascade), ListHistoryItem.productId and variantId (SetNull).
+// Returns the IDs of the products that such rows need. Those products are kept, without an owner,
+// instead of being deleted. Other users' lists, favorites and snapshots are never cascaded away.
+// Only foreign rows are read; a foreign ListHistory.listId is left to its natural SetNull.
+async function referencedProductIds(
   tx: Prisma.TransactionClient,
   userId: string,
-  own: { productIds: string[]; variantIds: string[]; listIds: string[] }
-): Promise<boolean> {
-  const { productIds, variantIds, listIds } = own;
-  if (productIds.length === 0 && variantIds.length === 0 && listIds.length === 0) return false;
+  own: { productIds: string[]; variantProductIds: Map<string, string> }
+): Promise<Set<string>> {
+  const { productIds, variantProductIds } = own;
+  const variantIds = [...variantProductIds.keys()];
+  const referenced = new Set<string>();
+  if (productIds.length === 0 && variantIds.length === 0) return referenced;
 
-  const found = await Promise.all([
-    tx.item.findFirst({
+  const [items, favorites, variantFavorites, historyItems] = await Promise.all([
+    tx.item.findMany({
       where: {
         list: { userId: { not: userId } },
         OR: [{ productId: { in: productIds } }, { variantId: { in: variantIds } }],
       },
-      select: { id: true },
+      select: { productId: true, variantId: true },
+      distinct: ['productId', 'variantId'],
     }),
-    tx.favorite.findFirst({
+    tx.favorite.findMany({
       where: { userId: { not: userId }, productId: { in: productIds } },
-      select: { id: true },
+      select: { productId: true },
+      distinct: ['productId'],
     }),
-    tx.variantFavorite.findFirst({
+    tx.variantFavorite.findMany({
       where: { userId: { not: userId }, variantId: { in: variantIds } },
-      select: { id: true },
+      select: { variantId: true },
+      distinct: ['variantId'],
     }),
-    tx.listHistoryItem.findFirst({
+    tx.listHistoryItem.findMany({
       where: {
         history: { userId: { not: userId } },
         OR: [{ productId: { in: productIds } }, { variantId: { in: variantIds } }],
       },
-      select: { id: true },
-    }),
-    tx.listHistory.findFirst({
-      where: { userId: { not: userId }, listId: { in: listIds } },
-      select: { id: true },
+      select: { productId: true, variantId: true },
+      distinct: ['productId', 'variantId'],
     }),
   ]);
-  return found.some((row) => row !== null);
+
+  // A variant keeps its product: the product is what gets kept, with all of its variants.
+  const addVariant = (variantId: string | null) => {
+    const owner = variantId ? variantProductIds.get(variantId) : undefined;
+    if (owner) referenced.add(owner);
+  };
+  for (const row of [...items, ...historyItems]) {
+    if (row.productId) referenced.add(row.productId);
+    addVariant(row.variantId);
+  }
+  for (const row of favorites) referenced.add(row.productId);
+  for (const row of variantFavorites) addVariant(row.variantId);
+  return referenced;
 }
 
 export async function deleteAccount(params: {
@@ -526,8 +540,8 @@ export async function deleteAccount(params: {
         // reference to them. A visibility or ownership change to one of these rows takes a row lock
         // and waits for this transaction, and an INSERT that points at one takes FOR KEY SHARE and
         // waits too. The private set is then read from the locked row state, and only those IDs are
-        // used for the reference checks and the delete. A product that turns private while
-        // deletion runs cannot join the set, because its row is already locked here.
+        // used for the reference checks, the delete and the release. A product that turns private
+        // while deletion runs cannot join the set, because its row is already locked here.
         const ownProducts = await tx.$queryRaw<Array<{ id: string; isGlobal: boolean }>>`
           SELECT id, "isGlobal" FROM products
           WHERE "createdById" = ${userId}
@@ -539,39 +553,50 @@ export async function deleteAccount(params: {
         const ownVariants =
           privateProductIds.length === 0
             ? []
-            : await tx.$queryRaw<Array<{ id: string }>>`
-                SELECT v.id FROM product_variants v
+            : await tx.$queryRaw<Array<{ id: string; productId: string }>>`
+                SELECT v.id, v."productId" FROM product_variants v
                 WHERE v."productId" = ANY(${privateProductIds}::text[])
                 ORDER BY v.id
                 FOR UPDATE OF v`;
-        const ownLists = await tx.$queryRaw<Array<{ id: string }>>`
+        // Own lists stay locked, as before, so a concurrent item insert into them waits for the delete.
+        await tx.$queryRaw`
           SELECT id FROM lists WHERE "userId" = ${userId} ORDER BY id FOR UPDATE`;
 
-        // Refuse rather than cascade or SetNull another user's rows. Throwing rolls back every
-        // change above, including the token deletions, so the account and session stay as they were.
-        if (
-          await hasCrossOwnerReferences(tx, userId, {
-            productIds: privateProductIds,
-            variantIds: ownVariants.map((variant) => variant.id),
-            listIds: ownLists.map((list) => list.id),
-          })
-        ) {
-          throw new AccountDeleteAbortedError('cross_owner_references');
-        }
+        // Products that another user's row still points at are kept. Every other private product of
+        // this account is deleted, and it cannot cascade anything but this account's own rows.
+        const referenced = await referencedProductIds(tx, userId, {
+          productIds: privateProductIds,
+          variantProductIds: new Map(ownVariants.map((variant) => [variant.id, variant.productId])),
+        });
+        const keptProductIds = privateProductIds.filter((id) => referenced.has(id));
+        const deletableProductIds = privateProductIds.filter((id) => !referenced.has(id));
 
-        // Delete exactly the locked private products (isGlobal = false) so no orphaned private data
-        // stays in the catalog. Global products are not in the set and remain untouched; User
-        // deletion sets Product.createdById = null via onDelete: SetNull, preserving other users'
-        // lists and favorites that reference them.
         const removedProducts = await tx.product.deleteMany({
           where: {
-            id: { in: privateProductIds },
+            id: { in: deletableProductIds },
             createdById: userId,
             isGlobal: false,
           },
         });
-        if (removedProducts.count !== privateProductIds.length) {
+        if (removedProducts.count !== deletableProductIds.length) {
           throw new AccountDeleteAbortedError('concurrent_change');
+        }
+
+        // A kept product becomes private with no owner. visibleProductsWhere matches neither
+        // isGlobal nor a creator for it, so nobody else can read it, and the other users' rows that
+        // point at it survive the account deletion.
+        if (keptProductIds.length > 0) {
+          const released = await tx.product.updateMany({
+            where: {
+              id: { in: keptProductIds },
+              createdById: userId,
+              isGlobal: false,
+            },
+            data: { createdById: null },
+          });
+          if (released.count !== keptProductIds.length) {
+            throw new AccountDeleteAbortedError('concurrent_change');
+          }
         }
 
         // Fail closed: a private product still owned by this account was attached to it after the

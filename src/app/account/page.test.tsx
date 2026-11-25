@@ -98,7 +98,7 @@ afterEach(() => {
 
 describe('AccountPage', () => {
   it.each(['ru', 'en'] as const)(
-    'renders profile, password form, export, legal links and deletion in %s',
+    'renders profile, password form and deletion, without export or documents, in %s',
     async (locale) => {
       vi.stubGlobal('fetch', mockProfileFetch(true));
       renderWithIntl(<AccountPage />, { locale });
@@ -106,14 +106,15 @@ describe('AccountPage', () => {
       const headingText = locale === 'ru' ? /Аккаунт/ : /Account/;
       expect(await screen.findByRole('heading', { name: headingText })).toBeTruthy();
       expect(screen.getByText('user@example.com')).toBeTruthy();
+      expect(screen.getByText(messages[locale].account.page.subtitle)).toBeTruthy();
       expect(document.getElementById('currentPassword')).toBeTruthy();
       expect(document.getElementById('deletePassword')).toBeTruthy();
-      expect(
-        screen.getByRole('link', { name: messages[locale].legal.links.terms })
-      ).toHaveAttribute('href', '/terms');
-      expect(
-        screen.getByRole('link', { name: messages[locale].legal.links.privacy })
-      ).toHaveAttribute('href', '/privacy');
+      expect(screen.getByText(messages[locale].account.delete.description)).toBeTruthy();
+      // The data export and the documents section are gone from the account page.
+      expect(screen.queryByRole('button', { name: /JSON/ })).toBeNull();
+      expect(screen.queryByRole('link', { name: messages[locale].legal.links.terms })).toBeNull();
+      expect(screen.queryByRole('link', { name: messages[locale].legal.links.privacy })).toBeNull();
+      expect(document.querySelector('[href="/api/account/export"]')).toBeNull();
     }
   );
 

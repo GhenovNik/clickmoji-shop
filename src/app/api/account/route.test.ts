@@ -265,6 +265,10 @@ function deleteUserCascade(userId: string) {
   const deletedListIds = new Set(db.lists.filter((l) => l.userId === userId).map((l) => l.id));
   db.lists = db.lists.filter((l) => l.userId !== userId);
   db.items = db.items.filter((i) => !deletedListIds.has(i.listId));
+  // ListHistory.listId is SetNull: another user history of a deleted list keeps its rows.
+  db.histories = db.histories.map((h) =>
+    h.listId && deletedListIds.has(h.listId) ? { ...h, listId: null } : h
+  );
   db.favorites = db.favorites.filter((f) => f.userId !== userId);
   db.variantFavorites = db.variantFavorites.filter((vf) => vf.userId !== userId);
   const deletedHistoryIds = new Set(
@@ -482,6 +486,18 @@ vi.mock('@/lib/prisma', () => {
           cascadeDeleteProducts(toDelete);
           return { count: toDelete.length };
         },
+        updateMany: async ({
+          where,
+          data,
+        }: {
+          where: Record<string, unknown>;
+          data: Partial<ProductRow>;
+        }) => {
+          recordOp('product', 'updateMany');
+          const rows = db.products.filter((p) => matches(p, where));
+          for (const row of rows) Object.assign(row, data, { updatedAt: new Date() });
+          return { count: rows.length };
+        },
         count: async ({ where }: { where: Record<string, unknown> }) =>
           db.products.filter((p) => matches(p, where)).length,
       },
@@ -678,6 +694,18 @@ vi.mock('@/lib/prisma', () => {
         },
       },
       item: {
+        findMany: async ({
+          where,
+          select,
+        }: {
+          where: Record<string, unknown>;
+          select?: Record<string, unknown>;
+        }) => {
+          recordOp('item', 'findMany');
+          return db.items
+            .filter((i) => matches(i as unknown as Record<string, unknown>, where))
+            .map((i) => pickSelected(i, select));
+        },
         findFirst: async ({
           where,
           select,
@@ -691,6 +719,18 @@ vi.mock('@/lib/prisma', () => {
         },
       },
       listHistoryItem: {
+        findMany: async ({
+          where,
+          select,
+        }: {
+          where: Record<string, unknown>;
+          select?: Record<string, unknown>;
+        }) => {
+          recordOp('listHistoryItem', 'findMany');
+          return db.historyItems
+            .filter((hi) => matches(hi as unknown as Record<string, unknown>, where))
+            .map((hi) => pickSelected(hi, select));
+        },
         findFirst: async ({
           where,
           select,
@@ -737,7 +777,9 @@ vi.mock('@/lib/prisma', () => {
         if (/FROM\s+product_variants\s+v\s+WHERE\s+v\."productId"\s*=\s*ANY/i.test(sql)) {
           recordOp('product_variants', 'forUpdate');
           const productIds = new Set(values[0] as string[]);
-          return db.variants.filter((v) => productIds.has(v.productId)).map((v) => ({ id: v.id }));
+          return db.variants
+            .filter((v) => productIds.has(v.productId))
+            .map((v) => ({ id: v.id, productId: v.productId }));
         }
         if (/FROM\s+lists\s+WHERE\s+"userId"/i.test(sql)) {
           recordOp('lists', 'forUpdate');
@@ -1851,13 +1893,12 @@ describe('DELETE /api/account', () => {
   });
 });
 
-describe('DELETE /api/account: another user referencing a private product blocks deletion', () => {
+describe('DELETE /api/account: another user referencing a private product keeps that product', () => {
   const now = new Date('2026-11-20T10:00:00.000Z');
-  const blockedEn =
-    "Account cannot be deleted yet: other users' lists, favorites or history still reference your private products or their variants. Nothing was changed.";
 
-  // Each case adds one cross-owner reference of Bob to Alice's private data through a real FK path.
-  async function expectBlockedAndUnchanged(addReference: () => void) {
+  // Adds one cross-owner reference of Bob to Alice's private data through a real FK path, then
+  // deletes Alice. The deletion must succeed; each test checks the rows that the reference keeps.
+  async function deleteWithForeignReference(addReference: () => void) {
     db.variants.push({
       id: 'var-private-a',
       name: 'Секретный вариант Алисы',
@@ -1868,38 +1909,46 @@ describe('DELETE /api/account: another user referencing a private product blocks
       productId: 'prod-private-a',
     });
     addReference();
-    const before = snapshotDb();
 
     const res = await accountRoute.DELETE(
       jsonRequest('http://localhost/api/account', 'DELETE', { password: 'Password123' }, 'en')
     );
 
-    expect(res.status).toBe(409);
-    expect(await res.json()).toEqual({ error: blockedEn });
-    // No Set-Cookie: the session stays as it was.
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ success: true, message: 'Account deleted' });
     expect(res.headers.get('set-cookie')).toBeNull();
-    expect(snapshotDb()).toEqual(before);
-    expect(db.users.map((u) => u.id)).toContain('user-a');
+    expect(db.users.map((u) => u.id)).not.toContain('user-a');
+    expect(db.users.map((u) => u.id)).toContain('user-b');
   }
 
-  it('blocks when another list item points at a private product (Item.productId cascade)', async () => {
-    await expectBlockedAndUnchanged(() => {
+  it('keeps another list item on a private product with its note (Item.productId)', async () => {
+    await deleteWithForeignReference(() => {
       db.items.push({
         id: 'item-b-foreign',
         listId: 'list-b',
         productId: 'prod-private-a',
         variantId: null,
         isPurchased: false,
-        note: null,
+        note: 'Бобу нужно',
         createdAt: now,
         updatedAt: now,
         purchasedAt: null,
       });
     });
+
+    expect(db.items.find((i) => i.id === 'item-b-foreign')).toMatchObject({
+      listId: 'list-b',
+      productId: 'prod-private-a',
+      note: 'Бобу нужно',
+    });
+    expect(db.products.find((p) => p.id === 'prod-private-a')).toMatchObject({
+      isGlobal: false,
+      createdById: null,
+    });
   });
 
-  it('blocks when another list item keeps a private variant on a global product (Item.variantId SetNull)', async () => {
-    await expectBlockedAndUnchanged(() => {
+  it('keeps another list item that uses a private variant on a global product, and that variant (Item.variantId)', async () => {
+    await deleteWithForeignReference(() => {
       db.items.push({
         id: 'item-b-foreign-variant',
         listId: 'list-b',
@@ -1912,10 +1961,21 @@ describe('DELETE /api/account: another user referencing a private product blocks
         purchasedAt: null,
       });
     });
+
+    expect(db.items.find((i) => i.id === 'item-b-foreign-variant')?.variantId).toBe(
+      'var-private-a'
+    );
+    expect(db.variants.find((v) => v.id === 'var-private-a')).toMatchObject({
+      productId: 'prod-private-a',
+    });
+    expect(db.products.find((p) => p.id === 'prod-private-a')).toMatchObject({
+      isGlobal: false,
+      createdById: null,
+    });
   });
 
-  it('blocks when another user favorited a private product (Favorite.productId cascade)', async () => {
-    await expectBlockedAndUnchanged(() => {
+  it('keeps another user favorite of a private product (Favorite.productId)', async () => {
+    await deleteWithForeignReference(() => {
       db.favorites.push({
         id: 'fav-b-foreign',
         userId: 'user-b',
@@ -1925,10 +1985,17 @@ describe('DELETE /api/account: another user referencing a private product blocks
         updatedAt: now,
       });
     });
+
+    expect(db.favorites.map((f) => [f.id, f.userId, f.productId])).toContainEqual([
+      'fav-b-foreign',
+      'user-b',
+      'prod-private-a',
+    ]);
+    expect(db.products.find((p) => p.id === 'prod-private-a')?.createdById).toBeNull();
   });
 
-  it('blocks when another user starred a private variant (VariantFavorite cascade)', async () => {
-    await expectBlockedAndUnchanged(() => {
+  it('keeps another user starred private variant (VariantFavorite.variantId)', async () => {
+    await deleteWithForeignReference(() => {
       db.variantFavorites.push({
         id: 'vfav-b-foreign',
         userId: 'user-b',
@@ -1938,10 +2005,16 @@ describe('DELETE /api/account: another user referencing a private product blocks
         updatedAt: now,
       });
     });
+
+    expect(db.variantFavorites.map((vf) => [vf.id, vf.variantId])).toContainEqual([
+      'vfav-b-foreign',
+      'var-private-a',
+    ]);
+    expect(db.variants.find((v) => v.id === 'var-private-a')).toBeDefined();
   });
 
-  it('blocks when another history snapshot points at a private product (ListHistoryItem.productId SetNull)', async () => {
-    await expectBlockedAndUnchanged(() => {
+  it('keeps another history snapshot that points at a private product (ListHistoryItem.productId)', async () => {
+    await deleteWithForeignReference(() => {
       db.historyItems.push({
         id: 'hi-b-foreign',
         historyId: 'hist-b',
@@ -1964,10 +2037,15 @@ describe('DELETE /api/account: another user referencing a private product blocks
         createdAt: now,
       });
     });
+
+    expect(db.historyItems.find((hi) => hi.id === 'hi-b-foreign')?.productId).toBe(
+      'prod-private-a'
+    );
+    expect(db.products.find((p) => p.id === 'prod-private-a')?.createdById).toBeNull();
   });
 
-  it('blocks when another history snapshot keeps a private variant (ListHistoryItem.variantId SetNull)', async () => {
-    await expectBlockedAndUnchanged(() => {
+  it('keeps another history snapshot that keeps a private variant (ListHistoryItem.variantId)', async () => {
+    await deleteWithForeignReference(() => {
       db.historyItems.push({
         id: 'hi-b-foreign-variant',
         historyId: 'hist-b',
@@ -1990,10 +2068,18 @@ describe('DELETE /api/account: another user referencing a private product blocks
         createdAt: now,
       });
     });
+
+    expect(db.historyItems.find((hi) => hi.id === 'hi-b-foreign-variant')?.variantId).toBe(
+      'var-private-a'
+    );
+    expect(db.products.find((p) => p.id === 'prod-private-a')).toMatchObject({
+      isGlobal: false,
+      createdById: null,
+    });
   });
 
-  it('blocks when another user history points at a list of the deleted account (ListHistory.listId SetNull)', async () => {
-    await expectBlockedAndUnchanged(() => {
+  it('keeps another user history that pointed at a list of the deleted account, with listId cleared (ListHistory.listId SetNull)', async () => {
+    await deleteWithForeignReference(() => {
       db.histories.push({
         id: 'hist-b-foreign',
         userId: 'user-b',
@@ -2003,5 +2089,61 @@ describe('DELETE /api/account: another user referencing a private product blocks
         createdAt: now,
       });
     });
+
+    expect(db.histories.find((h) => h.id === 'hist-b-foreign')).toMatchObject({
+      userId: 'user-b',
+      listId: null,
+      listName: 'Чужая история',
+    });
+    expect(db.lists.map((l) => l.userId)).not.toContain('user-a');
+  });
+
+  it('deletes the private products nobody else references and keeps only the referenced one', async () => {
+    await deleteWithForeignReference(() => {
+      db.items.push({
+        id: 'item-b-foreign',
+        listId: 'list-b',
+        productId: 'prod-private-a',
+        variantId: null,
+        isPurchased: false,
+        note: null,
+        createdAt: now,
+        updatedAt: now,
+        purchasedAt: null,
+      });
+      db.products.push({
+        id: 'prod-private-free',
+        name: 'Свободный товар',
+        nameEn: 'Free product',
+        emoji: '🍪',
+        isCustom: true,
+        imageUrl: null,
+        imageUrlEn: null,
+        categoryId: 'cat-1',
+        isGlobal: false,
+        createdById: 'user-a',
+        createdAt: now,
+        updatedAt: now,
+      });
+      db.variants.push({
+        id: 'var-private-free',
+        name: 'Свободный вариант',
+        nameEn: 'Free variant',
+        emoji: '🍪',
+        imageUrl: null,
+        imageUrlEn: null,
+        productId: 'prod-private-free',
+      });
+    });
+
+    expect(db.products.map((p) => [p.id, p.isGlobal, p.createdById]).sort()).toEqual(
+      [
+        ['prod-global-by-a', true, null],
+        ['prod-private-a', false, null],
+        ['prod-private-b', false, 'user-b'],
+      ].sort()
+    );
+    expect(db.variants.map((v) => v.id)).not.toContain('var-private-free');
+    expect(db.items.find((i) => i.id === 'item-b-foreign')?.productId).toBe('prod-private-a');
   });
 });

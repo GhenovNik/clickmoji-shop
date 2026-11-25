@@ -141,50 +141,89 @@ describe.skipIf(!url)('account deletion guards on disposable PostgreSQL', () => 
     };
   }
 
-  describe('cross-owner references to the deleted account', () => {
-    it('refuses with 409 status and keeps every row when another list item points at a private product', async () => {
-      await db.item.create({ data: { listId: 'bob-list', productId: 'alice-private' } });
-      const before = await stateOf();
+  describe('another user referencing a private product keeps that product', () => {
+    it('deletes the account and keeps another list item on a private product, with its note', async () => {
+      await db.item.create({
+        data: { listId: 'bob-list', productId: 'alice-private', note: 'Бобу' },
+      });
 
       const result = await deleteAccount({ userId: 'alice', password });
 
-      expect(result).toEqual({ status: 'cross_owner_references' });
-      expect(await stateOf()).toEqual(before);
+      expect(result).toEqual({ status: 'deleted' });
+      expect((await db.user.findMany()).map((u) => u.id)).toEqual(['bob']);
+      expect(await db.list.findMany({ where: { userId: 'alice' } })).toEqual([]);
+      expect(
+        (await db.item.findMany({ where: { listId: 'bob-list' } })).map((i) => [
+          i.productId,
+          i.variantId,
+          i.note,
+        ])
+      ).toEqual([['alice-private', null, 'Бобу']]);
+      // The product is kept private with no owner, and its variant stays under it.
+      expect(
+        (await db.product.findMany({ orderBy: { id: 'asc' } })).map((p) => [
+          p.id,
+          p.isGlobal,
+          p.createdById,
+        ])
+      ).toEqual([
+        ['alice-private', false, null],
+        ['milk-global', true, null],
+      ]);
+      expect(
+        (await db.productVariant.findMany({ orderBy: { id: 'asc' } })).map((v) => v.id)
+      ).toEqual(['alice-variant', 'milk-variant']);
     });
 
-    it('refuses when another list item keeps a variant of a private product on a global product (independent variant FK)', async () => {
+    it('keeps the private variant of a global product in another list item (independent variant FK)', async () => {
       await db.item.create({
         data: { listId: 'bob-list', productId: 'milk-global', variantId: 'alice-variant' },
       });
-      const before = await stateOf();
 
       const result = await deleteAccount({ userId: 'alice', password });
 
-      expect(result).toEqual({ status: 'cross_owner_references' });
-      expect(await stateOf()).toEqual(before);
+      expect(result).toEqual({ status: 'deleted' });
+      expect(
+        (await db.item.findMany({ where: { listId: 'bob-list' } })).map((i) => [
+          i.productId,
+          i.variantId,
+        ])
+      ).toEqual([['milk-global', 'alice-variant']]);
+      expect(await db.product.findFirst({ where: { id: 'alice-private' } })).toMatchObject({
+        isGlobal: false,
+        createdById: null,
+      });
+      expect(await db.productVariant.findUnique({ where: { id: 'alice-variant' } })).toMatchObject({
+        productId: 'alice-private',
+      });
     });
 
-    it('refuses when another user favorited a private product', async () => {
+    it('keeps another user favorite of a private product', async () => {
       await db.favorite.create({ data: { userId: 'bob', productId: 'alice-private' } });
-      const before = await stateOf();
 
-      const result = await deleteAccount({ userId: 'alice', password });
+      expect(await deleteAccount({ userId: 'alice', password })).toEqual({ status: 'deleted' });
 
-      expect(result).toEqual({ status: 'cross_owner_references' });
-      expect(await stateOf()).toEqual(before);
+      expect((await db.favorite.findMany()).map((f) => [f.userId, f.productId])).toEqual([
+        ['bob', 'alice-private'],
+      ]);
+      expect(await db.product.findFirst({ where: { id: 'alice-private' } })).toMatchObject({
+        isGlobal: false,
+        createdById: null,
+      });
     });
 
-    it('refuses when another user starred a variant of a private product', async () => {
+    it('keeps another user starred variant of a private product', async () => {
       await db.variantFavorite.create({ data: { userId: 'bob', variantId: 'alice-variant' } });
-      const before = await stateOf();
 
-      const result = await deleteAccount({ userId: 'alice', password });
+      expect(await deleteAccount({ userId: 'alice', password })).toEqual({ status: 'deleted' });
 
-      expect(result).toEqual({ status: 'cross_owner_references' });
-      expect(await stateOf()).toEqual(before);
+      expect((await db.variantFavorite.findMany()).map((vf) => [vf.userId, vf.variantId])).toEqual([
+        ['bob', 'alice-variant'],
+      ]);
+      expect(await db.productVariant.findUnique({ where: { id: 'alice-variant' } })).not.toBeNull();
     });
 
-    it('refuses when another user history snapshot would be SetNull-ed through productId', async () => {
+    it('keeps another user history snapshot that points at a private product or its variant', async () => {
       await db.listHistory.create({
         data: { id: 'bob-history', userId: 'bob', listName: 'История Боба' },
       });
@@ -198,18 +237,6 @@ describe.skipIf(!url)('account deletion guards on disposable PostgreSQL', () => 
           addedAt: new Date(),
         },
       });
-      const before = await stateOf();
-
-      const result = await deleteAccount({ userId: 'alice', password });
-
-      expect(result).toEqual({ status: 'cross_owner_references' });
-      expect(await stateOf()).toEqual(before);
-    });
-
-    it('refuses when another user history snapshot would be SetNull-ed through a private variant', async () => {
-      await db.listHistory.create({
-        data: { id: 'bob-history', userId: 'bob', listName: 'История Боба' },
-      });
       await db.listHistoryItem.create({
         data: {
           historyId: 'bob-history',
@@ -222,27 +249,76 @@ describe.skipIf(!url)('account deletion guards on disposable PostgreSQL', () => 
           addedAt: new Date(),
         },
       });
-      const before = await stateOf();
 
-      const result = await deleteAccount({ userId: 'alice', password });
+      expect(await deleteAccount({ userId: 'alice', password })).toEqual({ status: 'deleted' });
 
-      expect(result).toEqual({ status: 'cross_owner_references' });
-      expect(await stateOf()).toEqual(before);
+      expect(
+        (await db.listHistoryItem.findMany({ orderBy: { id: 'asc' } })).map((hi) => [
+          hi.productId,
+          hi.variantId,
+        ])
+      ).toEqual(
+        expect.arrayContaining([
+          ['alice-private', null],
+          ['milk-global', 'alice-variant'],
+        ])
+      );
+      expect(await db.product.findFirst({ where: { id: 'alice-private' } })).toMatchObject({
+        isGlobal: false,
+        createdById: null,
+      });
     });
 
-    it('refuses when another user history points at a list of the deleted account (ListHistory.listId SetNull)', async () => {
+    it('keeps another user history that pointed at the deleted list, with listId cleared (ListHistory.listId SetNull)', async () => {
       await db.listHistory.create({
         data: { id: 'bob-history', userId: 'bob', listId: 'alice-list', listName: 'История Боба' },
       });
-      const before = await stateOf();
 
-      const result = await deleteAccount({ userId: 'alice', password });
+      expect(await deleteAccount({ userId: 'alice', password })).toEqual({ status: 'deleted' });
 
-      expect(result).toEqual({ status: 'cross_owner_references' });
-      expect(await stateOf()).toEqual(before);
+      expect(await db.listHistory.findMany()).toEqual([
+        expect.objectContaining({ id: 'bob-history', userId: 'bob', listId: null }),
+      ]);
     });
 
-    it('waits for an uncommitted concurrent reference to the private product, then refuses with the committed reference', async () => {
+    it('deletes the private products nobody else references and keeps only the referenced one', async () => {
+      await db.product.create({
+        data: {
+          id: 'alice-free',
+          name: 'Свободный',
+          nameEn: 'Free',
+          emoji: '🍪',
+          categoryId: 'fruit',
+          isGlobal: false,
+          createdById: 'alice',
+        },
+      });
+      await db.productVariant.create({
+        data: {
+          id: 'alice-free-variant',
+          name: 'Свободный',
+          nameEn: 'Free',
+          emoji: '🍪',
+          productId: 'alice-free',
+        },
+      });
+      await db.item.create({ data: { listId: 'bob-list', productId: 'alice-private' } });
+
+      expect(await deleteAccount({ userId: 'alice', password })).toEqual({ status: 'deleted' });
+
+      expect((await db.product.findMany({ orderBy: { id: 'asc' } })).map((p) => p.id)).toEqual([
+        'alice-private',
+        'milk-global',
+      ]);
+      expect(
+        (await db.productVariant.findMany({ orderBy: { id: 'asc' } })).map((v) => v.id)
+      ).toEqual(['alice-variant', 'milk-variant']);
+      expect(
+        (await db.item.findMany({ where: { listId: 'bob-list' } })).map((i) => i.productId)
+      ).toEqual(['alice-private']);
+    });
+
+    it('waits for an uncommitted concurrent reference to the private product, then keeps that reference', async () => {
       const inserted = barrier();
       const release = barrier();
       const writing = writer.$transaction(async (tx) => {
@@ -252,8 +328,7 @@ describe.skipIf(!url)('account deletion guards on disposable PostgreSQL', () => 
       });
       await inserted.promise;
       // Uncommitted from every other connection's point of view: the list has no Bob item yet.
-      const { items: itemsBefore, ...rowsBefore } = await stateOf();
-      expect(itemsBefore).toEqual([]);
+      expect(await db.item.findMany({ where: { listId: 'bob-list' } })).toEqual([]);
 
       // The deletion must block on the row lock taken by the uncommitted FK insert, not read past it.
       const deleting = deleteAccount({ userId: 'alice', password });
@@ -266,11 +341,15 @@ describe.skipIf(!url)('account deletion guards on disposable PostgreSQL', () => 
       release.resolve();
       await writing;
 
-      expect(await deleting).toEqual({ status: 'cross_owner_references' });
-      // Refusal rolls back: only the committed concurrent reference is new, nothing else changed.
-      const { items, ...rowsAfter } = await stateOf();
-      expect(rowsAfter).toEqual(rowsBefore);
-      expect(items.map((i) => [i.listId, i.productId])).toEqual([['bob-list', 'alice-private']]);
+      expect(await deleting).toEqual({ status: 'deleted' });
+      // The committed reference is read after the lock and keeps its product.
+      expect(
+        (await db.item.findMany({ where: { listId: 'bob-list' } })).map((i) => i.productId)
+      ).toEqual(['alice-private']);
+      expect(await db.product.findFirst({ where: { id: 'alice-private' } })).toMatchObject({
+        isGlobal: false,
+        createdById: null,
+      });
     });
   });
 
@@ -290,15 +369,18 @@ describe.skipIf(!url)('account deletion guards on disposable PostgreSQL', () => 
       }
     }
 
-    it('refuses when a formerly global product was made private before deletion and another user references it', async () => {
+    it('keeps a formerly global product that was made private before deletion while another user references it', async () => {
       await db.item.create({ data: { listId: 'bob-list', productId: 'milk-global' } });
       await db.product.update({ where: { id: 'milk-global' }, data: { isGlobal: false } });
-      const before = await stateOf();
 
-      const result = await deleteAccount({ userId: 'alice', password });
+      expect(await deleteAccount({ userId: 'alice', password })).toEqual({ status: 'deleted' });
 
-      expect(result).toEqual({ status: 'cross_owner_references' });
-      expect(await stateOf()).toEqual(before);
+      expect(
+        (await db.item.findMany({ where: { listId: 'bob-list' } })).map((i) => i.productId)
+      ).toEqual(['milk-global']);
+      expect(await db.product.findMany({ orderBy: { id: 'asc' } })).toEqual([
+        expect.objectContaining({ id: 'milk-global', isGlobal: false, createdById: null }),
+      ]);
     });
 
     it('keeps a foreign reference to a formerly global product when it turns private during deletion', async () => {

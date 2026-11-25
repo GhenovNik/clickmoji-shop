@@ -32,14 +32,13 @@
     "currentPasswordRequired": "Enter your current password",
     "incorrectCurrentPassword": "Current password is incorrect",
     "passwordUpdated": "Password updated",
-    "passwordChangedConcurrently": "Password was changed by another request. Please try again.",
+    "passwordChangedConcurrently": "Your password was just changed. Please try again.",
     "passwordUpdateFailed": "Failed to update password",
     "exportFailed": "Failed to export account data",
     "passwordRequiredToDelete": "Enter your current password to confirm deletion",
     "deleteConfirmationRequired": "Type \"{word}\" to confirm account deletion",
     "deleted": "Account deleted",
-    "deleteFailed": "Failed to delete account",
-    "deleteBlockedByForeignReferences": "Account cannot be deleted yet: other users' lists, favorites or history still reference your private products or their variants. Nothing was changed."
+    "deleteFailed": "Failed to delete account"
   },
   "lists": {
     "defaultNames": {

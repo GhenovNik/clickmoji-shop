@@ -5,8 +5,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { signOut, useSession } from 'next-auth/react';
 import { useFormatter, useTranslations } from 'next-intl';
-import { Download, Eye, EyeOff, KeyRound, ShieldAlert, Trash2, UserCheck } from 'lucide-react';
-import LegalLinks from '@/components/LegalLinks';
+import { Eye, EyeOff, KeyRound, ShieldAlert, Trash2, UserCheck } from 'lucide-react';
 import {
   getPasswordIssue,
   PASSWORD_MESSAGE_VALUES,
@@ -43,10 +42,6 @@ export default function AccountPage() {
   const [passwordLoading, setPasswordLoading] = useState(false);
   const [passwordError, setPasswordError] = useState('');
   const [passwordSuccess, setPasswordSuccess] = useState('');
-
-  const [exportLoading, setExportLoading] = useState(false);
-  const [exportError, setExportError] = useState('');
-  const [exportSuccess, setExportSuccess] = useState('');
 
   const [deleteInput, setDeleteInput] = useState('');
   const [showDeletePassword, setShowDeletePassword] = useState(false);
@@ -134,41 +129,6 @@ export default function AccountPage() {
       setPasswordError(t('page.loadError'));
     } finally {
       setPasswordLoading(false);
-    }
-  }
-
-  async function handleExport() {
-    setExportError('');
-    setExportSuccess('');
-    setExportLoading(true);
-    try {
-      const res = await fetch('/api/account/export', { cache: 'no-store' });
-      if (!res.ok) {
-        let message = t('export.failed');
-        try {
-          const data = (await res.json()) as { error?: string };
-          if (data.error) message = data.error;
-        } catch {
-          // Keep generic localized fallback when error body is not JSON.
-        }
-        setExportError(message);
-        return;
-      }
-
-      const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
-      const anchor = document.createElement('a');
-      anchor.href = url;
-      anchor.download = 'clickmoji-account-export.json';
-      document.body.appendChild(anchor);
-      anchor.click();
-      anchor.remove();
-      URL.revokeObjectURL(url);
-      setExportSuccess(t('export.success'));
-    } catch {
-      setExportError(t('export.failed'));
-    } finally {
-      setExportLoading(false);
     }
   }
 
@@ -472,42 +432,6 @@ export default function AccountPage() {
               <p className="text-sm text-blue-800">{t('password.googleNoticeBody')}</p>
             </div>
           )}
-        </section>
-
-        {/* Data Export */}
-        <section className="bg-card border border-border rounded-3xl shadow-soft p-5 sm:p-6 space-y-4">
-          <div className="flex items-center gap-2">
-            <Download className="w-5 h-5 text-primary shrink-0" aria-hidden="true" />
-            <h2 className="text-lg sm:text-xl font-bold text-foreground">{t('export.title')}</h2>
-          </div>
-          <p className="text-sm text-muted-foreground">{t('export.description')}</p>
-
-          {exportError && (
-            <div className="bg-red-50 text-red-700 px-4 py-3 rounded-xl text-sm">{exportError}</div>
-          )}
-
-          {exportSuccess && (
-            <div className="bg-green-50 text-green-700 px-4 py-3 rounded-xl text-sm">
-              {exportSuccess}
-            </div>
-          )}
-
-          <button
-            type="button"
-            onClick={() => void handleExport()}
-            disabled={exportLoading}
-            className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl border border-border bg-background hover:bg-muted text-foreground font-semibold text-sm disabled:opacity-50 transition-colors"
-          >
-            <Download className="w-4 h-4 shrink-0" aria-hidden="true" />
-            <span>{exportLoading ? t('export.downloading') : t('export.button')}</span>
-          </button>
-        </section>
-
-        {/* Legal */}
-        <section className="bg-card border border-border rounded-3xl shadow-soft p-5 sm:p-6 space-y-3">
-          <h2 className="text-lg sm:text-xl font-bold text-foreground">{t('legal.title')}</h2>
-          <p className="text-sm text-muted-foreground">{t('legal.description')}</p>
-          <LegalLinks />
         </section>
 
         {/* Delete Account */}
