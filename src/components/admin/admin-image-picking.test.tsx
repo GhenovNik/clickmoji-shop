@@ -60,7 +60,10 @@ function stubObjectUrls() {
   });
 }
 
-function renderProductForm(product = savedProduct, onSubmit = submitMock()) {
+function renderProductForm(
+  product: typeof savedProduct | typeof plainProduct = savedProduct,
+  onSubmit = submitMock()
+) {
   return {
     onSubmit,
     ...renderWithIntl(

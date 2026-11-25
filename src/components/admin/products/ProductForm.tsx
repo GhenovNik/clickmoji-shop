@@ -4,7 +4,8 @@ import Image from 'next/image';
 import { useState, useRef, useEffect } from 'react';
 import { useLocale, useTranslations } from 'next-intl';
 import { localizedName } from '@/lib/catalog-name';
-import { DICTIONARY_LANGUAGES, type DictionaryLanguage } from '@/lib/image-languages';
+import { IMAGE_LANGUAGES } from '@/lib/image-languages';
+import { imageLanguageLabel } from '@/lib/image-language-label';
 import { localizedImagesOf, type LocalizedImages } from '@/lib/product-image';
 import EmojiPicker from '../shared/EmojiPicker';
 import ImagePreviewButton from '../shared/ImagePreviewButton';
@@ -59,8 +60,7 @@ export type FormData = {
   variants?: ProductVariant[];
 };
 
-// The wording of one dictionary language's picture field. Typed per language: a language added to
-// the picture-language list fails the type check until its wording exists here.
+// The wording of one picture-language field.
 type PictureText = {
   savedLabel: string;
   newLabel: string;
@@ -92,7 +92,7 @@ export default function ProductForm({ product, categories, onSubmit, onCancel }:
     isCustom: product?.isCustom || false,
     imageUrl: product?.imageUrl || '',
     imageTextLocale: product?.imageTextLocale ?? null,
-    localizedImages: localizedImagesOf(product?.localizedImages, DICTIONARY_LANGUAGES),
+    localizedImages: localizedImagesOf(product?.localizedImages, IMAGE_LANGUAGES),
     variants: product?.variants || [],
   });
 
@@ -107,7 +107,7 @@ export default function ProductForm({ product, categories, onSubmit, onCancel }:
   const [savedImage] = useState(() => ({
     imageUrl: product?.imageUrl ?? '',
     imageTextLocale: product?.imageTextLocale ?? (null as string | null),
-    localizedImages: localizedImagesOf(product?.localizedImages, DICTIONARY_LANGUAGES),
+    localizedImages: localizedImagesOf(product?.localizedImages, IMAGE_LANGUAGES),
   }));
   // INV-1: every selection action bumps the sequence; an AI answer applies only while the
   // sequence still equals the value recorded at the request.
@@ -115,19 +115,32 @@ export default function ProductForm({ product, categories, onSubmit, onCancel }:
   const aiRequestSeq = useRef(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const mainPictureChanged = !!selectedFile || formData.imageUrl !== savedImage.imageUrl;
-  const languageChanged = (language: DictionaryLanguage) =>
+  const languageChanged = (language: string) =>
     formData.localizedImages[language] !== savedImage.localizedImages[language];
-  const hasNewPicture = mainPictureChanged || DICTIONARY_LANGUAGES.some(languageChanged);
+  const hasNewPicture = mainPictureChanged || IMAGE_LANGUAGES.some(languageChanged);
   const newMainPreview = selectedFile ? filePreviewUrl : formData.imageUrl || null;
 
-  const pictureText: Record<DictionaryLanguage, PictureText> = {
-    en: {
-      savedLabel: t('shared.nowEnglishImage'),
-      newLabel: t('shared.newEnglishImage'),
-      currentLabel: t('productForm.englishVersion'),
-      currentAlt: t('productForm.englishVersionAlt'),
-      removeLabel: t('productForm.removeEnglishVersion'),
-    },
+  // Every language of the picture list gets a field. English keeps its own wording; any other
+  // language (listed later, or only in a test) uses the generic wording with its name or code.
+  const pictureText = (language: string): PictureText => {
+    if (language === 'en') {
+      return {
+        savedLabel: t('shared.nowEnglishImage'),
+        newLabel: t('shared.newEnglishImage'),
+        currentLabel: t('productForm.englishVersion'),
+        currentAlt: t('productForm.englishVersionAlt'),
+        removeLabel: t('productForm.removeEnglishVersion'),
+      };
+    }
+    const code = language.toUpperCase();
+    const name = imageLanguageLabel(language, locale);
+    return {
+      savedLabel: t('shared.nowLanguageImage', { code }),
+      newLabel: t('shared.newLanguageImage', { code }),
+      currentLabel: t('productForm.languageVersion', { language: name }),
+      currentAlt: t('productForm.languageVersionAlt', { language: name }),
+      removeLabel: t('productForm.removeLanguageVersion', { language: name }),
+    };
   };
 
   const clearFileInput = () => {
@@ -137,7 +150,7 @@ export default function ProductForm({ product, categories, onSubmit, onCancel }:
 
   // Deleting a language's picture is a selection action: a pending AI answer must not replace
   // the main picture or report its result (AGE-1626).
-  const removeLanguagePicture = (language: DictionaryLanguage) => {
+  const removeLanguagePicture = (language: string) => {
     selectionSeq.current += 1;
     setFormData((prev) => {
       const localizedImages = { ...prev.localizedImages };
@@ -219,10 +232,7 @@ export default function ProductForm({ product, categories, onSubmit, onCancel }:
 
     // FR-2: an unchecked custom-image box saves no picture; the stored file is not deleted.
     if (!formData.isCustom) {
-      await onSubmit(
-        { ...formData, imageUrl: '', imageTextLocale: null, localizedImages: {} },
-        ''
-      );
+      await onSubmit({ ...formData, imageUrl: '', imageTextLocale: null, localizedImages: {} }, '');
       return;
     }
 
@@ -521,8 +531,8 @@ export default function ProductForm({ product, categories, onSubmit, onCancel }:
                 </div>
               )
             )}
-            {DICTIONARY_LANGUAGES.map((language) => {
-              const text = pictureText[language];
+            {IMAGE_LANGUAGES.map((language) => {
+              const text = pictureText(language);
               const current = formData.localizedImages[language];
               const saved = savedImage.localizedImages[language];
               if (languageChanged(language)) {

@@ -6,9 +6,11 @@ import { auth } from '@/lib/auth';
 import { visibleProductsWhere } from '@/lib/product-visibility';
 import { getRequestLocale } from '@/lib/auth-security';
 import { sortByDisplayedName } from '@/lib/catalog-sort';
-import { DICTIONARY_LANGUAGES } from '@/lib/image-languages';
-import { legacyEnglishOf, localizedImagesForStorage } from '@/lib/picture-storage';
-import { localizedImagesOf } from '@/lib/product-image';
+import {
+  legacyEnglishOf,
+  localizedImagesForStorage,
+  mergeLocalizedImages,
+} from '@/lib/picture-storage';
 
 export async function GET(request: Request) {
   try {
@@ -109,6 +111,8 @@ export async function POST(request: Request) {
       );
     }
 
+    // A new product has no stored dictionary: only the listed picture languages are accepted.
+    const pictures = mergeLocalizedImages(null, localizedImages);
     const product = await prisma.product.create({
       data: {
         name,
@@ -118,8 +122,8 @@ export async function POST(request: Request) {
         isCustom: isCustom || false,
         imageUrl: imageUrl || null,
         imageTextLocale: imageTextLocale || null,
-        localizedImages: localizedImagesForStorage(localizedImages),
-        imageUrlEn: legacyEnglishOf(localizedImagesOf(localizedImages, DICTIONARY_LANGUAGES)),
+        localizedImages: localizedImagesForStorage(pictures),
+        imageUrlEn: legacyEnglishOf(pictures),
         variants: Array.isArray(variants)
           ? {
               create: variants

@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { collectReferencedFileKeys, storedFileKey } from './stored-image-references';
 
 function reader(rows: {
-  products?: { imageUrl: string | null; imageUrlEn: string | null; localizedImages?: unknown }[];
+  products?: { imageUrl: string | null; localizedImages?: unknown }[];
   categories?: { imageUrl: string | null; isCustom: boolean }[];
   library?: { imageUrl: string }[];
 }) {
@@ -38,7 +38,6 @@ describe('collectReferencedFileKeys', () => {
         products: [
           {
             imageUrl: null,
-            imageUrlEn: null,
             localizedImages: { en: 'https://utfs.io/f/dictionary-only' },
           },
         ],
@@ -52,8 +51,17 @@ describe('collectReferencedFileKeys', () => {
     const { keys, counts } = await collectReferencedFileKeys(
       reader({
         products: [
-          { imageUrl: 'https://utfs.io/f/main', imageUrlEn: 'https://utfs.io/f/english' },
-          { imageUrl: null, imageUrlEn: 'https://3kv5vvupx6.ufs.sh/f/only-english' },
+          {
+            imageUrl: 'https://utfs.io/f/main',
+            localizedImages: { en: 'https://utfs.io/f/english' },
+          },
+          {
+            imageUrl: null,
+            localizedImages: {
+              en: 'https://3kv5vvupx6.ufs.sh/f/only-english',
+              xx: 'https://utfs.io/f/xx',
+            },
+          },
         ],
         categories: [{ imageUrl: 'https://utfs.io/f/category', isCustom: true }],
         library: [{ imageUrl: 'https://utfs.io/f/library' }],
@@ -61,9 +69,29 @@ describe('collectReferencedFileKeys', () => {
     );
 
     expect([...keys].sort()).toEqual(
-      ['category', 'english', 'library', 'main', 'only-english'].sort()
+      ['category', 'english', 'library', 'main', 'only-english', 'xx'].sort()
     );
     expect(counts).toEqual({ products: 2, categories: 1, library: 1 });
+  });
+});
+
+describe('collectReferencedFileKeys with an extra reference reader', () => {
+  it('keeps a file that only the extra reader knows', async () => {
+    const extra = vi.fn(async () => ['https://utfs.io/f/legacy-only', null]);
+    const { keys } = await collectReferencedFileKeys(reader({}), extra);
+
+    expect(keys.has('legacy-only')).toBe(true);
+    expect(extra).toHaveBeenCalledTimes(1);
+  });
+
+  it('stops the collection when the extra reader fails, so nothing is judged unused', async () => {
+    const extra = vi.fn(async () => {
+      throw new Error('column does not exist');
+    });
+
+    await expect(collectReferencedFileKeys(reader({}), extra)).rejects.toThrow(
+      'column does not exist'
+    );
   });
 });
 

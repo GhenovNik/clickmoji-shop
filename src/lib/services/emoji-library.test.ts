@@ -1,9 +1,11 @@
 // @vitest-environment node
+import { Prisma } from '@prisma/client';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const db = vi.hoisted(() => ({
   libraryCount: vi.fn(),
   productCount: vi.fn(),
+  productFindMany: vi.fn(),
   categoryCount: vi.fn(),
   upsert: vi.fn(),
   findMany: vi.fn(),
@@ -12,7 +14,7 @@ const db = vi.hoisted(() => ({
 vi.mock('@/lib/prisma', () => ({
   prisma: {
     emojiLibraryItem: { count: db.libraryCount, upsert: db.upsert, findMany: db.findMany },
-    product: { count: db.productCount },
+    product: { count: db.productCount, findMany: db.productFindMany },
     category: { count: db.categoryCount },
   },
 }));
@@ -25,6 +27,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   db.libraryCount.mockResolvedValue(0);
   db.productCount.mockResolvedValue(0);
+  db.productFindMany.mockResolvedValue([]);
   db.categoryCount.mockResolvedValue(0);
   vi.spyOn(console, 'error').mockImplementation(() => {});
 });
@@ -33,14 +36,12 @@ describe('isStoredImageInUse', () => {
   it('is free to delete when nothing else shows the file', async () => {
     expect(await isStoredImageInUse(URL_A, { productId: 'p1' })).toBe(false);
     expect(db.productCount).toHaveBeenCalledWith({
-      where: {
-        OR: [
-          { imageUrl: URL_A },
-          { imageUrlEn: URL_A },
-          { localizedImages: { path: ['en'], equals: URL_A } },
-        ],
-        id: { not: 'p1' },
-      },
+      where: { imageUrl: URL_A, id: { not: 'p1' } },
+    });
+    // The dictionary is read whole, so no language has to be named to protect its file.
+    expect(db.productFindMany).toHaveBeenCalledWith({
+      where: { localizedImages: { not: Prisma.DbNull }, id: { not: 'p1' } },
+      select: { localizedImages: true },
     });
   });
 
@@ -49,11 +50,23 @@ describe('isStoredImageInUse', () => {
     expect(await isStoredImageInUse(URL_A, { productId: 'p1' })).toBe(true);
   });
 
-  it('keeps a file that is only the English picture of a product', async () => {
-    db.productCount.mockImplementation(async ({ where }) =>
-      where.OR.some((condition: { imageUrlEn?: string }) => condition.imageUrlEn === URL_A) ? 1 : 0
-    );
-    expect(await isStoredImageInUse(URL_A)).toBe(true);
+  it.each(['en', 'ru', 'es', 'xx'])(
+    'keeps a file that is only the %s picture of a product, listed language or not',
+    async (language) => {
+      db.productFindMany.mockResolvedValue([
+        { localizedImages: { en: 'https://utfs.io/f/other.webp' } },
+        { localizedImages: { [language]: URL_A } },
+      ]);
+      expect(await isStoredImageInUse(URL_A)).toBe(true);
+    }
+  );
+
+  it('ignores a dictionary that only holds other files or is malformed', async () => {
+    db.productFindMany.mockResolvedValue([
+      { localizedImages: { en: 'https://utfs.io/f/other.webp' } },
+      { localizedImages: 'broken' },
+    ]);
+    expect(await isStoredImageInUse(URL_A)).toBe(false);
   });
 
   it('keeps a file another product or category shows', async () => {
@@ -63,6 +76,11 @@ describe('isStoredImageInUse', () => {
     db.productCount.mockResolvedValue(0);
     db.categoryCount.mockResolvedValue(1);
     expect(await isStoredImageInUse(URL_A, { categoryId: 'c1' })).toBe(true);
+  });
+
+  it('keeps the file when reading the dictionaries fails', async () => {
+    db.productFindMany.mockRejectedValue(new Error('connection lost'));
+    expect(await isStoredImageInUse(URL_A)).toBe(true);
   });
 
   it('keeps the file when the check fails, e.g. before the migration is applied', async () => {

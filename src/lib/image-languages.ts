@@ -1,20 +1,21 @@
-// Languages a product picture can be stored in (`localizedImages`). This list is separate from the
-// interface languages: a picture language may exist before its interface translation does.
-// Adding a picture language is one line here; the selector, the saved dictionary and the admin
-// form follow it. The admin form has one picture field per language that is not the main one.
-export const IMAGE_LANGUAGES = ['ru', 'en'] as const;
+// The one list of picture languages: the languages a product picture can be stored in
+// (`localizedImages`). It is separate from the interface languages: a picture language may exist
+// before its interface translation does.
+//
+// Adding a picture language is one line here (and, when it needs a stand-in, one line in
+// IMAGE_FALLBACK). The selector, the saved dictionary, the admin form, the library picker and the
+// batch import follow the list; nothing outside this file names a language.
+//
+// The list says which languages the ADMIN may edit and which the LIBRARY fills. It never decides
+// which dictionary entries are kept: entries of a language that is not (or no longer) listed stay
+// in the data and in every copy of it (history snapshots, merged duplicates, edits).
+export const IMAGE_LANGUAGES: readonly string[] = ['ru', 'en'];
 
-export type ImageLanguage = (typeof IMAGE_LANGUAGES)[number];
-
-// The main picture (`imageUrl`) is Russian or text-free; it is not stored in the dictionary.
-export const MAIN_IMAGE_LANGUAGE = 'ru' as const;
-
-export type DictionaryLanguage = Exclude<ImageLanguage, typeof MAIN_IMAGE_LANGUAGE>;
-
-// The languages whose pictures live in the dictionary.
-export const DICTIONARY_LANGUAGES: readonly DictionaryLanguage[] = IMAGE_LANGUAGES.filter(
-  (language): language is DictionaryLanguage => language !== MAIN_IMAGE_LANGUAGE
-);
+// The language of the main picture (`imageUrl`) when it has text: a library picture in this
+// language, or without a language, becomes the main picture; the other languages become
+// dictionary entries. A dictionary entry for this language is still allowed (a product whose main
+// picture carries another language's text can hold its Russian version there).
+export const MAIN_IMAGE_LANGUAGE = 'ru';
 
 // Where a language without a picture of its own borrows from. Languages not listed have none.
 export const IMAGE_FALLBACK: Readonly<Record<string, string>> = { es: 'en' };

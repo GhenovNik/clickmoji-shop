@@ -87,7 +87,5 @@ export function productImageUrl(
   const candidates = productPictureCandidates(picture, locale);
   const { isAvailable } = options;
   if (!isAvailable) return candidates[0] ?? null;
-  return (
-    candidates.find(isAvailable) ?? productPictureUrls(picture).find(isAvailable) ?? null
-  );
+  return candidates.find(isAvailable) ?? productPictureUrls(picture).find(isAvailable) ?? null;
 }

@@ -7,7 +7,7 @@ import {
   sanitizeBackfillError,
   totalsOf,
   type BackfillPlan,
-} from '../src/lib/services/localized-pictures-backfill';
+} from './lib/localized-pictures-backfill';
 
 // Fills imageTextLocale and localizedImages on Product, ProductVariant and ListHistoryItem from the
 // legacy imageUrl / imageUrlEn columns and the emoji library (AGE-1667). The legacy columns are

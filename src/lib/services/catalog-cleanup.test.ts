@@ -219,7 +219,11 @@ describe('applyCatalogCleanup', () => {
     db.productVariant.rows.push(existingVariant());
     await run(db);
     expect(db.productVariant.rows).toEqual([
-      existingVariant({ imageUrl: '/hc.webp', imageUrlEn: '/hc-en.webp', localizedImages: { en: '/hc-en.webp' } }),
+      existingVariant({
+        imageUrl: '/hc.webp',
+        imageUrlEn: '/hc-en.webp',
+        localizedImages: { en: '/hc-en.webp' },
+      }),
     ]);
     expect(db.item.rows.find((row) => row.id === 'i-2')).toMatchObject({
       productId: 'apple',

@@ -1,9 +1,12 @@
 # UploadThing Image Cleanup
 
 `scripts/db-files.ts` compares UploadThing storage with every picture reference in PostgreSQL
-(`src/lib/services/stored-image-references.ts`): both pictures of a product (`imageUrl`,
-`imageUrlEn`), every category `imageUrl` whatever its `isCustom` flag says, and every emoji
-library picture.
+(`src/lib/services/stored-image-references.ts`): the main picture of a product (`imageUrl`) and
+every entry of its picture dictionary (`localizedImages`, any language), every category `imageUrl`
+whatever its `isCustom` flag says, and every emoji library picture. The script also passes the
+legacy English column `imageUrlEn` (`scripts/lib/legacy-picture-references.ts`): the application no
+longer reads it, but a row written before the dictionary was filled may reference a file only
+there. A failed read of any source stops the run.
 
 ## Run it only with the app stopped
 
@@ -49,6 +52,7 @@ dry-run mode and should be treated as an operator-only recovery tool, under the 
 
 ## Scope
 
-- Product (`imageUrl`, `imageUrlEn`), category and emoji library pictures are preserved.
+- Product (`imageUrl`, `localizedImages`, legacy `imageUrlEn`), category and emoji library pictures
+  are preserved.
 - Unicode emoji are not stored in UploadThing and are unaffected.
 - User avatars are not part of the current application upload surface.

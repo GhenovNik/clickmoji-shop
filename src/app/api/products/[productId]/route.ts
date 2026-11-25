@@ -2,9 +2,11 @@ import { NextResponse } from 'next/server';
 import { apiText } from '@/lib/api-messages';
 import { prisma } from '@/lib/prisma';
 import { requireAdmin } from '@/lib/auth-guards';
-import { DICTIONARY_LANGUAGES } from '@/lib/image-languages';
-import { legacyEnglishOf, localizedImagesForStorage } from '@/lib/picture-storage';
-import { localizedImagesOf } from '@/lib/product-image';
+import {
+  legacyEnglishOf,
+  localizedImagesForStorage,
+  mergeLocalizedImages,
+} from '@/lib/picture-storage';
 
 // Replaced or deleted pictures are not removed from UploadThing here. Between checking that
 // nothing shows a file and deleting it, another request could attach the same URL again, leaving
@@ -34,6 +36,19 @@ export async function PUT(
     } = body;
 
     const product = await prisma.$transaction(async (tx) => {
+      // The edit speaks for the listed picture languages; entries of other languages stay as stored.
+      const mergedPictures =
+        localizedImages !== undefined
+          ? mergeLocalizedImages(
+              (
+                await tx.product.findUnique({
+                  where: { id: productId },
+                  select: { localizedImages: true },
+                })
+              )?.localizedImages,
+              localizedImages
+            )
+          : undefined;
       const updatedProduct = await tx.product.update({
         where: { id: productId },
         data: {
@@ -44,9 +59,9 @@ export async function PUT(
           ...(isCustom !== undefined && { isCustom }),
           ...(imageUrl !== undefined && { imageUrl }),
           ...(imageTextLocale !== undefined && { imageTextLocale: imageTextLocale || null }),
-          ...(localizedImages !== undefined && {
-            localizedImages: localizedImagesForStorage(localizedImages),
-            imageUrlEn: legacyEnglishOf(localizedImagesOf(localizedImages, DICTIONARY_LANGUAGES)),
+          ...(mergedPictures !== undefined && {
+            localizedImages: localizedImagesForStorage(mergedPictures),
+            imageUrlEn: legacyEnglishOf(mergedPictures),
           }),
         },
       });

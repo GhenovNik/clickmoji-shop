@@ -1,5 +1,6 @@
 import { prisma } from '@/lib/prisma';
-import { DICTIONARY_LANGUAGES } from '@/lib/image-languages';
+import { Prisma } from '@prisma/client';
+import { localizedImagesOf } from '@/lib/product-image';
 
 export type EmojiLibrarySource = 'generated' | 'upload' | 'batch';
 
@@ -11,7 +12,7 @@ export type EmojiLibraryInput = {
   source: EmojiLibrarySource;
   sourceRef?: string | null;
   // null: no text on the picture; 'ru' / 'en': packaging text in that language.
-  locale?: 'ru' | 'en' | null;
+  locale?: string | null;
   groupKey?: string | null;
 };
 
@@ -85,6 +86,22 @@ export async function searchEmojiLibrary(query: string, limit = SEARCH_LIMIT) {
   return [...matches, ...siblings];
 }
 
+// How many products hold the URL in a picture-language entry. The dictionary is read in full:
+// a JSON path filter would have to name each language, and a language that is not listed (yet)
+// must keep its file as much as a listed one.
+async function referencedByDictionary(imageUrl: string, exceptProductId?: string) {
+  const rows = await prisma.product.findMany({
+    where: {
+      localizedImages: { not: Prisma.DbNull },
+      ...(exceptProductId && { id: { not: exceptProductId } }),
+    },
+    select: { localizedImages: true },
+  });
+  return rows.filter((row) =>
+    Object.values(localizedImagesOf(row.localizedImages)).includes(imageUrl)
+  ).length;
+}
+
 // A stored file may be deleted only when nothing else shows it: no library entry and no other
 // product or category. When the check itself fails the answer is "in use", so the file stays.
 export async function isStoredImageInUse(
@@ -92,28 +109,22 @@ export async function isStoredImageInUse(
   except: { productId?: string; categoryId?: string } = {}
 ) {
   try {
-    const [library, products, categories] = await Promise.all([
+    const [library, products, dictionaries, categories] = await Promise.all([
       prisma.emojiLibraryItem.count({ where: { imageUrl } }),
-      // Any picture of a product keeps the file: a language picture may be the only reference.
-      // The legacy English column stays in the check until it is dropped (AGE-1667 Я6): a row
-      // written before the dictionary is the only place that reference may exist.
+      // Any picture of a product keeps the file: the main one, and an entry of the dictionary
+      // whatever its language (a language the picture list does not cover yet included).
       prisma.product.count({
         where: {
-          OR: [
-            { imageUrl },
-            { imageUrlEn: imageUrl },
-            ...DICTIONARY_LANGUAGES.map((language) => ({
-              localizedImages: { path: [language], equals: imageUrl },
-            })),
-          ],
+          imageUrl,
           ...(except.productId && { id: { not: except.productId } }),
         },
       }),
+      referencedByDictionary(imageUrl, except.productId),
       prisma.category.count({
         where: { imageUrl, ...(except.categoryId && { id: { not: except.categoryId } }) },
       }),
     ]);
-    return library + products + categories > 0;
+    return library + products + dictionaries + categories > 0;
   } catch (error) {
     console.error('Failed to check whether a stored image is in use:', error);
     return true;

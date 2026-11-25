@@ -96,15 +96,61 @@ describe('product picture files', () => {
     expect(state.deleted).toEqual([]);
   });
 
-  it('stores the picture languages and mirrors English into the legacy column', async () => {
+  it('stores every listed picture language and mirrors English into the legacy column', async () => {
     await put('b', {
       imageUrl: X,
       localizedImages: { en: 'https://utfs.io/f/x-en', ru: 'https://utfs.io/f/x-ru' },
     });
 
-    expect(state.products.get('b')).toMatchObject({
+    expect(state.products.get('b')).toEqual({
+      imageUrl: X,
       imageUrlEn: 'https://utfs.io/f/x-en',
-      localizedImages: { en: 'https://utfs.io/f/x-en' },
+      localizedImages: { en: 'https://utfs.io/f/x-en', ru: 'https://utfs.io/f/x-ru' },
+    });
+  });
+
+  it('keeps the entries of a language outside the list when the form saves its own languages', async () => {
+    state.products.set('a', {
+      imageUrl: X,
+      imageUrlEn: 'https://utfs.io/f/x-en',
+      localizedImages: { en: 'https://utfs.io/f/x-en', es: 'https://utfs.io/f/x-es' },
+    });
+
+    // The form shows only the listed languages: removing English must not touch Spanish.
+    await put('a', { imageUrl: X, localizedImages: {} });
+
+    expect(state.products.get('a')).toMatchObject({
+      imageUrlEn: null,
+      localizedImages: { es: 'https://utfs.io/f/x-es' },
+    });
+  });
+
+  it('ignores an edit of a language outside the list', async () => {
+    state.products.set('a', {
+      imageUrl: X,
+      imageUrlEn: null,
+      localizedImages: { es: 'https://utfs.io/f/x-es' },
+    });
+
+    await put('a', {
+      localizedImages: { es: 'https://utfs.io/f/replaced', fr: 'https://utfs.io/f/x-fr' },
+    });
+
+    expect(state.products.get('a')?.localizedImages).toEqual({ es: 'https://utfs.io/f/x-es' });
+  });
+
+  it('leaves the dictionary alone when the request does not mention it', async () => {
+    state.products.set('a', {
+      imageUrl: X,
+      imageUrlEn: 'https://utfs.io/f/x-en',
+      localizedImages: { en: 'https://utfs.io/f/x-en', es: 'https://utfs.io/f/x-es' },
+    });
+
+    await put('a', { name: 'Кефир' });
+
+    expect(state.products.get('a')).toMatchObject({
+      imageUrlEn: 'https://utfs.io/f/x-en',
+      localizedImages: { en: 'https://utfs.io/f/x-en', es: 'https://utfs.io/f/x-es' },
     });
   });
 

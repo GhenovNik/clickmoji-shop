@@ -1,5 +1,4 @@
 import type { Prisma } from '@prisma/client';
-import { DICTIONARY_LANGUAGES } from '../image-languages';
 import { legacyEnglishOf, localizedImagesForStorage } from '../picture-storage';
 import { localizedImagesOf, type LocalizedImages } from '../product-image';
 
@@ -151,9 +150,7 @@ export async function applyCatalogCleanup(
           imageUrl: drop.imageUrl,
           imageTextLocale: drop.imageTextLocale,
           localizedImages: localizedImagesForStorage(drop.localizedImages),
-          imageUrlEn: legacyEnglishOf(
-            localizedImagesOf(drop.localizedImages, DICTIONARY_LANGUAGES)
-          ),
+          imageUrlEn: legacyEnglishOf(localizedImagesOf(drop.localizedImages)),
         },
       });
     }
@@ -190,8 +187,9 @@ export async function applyCatalogCleanup(
     ) {
       throw new Error(`Ambiguous or conflicting variant ${step.name} / ${step.nameEn}`);
     }
+    // Every dictionary entry moves, including the languages the picture list does not cover.
     const childLocalized: LocalizedImages = child.isCustom
-      ? localizedImagesOf(child.localizedImages, DICTIONARY_LANGUAGES)
+      ? localizedImagesOf(child.localizedImages)
       : {};
     const pictures = {
       imageUrl: child.isCustom ? child.imageUrl : null,
@@ -199,13 +197,13 @@ export async function applyCatalogCleanup(
       localized: childLocalized,
     };
     const existingLocalized: LocalizedImages = existing
-      ? localizedImagesOf(existing.localizedImages, DICTIONARY_LANGUAGES)
+      ? localizedImagesOf(existing.localizedImages)
       : {};
     // Never silently overwrite a different existing picture, or lose the child's picture.
     if (existing?.imageUrl && pictures.imageUrl && existing.imageUrl !== pictures.imageUrl) {
       throw new Error(`Conflicting variant ${step.name}: imageUrl`);
     }
-    for (const language of DICTIONARY_LANGUAGES) {
+    for (const language of Object.keys(pictures.localized)) {
       const current = existingLocalized[language];
       const next = pictures.localized[language];
       if (current && next && current !== next) {

@@ -43,8 +43,13 @@
   (`imageTextLocale`: empty = unlabelled, `none` = no text, otherwise a language) and the dictionary
   `localizedImages` (`{"<language>": "<url>"}`). The picture languages are listed in
   `src/lib/image-languages.ts`; the five selection steps are tested in `product-image.test.ts`.
-- `imageUrlEn` is a legacy mirror of the English dictionary entry, kept until AGE-1667 Я6: no
-  display reads it.
+- `imageUrl` has no language of its own in the dictionary, but the dictionary may hold an entry for
+  any listed language, the main one included: a product whose main picture carries another
+  language's text keeps its Russian version in `localizedImages.ru`.
+- `imageUrlEn` is a legacy mirror of the English dictionary entry, kept until AGE-1667 Ya6. It is
+  write-only: every writer under `src` stores it next to the dictionary (the way back to the
+  previous release), nothing under `src` reads it. The tooling that still reads it lives outside
+  `src` (see the decisions below).
 - History snapshots copy the English names and picture next to the Russian ones. Snapshots taken
   before this change keep only their Russian copy: they are not filled from today's catalogue.
 - Search (`src/lib/services/product-search.ts`) finds products by either language and ranks
@@ -54,6 +59,47 @@
 - The data stays in per-language columns rather than a translations table: there are two
   languages, search indexes both columns directly, and every read goes through the two helpers
   above, so moving to a table later only changes those helpers and the queries.
+
+## Decisions (AGE-1667 Ya3, fix round)
+
+- **One list, nothing else names a language.** `IMAGE_LANGUAGES` in `src/lib/image-languages.ts`
+  is the only place a picture language is added. The admin form draws one picture field per listed
+  language (the main language included), the library picker fills every listed language, the
+  product API accepts edits for them, and the selector needs no list at all. A field's label
+  falls back from the interface wording (English has its own) to the platform's language name
+  (`Intl.DisplayNames`) to the upper-case code, so a new language needs no message and no type
+  entry. `src/components/admin/image-language-list.test.tsx` adds an invented `xx` to the list
+  only and checks the selector, the stored dictionary, the library grouping and the form.
+- **The list limits edits, never data.** Entries of a language that is not (or not yet) listed
+  survive every write: the product API replaces the listed languages with the edit and keeps the
+  rest as stored (`mergeLocalizedImages`), a history snapshot and a merged duplicate copy the whole
+  dictionary, and the batch import changes only its `en` entry. An edit of an unlisted language is
+  ignored, so a stale form can neither erase nor add one. Rows written before this change with a
+  dictionary of unlisted languages keep them.
+- **No `imageUrlEn` read under `src`.** The batch import's compare-and-set (`emoji-batch-import.ts`)
+  reads and conditions on the dictionary: a queue write applies only while the main picture is empty
+  and the dictionary is exactly as read (`localizedImages` equals the value read, or SQL NULL), so a
+  picture, or any language, attached between the read and the write is never replaced or lost; a
+  failed condition is re-read and reported as before. A historical cell writes by id unless it
+  changes the dictionary of a record it read, in which case the same condition applies. An English
+  entry is rewritten only when it changes. The exported-catalogue parser (`scripts/lib/catalog-export.ts`)
+  and the Ya2 backfill (`scripts/lib/localized-pictures-backfill.ts`) are the readers of the legacy
+  column left; both are tooling outside `src` with their own tests (`vitest` includes
+  `scripts/lib`), and the parser reads `localizedImages.en` first, then `imageUrlEn` of an older
+  export.
+- **Deletion safety.** `isStoredImageInUse` (runtime) keeps a file that any dictionary entry of any
+  product shows, listed language or not, and keeps the file when the check fails. The runtime no
+  longer looks at `imageUrlEn`: a row can reference a file only there if a release before the
+  dictionary wrote it after the last backfill. So the offline cleanup (`npm run db:files`) still
+  passes the legacy column to the shared collector (`scripts/lib/legacy-picture-references.ts`) and
+  stops when that read fails. Rollout order that keeps this safe: run the Ya2 backfill, switch the
+  code, run the backfill again, and only then run any file cleanup.
+- **Rollback.** Writes keep mirroring the English entry into `imageUrlEn` (products, variants,
+  history rows, the importer, catalogue cleanup), so the previous release shows the same pictures
+  until Ya6.
+- **Not done here.** Marking `imageTextLocale` from an import, importing a library cell into every
+  product of its group, and the gap report belong to Ya4 and Ya5; the picture reserve for offline
+  mode belongs to the offline plan.
 
 ## Not localized yet
 

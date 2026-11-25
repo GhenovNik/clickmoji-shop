@@ -1,4 +1,4 @@
-import { DICTIONARY_LANGUAGES, MAIN_IMAGE_LANGUAGE } from './image-languages';
+import { IMAGE_LANGUAGES, MAIN_IMAGE_LANGUAGE } from './image-languages';
 import { TEXT_LOCALE_NONE } from './product-image';
 
 export type LibraryItem = {
@@ -41,7 +41,9 @@ export function groupLibraryItems(items: LibraryItem[]): LibraryPicture[] {
     // Without a main picture, the labelled version names the group (as the English one did before).
     const shown = (main ?? members.find((item) => !!item.locale) ?? members[0])!;
     const localizedImages: Record<string, string> = {};
-    for (const language of DICTIONARY_LANGUAGES) {
+    for (const language of IMAGE_LANGUAGES) {
+      // The main language's picture is the main picture, never a dictionary entry.
+      if (language === MAIN_IMAGE_LANGUAGE) continue;
       const version = members.find((item) => item.locale === language);
       if (version) localizedImages[language] = version.imageUrl;
     }
