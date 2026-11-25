@@ -17,6 +17,7 @@ import {
   getServerTranslator,
   rateLimitResponse,
 } from '@/lib/auth-security';
+import { markLocalizedApiError } from '@/lib/api-error-source';
 import { runTextAiCall } from '@/lib/text-ai-call';
 import { textAiErrorCode } from '@/lib/services/text-ai-errors';
 import {
@@ -36,10 +37,20 @@ export const maxDuration = 60;
 
 type CatalogProduct = CatalogProductPromptEntry & { categoryId: string };
 
+// Every error this handler returns (guard, body limits, rate limit, AI quota, its own checks) is
+// marked, so the import window can tell them from a gateway's JSON error.
 export async function POST(request: Request) {
+  return markLocalizedApiError(await importListText(request));
+}
+
+async function importListText(request: Request) {
   const locale = getRequestLocale(request);
   // Every message the import window shows is in the request's language.
   const t = getServerTranslator(locale);
+  // Fallback for an entry without a usable name, in the request language.
+  const unrecognizedName = t('api.import.unrecognizedName');
+  const failedRow = (entry: unknown, reason: string) =>
+    failedEntry(entry, reason, unrecognizedName);
   try {
     const guard = await requireUser();
     if (guard instanceof Response) return guard;
@@ -168,7 +179,7 @@ export async function POST(request: Request) {
     };
 
     for (const entry of invalidEntries) {
-      results.failed.push(failedEntry(entry, t('api.import.unrecognizedEntry')));
+      results.failed.push(failedRow(entry, t('api.import.unrecognizedEntry')));
     }
 
     // Ids the model was shown are trusted only when they belong to the catalog in its prompt;
@@ -208,7 +219,7 @@ export async function POST(request: Request) {
         if (!dbProduct) {
           if (!nameRu || !nameEn || !product.categoryName.trim()) {
             results.failed.push(
-              failedEntry(
+              failedRow(
                 product,
                 product.existingProductId
                   ? t('api.import.unknownProductReference')
@@ -222,7 +233,7 @@ export async function POST(request: Request) {
 
           if (!category) {
             results.failed.push(
-              failedEntry(
+              failedRow(
                 product,
                 t('api.import.categoryNotFound', { category: product.categoryName })
               )
@@ -271,7 +282,7 @@ export async function POST(request: Request) {
       } catch (error) {
         // Log only an allowlisted code, never prompts or upstream error details.
         console.error('Error importing a list entry:', textAiErrorCode(error));
-        results.failed.push(failedEntry(product, t('api.import.entryFailed')));
+        results.failed.push(failedRow(product, t('api.import.entryFailed')));
       }
     }
 
@@ -325,10 +336,7 @@ function findCategory<T extends { name: string; nameEn: string }>(
 // the import report can always be rendered. Missing, empty or non-string names get a fallback.
 type FailedEntry = { product: { nameRu: string; nameEn: string }; reason: string };
 
-const UNRECOGNIZED_NAME_RU = 'Нераспознанная позиция';
-const UNRECOGNIZED_NAME_EN = 'Unrecognized item';
-
-function failedEntry(entry: unknown, reason: string): FailedEntry {
+function failedEntry(entry: unknown, reason: string, unrecognizedName: string): FailedEntry {
   const { nameRu, nameEn } = (entry && typeof entry === 'object' ? entry : {}) as Record<
     string,
     unknown
@@ -337,8 +345,10 @@ function failedEntry(entry: unknown, reason: string): FailedEntry {
     typeof value === 'string' && value.trim() ? value.trim() : fallback;
   return {
     product: {
-      nameRu: text(nameRu, UNRECOGNIZED_NAME_RU),
-      nameEn: text(nameEn, UNRECOGNIZED_NAME_EN),
+      // An English name is never invented: an empty one stays empty and the report falls back to
+      // the Russian name, as in the rest of the catalog.
+      nameRu: text(nameRu, unrecognizedName),
+      nameEn: text(nameEn, ''),
     },
     reason,
   };

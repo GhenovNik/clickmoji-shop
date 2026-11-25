@@ -28,7 +28,7 @@ test.describe('Auth flows', () => {
 
     if (currentUrl.includes('registered=verify')) {
       await expect(
-        page.getByText('Регистрация успешна! Проверьте почту и подтвердите email.')
+        page.getByText('Регистрация успешна! Проверьте почту и подтвердите электронную почту.')
       ).toBeVisible();
       return;
     }

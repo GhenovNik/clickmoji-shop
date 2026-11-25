@@ -9,7 +9,8 @@ import { useLocale, useTranslations } from 'next-intl';
 import { listsQueryKey, useActiveList } from '@/hooks/useListsQuery';
 import { queryKeys } from '@/lib/query-keys';
 import { refreshQueryCache } from '@/lib/refresh-query-cache';
-import { localizedName } from '@/lib/catalog-name';
+import { localizedName, namesOf } from '@/lib/catalog-name';
+import { LocalizedName } from '@/components/ui/LocalizedName';
 import { productImageUrl } from '@/lib/product-image';
 import { cn } from '@/lib/utils';
 import { settleCatalogAddAttempt, type CatalogAddAttempt } from '@/lib/catalog-add-attempt';
@@ -59,6 +60,10 @@ const addProductToListAPI = async (
   return res.json();
 };
 
+// A message the server wrote for the request language. Any other failure (a page that is not JSON,
+// a network error) has no text the user can read, so it gets the localized fallback instead.
+class ServerMessageError extends Error {}
+
 const createSmartProductAPI = async (productName: string) => {
   const res = await fetch('/api/products/smart-create', {
     method: 'POST',
@@ -66,8 +71,11 @@ const createSmartProductAPI = async (productName: string) => {
     body: JSON.stringify({ productName }),
   });
   if (!res.ok) {
-    const error = await res.json();
-    throw new Error(error.error || 'Failed to create product');
+    const error: { error?: unknown } | null = await res.json().catch(() => null);
+    if (typeof error?.error === 'string' && error.error.trim()) {
+      throw new ServerMessageError(error.error);
+    }
+    throw new Error('Failed to create product');
   }
   return res.json();
 };
@@ -258,7 +266,7 @@ export default function ProductSearch({ compact = false }: { compact?: boolean }
             ? t(
                 catalogProduct.exists ? 'search.existingButAddFailed' : 'search.createdButAddFailed'
               )
-            : error instanceof Error
+            : error instanceof ServerMessageError
               ? error.message
               : t('search.createFailed')
         );
@@ -371,7 +379,11 @@ export default function ProductSearch({ compact = false }: { compact?: boolean }
                       <span className="text-3xl">{product.emoji}</span>
                     )}
                     <div className="flex-1 text-left">
-                      <p className="font-medium text-gray-900">{name}</p>
+                      <LocalizedName
+                        names={namesOf(product)}
+                        locale={locale}
+                        primaryClassName="font-medium text-gray-900"
+                      />
                       <p className="text-sm text-gray-500 flex items-center gap-1">
                         {product.category.isCustom && product.category.imageUrl ? (
                           <Image
@@ -384,7 +396,11 @@ export default function ProductSearch({ compact = false }: { compact?: boolean }
                         ) : (
                           <span>{product.category.emoji}</span>
                         )}
-                        <span>{localizedName(product.category, locale)}</span>
+                        <LocalizedName
+                          names={namesOf(product.category)}
+                          locale={locale}
+                          primaryOnly
+                        />
                       </p>
                       {product.variants && product.variants.length > 0 && (
                         <div className="mt-2">

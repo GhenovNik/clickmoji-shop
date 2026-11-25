@@ -7,6 +7,7 @@ import { useSession } from 'next-auth/react';
 import { useLocale, useTranslations } from 'next-intl';
 import { listsQueryKey, useActiveList } from '@/hooks/useListsQuery';
 import { queryKeys } from '@/lib/query-keys';
+import { localizedName } from '@/lib/catalog-name';
 import { refreshQueryCache } from '@/lib/refresh-query-cache';
 import {
   favoriteDisplay,
@@ -235,7 +236,8 @@ export default function FavoritesSection() {
       )}
       <div className="grid grid-cols-4 sm:grid-cols-6 md:grid-cols-8 lg:grid-cols-10 gap-3">
         {favorites.map((favorite) => {
-          const { name, imageUrl, emoji } = favoriteDisplay(favorite, locale);
+          const { entity, imageUrl, emoji } = favoriteDisplay(favorite, locale);
+          const name = localizedName(entity, locale);
           const state = activeListId ? feedback[addTargetKey(activeListId, favorite)] : undefined;
           return (
             <div key={favorite.id} className="relative group">

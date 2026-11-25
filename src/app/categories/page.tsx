@@ -11,7 +11,8 @@ import { useLists } from '@/store/lists';
 import ProductSearch from '@/components/ProductSearch';
 import { CategoryCardSkeleton } from '@/components/ui/Skeleton';
 import { queryKeys } from '@/lib/query-keys';
-import { localizedName } from '@/lib/catalog-name';
+import { localizedName, namesOf } from '@/lib/catalog-name';
+import { LocalizedName } from '@/components/ui/LocalizedName';
 
 type Category = {
   id: string;
@@ -119,7 +120,13 @@ function CategoriesPageContent() {
 
                       <div className="mt-auto -translate-y-1">
                         <h3 className="h-10 mb-0 text-base font-semibold leading-[1.1] text-gray-900 flex items-center justify-center">
-                          {categoryName}
+                          <LocalizedName
+                            names={namesOf(category)}
+                            locale={locale}
+                            primaryOnly
+                            className="text-center"
+                            primaryClassName="text-base font-semibold leading-[1.1] text-gray-900"
+                          />
                         </h3>
                         {category._count && (
                           <p className="text-sm text-gray-600 h-5 flex items-center justify-center">

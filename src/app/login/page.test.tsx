@@ -212,3 +212,38 @@ describe('the login page return address', () => {
     await waitFor(() => expect(nav.push).toHaveBeenCalledWith('/'));
   });
 });
+
+// Sign-in answers are shown in the interface language; the NextAuth result is the mock input.
+describe('the login page error messages', () => {
+  it.each([
+    ['ru', 'CredentialsSignin', 'Неверная электронная почта или пароль'],
+    ['en', 'CredentialsSignin', 'Wrong email or password'],
+    [
+      'ru',
+      'EmailNotVerified',
+      'Электронная почта не подтверждена. Проверьте почту для активации аккаунта.',
+    ],
+    ['en', 'EmailNotVerified', 'Email not confirmed. Check your inbox to activate your account.'],
+  ] as const)('shows the %s %s answer in the interface language', async (locale, code, text) => {
+    nextauth.signIn.mockResolvedValue({ error: code });
+
+    const { container } = renderWithIntl(<LoginPage />, { locale });
+    fillAndSubmit(container);
+
+    expect(await screen.findByText(text)).toBeTruthy();
+    expect(nav.push).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['ru', 'Ошибка входа'],
+    ['en', 'Sign-in failed'],
+  ] as const)('shows the %s failure when the sign-in request throws', async (locale, text) => {
+    nextauth.signIn.mockRejectedValue(new Error('network down'));
+
+    const { container } = renderWithIntl(<LoginPage />, { locale });
+    fillAndSubmit(container);
+
+    expect(await screen.findByText(text)).toBeTruthy();
+    expect(nav.push).not.toHaveBeenCalled();
+  });
+});

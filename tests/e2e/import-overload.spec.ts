@@ -25,7 +25,10 @@ for (const locale of ['ru', 'en'] as const) {
       if (requests.length === 1) {
         await route.fulfill({
           status: 503,
-          headers: { 'Retry-After': '60' },
+          headers: {
+            'Retry-After': '60',
+            [LOCALIZED_API_ERROR_HEADER]: LOCALIZED_API_ERROR_VALUE,
+          },
           json: { error: message },
         });
       } else {
@@ -73,3 +76,7 @@ for (const locale of ['ru', 'en'] as const) {
     expect(dialogs).toEqual([]);
   });
 }
+import {
+  LOCALIZED_API_ERROR_HEADER,
+  LOCALIZED_API_ERROR_VALUE,
+} from '../../src/lib/api-error-source';

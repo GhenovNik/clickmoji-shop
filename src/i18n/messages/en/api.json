@@ -69,6 +69,7 @@
     "noProductsFound": "No products found in the text",
     "importFailed": "Could not import the list",
     "unrecognizedEntry": "The AI returned an entry it could not recognise",
+    "unrecognizedName": "Unrecognized item",
     "unknownProductReference": "Reference to an unknown product",
     "categoryNotFound": "Category \"{category}\" not found",
     "entryFailed": "Could not add the item",
