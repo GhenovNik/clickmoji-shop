@@ -71,6 +71,8 @@ function createFakeDb(seed: FakeUser[], hooks?: { beforeDelete?: (users: FakeUse
       },
     },
   };
+  // The batch locks its candidate rows with a raw statement; the in-memory rows need no lock.
+  Object.assign(db, { $queryRaw: async () => [] });
   return { db, users };
 }
 
@@ -284,6 +286,97 @@ describe('cleanupInactiveGuests', () => {
     ).rejects.toThrow('hand-off failed');
     expect(failing.users).toHaveLength(1);
     expect(users).toHaveLength(0);
+  });
+
+  it('leaves a candidate touched after the scan out of the hand-off and the delete', async () => {
+    const stale = (id: string): FakeUser => ({
+      id,
+      role: 'USER',
+      isGuest: true,
+      guestLastActiveAt: daysAgo(40),
+      createdAt: daysAgo(40),
+      updatedAt: daysAgo(40),
+    });
+    const { db, users } = createFakeDb([stale('guest-touched'), stale('guest-other')]);
+    // The scan selects both guests; then guest-touched is used again before the batch locks.
+    const scan = db.user.findMany;
+    let scans = 0;
+    db.user.findMany = async (args) => {
+      const rows = await scan(args);
+      scans += 1;
+      if (scans === 1) {
+        const touched = users.find((u) => u.id === 'guest-touched');
+        if (touched) touched.guestLastActiveAt = NOW;
+      }
+      return rows;
+    };
+    const handOff = vi.fn(async (_input: unknown, _tx: unknown) => 0);
+
+    const result = await cleanupInactiveGuests({ db, inactiveDays: 30, now: NOW, handOff });
+
+    expect(handOff).toHaveBeenCalledWith(
+      { donorIds: ['guest-other'], cutoff: daysAgo(30) },
+      expect.anything()
+    );
+    expect(result.deletedCount).toBe(1);
+    expect(users.map((u) => u.id)).toEqual(['guest-touched']);
+  });
+
+  it('runs no hand-off when every candidate was touched before the lock', async () => {
+    const { db, users } = createFakeDb([
+      {
+        id: 'guest-touched',
+        role: 'USER',
+        isGuest: true,
+        guestLastActiveAt: daysAgo(40),
+        createdAt: daysAgo(40),
+        updatedAt: daysAgo(40),
+      },
+    ]);
+    const scan = db.user.findMany;
+    let scans = 0;
+    db.user.findMany = async (args) => {
+      const rows = await scan(args);
+      scans += 1;
+      if (scans === 1) {
+        const touched = users.find((u) => u.id === 'guest-touched');
+        if (touched) touched.guestLastActiveAt = NOW;
+      }
+      return rows;
+    };
+    const handOff = vi.fn(async (_input: unknown, _tx: unknown) => 0);
+
+    const result = await cleanupInactiveGuests({ db, inactiveDays: 30, now: NOW, handOff });
+
+    expect(handOff).not.toHaveBeenCalled();
+    expect(result.deletedCount).toBe(0);
+    expect(users).toHaveLength(1);
+  });
+
+  it('rolls the batch back when a locked donor is not deleted, so no hand-off is kept alone', async () => {
+    const { db, users } = createFakeDb(
+      [
+        {
+          id: 'guest-converted',
+          role: 'USER',
+          isGuest: true,
+          guestLastActiveAt: daysAgo(40),
+          createdAt: daysAgo(40),
+          updatedAt: daysAgo(40),
+        },
+      ],
+      {
+        beforeDelete: (rows) => {
+          const converted = rows.find((u) => u.id === 'guest-converted');
+          if (converted) converted.isGuest = false;
+        },
+      }
+    );
+
+    await expect(
+      cleanupInactiveGuests({ db, inactiveDays: 30, now: NOW, handOff: noHandOff })
+    ).rejects.toThrow(/changed under its lock/);
+    expect(users).toHaveLength(1);
   });
 
   it('processes deletions across multiple batches', async () => {
