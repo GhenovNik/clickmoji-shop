@@ -14,8 +14,10 @@ name: Production migration
 #   2. pre-merge (AGE-1667): dispatch from the reviewed feature branch below, before its PR merges. Needs
 #      confirm_premerge, the full reviewed commit SHA, the name and SHA-256 of the encrypted backup the
 #      curator restored, and the restore attestation. Its production job runs in the protected environment
-#      "production-migration-premerge" (see the setup notes in the PR), which holds its own copy of
-#      PROD_DATABASE_URL and is the only job that can read it.
+#      "production-migration-premerge" (see the setup notes in the PR), which holds its own secret
+#      PREMERGE_PROD_DATABASE_URL, and is the only job that can read it. Before production access and again
+#      immediately before the migration, scripts/premerge/verify-pr.sh checks with a read-only token that PR #160
+#      is open, its head is the reviewed commit and live master is an ancestor of it.
 # Any invalid dispatch fails in the "validate" job with a REFUSED line. It never ends as a skipped green run.
 
 on:
@@ -37,7 +39,7 @@ on:
         default: ''
         type: string
       backup_age_file:
-        description: 'feature branch only: the encrypted backup you restored, e.g. clickmoji-20261124-093000.dump.age'
+        description: 'feature branch only: the encrypted backup you restored, named by the backup CLI, e.g. clickmoji-20261124T093000Z.dump.age'
         required: false
         default: ''
         type: string
@@ -104,8 +106,9 @@ jobs:
                 || refuse "reviewed_sha must be a full 40-character lowercase commit SHA"
               [[ "$REVIEWED_SHA" == "$DISPATCH_SHA" ]] \
                 || refuse "reviewed_sha is not the dispatched head ($DISPATCH_SHA); the branch moved or the wrong SHA was typed; re-review and dispatch again"
-              [[ "$BACKUP_FILE" =~ ^clickmoji-[0-9]{8}-[0-9]{6}\.dump\.age$ ]] \
-                || refuse "backup_age_file must be clickmoji-YYYYMMDD-HHMMSS.dump.age"
+              # The name the backup CLI writes (scripts/backup/constants.mjs, BACKUP_NAME_PATTERN).
+              [[ "$BACKUP_FILE" =~ ^clickmoji-[0-9]{8}T[0-9]{6}Z\.dump\.age$ ]] \
+                || refuse "backup_age_file must be clickmoji-YYYYMMDDTHHMMSSZ.dump.age, the name the backup CLI writes"
               [[ "$BACKUP_SHA256" =~ ^[0-9a-f]{64}$ ]] \
                 || refuse "backup_age_sha256 must be 64 lowercase hex characters"
               [[ "$RESTORE_ATTESTED" == 'true' ]] \
@@ -211,7 +214,8 @@ jobs:
           fi
 
   # Pre-merge path. Runs only after validate passed. GitHub holds this job until a required reviewer approves
-  # in the environment; the environment's secret is the only PROD_DATABASE_URL this job can read.
+  # in the environment; the environment's secret is the only PREMERGE_PROD_DATABASE_URL this job can read.
+  # Job token: read-only, and only what the PR check needs (pull-requests: read); it writes nothing.
   premerge-migrate:
     name: Migrate production (pre-merge, reviewed branch)
     needs: validate
@@ -219,6 +223,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     environment: production-migration-premerge
+    permissions:
+      contents: read
+      pull-requests: read
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -233,6 +240,13 @@ jobs:
             exit 1
           fi
           echo "checkout is the reviewed commit"
+
+      - name: Confirm PR #160 and live master before any production access
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REVIEWED_SHA: ${{ inputs.reviewed_sha }}
+        run: bash scripts/premerge/verify-pr.sh
 
       - name: Setup Node
         uses: actions/setup-node@v7
@@ -251,50 +265,27 @@ jobs:
           echo "file_name=neon-prod-premigrate-${ts}.dump" >> "$GITHUB_OUTPUT"
 
       - name: Backup production database
-        # The DSN reaches docker by name (-e DATABASE_URL): its value is in the step environment, never in argv.
+        # The DSN is a step variable only. scripts/premerge/prod-backup.sh turns it into PG* variables and
+        # docker gets their names (-e PGHOST): no argv of any process holds the address, user or password.
         env:
           DATABASE_URL: ${{ secrets.PREMERGE_PROD_DATABASE_URL }}
+          FILE_NAME: ${{ steps.meta.outputs.file_name }}
         shell: bash
-        run: |
-          if [[ -z "${DATABASE_URL}" ]]; then
-            echo "PROD_DATABASE_URL secret is required"
-            exit 1
-          fi
-          mkdir -p backups
-          docker run --rm \
-            -e DATABASE_URL \
-            -v "${GITHUB_WORKSPACE}/backups:/backups" \
-            postgres:17-alpine \
-            sh -lc "pg_dump \"\$DATABASE_URL\" -Fc -f \"/backups/${{ steps.meta.outputs.file_name }}\"" \
-            > /dev/null 2>&1 || { echo "backup failed; migration not applied"; exit 1; }
-          echo "backup created"
+        run: bash scripts/premerge/prod-backup.sh dump "$FILE_NAME" "${GITHUB_WORKSPACE}/backups"
 
       - name: Prove the backup restores
-        # Output is suppressed: a failing COPY can print production values and the repository is public.
+        # Output is suppressed inside the script: a failing COPY can print production values and the repository is public.
+        env:
+          FILE_NAME: ${{ steps.meta.outputs.file_name }}
         shell: bash
-        run: |
-          test -s "backups/${{ steps.meta.outputs.file_name }}"
-          docker network create restore-check > /dev/null
-          docker run -d --rm --name scratch --network restore-check --log-driver none \
-            -e POSTGRES_PASSWORD=scratch -e POSTGRES_DB=restore_check postgres:17-alpine > /dev/null
-          ready=""
-          for _ in $(seq 1 60); do
-            if docker exec scratch pg_isready -h 127.0.0.1 -p 5432 -U postgres > /dev/null 2>&1; then ready=1; break; fi
-            sleep 2
-          done
-          [ -n "$ready" ] || { echo "scratch database did not start; migration not applied"; docker stop scratch > /dev/null 2>&1 || true; exit 1; }
-          if docker run --rm --network restore-check --log-driver none \
-              -v "${GITHUB_WORKSPACE}/backups:/backups" -e PGPASSWORD=scratch postgres:17-alpine \
-              sh -lc "pg_restore --exit-on-error --no-owner --no-privileges -h scratch -U postgres -d restore_check \"/backups/${{ steps.meta.outputs.file_name }}\"" \
-              > /dev/null 2>&1; then
-            echo "backup restored into a scratch PostgreSQL 17"
-          else
-            echo "backup restore check failed; migration not applied"
-            docker stop scratch > /dev/null 2>&1 || true
-            exit 1
-          fi
-          docker stop scratch > /dev/null 2>&1 || true
-          rm -f "backups/${{ steps.meta.outputs.file_name }}"
+        run: bash scripts/premerge/prod-backup.sh restore "$FILE_NAME" "${GITHUB_WORKSPACE}/backups"
+
+      - name: Confirm PR #160 and live master immediately before the migration
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REVIEWED_SHA: ${{ inputs.reviewed_sha }}
+        run: bash scripts/premerge/verify-pr.sh
 
       # Prisma prints database error details (P3018) and connection info; the repository is public.
       - name: Apply pending migrations
