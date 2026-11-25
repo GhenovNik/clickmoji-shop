@@ -7,9 +7,18 @@ import { promisify } from 'node:util';
 import { PrismaClient } from '@prisma/client';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { createPrismaPgAdapter } from '../prisma-adapter';
-import { applyCatalogImageRepairs, type RepairPlanEntry } from './catalog-image-repair';
+import {
+  applyCatalogImageRepairs,
+  dryRunCatalogImageRepairs,
+  type RepairPlanEntry,
+} from './catalog-image-repair';
 
 const execFileAsync = promisify(execFile);
+
+const VALID_WEBP_BYTES = Buffer.from(
+  'UklGRkAAAABXRUJQVlA4WAoAAAAQAAAAAAAAAAAAQUxQSAIAAAAAAFZQOCAYAAAAMAEAnQEqAQABAAFAJiWkAANwAP79NmgA',
+  'base64'
+);
 
 async function runCli(args: string[], databaseUrl: string) {
   try {
@@ -40,16 +49,45 @@ describeWithDb('catalog image audit & repair (disposable PostgreSQL)', () => {
     server = http.createServer((req, res) => {
       if (req.url === '/ok.webp' || req.url === '/new-1.webp' || req.url === '/new-2.webp') {
         res.writeHead(200, { 'content-type': 'image/webp' });
-        res.end('webp');
+        if (req.method === 'HEAD') {
+          res.end();
+        } else {
+          res.end(VALID_WEBP_BYTES);
+        }
         return;
       }
       if (req.url === '/broken-1.webp' || req.url === '/broken-2.webp') {
         res.writeHead(404, { 'content-type': 'text/plain' });
-        res.end('not found');
+        res.end(req.method === 'HEAD' ? undefined : 'not found');
+        return;
+      }
+      if (req.url === '/rate-limited-429.webp') {
+        res.writeHead(429, { 'content-type': 'text/plain' });
+        res.end(req.method === 'HEAD' ? undefined : 'rate limited');
+        return;
+      }
+      if (req.url === '/unavailable-503.webp') {
+        res.writeHead(503, { 'content-type': 'text/plain' });
+        res.end(req.method === 'HEAD' ? undefined : 'service unavailable');
+        return;
+      }
+      if (req.url === '/html-200.webp') {
+        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+        res.end(req.method === 'HEAD' ? undefined : '<html><body>Not an image</body></html>');
+        return;
+      }
+      if (req.url === '/head-200-get-404.webp') {
+        if (req.method === 'HEAD') {
+          res.writeHead(200, { 'content-type': 'image/webp' });
+          res.end();
+        } else {
+          res.writeHead(404, { 'content-type': 'text/plain' });
+          res.end('not found');
+        }
         return;
       }
       res.writeHead(500);
-      res.end('err');
+      res.end(req.method === 'HEAD' ? undefined : 'err');
     });
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
     const addr = server.address();
@@ -136,11 +174,34 @@ describeWithDb('catalog image audit & repair (disposable PostgreSQL)', () => {
         addedAt: new Date(),
       },
     });
-    return { smetana, ketchup };
+    return { dairy, smetana, ketchup };
   }
 
-  it('runs the shipped audit script against real Postgres and hides URLs/secrets', async () => {
-    await seedFixture();
+  it('runs the shipped audit script against real Postgres, fails HTML 200 and HEAD/GET mismatch, and hides URLs/secrets', async () => {
+    const { dairy } = await seedFixture();
+    await prisma.product.create({
+      data: {
+        name: 'Фальшивый200',
+        nameEn: 'Fake200',
+        emoji: '🥛',
+        isCustom: true,
+        imageUrl: `${baseUrl}/html-200.webp`,
+        categoryId: dairy.id,
+        isGlobal: true,
+      },
+    });
+    await prisma.product.create({
+      data: {
+        name: 'РассинхронHeadGet',
+        nameEn: 'Mismatch200',
+        emoji: '🥛',
+        isCustom: true,
+        imageUrl: `${baseUrl}/head-200-get-404.webp`,
+        categoryId: dairy.id,
+        isGlobal: true,
+      },
+    });
+
     const res = await runCli(
       ['node_modules/.bin/tsx', 'scripts/audit-catalog-images.ts'],
       integrationDbUrl!
@@ -149,12 +210,14 @@ describeWithDb('catalog image audit & repair (disposable PostgreSQL)', () => {
     expect(res.stdout).toContain('Сметана: HTTP 404');
     expect(res.stdout).toContain('Кетчуп: HTTP 404');
     expect(res.stdout).toContain('Молоко: HTTP 200');
+    expect(res.stdout).toContain('Фальшивый200: NOT_AN_IMAGE');
+    expect(res.stdout).toContain('РассинхронHeadGet: HEAD_GET_MISMATCH');
     expect(res.stdout).not.toContain('http://');
     expect(res.stdout).not.toContain('postgresql://');
   });
 
-  it('prevents partial apply, preserves concurrent edits, and supports dry-run + atomic apply', async () => {
-    const { smetana, ketchup } = await seedFixture();
+  it('rejects 429/503 UNKNOWN, HTML 200, HEAD/GET mismatch, disallowed CDN routes, concurrent edits, and supports atomic apply', async () => {
+    const { dairy, smetana, ketchup } = await seedFixture();
 
     const entries: RepairPlanEntry[] = [
       {
@@ -175,9 +238,88 @@ describeWithDb('catalog image audit & repair (disposable PostgreSQL)', () => {
       },
     ];
 
+    // 0a. B1: 429 and 503 old URLs must fail as UNKNOWN in both dry-run and apply without touching DB.
+    const rateLimited = await prisma.product.create({
+      data: {
+        name: 'Ряженка',
+        nameEn: 'Ryazhenka',
+        emoji: '🥛',
+        isCustom: true,
+        imageUrl: `${baseUrl}/rate-limited-429.webp`,
+        categoryId: dairy.id,
+        isGlobal: true,
+      },
+    });
+    const unavailable = await prisma.product.create({
+      data: {
+        name: 'Варенец',
+        nameEn: 'Varenets',
+        emoji: '🥛',
+        isCustom: true,
+        imageUrl: `${baseUrl}/unavailable-503.webp`,
+        categoryId: dairy.id,
+        isGlobal: true,
+      },
+    });
+    for (const [prod, path] of [
+      [rateLimited, '/rate-limited-429.webp'],
+      [unavailable, '/unavailable-503.webp'],
+    ] as const) {
+      const entry: RepairPlanEntry = {
+        target: 'product',
+        category: 'Молочные продукты',
+        name: prod.name,
+        expectedImageUrl: `${baseUrl}${path}`,
+        expectedIsCustom: true,
+        newImageUrl: `${baseUrl}/new-1.webp`,
+      };
+      const dry = await dryRunCatalogImageRepairs(prisma, [entry], {
+        requireHttps: false,
+        requireStorefrontUrl: false,
+      });
+      expect(dry.exitCode).toBe(1);
+      expect(dry.decisions[0]?.status).toBe('UNKNOWN');
+      const app = await applyCatalogImageRepairs(prisma, [entry], {
+        requireHttps: false,
+        requireStorefrontUrl: false,
+      });
+      expect(app.exitCode).toBe(1);
+      expect(app.updatedCount).toBe(0);
+      expect(app.decisions[0]?.status).toBe('UNKNOWN');
+      expect((await prisma.product.findUnique({ where: { id: prod.id } }))?.imageUrl).toBe(
+        `${baseUrl}${path}`
+      );
+    }
+    await prisma.product.deleteMany({ where: { id: { in: [rateLimited.id, unavailable.id] } } });
+
+    // 0b. B3: Shipped CLI refuses disallowed storefront route before HTTP/DB.
+    const badRoutePlanPath = join(tempDir, 'bad-route-plan.json');
+    writeFileSync(
+      badRoutePlanPath,
+      JSON.stringify({
+        repairs: [
+          {
+            target: 'product',
+            category: 'Молочные продукты',
+            name: 'Сметана',
+            expectedImageUrl: 'https://utfs.io/f/broken-1',
+            expectedIsCustom: true,
+            newImageUrl: 'https://utfs.io/x/disallowed-route.webp',
+          },
+        ],
+      })
+    );
+    const badRouteCli = await runCli(
+      ['node_modules/.bin/tsx', 'scripts/repair-catalog-images.ts', '--plan', badRoutePlanPath],
+      integrationDbUrl!
+    );
+    expect(badRouteCli.status).toBe(1);
+    expect(badRouteCli.stderr).toContain('INVALID_PLAN');
+
     // 1. Concurrent modification between read and conditional update aborts and leaves both rows unchanged.
     const concurrentEditResult = await applyCatalogImageRepairs(prisma, entries, {
       requireHttps: false,
+      requireStorefrontUrl: false,
       beforeWriteHook: async () => {
         await prisma.product.update({
           where: { id: ketchup.id },
@@ -202,7 +344,7 @@ describeWithDb('catalog image audit & repair (disposable PostgreSQL)', () => {
     const partialResult = await applyCatalogImageRepairs(
       prisma,
       [entries[0]!, { ...entries[1]!, expectedImageUrl: `${baseUrl}/broken-1.webp` }],
-      { requireHttps: false }
+      { requireHttps: false, requireStorefrontUrl: false }
     );
     expect(partialResult.exitCode).toBe(1);
     expect(partialResult.updatedCount).toBe(0);
@@ -227,7 +369,10 @@ describeWithDb('catalog image audit & repair (disposable PostgreSQL)', () => {
     expect(cliFail.status).toBe(1);
 
     // 3. Full atomic apply updates only primary image fields and leaves imageUrlEn and history untouched.
-    const applyResult = await applyCatalogImageRepairs(prisma, entries, { requireHttps: false });
+    const applyResult = await applyCatalogImageRepairs(prisma, entries, {
+      requireHttps: false,
+      requireStorefrontUrl: false,
+    });
     expect(applyResult.exitCode).toBe(0);
     expect(applyResult.updatedCount).toBe(2);
 

@@ -2,10 +2,13 @@ import type { PrismaClient } from '@prisma/client';
 import {
   DEFAULT_HTTP_CONCURRENCY,
   DEFAULT_HTTP_TIMEOUT_MS,
+  type ImageProbeResult,
+  isStorefrontImageUrl,
   mapWithConcurrency,
   normalizeCatalogName,
   parseSafeHttpUrl,
   probeImageUrl,
+  probeOldBrokenImage,
   SafeOperationalError,
 } from './catalog-image-http';
 
@@ -24,6 +27,7 @@ export type RepairPlanEntry = {
 export type CurrencyCheckOutcome = {
   targetLabel: string;
   ok: boolean;
+  oldState?: 'PROVEN_MISSING' | 'STILL_PRESENT' | 'UNKNOWN';
   reason?: string;
   oldHttpStatus?: number | string;
   newHttpStatus?: number | string;
@@ -31,7 +35,15 @@ export type CurrencyCheckOutcome = {
 
 export type RepairItemDecision = {
   targetLabel: string;
-  status: 'READY' | 'CONFLICT' | 'ALREADY_APPLIED' | 'NOT_FOUND' | 'AMBIGUOUS' | 'HTTP_FAILED';
+  status:
+    | 'READY'
+    | 'CONFLICT'
+    | 'ALREADY_APPLIED'
+    | 'NOT_FOUND'
+    | 'AMBIGUOUS'
+    | 'UNKNOWN'
+    | 'INVALID_URL'
+    | 'HTTP_FAILED';
   detail: string;
 };
 
@@ -161,10 +173,10 @@ export function parseRepairPlan(raw: unknown): RepairPlanEntry[] {
         `Repair entry #${i + 1} requires an https "expectedImageUrl"`
       );
     }
-    if (!isNonEmptyString(newImageUrl) || !parseSafeHttpUrl(newImageUrl, true)) {
+    if (!isNonEmptyString(newImageUrl) || !isStorefrontImageUrl(newImageUrl)) {
       throw new SafeOperationalError(
         'INVALID_PLAN',
-        `Repair entry #${i + 1} requires an https "newImageUrl"`
+        `Repair entry #${i + 1} "newImageUrl" must match the storefront CDN URL contract`
       );
     }
     if (expectedImageUrl === newImageUrl) {
@@ -198,20 +210,110 @@ export function parseRepairPlan(raw: unknown): RepairPlanEntry[] {
   return entries;
 }
 
+function formatNewProbeFailure(probe: Extract<ImageProbeResult, { ok: false }>): string {
+  switch (probe.kind) {
+    case 'INVALID_URL':
+      return 'New URL is invalid or redirected to a disallowed URL';
+    case 'HEAD_GET_MISMATCH':
+      return `New URL had HEAD/GET mismatch (GET status ${probe.status ?? 'unknown'})`;
+    case 'NOT_AN_IMAGE':
+      return 'New URL did not return a valid raster image payload';
+    case 'BODY_TOO_LARGE':
+      return 'New URL response exceeded the bounded byte limit';
+    case 'NON_200_HTTP':
+      return `New URL returned HTTP ${probe.status ?? 'unknown'}; expected HTTP 200`;
+    case 'TIMEOUT':
+    case 'NETWORK_ERROR':
+      return `New URL check failed (${probe.kind})`;
+  }
+}
+
+export type RepairVerificationOptions = {
+  fetchImpl?: typeof fetch;
+  timeoutMs?: number;
+  maxBytes?: number;
+  concurrency?: number;
+  requireHttps?: boolean;
+  requireStorefrontUrl?: boolean;
+};
+
+function precheckRepairUrls(
+  entries: readonly RepairPlanEntry[],
+  options?: Pick<RepairVerificationOptions, 'requireHttps' | 'requireStorefrontUrl'>
+): CurrencyCheckOutcome[] | null {
+  const requireHttps = options?.requireHttps ?? true;
+  const requireStorefrontUrl = options?.requireStorefrontUrl ?? true;
+
+  const issues = entries.map((entry) => {
+    const targetLabel = formatRepairTargetLabel(entry);
+    const oldValid = Boolean(parseSafeHttpUrl(entry.expectedImageUrl, requireHttps));
+    const newValid = requireStorefrontUrl
+      ? isStorefrontImageUrl(entry.newImageUrl)
+      : Boolean(parseSafeHttpUrl(entry.newImageUrl, requireHttps));
+
+    if (!newValid) {
+      return {
+        targetLabel,
+        invalid: true,
+        outcome: {
+          targetLabel,
+          ok: false,
+          newHttpStatus: 'INVALID_URL',
+          reason: requireStorefrontUrl
+            ? 'New URL violates storefront CDN URL contract (next.config.ts remotePatterns)'
+            : 'New URL is invalid',
+        } satisfies CurrencyCheckOutcome,
+      };
+    }
+
+    if (!oldValid) {
+      return {
+        targetLabel,
+        invalid: true,
+        outcome: {
+          targetLabel,
+          ok: false,
+          oldState: 'UNKNOWN',
+          oldHttpStatus: 'INVALID_URL',
+          reason: 'Old URL is invalid; treating status as UNKNOWN',
+        } satisfies CurrencyCheckOutcome,
+      };
+    }
+
+    return { targetLabel, invalid: false, outcome: null };
+  });
+
+  if (!issues.some((item) => item.invalid)) {
+    return null;
+  }
+
+  return issues.map((item) =>
+    item.outcome
+      ? item.outcome
+      : {
+          targetLabel: item.targetLabel,
+          ok: false,
+          reason: 'Skipped HTTP check because another entry failed URL contract validation',
+        }
+  );
+}
+
 /**
  * Verifies live HTTP currency of every `(expectedImageUrl, newImageUrl)` pair before touching
- * the database: `expectedImageUrl` must respond with an explicit non-200 HTTP status, and
- * `newImageUrl` must respond with HTTP 200 and an `image/*` content type.
+ * the database: `newImageUrl` must match the storefront URL contract before any HTTP/DB call,
+ * `expectedImageUrl` must return a proven missing status (consistent `404`/`410`, treating
+ * transient/ambiguous statuses as `UNKNOWN`), and `newImageUrl` must pass a bounded actual `GET`
+ * returning HTTP 200 with valid raster image bytes.
  */
 export async function verifyRepairCurrency(
   entries: readonly RepairPlanEntry[],
-  options?: {
-    fetchImpl?: typeof fetch;
-    timeoutMs?: number;
-    concurrency?: number;
-    requireHttps?: boolean;
-  }
+  options?: RepairVerificationOptions
 ): Promise<CurrencyCheckOutcome[]> {
+  const precheckFailure = precheckRepairUrls(entries, options);
+  if (precheckFailure) {
+    return precheckFailure;
+  }
+
   const fetchImpl = options?.fetchImpl ?? fetch;
   const timeoutMs = options?.timeoutMs ?? DEFAULT_HTTP_TIMEOUT_MS;
   const requireHttps = options?.requireHttps ?? true;
@@ -222,24 +324,31 @@ export async function verifyRepairCurrency(
     async (entry): Promise<CurrencyCheckOutcome> => {
       const targetLabel = formatRepairTargetLabel(entry);
       const [oldProbe, newProbe] = await Promise.all([
-        probeImageUrl(entry.expectedImageUrl, { fetchImpl, timeoutMs, requireHttps }),
-        probeImageUrl(entry.newImageUrl, { fetchImpl, timeoutMs, requireHttps }),
+        probeOldBrokenImage(entry.expectedImageUrl, { fetchImpl, timeoutMs, requireHttps }),
+        probeImageUrl(entry.newImageUrl, {
+          fetchImpl,
+          timeoutMs,
+          maxBytes: options?.maxBytes,
+          requireHttps,
+        }),
       ]);
 
-      if (!oldProbe.ok) {
+      if (oldProbe.kind === 'STILL_PRESENT') {
         return {
           targetLabel,
           ok: false,
-          oldHttpStatus: oldProbe.kind,
-          reason: `Old URL check failed (${oldProbe.kind}); refusing to assume it is broken`,
-        };
-      }
-      if (oldProbe.status === 200) {
-        return {
-          targetLabel,
-          ok: false,
+          oldState: 'STILL_PRESENT',
           oldHttpStatus: oldProbe.status,
           reason: 'Old URL still returns HTTP 200 on CDN; refusing overwrite',
+        };
+      }
+      if (oldProbe.kind === 'UNKNOWN') {
+        return {
+          targetLabel,
+          ok: false,
+          oldState: 'UNKNOWN',
+          oldHttpStatus: 'UNKNOWN',
+          reason: oldProbe.reason,
         };
       }
 
@@ -247,33 +356,17 @@ export async function verifyRepairCurrency(
         return {
           targetLabel,
           ok: false,
+          oldState: 'PROVEN_MISSING',
           oldHttpStatus: oldProbe.status,
-          newHttpStatus: newProbe.kind,
-          reason: `New URL check failed (${newProbe.kind})`,
-        };
-      }
-      if (newProbe.status !== 200) {
-        return {
-          targetLabel,
-          ok: false,
-          oldHttpStatus: oldProbe.status,
-          newHttpStatus: newProbe.status,
-          reason: `New URL returned HTTP ${newProbe.status}; expected HTTP 200`,
-        };
-      }
-      if (!newProbe.contentType || !newProbe.contentType.toLowerCase().startsWith('image/')) {
-        return {
-          targetLabel,
-          ok: false,
-          oldHttpStatus: oldProbe.status,
-          newHttpStatus: newProbe.status,
-          reason: 'New URL did not return an image/* Content-Type',
+          newHttpStatus: newProbe.status ?? newProbe.kind,
+          reason: formatNewProbeFailure(newProbe),
         };
       }
 
       return {
         targetLabel,
         ok: true,
+        oldState: 'PROVEN_MISSING',
         oldHttpStatus: oldProbe.status,
         newHttpStatus: newProbe.status,
       };
@@ -464,19 +557,48 @@ function evaluatePrecondition(
   return { targetLabel, status: 'READY', detail: 'Precondition matched' };
 }
 
+function decisionFromHttpFailure(item: CurrencyCheckOutcome): RepairItemDecision {
+  if (item.newHttpStatus === 'INVALID_URL') {
+    return {
+      targetLabel: item.targetLabel,
+      status: 'INVALID_URL',
+      detail: item.reason ?? 'Replacement URL violates storefront contract',
+    };
+  }
+  if (item.oldState === 'UNKNOWN') {
+    return {
+      targetLabel: item.targetLabel,
+      status: 'UNKNOWN',
+      detail: item.reason ?? 'Old URL status is UNKNOWN; refusing overwrite',
+    };
+  }
+  return {
+    targetLabel: item.targetLabel,
+    status: 'HTTP_FAILED',
+    detail: item.reason ?? 'HTTP currency check failed',
+  };
+}
+
 /**
- * Dry-run check: verifies HTTP currency and read-only DB preconditions without writing anything.
+ * Dry-run check: validates storefront URL contract before HTTP/DB, verifies HTTP currency, and
+ * checks read-only DB preconditions without writing anything.
  */
 export async function dryRunCatalogImageRepairs(
   db: RepairDbClient,
   entries: readonly RepairPlanEntry[],
-  options?: {
-    fetchImpl?: typeof fetch;
-    timeoutMs?: number;
-    concurrency?: number;
-    requireHttps?: boolean;
-  }
+  options?: RepairVerificationOptions
 ): Promise<RepairRunResult> {
+  const precheckFailure = precheckRepairUrls(entries, options);
+  if (precheckFailure) {
+    return {
+      mode: 'dry-run',
+      plannedCount: entries.length,
+      updatedCount: 0,
+      decisions: precheckFailure.map(decisionFromHttpFailure),
+      exitCode: 1,
+    };
+  }
+
   const currency = await verifyRepairCurrency(entries, options);
   const currencyByLabel = new Map(currency.map((item) => [item.targetLabel, item]));
 
@@ -500,11 +622,7 @@ export async function dryRunCatalogImageRepairs(
     const dbCheck = evaluatePrecondition(entry, resolved);
 
     if (!httpCheck.ok) {
-      return {
-        targetLabel: label,
-        status: 'HTTP_FAILED',
-        detail: httpCheck.reason ?? 'HTTP currency check failed',
-      };
+      return decisionFromHttpFailure(httpCheck);
     }
     return dbCheck;
   });
@@ -520,18 +638,15 @@ export async function dryRunCatalogImageRepairs(
 }
 
 /**
- * Applies all repair pairs atomically inside a single Serializable transaction. Any currency
- * check failure, missing/ambiguous target, or concurrent edit (`count !== 1`) aborts and rolls
- * back every update in the transaction so partial apply is impossible.
+ * Applies all repair pairs atomically inside a single Serializable transaction. Any storefront URL
+ * contract violation, HTTP currency check failure, UNKNOWN old-URL status, missing/ambiguous
+ * target, or concurrent edit (`count !== 1`) aborts and rolls back every update in the transaction
+ * so partial apply is impossible.
  */
 export async function applyCatalogImageRepairs(
   prisma: Pick<PrismaClient, '$transaction'>,
   entries: readonly RepairPlanEntry[],
-  options?: {
-    fetchImpl?: typeof fetch;
-    timeoutMs?: number;
-    concurrency?: number;
-    requireHttps?: boolean;
+  options?: RepairVerificationOptions & {
     beforeWriteHook?: () => Promise<void>;
   }
 ): Promise<RepairRunResult> {
@@ -542,11 +657,15 @@ export async function applyCatalogImageRepairs(
       mode: 'apply',
       plannedCount: entries.length,
       updatedCount: 0,
-      decisions: currency.map((item) => ({
-        targetLabel: item.targetLabel,
-        status: item.ok ? 'READY' : 'HTTP_FAILED',
-        detail: item.ok ? 'HTTP currency verified' : (item.reason ?? 'HTTP currency check failed'),
-      })),
+      decisions: currency.map((item) =>
+        item.ok
+          ? {
+              targetLabel: item.targetLabel,
+              status: 'READY',
+              detail: 'HTTP currency verified',
+            }
+          : decisionFromHttpFailure(item)
+      ),
       exitCode: 1,
     };
   }

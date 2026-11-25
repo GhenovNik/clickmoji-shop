@@ -10,7 +10,14 @@ import {
 export type CatalogAuditTargetKind = 'category' | 'product' | 'variant';
 
 export type CatalogAuditStatus =
-  `HTTP ${number}` | 'MISSING_URL' | 'INVALID_URL' | 'TIMEOUT' | 'NETWORK_ERROR';
+  | `HTTP ${number}`
+  | 'MISSING_URL'
+  | 'INVALID_URL'
+  | 'TIMEOUT'
+  | 'NETWORK_ERROR'
+  | 'HEAD_GET_MISMATCH'
+  | 'NOT_AN_IMAGE'
+  | 'BODY_TOO_LARGE';
 
 export type CatalogAuditEntry = {
   kind: CatalogAuditTargetKind;
@@ -28,6 +35,7 @@ export type CatalogAuditReport = {
   missingUrlCount: number;
   invalidUrlCount: number;
   non200HttpCount: number;
+  invalidImageCount: number;
   networkErrorCount: number;
   entries: CatalogAuditEntry[];
   exitCode: 0 | 1;
@@ -111,6 +119,7 @@ export async function auditCatalogPrimaryImages(
   options?: {
     fetchImpl?: typeof fetch;
     timeoutMs?: number;
+    maxBytes?: number;
     concurrency?: number;
   }
 ): Promise<CatalogAuditReport> {
@@ -171,16 +180,18 @@ export async function auditCatalogPrimaryImages(
       const probe = await probeImageUrl(item.url, {
         fetchImpl: options?.fetchImpl,
         timeoutMs: options?.timeoutMs ?? DEFAULT_HTTP_TIMEOUT_MS,
+        maxBytes: options?.maxBytes,
       });
       if (!probe.ok) {
-        return { kind: item.kind, name: item.name, status: probe.kind, ok: false };
+        const status: CatalogAuditStatus =
+          probe.kind === 'NON_200_HTTP' ? `HTTP ${probe.status ?? 0}` : probe.kind;
+        return { kind: item.kind, name: item.name, status, ok: false };
       }
-      const status: CatalogAuditStatus = `HTTP ${probe.status}`;
       return {
         kind: item.kind,
         name: item.name,
-        status,
-        ok: probe.status === 200,
+        status: 'HTTP 200',
+        ok: true,
       };
     }
   );
@@ -189,6 +200,7 @@ export async function auditCatalogPrimaryImages(
   let missingUrlCount = 0;
   let invalidUrlCount = 0;
   let non200HttpCount = 0;
+  let invalidImageCount = 0;
   let networkErrorCount = 0;
 
   for (const entry of entries) {
@@ -198,6 +210,12 @@ export async function auditCatalogPrimaryImages(
       missingUrlCount++;
     } else if (entry.status === 'INVALID_URL') {
       invalidUrlCount++;
+    } else if (
+      entry.status === 'HEAD_GET_MISMATCH' ||
+      entry.status === 'NOT_AN_IMAGE' ||
+      entry.status === 'BODY_TOO_LARGE'
+    ) {
+      invalidImageCount++;
     } else if (entry.status === 'TIMEOUT' || entry.status === 'NETWORK_ERROR') {
       networkErrorCount++;
     } else {
@@ -217,6 +235,7 @@ export async function auditCatalogPrimaryImages(
     missingUrlCount,
     invalidUrlCount,
     non200HttpCount,
+    invalidImageCount,
     networkErrorCount,
     entries,
     exitCode,
@@ -242,9 +261,9 @@ export function formatAuditReportLines(
 
   lines.push(
     `Summary: checked=${report.checkedCount}, ok_200=${report.okCount}, failed=${report.failedCount}, ` +
-      `non_200=${report.non200HttpCount}, missing_url=${report.missingUrlCount}, ` +
-      `invalid_url=${report.invalidUrlCount}, network_errors=${report.networkErrorCount}, ` +
-      `emoji_only=${report.withoutUrlCount}`
+      `non_200=${report.non200HttpCount}, invalid_image=${report.invalidImageCount}, ` +
+      `missing_url=${report.missingUrlCount}, invalid_url=${report.invalidUrlCount}, ` +
+      `network_errors=${report.networkErrorCount}, emoji_only=${report.withoutUrlCount}`
   );
 
   return lines;

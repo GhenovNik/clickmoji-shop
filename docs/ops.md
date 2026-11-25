@@ -1774,8 +1774,8 @@ Execute using `tsx`:
 - Files: `npx tsx scripts/db-files.ts --help`
 - Transfer: `npx tsx scripts/db-transfer.ts --help`
   - `migrate-data` requires `DB_TRANSFER_SOURCE_URL` (source database) and `DB_TRANSFER_TARGET_URL` (target database); neither has a default value.
-- Primary catalog image audit: `vercel env run -e production -- npm run audit:catalog-images` (read-only DB check + HTTP 200 verification; prints only item names, HTTP/status codes, and aggregate counts)
-- Primary catalog image repair: `vercel env run -e production -- npm run db:repair-catalog-images -- --plan <plan.json>` (dry-run by default; add `--apply` for atomic `Serializable` update)
+- Primary catalog image audit: `vercel env run -e production -- npm run audit:catalog-images` (read-only DB check + actual HTTP `GET` image verification within bounded time/bytes, rejecting non-200, `HEAD`/`GET` mismatches, and non-image/HTML payloads; prints only item names, HTTP/status codes, and aggregate counts)
+- Primary catalog image repair: `vercel env run -e production -- npm run db:repair-catalog-images -- --plan <plan.json>` (dry-run by default; validates replacement URLs against the storefront `next.config.ts` `remotePatterns` contract before HTTP/DB, requires proven `404`/`410` absence on old URLs and `GET` 200 image bytes on new URLs, and treats `429`/`503`/ambiguous states as `UNKNOWN`; add `--apply` for atomic `Serializable` update)
 
 ### Primary catalog image audit and repair (AGE-1667)
 
@@ -1785,15 +1785,15 @@ Execute using `tsx`:
    - Record before-counts (`checked`, `ok_200`, `failed`, `emoji_only`) and the failing item names.
    - Take a verified encrypted production backup (`npm run db:backup:verified` / direct unpooled URL per _Database_ and _Production recovery_ above). Never store production dumps in Git or GitHub.
 2. **Dry-run & atomic apply (only with proven `old -> new` pairs):**
-   - Prepare a local `--plan <plan.json>` outside the repository containing only proven `{ target, category, name, expectedImageUrl, expectedIsCustom, newImageUrl }` entries (never commit production URLs or plans to Git).
-   - Run dry-run first (verifies live CDN HTTP status of old/new URLs and read-only DB preconditions):
+   - Prepare a local `--plan <plan.json>` outside the repository containing only proven `{ target, category, name, expectedImageUrl, expectedIsCustom, newImageUrl }` entries (never commit production URLs or plans to Git). Every `newImageUrl` must match the storefront `next.config.ts` `images.remotePatterns` contract (`https://utfs.io/f/*` or `https://3kv5vvupx6.ufs.sh/f/*`).
+   - Run dry-run first (validates storefront URL contract, checks live CDN `HEAD`+`GET` status/image bytes, and verifies read-only DB preconditions):
      `vercel env run -e production -- npm run db:repair-catalog-images -- --plan /path/to/repair-plan.json`
-   - Stop on any conflict, non-200 new URL, or still-200 old URL.
+   - Stop on any conflict, disallowed replacement URL, non-image/mismatched `GET` on new URL, still-200 old URL, or `UNKNOWN` old-URL status (`429`/`503`/timeout/mismatch).
    - Apply inside one `Serializable` transaction (conditional `updateMany` on `expectedImageUrl` and `expectedIsCustom`; aborts and rolls back all changes if any concurrent edit occurs):
      `vercel env run -e production -- npm run db:repair-catalog-images -- --plan /path/to/repair-plan.json --apply`
 3. **Post-check & safe rollback:**
    - Re-run `vercel env run -e production -- npm run audit:catalog-images` and confirm `failed=0` (`exit 0`).
-   - **Rollback:** Do **not** blindly re-run the repair script with reversed URLs if `expectedImageUrl` returns 404 (the script rejects non-200 `newImageUrl` by design). To revert to the pre-repair state, restore from the pre-repair backup using _Production recovery_ (new target, verification, write barrier, cutover) or execute a coordinator-approved conditional `UPDATE` matching `newImageUrl` back to the saved pre-repair values in a single transaction, then re-verify counts.
+   - **Rollback:** Do **not** re-run `repair-catalog-images` with reversed URLs: the script rejects both `newImageUrl` when the old URL returns `404`/`410` and `expectedImageUrl` when the repaired URL now returns `200`. Rollback commands do not rely on HTTP CDN probes: restore from the pre-repair backup using _Production recovery_ (new target, verification, write barrier, cutover) or execute a coordinator-approved conditional SQL `UPDATE` matching `newImageUrl` back to the saved pre-repair values in a single transaction, then re-verify counts with `audit:catalog-images`.
 
 ## Deploy
 

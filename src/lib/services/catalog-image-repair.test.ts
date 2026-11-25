@@ -10,6 +10,18 @@ import {
 } from './catalog-image-repair';
 import { SafeOperationalError } from './catalog-image-http';
 
+const VALID_WEBP_BYTES = Buffer.from(
+  'UklGRkAAAABXRUJQVlA4WAoAAAAQAAAAAAAAAAAAQUxQSAIAAAAAAFZQOCAYAAAAMAEAnQEqAQABAAFAJiWkAANwAP79NmgA',
+  'base64'
+);
+
+function webpOkResponse(method?: string) {
+  return new Response(method === 'HEAD' ? null : VALID_WEBP_BYTES, {
+    status: 200,
+    headers: { 'content-type': 'image/webp' },
+  });
+}
+
 const SAMPLE_ENTRY: RepairPlanEntry = {
   target: 'product',
   category: 'Молочные продукты',
@@ -19,10 +31,39 @@ const SAMPLE_ENTRY: RepairPlanEntry = {
   newImageUrl: 'https://utfs.io/f/new-sour-cream',
 };
 
+function makeSimpleDb(expectedImageUrl = SAMPLE_ENTRY.expectedImageUrl) {
+  const findCategoriesSpy = vi.fn(async () => [
+    { id: 'c1', name: 'Молочные продукты', imageUrl: null, isCustom: false },
+  ]);
+  const updateManySpy = vi.fn();
+  const db = {
+    category: { findMany: findCategoriesSpy },
+    product: {
+      findMany: async () => [
+        {
+          id: 'p1',
+          name: 'Сметана',
+          categoryId: 'c1',
+          imageUrl: expectedImageUrl,
+          isCustom: true,
+        },
+      ],
+      updateMany: updateManySpy,
+    },
+    productVariant: { findMany: async () => [] },
+  } as unknown as RepairDbClient;
+  return { db, findCategoriesSpy, updateManySpy };
+}
+
 describe('catalog-image-repair', () => {
-  it('validates repair plans strictly and rejects duplicates, missing fields, and non-https URLs', () => {
-    const parsed = parseRepairPlan({ repairs: [SAMPLE_ENTRY] });
-    expect(parsed).toEqual([SAMPLE_ENTRY]);
+  it('validates repair plans strictly against schema and storefront CDN URL contract (B3)', () => {
+    expect(parseRepairPlan({ repairs: [SAMPLE_ENTRY] })).toEqual([SAMPLE_ENTRY]);
+
+    const ufsEntry: RepairPlanEntry = {
+      ...SAMPLE_ENTRY,
+      newImageUrl: 'https://3kv5vvupx6.ufs.sh/f/new-sour-cream.webp',
+    };
+    expect(parseRepairPlan({ repairs: [ufsEntry] })).toEqual([ufsEntry]);
 
     expect(() => parseRepairPlan([])).toThrowError(SafeOperationalError);
     expect(() => parseRepairPlan({ repairs: [] })).toThrowError(SafeOperationalError);
@@ -36,7 +77,7 @@ describe('catalog-image-repair', () => {
     ).toThrowError(SafeOperationalError);
     expect(() =>
       parseRepairPlan({
-        repairs: [{ ...SAMPLE_ENTRY, newImageUrl: 'http://insecure.example/x.webp' }],
+        repairs: [{ ...SAMPLE_ENTRY, newImageUrl: 'http://utfs.io/f/insecure.webp' }],
       })
     ).toThrowError(SafeOperationalError);
     expect(() =>
@@ -62,28 +103,185 @@ describe('catalog-image-repair', () => {
         ],
       })
     ).toThrowError(SafeOperationalError);
+
+    const disallowedNewUrls = [
+      'https://evil.example/f/a.webp',
+      'https://utfs.io/x/a.webp',
+      'https://utfs.io/f/a/b.webp',
+      'https://utfs.io/f/',
+      'https://utfs.io/f/a.webp?x=1',
+      'https://utfs.io:8443/f/a.webp',
+      'https://other.ufs.sh/f/a.webp',
+      'https://user:pass@utfs.io/f/a.webp',
+    ];
+    for (const badUrl of disallowedNewUrls) {
+      expect(() =>
+        parseRepairPlan({ repairs: [{ ...SAMPLE_ENTRY, newImageUrl: badUrl }] })
+      ).toThrowError(SafeOperationalError);
+    }
   });
 
-  it('verifies HTTP currency: requires broken old URL and HTTP 200 image/* new URL', async () => {
-    const okFetch = vi.fn(async (input: string | URL | Request) => {
+  it('rejects disallowed replacement URLs before any HTTP or DB call in dry-run and apply (B3)', async () => {
+    const badEntry: RepairPlanEntry = {
+      ...SAMPLE_ENTRY,
+      newImageUrl: 'https://utfs.io/x/not-allowed-route.webp',
+    };
+    const fetchSpy = vi.fn();
+    const { db, findCategoriesSpy, updateManySpy } = makeSimpleDb();
+    const transactionSpy = vi.fn();
+    const prisma = { $transaction: transactionSpy } as unknown as Parameters<
+      typeof applyCatalogImageRepairs
+    >[0];
+
+    const currency = await verifyRepairCurrency([badEntry], {
+      fetchImpl: fetchSpy as unknown as typeof fetch,
+    });
+    expect(currency[0]?.ok).toBe(false);
+    expect(currency[0]?.newHttpStatus).toBe('INVALID_URL');
+    expect(fetchSpy).not.toHaveBeenCalled();
+
+    const dryRun = await dryRunCatalogImageRepairs(db, [badEntry], {
+      fetchImpl: fetchSpy as unknown as typeof fetch,
+    });
+    expect(dryRun.exitCode).toBe(1);
+    expect(dryRun.updatedCount).toBe(0);
+    expect(dryRun.decisions[0]?.status).toBe('INVALID_URL');
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(findCategoriesSpy).not.toHaveBeenCalled();
+    expect(updateManySpy).not.toHaveBeenCalled();
+
+    const applyRun = await applyCatalogImageRepairs(prisma, [badEntry], {
+      fetchImpl: fetchSpy as unknown as typeof fetch,
+    });
+    expect(applyRun.exitCode).toBe(1);
+    expect(applyRun.updatedCount).toBe(0);
+    expect(applyRun.decisions[0]?.status).toBe('INVALID_URL');
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(transactionSpy).not.toHaveBeenCalled();
+  });
+
+  it('requires consistent 404/410 for old URL and rejects 429/503/ambiguous as UNKNOWN without touching DB (B1)', async () => {
+    const gone410Fetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      if (String(input).includes('old-sour-cream')) return new Response(null, { status: 410 });
+      return webpOkResponse(init?.method);
+    }) as typeof fetch;
+
+    expect(await verifyRepairCurrency([SAMPLE_ENTRY], { fetchImpl: gone410Fetch })).toEqual([
+      {
+        targetLabel: '[product] Молочные продукты / Сметана',
+        ok: true,
+        oldState: 'PROVEN_MISSING',
+        oldHttpStatus: 410,
+        newHttpStatus: 200,
+      },
+    ]);
+
+    const head405Old404Fetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      if (String(input).includes('old-sour-cream')) {
+        if (init?.method === 'HEAD') return new Response(null, { status: 405 });
+        return new Response(null, { status: 404 });
+      }
+      return webpOkResponse(init?.method);
+    }) as typeof fetch;
+    const fallbackOld = await verifyRepairCurrency([SAMPLE_ENTRY], {
+      fetchImpl: head405Old404Fetch,
+    });
+    expect(fallbackOld[0]?.ok).toBe(true);
+    expect(fallbackOld[0]?.oldHttpStatus).toBe(404);
+
+    for (const status of [429, 503, 500, 403]) {
+      const transientFetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        if (String(input).includes('old-sour-cream')) return new Response(null, { status });
+        return webpOkResponse(init?.method);
+      }) as typeof fetch;
+
+      const outcome = await verifyRepairCurrency([SAMPLE_ENTRY], { fetchImpl: transientFetch });
+      expect(outcome[0]?.ok).toBe(false);
+      expect(outcome[0]?.oldState).toBe('UNKNOWN');
+      expect(outcome[0]?.oldHttpStatus).toBe('UNKNOWN');
+
+      const { db, updateManySpy } = makeSimpleDb();
+      const dryRun = await dryRunCatalogImageRepairs(db, [SAMPLE_ENTRY], {
+        fetchImpl: transientFetch,
+      });
+      expect(dryRun.exitCode).toBe(1);
+      expect(dryRun.updatedCount).toBe(0);
+      expect(dryRun.decisions[0]?.status).toBe('UNKNOWN');
+      expect(updateManySpy).not.toHaveBeenCalled();
+
+      const transactionSpy = vi.fn();
+      const applyRun = await applyCatalogImageRepairs(
+        { $transaction: transactionSpy } as unknown as Parameters<
+          typeof applyCatalogImageRepairs
+        >[0],
+        [SAMPLE_ENTRY],
+        { fetchImpl: transientFetch }
+      );
+      expect(applyRun.exitCode).toBe(1);
+      expect(applyRun.updatedCount).toBe(0);
+      expect(applyRun.decisions[0]?.status).toBe('UNKNOWN');
+      expect(transactionSpy).not.toHaveBeenCalled();
+    }
+
+    // Mismatched HEAD/GET on old URL must also be treated as UNKNOWN.
+    const oldMismatchFetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      if (String(input).includes('old-sour-cream')) {
+        if (init?.method === 'HEAD') return new Response(null, { status: 200 });
+        return new Response(null, { status: 404 });
+      }
+      return webpOkResponse(init?.method);
+    }) as typeof fetch;
+    const mismatchOutcome = await verifyRepairCurrency([SAMPLE_ENTRY], {
+      fetchImpl: oldMismatchFetch,
+    });
+    expect(mismatchOutcome[0]?.ok).toBe(false);
+    expect(mismatchOutcome[0]?.oldState).toBe('UNKNOWN');
+  });
+
+  it('requires real GET image payload for replacement URL and blocks HEAD/GET mismatch, HTML 200, and protocol downgrade redirects (B2)', async () => {
+    const okFetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
       if (String(input).includes('old-sour-cream')) return new Response(null, { status: 404 });
-      return new Response(null, { status: 200, headers: { 'content-type': 'image/webp' } });
+      return webpOkResponse(init?.method);
     }) as typeof fetch;
 
     expect(await verifyRepairCurrency([SAMPLE_ENTRY], { fetchImpl: okFetch })).toEqual([
       {
         targetLabel: '[product] Молочные продукты / Сметана',
         ok: true,
+        oldState: 'PROVEN_MISSING',
         oldHttpStatus: 404,
         newHttpStatus: 200,
       },
     ]);
 
-    const oldStill200Fetch = vi.fn(
-      async () => new Response(null, { status: 200, headers: { 'content-type': 'image/webp' } })
+    const head200Get404Fetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      if (String(input).includes('old-sour-cream')) return new Response(null, { status: 404 });
+      if (init?.method === 'HEAD') {
+        return new Response(null, { status: 200, headers: { 'content-type': 'image/webp' } });
+      }
+      return new Response('missing', { status: 404 });
+    }) as typeof fetch;
+    const mismatchRes = await verifyRepairCurrency([SAMPLE_ENTRY], {
+      fetchImpl: head200Get404Fetch,
+    });
+    expect(mismatchRes[0]?.ok).toBe(false);
+
+    const transactionSpy = vi.fn();
+    const applyMismatch = await applyCatalogImageRepairs(
+      { $transaction: transactionSpy } as unknown as Parameters<typeof applyCatalogImageRepairs>[0],
+      [SAMPLE_ENTRY],
+      { fetchImpl: head200Get404Fetch }
+    );
+    expect(applyMismatch.exitCode).toBe(1);
+    expect(applyMismatch.updatedCount).toBe(0);
+    expect(transactionSpy).not.toHaveBeenCalled();
+
+    const oldStill200Fetch = vi.fn(async (_input: string | URL | Request, init?: RequestInit) =>
+      webpOkResponse(init?.method)
     ) as typeof fetch;
     const still200 = await verifyRepairCurrency([SAMPLE_ENTRY], { fetchImpl: oldStill200Fetch });
     expect(still200[0]?.ok).toBe(false);
+    expect(still200[0]?.oldState).toBe('STILL_PRESENT');
 
     const oldTimeoutFetch = vi.fn(async (input: string | URL | Request) => {
       if (String(input).includes('old-sour-cream')) {
@@ -91,16 +289,17 @@ describe('catalog-image-repair', () => {
         e.name = 'TimeoutError';
         throw e;
       }
-      return new Response(null, { status: 200, headers: { 'content-type': 'image/webp' } });
+      return webpOkResponse();
     }) as typeof fetch;
     const timeoutResult = await verifyRepairCurrency([SAMPLE_ENTRY], {
       fetchImpl: oldTimeoutFetch,
     });
     expect(timeoutResult[0]?.ok).toBe(false);
+    expect(timeoutResult[0]?.oldState).toBe('UNKNOWN');
 
-    const nonImageNewFetch = vi.fn(async (input: string | URL | Request) => {
+    const nonImageNewFetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
       if (String(input).includes('old-sour-cream')) return new Response(null, { status: 404 });
-      return new Response('<html>not image</html>', {
+      return new Response(init?.method === 'HEAD' ? null : '<html>not image</html>', {
         status: 200,
         headers: { 'content-type': 'text/html' },
       });
@@ -109,36 +308,44 @@ describe('catalog-image-repair', () => {
       fetchImpl: nonImageNewFetch,
     });
     expect(nonImageResult[0]?.ok).toBe(false);
+
+    // Redirect downgrade from https to http must be rejected.
+    const downgradeFetch = vi.fn(async (input: string | URL | Request) => {
+      if (String(input).includes('old-sour-cream')) return new Response(null, { status: 404 });
+      return new Response(null, {
+        status: 302,
+        headers: { location: 'http://utfs.io/f/downgraded.webp' },
+      });
+    }) as typeof fetch;
+    const downgradeRes = await verifyRepairCurrency([SAMPLE_ENTRY], { fetchImpl: downgradeFetch });
+    expect(downgradeRes[0]?.ok).toBe(false);
+
+    // Redirect over HTTPS to valid image succeeds.
+    const safeRedirectFetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes('old-sour-cream')) return new Response(null, { status: 404 });
+      if (url.includes('new-sour-cream')) {
+        return new Response(null, {
+          status: 307,
+          headers: { location: 'https://3kv5vvupx6.ufs.sh/f/target.webp' },
+        });
+      }
+      return webpOkResponse(init?.method);
+    }) as typeof fetch;
+    const safeRedirectRes = await verifyRepairCurrency([SAMPLE_ENTRY], {
+      fetchImpl: safeRedirectFetch,
+    });
+    expect(safeRedirectRes[0]?.ok).toBe(true);
   });
 
   it('performs dry-run without writes and reports conflicts cleanly', async () => {
-    const updateManySpy = vi.fn();
-    const db = {
-      category: {
-        findMany: async () => [
-          { id: 'c1', name: 'Молочные продукты', imageUrl: null, isCustom: false },
-        ],
-      },
-      product: {
-        findMany: async () => [
-          {
-            id: 'p1',
-            name: 'Сметана',
-            categoryId: 'c1',
-            imageUrl: SAMPLE_ENTRY.expectedImageUrl,
-            isCustom: true,
-          },
-        ],
-        updateMany: updateManySpy,
-      },
-      productVariant: { findMany: async () => [] },
-    } as unknown as RepairDbClient;
+    const { db, updateManySpy } = makeSimpleDb();
 
-    const okFetch = vi.fn(async (input: string | URL | Request) => {
+    const okFetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
       if (String(input).includes('old-sour-cream') || String(input).includes('stale-url')) {
         return new Response(null, { status: 404 });
       }
-      return new Response(null, { status: 200, headers: { 'content-type': 'image/webp' } });
+      return webpOkResponse(init?.method);
     }) as typeof fetch;
 
     const readyRun = await dryRunCatalogImageRepairs(db, [SAMPLE_ENTRY], { fetchImpl: okFetch });
@@ -155,25 +362,7 @@ describe('catalog-image-repair', () => {
     expect(conflictRun.exitCode).toBe(1);
     expect(conflictRun.decisions[0]?.status).toBe('CONFLICT');
 
-    const alreadyAppliedDb = {
-      category: {
-        findMany: async () => [
-          { id: 'c1', name: 'Молочные продукты', imageUrl: null, isCustom: false },
-        ],
-      },
-      product: {
-        findMany: async () => [
-          {
-            id: 'p1',
-            name: 'Сметана',
-            categoryId: 'c1',
-            imageUrl: SAMPLE_ENTRY.newImageUrl,
-            isCustom: true,
-          },
-        ],
-      },
-      productVariant: { findMany: async () => [] },
-    } as unknown as RepairDbClient;
+    const { db: alreadyAppliedDb } = makeSimpleDb(SAMPLE_ENTRY.newImageUrl);
 
     const alreadyAppliedRun = await dryRunCatalogImageRepairs(alreadyAppliedDb, [SAMPLE_ENTRY], {
       fetchImpl: okFetch,
@@ -200,9 +389,9 @@ describe('catalog-image-repair', () => {
       newImageUrl: 'https://utfs.io/f/new-curd',
     };
 
-    const okFetch = vi.fn(async (input: string | URL | Request) => {
+    const okFetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
       if (String(input).includes('old-')) return new Response(null, { status: 404 });
-      return new Response(null, { status: 200, headers: { 'content-type': 'image/webp' } });
+      return webpOkResponse(init?.method);
     }) as typeof fetch;
 
     let committedState = new Map<string, string>([
