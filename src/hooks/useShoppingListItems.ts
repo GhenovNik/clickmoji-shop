@@ -26,7 +26,8 @@ export type Item = {
     emoji: string;
     isCustom: boolean;
     imageUrl: string | null;
-    imageUrlEn?: string | null;
+    imageTextLocale?: string | null;
+    localizedImages?: unknown;
     category: {
       name: string;
       nameEn?: string | null;

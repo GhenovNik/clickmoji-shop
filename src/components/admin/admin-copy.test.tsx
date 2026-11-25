@@ -104,7 +104,7 @@ describe('ProductMoveModal pictures', () => {
     ...apple,
     isCustom: true,
     imageUrl: 'https://utfs.io/f/apple-ru.webp',
-    imageUrlEn: 'https://utfs.io/f/apple-en.webp',
+    localizedImages: { en: 'https://utfs.io/f/apple-en.webp' },
   };
 
   function pictureSrc(locale: 'ru' | 'en') {

@@ -26,7 +26,7 @@ const product = (nameEn: string, categoryNameEn = 'Fruit') => ({
   emoji: '🍏',
   isCustom: true,
   imageUrl: '/apple.png',
-  imageUrlEn: null,
+  localizedImages: null,
   categoryId: 'cat-1',
   category: {
     id: 'cat-1',

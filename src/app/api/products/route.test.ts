@@ -31,7 +31,7 @@ function row(id: string, name: string, nameEn: string | null) {
     isGlobal: true,
     createdById: null,
     imageUrl: null,
-    imageUrlEn: null,
+    localizedImages: null,
     variants: [],
     category: {
       id: 'cat-1',
@@ -106,5 +106,90 @@ describe('GET /api/products ordering', () => {
     for (const item of body) {
       expect(Object.keys(item).sort()).toEqual(Object.keys(CATALOG[0]).sort());
     }
+  });
+});
+
+// AGE-1667 Ya3 review: the legacy English column is a write-only rollback mirror. A query that
+// returns full rows must ask the database to leave it out, on the product and on its variants, in
+// both branches. The fake database below applies `omit` the way Prisma does, so a branch that
+// forgets one leaks the column into the response.
+describe('GET /api/products does not return the legacy English column', () => {
+  type Args = {
+    omit?: Record<string, boolean>;
+    include?: { variants?: true | { omit?: Record<string, boolean> } };
+  };
+
+  const without = (row: Record<string, unknown>, omit: Record<string, boolean> = {}) =>
+    Object.fromEntries(Object.entries(row).filter(([column]) => !omit[column]));
+
+  function databaseWithLegacyColumn() {
+    state.findMany.mockImplementation(async (args: Args) =>
+      state.rows.map((product) => {
+        const variants = product.variants as Array<Record<string, unknown>>;
+        const variantArgs = typeof args.include?.variants === 'object' ? args.include.variants : {};
+        return {
+          ...without(product, args.omit),
+          variants: variants.map((variant) => without(variant, variantArgs.omit)),
+        };
+      })
+    );
+  }
+
+  function withLegacy(id: string) {
+    return {
+      ...row(id, 'Яблоко', 'Apple'),
+      imageUrlEn: 'https://utfs.io/f/legacy-en',
+      localizedImages: { en: 'https://utfs.io/f/dictionary-en' },
+      variants: [
+        {
+          id: 'v1',
+          name: 'Красное',
+          nameEn: 'Red',
+          emoji: '🍎',
+          imageUrl: null,
+          imageUrlEn: 'https://utfs.io/f/variant-legacy-en',
+          localizedImages: { en: 'https://utfs.io/f/variant-dictionary-en' },
+        },
+      ],
+    };
+  }
+
+  it.each([
+    ['full catalog', 'http://localhost/api/products'],
+    ['category', 'http://localhost/api/products?categoryId=cat-1'],
+  ])(
+    '%s: neither the product nor its variants carry it, the dictionaries stay',
+    async (_l, url) => {
+      state.rows = [withLegacy('apple')];
+      databaseWithLegacyColumn();
+
+      const response = await get(url);
+      const [product] = (await response.json()) as Array<Record<string, unknown>>;
+
+      expect(response.status).toBe(200);
+      expect(JSON.stringify(product)).not.toContain('imageUrlEn');
+      expect(JSON.stringify(product)).not.toContain('legacy-en');
+      expect(product).toMatchObject({
+        id: 'apple',
+        localizedImages: { en: 'https://utfs.io/f/dictionary-en' },
+        category: { id: 'cat-1' },
+        variants: [
+          { id: 'v1', localizedImages: { en: 'https://utfs.io/f/variant-dictionary-en' } },
+        ],
+      });
+    }
+  );
+
+  it.each([
+    ['full catalog', 'http://localhost/api/products'],
+    ['category', 'http://localhost/api/products?categoryId=cat-1'],
+  ])('%s: the query itself omits the column on both levels', async (_l, url) => {
+    await get(url);
+
+    expect(state.findMany).toHaveBeenCalledTimes(1);
+    expect(state.findMany.mock.calls[0]![0]).toMatchObject({
+      omit: { imageUrlEn: true },
+      include: { variants: { omit: { imageUrlEn: true } } },
+    });
   });
 });

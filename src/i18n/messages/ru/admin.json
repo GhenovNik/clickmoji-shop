@@ -16,7 +16,9 @@
     "nowImage": "Сейчас",
     "newImage": "Новая",
     "nowEnglishImage": "Сейчас (EN)",
-    "newEnglishImage": "Новая (EN)"
+    "newEnglishImage": "Новая (EN)",
+    "nowLanguageImage": "Сейчас ({code})",
+    "newLanguageImage": "Новая ({code})"
   },
   "columns": {
     "icon": "Иконка",
@@ -115,6 +117,9 @@
     "removeEnglishVersion": "Убрать английскую версию",
     "currentImageAlt": "Текущее изображение",
     "englishVersionAlt": "Английская версия",
+    "languageVersion": "Версия: {language} (с надписями):",
+    "removeLanguageVersion": "Убрать версию: {language}",
+    "languageVersionAlt": "Версия: {language}",
     "newImageAlt": "Новая картинка",
     "restorePrevious": "Вернуть прежнюю"
   },

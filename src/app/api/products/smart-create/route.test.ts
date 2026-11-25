@@ -188,6 +188,24 @@ describe('AC-7 POST /api/products/smart-create generation failure contract', () 
   });
 });
 
+describe('AGE-1667 Ya3 the legacy English column stays out of the product it returns', () => {
+  it('omits it on the created product and on an existing one', async () => {
+    await POST(smartCreateRequest());
+    expect(doubles.createProduct.mock.calls[0]?.[0]).toMatchObject({
+      omit: { imageUrlEn: true },
+      include: { category: true },
+    });
+
+    doubles.findProduct.mockResolvedValue({ id: 'product-0', category: CATEGORY });
+    const response = await POST(smartCreateRequest());
+    expect((await response.json()).exists).toBe(true);
+    expect(doubles.findProduct.mock.calls[0]?.[0]).toMatchObject({
+      omit: { imageUrlEn: true },
+      include: { category: true },
+    });
+  });
+});
+
 describe('AC-16 an unavailable provider degrades to the Unicode emoji', () => {
   for (const reason of ['missing-key', 'quota', 'auth'] as const) {
     it(`creates the product with a Unicode emoji and no upload for reason ${reason}`, async () => {

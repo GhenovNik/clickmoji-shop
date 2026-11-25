@@ -21,7 +21,9 @@ interface EmojiPickerProps {
   // check that tells whether this request is still the latest picture selection (AGE-1620).
   onGenerateStart?: () => (() => boolean) | void;
   onGenerateImage?: (imageUrl: string) => void;
-  onSelectLibraryImage?: (picture: Pick<LibraryPicture, 'imageUrl' | 'imageUrlEn'>) => void;
+  onSelectLibraryImage?: (
+    picture: Pick<LibraryPicture, 'imageUrl' | 'imageTextLocale' | 'localizedImages'>
+  ) => void;
 }
 
 interface EmojiResult {
@@ -252,7 +254,11 @@ export default function EmojiPicker({
                   key={item.key}
                   type="button"
                   onClick={() => {
-                    onSelectLibraryImage({ imageUrl: item.imageUrl, imageUrlEn: item.imageUrlEn });
+                    onSelectLibraryImage({
+                      imageUrl: item.imageUrl,
+                      imageTextLocale: item.imageTextLocale,
+                      localizedImages: item.localizedImages,
+                    });
                     setLibraryOpen(false);
                   }}
                   className="flex flex-col items-center gap-1 p-1 bg-white rounded-lg border border-gray-200 hover:border-emerald-500"
@@ -260,7 +266,7 @@ export default function EmojiPicker({
                 >
                   <span className="h-12 w-12 flex items-center justify-center overflow-hidden">
                     <Image
-                      src={(item.imageUrl ?? item.imageUrlEn)!}
+                      src={(item.imageUrl ?? Object.values(item.localizedImages)[0])!}
                       alt={localizedName(item, locale)}
                       width={48}
                       height={48}
@@ -269,11 +275,14 @@ export default function EmojiPicker({
                   </span>
                   <span className="w-full truncate text-[11px] text-gray-700">
                     {localizedName(item, locale)}
-                    {item.imageUrlEn && (
-                      <span className="ml-1 rounded bg-emerald-100 px-1 text-[9px] font-bold text-emerald-700">
-                        EN
+                    {Object.keys(item.localizedImages).map((language) => (
+                      <span
+                        key={language}
+                        className="ml-1 rounded bg-emerald-100 px-1 text-[9px] font-bold text-emerald-700"
+                      >
+                        {language.toUpperCase()}
                       </span>
-                    )}
+                    ))}
                   </span>
                 </button>
               ))}

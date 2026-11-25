@@ -1,6 +1,10 @@
 import { Prisma, type PrismaClient } from '@prisma/client';
-import { sanitizeDatabaseErrorMessage } from './emoji-legacy-ru-locales';
+import { sanitizeDatabaseErrorMessage } from '../../src/lib/services/emoji-legacy-ru-locales';
 
+// Standalone tooling, deliberately outside `src` (AGE-1667 Ya3): it is the one reader of the legacy
+// English columns (imageUrlEn, productImageUrlEn) and no runtime code imports it. Ya6 deletes it with
+// the columns.
+//
 // Fills the localized picture fields (AGE-1667) from the legacy columns, while the legacy
 // columns stay untouched and the previous release keeps working:
 //   - the English legacy URL is copied to localizedImages.en; other keys are kept; when the legacy

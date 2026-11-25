@@ -1,6 +1,8 @@
 import bcrypt from 'bcryptjs';
 import type { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
+import { localizedImagesOf } from '@/lib/product-image';
+import { legacyEnglishOf } from '@/lib/picture-storage';
 import { normalizeEmail } from '@/lib/auth-security';
 import {
   keepSnapshotVariant,
@@ -130,7 +132,8 @@ const exportProductSelect = {
   emoji: true,
   isCustom: true,
   imageUrl: true,
-  imageUrlEn: true,
+  imageTextLocale: true,
+  localizedImages: true,
   isGlobal: true,
   category: { select: exportCategorySelect },
 } as const;
@@ -141,8 +144,34 @@ const exportVariantSelect = {
   nameEn: true,
   emoji: true,
   imageUrl: true,
-  imageUrlEn: true,
+  imageTextLocale: true,
+  localizedImages: true,
 } as const;
+
+type ExportPictureRow = { imageTextLocale: string | null; localizedImages: unknown };
+
+// The download contract keeps its legacy English key (`imageUrlEn` on products and variants,
+// `productImageUrlEn` on history rows). The column is not read: the key is projected from the
+// English entry of the picture dictionary, which is what the column mirrors. The dictionary and
+// the text language are exported next to it, so a download carries the full picture metadata.
+function exportPictures(row: ExportPictureRow) {
+  const pictures = localizedImagesOf(row.localizedImages);
+  return {
+    imageTextLocale: row.imageTextLocale,
+    localizedImages: Object.keys(pictures).length > 0 ? pictures : null,
+    legacyEnglish: legacyEnglishOf(pictures),
+  };
+}
+
+function exportPictureFields<T extends ExportPictureRow>(row: T) {
+  const { legacyEnglish, ...pictures } = exportPictures(row);
+  return { ...row, ...pictures, imageUrlEn: legacyEnglish };
+}
+
+function exportHistoryPictureFields<T extends ExportPictureRow>(row: T) {
+  const { legacyEnglish, ...pictures } = exportPictures(row);
+  return { ...row, ...pictures, productImageUrlEn: legacyEnglish };
+}
 
 // Item.variantId is an independent FK: its variant may belong to another product, so the product
 // check alone does not cover it. The item row itself is already limited to a visible product; the
@@ -150,16 +179,17 @@ const exportVariantSelect = {
 function sameProductVariant<T extends ExportVariantRow & { productId: string }>(
   variant: T | null,
   productId: string
-): ExportVariantRow | null {
+) {
   if (!variant || variant.productId !== productId) return null;
-  return {
+  return exportPictureFields({
     id: variant.id,
     name: variant.name,
     nameEn: variant.nameEn,
     emoji: variant.emoji,
     imageUrl: variant.imageUrl,
-    imageUrlEn: variant.imageUrlEn,
-  };
+    imageTextLocale: variant.imageTextLocale,
+    localizedImages: variant.localizedImages,
+  });
 }
 
 type ExportVariantRow = {
@@ -168,7 +198,8 @@ type ExportVariantRow = {
   nameEn: string;
   emoji: string;
   imageUrl: string | null;
-  imageUrlEn: string | null;
+  imageTextLocale: string | null;
+  localizedImages: unknown;
 };
 
 export async function exportAccountData(userId: string) {
@@ -239,7 +270,8 @@ export async function exportAccountData(userId: string) {
                 productNameEn: true,
                 productEmoji: true,
                 productImageUrl: true,
-                productImageUrlEn: true,
+                imageTextLocale: true,
+                localizedImages: true,
                 categoryName: true,
                 categoryNameEn: true,
                 isCustom: true,
@@ -339,14 +371,17 @@ export async function exportAccountData(userId: string) {
       ...entry,
       items: entry.items
         .filter((item) => item.productId === null || visibleSnapshotProductIds.has(item.productId))
-        .map((item) => keepSnapshotVariant(item, visibleSnapshotVariantProductIds)),
+        .map((item) =>
+          exportHistoryPictureFields(keepSnapshotVariant(item, visibleSnapshotVariantProductIds))
+        ),
     }));
 
     const lists = rawLists.map((list) => ({
       ...list,
-      items: list.items.map(({ variant, ...item }) => ({
+      items: list.items.map(({ variant, product, ...item }) => ({
         ...item,
-        variant: sameProductVariant(variant, item.product.id),
+        product: exportPictureFields(product),
+        variant: sameProductVariant(variant, product.id),
       })),
     }));
 
@@ -356,7 +391,7 @@ export async function exportAccountData(userId: string) {
         usageCount: favorite.usageCount,
         createdAt: favorite.createdAt,
         updatedAt: favorite.updatedAt,
-        product: favorite.product,
+        product: exportPictureFields(favorite.product),
         variant: null,
       })),
       ...variantFavorites.map(({ variant: { product, ...variant }, ...favorite }) => ({
@@ -364,8 +399,8 @@ export async function exportAccountData(userId: string) {
         usageCount: favorite.usageCount,
         createdAt: favorite.createdAt,
         updatedAt: favorite.updatedAt,
-        product,
-        variant,
+        product: exportPictureFields(product),
+        variant: exportPictureFields(variant),
       })),
     ].sort((a, b) => b.usageCount - a.usageCount);
 
@@ -375,7 +410,10 @@ export async function exportAccountData(userId: string) {
       lists,
       history,
       favorites,
-      createdProducts,
+      createdProducts: createdProducts.map(({ variants, ...product }) => ({
+        ...exportPictureFields(product),
+        variants: variants.map(exportPictureFields),
+      })),
     };
   });
 }

@@ -10,7 +10,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { PrismaClient } from '@prisma/client';
+import { Prisma, type PrismaClient } from '@prisma/client';
 import sharp from 'sharp';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
@@ -412,6 +412,8 @@ describe('applyCell', () => {
         isGlobal: true,
         isCustom: true,
         imageUrl: 'https://utfs.io/f/ru.webp',
+        localizedImages: { en: 'https://utfs.io/f/en.webp' },
+        // The legacy column is written as a rollback mirror of the dictionary entry.
         imageUrlEn: 'https://utfs.io/f/en.webp',
       }),
     });
@@ -533,6 +535,7 @@ describe('applyCell', () => {
       data: {
         isCustom: true,
         imageUrl: 'https://utfs.io/f/ru.webp',
+        localizedImages: { en: 'https://utfs.io/f/en.webp' },
         imageUrlEn: 'https://utfs.io/f/en.webp',
       },
     });
@@ -606,7 +609,12 @@ describe('applyCell for variants and categories', () => {
     expect(result).toMatchObject({ product: 'variant', changed: true, uploaded: 1 });
     expect(prisma.productVariant.updateMany).toHaveBeenCalledWith({
       // Written only while the variant still has no picture: a manual one is never replaced.
-      where: { id: 'v1', imageUrl: null, imageUrlEn: null },
+      where: {
+        id: 'v1',
+        imageUrl: null,
+        localizedImages: { equals: Prisma.DbNull },
+        imageUrlEn: null,
+      },
       // A text-free picture serves both languages, so a stale English one is cleared.
       data: { imageUrl: 'https://utfs.io/f/variant.webp', imageUrlEn: null },
     });
@@ -675,7 +683,7 @@ describe('applyCell for variants and categories', () => {
       locale: null,
       groupKey: 'queue-001#1',
     });
-    prisma.productVariant.findUnique.mockResolvedValue({ imageUrl: stored, imageUrlEn: null });
+    prisma.productVariant.findUnique.mockResolvedValue({ imageUrl: stored, localizedImages: null });
     const plan = planFor(
       { kind: 'variant', variantId: 'v1', productName: 'Яблоко', variantName: 'Яблоко Ханикрисп' },
       { stored: { ru: stored } }
@@ -795,9 +803,28 @@ const noCatalogue = () => ({
   category: { findFirst: vi.fn(async () => null) },
 });
 
+// Whether a stored value satisfies one `where` condition: a plain value must be equal, a JSON
+// column is compared with `{ equals }` (SQL NULL is Prisma.DbNull), as PostgreSQL would.
+const sameJson = (a: unknown, b: unknown) =>
+  JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+const satisfies = (value: unknown, condition: unknown) => {
+  if (condition !== null && typeof condition === 'object' && 'equals' in condition) {
+    const { equals } = condition as { equals: unknown };
+    return equals === Prisma.DbNull ? value == null : sameJson(value, equals);
+  }
+  // A column a row does not carry is SQL NULL, as for the legacy English column of a test row.
+  return condition === null ? (value ?? null) === null : value === condition;
+};
+
 // Whether a catalogue row matches one clause of a `where.OR` list, as the reference check asks.
 const matchesClause = (row: Row, clause: Record<string, unknown>) =>
-  Object.entries(clause).every(([key, value]) => row[key] === value);
+  Object.entries(clause).every(([key, value]) => satisfies(row[key], value));
+
+// What the database stores: Prisma.DbNull is SQL NULL.
+const stored = (data: Row) =>
+  Object.fromEntries(
+    Object.entries(data).map(([key, value]) => [key, value === Prisma.DbNull ? null : value])
+  );
 
 // A record whose conditional write checks the row as it stands when the write runs.
 function liveRow<T extends Row>(row: T) {
@@ -806,11 +833,11 @@ function liveRow<T extends Row>(row: T) {
     findFirst: vi.fn(async ({ where }: { where: { OR?: Record<string, unknown>[] } }) =>
       (where.OR ?? []).some((clause) => matchesClause(row, clause)) ? { id: row.id } : null
     ),
-    update: vi.fn(async ({ data }: { data: Row }) => Object.assign(row, data)),
+    update: vi.fn(async ({ data }: { data: Row }) => Object.assign(row, stored(data))),
     updateMany: vi.fn(async ({ where, data }: { where: Row; data: Row }) => {
-      const holds = Object.entries(where).every(([key, value]) => row[key] === value);
+      const holds = Object.entries(where).every(([key, value]) => satisfies(row[key], value));
       if (!holds) return { count: 0 };
-      Object.assign(row, data);
+      Object.assign(row, stored(data));
       return { count: 1 };
     }),
   };
@@ -940,9 +967,9 @@ describe('queue writes are conditional on the state at write time (AGE-1667 B2)'
     const product: {
       id: string;
       imageUrl: string | null;
-      imageUrlEn: string | null;
+      localizedImages: Record<string, string> | null;
       isCustom: boolean;
-    } = { id: 'p1', imageUrl: null, imageUrlEn: null, isCustom: false };
+    } = { id: 'p1', imageUrl: null, localizedImages: null, isCustom: false };
     const row = liveRow(product);
     // The picture is attached by hand after this run has read the product.
     row.findUnique.mockImplementationOnce(async () => {
@@ -960,7 +987,12 @@ describe('queue writes are conditional on the state at write time (AGE-1667 B2)'
 
     expect(result).toMatchObject({ product: 'conflict', changed: true });
     expect(row.updateMany).toHaveBeenCalledWith({
-      where: { id: 'p1', imageUrl: null, imageUrlEn: null },
+      where: {
+        id: 'p1',
+        imageUrl: null,
+        localizedImages: { equals: Prisma.DbNull },
+        imageUrlEn: null,
+      },
       data: { isCustom: true, imageUrl: QUEUED, imageUrlEn: null },
     });
     expect(row.update).not.toHaveBeenCalled();
@@ -968,7 +1000,11 @@ describe('queue writes are conditional on the state at write time (AGE-1667 B2)'
   });
 
   it('keeps an English picture set by hand when a text-free picture is queued', async () => {
-    const variant = { id: 'v1', imageUrl: null, imageUrlEn: 'https://utfs.io/f/manual-en.webp' };
+    const variant = {
+      id: 'v1',
+      imageUrl: null,
+      localizedImages: { en: 'https://utfs.io/f/manual-en.webp' },
+    };
     const row = liveRow(variant);
     const prisma = { emojiLibraryItem: libraryNone(), productVariant: row };
 
@@ -989,13 +1025,13 @@ describe('queue writes are conditional on the state at write time (AGE-1667 B2)'
     );
 
     expect(result).toMatchObject({ product: 'conflict' });
-    expect(variant.imageUrlEn).toBe('https://utfs.io/f/manual-en.webp');
+    expect(variant.localizedImages).toEqual({ en: 'https://utfs.io/f/manual-en.webp' });
     expect(row.updateMany).not.toHaveBeenCalled();
     expect(row.update).not.toHaveBeenCalled();
   });
 
   it('reports a conflict and writes nothing on a re-run after a manual replacement', async () => {
-    const product = { id: 'p1', imageUrl: MANUAL, imageUrlEn: null, isCustom: true };
+    const product = { id: 'p1', imageUrl: MANUAL, localizedImages: null, isCustom: true };
     const row = liveRow(product);
     const library = libraryNone();
     library.findUnique.mockResolvedValue({
@@ -1027,7 +1063,7 @@ describe('queue writes are conditional on the state at write time (AGE-1667 B2)'
   });
 
   it('leaves a product that already holds the queued picture unchanged on a re-run', async () => {
-    const product = { id: 'p1', imageUrl: QUEUED, imageUrlEn: null, isCustom: true };
+    const product = { id: 'p1', imageUrl: QUEUED, localizedImages: null, isCustom: true };
     const row = liveRow(product);
     const library = libraryNone();
     library.findUnique.mockResolvedValue({
@@ -1056,7 +1092,7 @@ describe('queue writes are conditional on the state at write time (AGE-1667 B2)'
   });
 
   it('keeps the historical overwrite of an existing picture for cells without a target', async () => {
-    const product = { id: 'p1', imageUrl: MANUAL, imageUrlEn: null, isCustom: true };
+    const product = { id: 'p1', imageUrl: MANUAL, localizedImages: null, isCustom: true };
     const row = liveRow(product);
     const prisma = { emojiLibraryItem: libraryNone(), product: row };
 
@@ -1076,7 +1112,7 @@ describe('queue writes are conditional on the state at write time (AGE-1667 B2)'
   });
 
   it('writes nothing to the catalogue for an ambiguous category', async () => {
-    const product = liveRow({ id: 'p1', imageUrl: null, imageUrlEn: null });
+    const product = liveRow({ id: 'p1', imageUrl: null, localizedImages: null });
     const prisma = { emojiLibraryItem: libraryNone(), product };
 
     const result = await applyCell(
@@ -1096,7 +1132,7 @@ describe('queue writes are conditional on the state at write time (AGE-1667 B2)'
     {
       label: 'product',
       key: 'product',
-      start: { id: 'p1', imageUrl: null, imageUrlEn: null, isCustom: false } as Row,
+      start: { id: 'p1', imageUrl: null, localizedImages: null, isCustom: false } as Row,
       cell: queueCell(),
       plan: { kind: 'link', productId: 'p1', productName: 'Кефир' } as CellPlan['product'],
       kind: 'linked',
@@ -1104,7 +1140,7 @@ describe('queue writes are conditional on the state at write time (AGE-1667 B2)'
     {
       label: 'variant',
       key: 'productVariant',
-      start: { id: 'v1', imageUrl: null, imageUrlEn: null } as Row,
+      start: { id: 'v1', imageUrl: null, localizedImages: null } as Row,
       cell: queueCell({
         target: 'variant',
         parent: 'Молоко',
@@ -1148,15 +1184,20 @@ describe('queue writes are conditional on the state at write time (AGE-1667 B2)'
 
       const first = await applyCell(prisma, run(false), upload);
       expect(first).toMatchObject({ product: path.kind, changed: true, uploaded: 1 });
-      expect(data).toMatchObject({ imageUrl: RU, imageUrlEn: null });
+      expect(data).toMatchObject({ imageUrl: RU, localizedImages: null });
 
       const second = await applyCell(prisma, run(true), upload);
       expect(second).toMatchObject({ product: path.kind, changed: true, uploaded: 1 });
       expect(second.conflict).toBeUndefined();
-      expect(data).toMatchObject({ imageUrl: RU, imageUrlEn: EN });
+      expect(data).toMatchObject({ imageUrl: RU, localizedImages: { en: EN } });
       expect(row.updateMany).toHaveBeenLastCalledWith({
-        where: { id: path.start.id, imageUrl: RU, imageUrlEn: null },
-        data: expect.objectContaining({ imageUrl: RU, imageUrlEn: EN }),
+        where: {
+          id: path.start.id,
+          imageUrl: RU,
+          localizedImages: { equals: Prisma.DbNull },
+          imageUrlEn: null,
+        },
+        data: expect.objectContaining({ imageUrl: RU, localizedImages: { en: EN } }),
       });
       expect(library.rows.get('queue-001#1')).toMatchObject({ imageUrl: RU, locale: 'ru' });
       expect(library.rows.get('queue-001#1:en')).toMatchObject({ imageUrl: EN, locale: 'en' });
@@ -1187,7 +1228,7 @@ describe('queue writes are conditional on the state at write time (AGE-1667 B2)'
       // The English library record is written before the catalogue is read; only the catalogue refuses.
       expect(result).toMatchObject({ product: 'conflict', changed: true, uploaded: 1 });
       expect(result.conflict).toBeDefined();
-      expect(data).toMatchObject({ imageUrl: MANUAL_RU, imageUrlEn: null });
+      expect(data).toMatchObject({ imageUrl: MANUAL_RU, localizedImages: null });
       expect(row.updateMany).toHaveBeenCalledTimes(1);
     });
 
@@ -1200,7 +1241,7 @@ describe('queue writes are conditional on the state at write time (AGE-1667 B2)'
         run(false),
         vi.fn(async () => RU)
       );
-      data.imageUrlEn = MANUAL_EN;
+      data.localizedImages = { en: MANUAL_EN };
 
       const result = await applyCell(
         prisma,
@@ -1211,7 +1252,7 @@ describe('queue writes are conditional on the state at write time (AGE-1667 B2)'
       // The English library record is written before the catalogue is read; only the catalogue refuses.
       expect(result).toMatchObject({ product: 'conflict', changed: true, uploaded: 1 });
       expect(result.conflict).toBeDefined();
-      expect(data).toMatchObject({ imageUrl: RU, imageUrlEn: MANUAL_EN });
+      expect(data).toMatchObject({ imageUrl: RU, localizedImages: { en: MANUAL_EN } });
       expect(row.updateMany).toHaveBeenCalledTimes(1);
     });
   });
@@ -1296,7 +1337,7 @@ describe('library reuse is bound to the target that wrote it (AGE-1667 B3)', () 
   });
 
   it('reuses the stored picture of the same target without an upload', async () => {
-    const product = { id: 'pear', imageUrl: null, imageUrlEn: null };
+    const product = { id: 'pear', imageUrl: null, localizedImages: null };
     const library = {
       upsert: vi.fn().mockResolvedValue({}),
       findUnique: vi.fn().mockResolvedValue(libraryRow('Груша', ['фрукты', 'queue:product'])),
@@ -1326,7 +1367,12 @@ describe('library reuse is bound to the target that wrote it (AGE-1667 B3)', () 
     expect(result).toMatchObject({ product: 'linked', uploaded: 0 });
     expect(upload).not.toHaveBeenCalled();
     expect(row.updateMany).toHaveBeenCalledWith({
-      where: { id: 'pear', imageUrl: null, imageUrlEn: null },
+      where: {
+        id: 'pear',
+        imageUrl: null,
+        localizedImages: { equals: Prisma.DbNull },
+        imageUrlEn: null,
+      },
       data: { isCustom: true, imageUrl: APPLE, imageUrlEn: null },
     });
   });
@@ -1341,7 +1387,9 @@ describe('a reference is bound to one owner at write (AGE-1667 B3, round 3)', ()
 
   // A catalogue record that is still empty when read and accepts the conditional write.
   const catalogStub = () => ({
-    findUnique: vi.fn().mockResolvedValue({ imageUrl: null, imageUrlEn: null, isCustom: false }),
+    findUnique: vi
+      .fn()
+      .mockResolvedValue({ imageUrl: null, localizedImages: null, isCustom: false }),
     findFirst: vi.fn().mockResolvedValue(null),
     update: vi.fn().mockResolvedValue({}),
     updateMany: vi.fn().mockResolvedValue({ count: 1 }),
@@ -1388,7 +1436,7 @@ describe('a reference is bound to one owner at write (AGE-1667 B3, round 3)', ()
 
   it('keeps the first owner and its picture when another target races for the same reference', async () => {
     const { library, written } = racing();
-    const apple = { id: 'apple', imageUrl: null, imageUrlEn: null, isCustom: false } as Row;
+    const apple = { id: 'apple', imageUrl: null, localizedImages: null, isCustom: false } as Row;
     const appleRow = liveRow(apple);
     const pear = catalogStub();
 
@@ -1436,7 +1484,7 @@ describe('a reference is bound to one owner at write (AGE-1667 B3, round 3)', ()
 
   it('reuses the winning picture when the same cell is written by two runs at once', async () => {
     const { library, written } = racing();
-    const pear = { id: 'pear', imageUrl: null, imageUrlEn: null, isCustom: false } as Row;
+    const pear = { id: 'pear', imageUrl: null, localizedImages: null, isCustom: false } as Row;
     const pearRow = liveRow(pear);
     const plan = planOf(cellOf({}), { kind: 'link', productId: 'pear', productName: 'Груша' });
     const prisma = {
@@ -1551,7 +1599,7 @@ describe('a failed read after or before an upload never orphans a file (AGE-1667
       product: {
         findUnique: vi
           .fn()
-          .mockResolvedValue({ imageUrl: null, imageUrlEn: null, isCustom: false }),
+          .mockResolvedValue({ imageUrl: null, localizedImages: null, isCustom: false }),
         update: vi.fn(),
         updateMany: vi.fn().mockResolvedValue({ count: 1 }),
       },
@@ -1637,7 +1685,7 @@ describe('an RU-only and an RU+EN cell of one target race (AGE-1667 B2, round 4)
     ({
       id: kind === 'product' ? 'pear' : 'v-pear',
       imageUrl: null,
-      imageUrlEn: null,
+      localizedImages: null,
       isCustom: false,
       ...slots,
     }) as Row;
@@ -1696,7 +1744,7 @@ describe('an RU-only and an RU+EN cell of one target race (AGE-1667 B2, round 4)
         changed: true,
         conflict: undefined,
       });
-      expect(row).toMatchObject({ imageUrl: RU_WON, imageUrlEn: EN });
+      expect(row).toMatchObject({ imageUrl: RU_WON, localizedImages: { en: EN } });
       expect(library.rows.get(REF)).toMatchObject({ imageUrl: RU_WON });
       expect(library.rows.get(`${REF}:en`)).toMatchObject({ imageUrl: EN });
     }
@@ -1707,7 +1755,7 @@ describe('an RU-only and an RU+EN cell of one target race (AGE-1667 B2, round 4)
     async (kind) => {
       const library = memoryLibrary([ownedRow(kind, RU_WON), ownedRow(kind, EN, `${REF}:en`)]);
       // The state a completed first run leaves: both pictures, and the custom flag it set.
-      const row = rowOf(kind, { imageUrl: RU_WON, imageUrlEn: EN, isCustom: true });
+      const row = rowOf(kind, { imageUrl: RU_WON, localizedImages: { en: EN }, isCustom: true });
       const record = liveRow(row);
       const prisma = prismaOf(kind, library, row);
       const upload = vi.fn(async () => 'https://utfs.io/f/unexpected.webp');
@@ -1735,7 +1783,7 @@ describe('an RU-only and an RU+EN cell of one target race (AGE-1667 B2, round 4)
 
       expect(pair).toMatchObject({ product: 'conflict' });
       expect(pair.conflict).toContain('уже есть картинка');
-      expect(row).toMatchObject({ imageUrl: MANUAL, imageUrlEn: null });
+      expect(row).toMatchObject({ imageUrl: MANUAL, localizedImages: null });
     }
   );
 
@@ -1743,7 +1791,7 @@ describe('an RU-only and an RU+EN cell of one target race (AGE-1667 B2, round 4)
     'keeps a manual English picture on the target and reports a conflict (%s)',
     async (kind) => {
       const library = memoryLibrary([ownedRow(kind, RU_WON)]);
-      const row = rowOf(kind, { imageUrl: RU_WON, imageUrlEn: MANUAL_EN });
+      const row = rowOf(kind, { imageUrl: RU_WON, localizedImages: { en: MANUAL_EN } });
       const prisma = prismaOf(kind, library, row);
 
       const pair = await applyCell(
@@ -1753,7 +1801,7 @@ describe('an RU-only and an RU+EN cell of one target race (AGE-1667 B2, round 4)
       );
 
       expect(pair).toMatchObject({ product: 'conflict' });
-      expect(row).toMatchObject({ imageUrl: RU_WON, imageUrlEn: MANUAL_EN });
+      expect(row).toMatchObject({ imageUrl: RU_WON, localizedImages: { en: MANUAL_EN } });
     }
   );
 });
@@ -1799,7 +1847,7 @@ describe('a collision on either unique key never removes a file (AGE-1667 B3, ro
   it('keeps the winner when both runs upload the same URL and the loser hits both keys', async () => {
     // The memory table names sourceRef first; both keys are taken by the winner's row either way.
     const library = memoryLibrary([], { afterRead: readBarrier(2) });
-    const pearRow = { id: 'pear', imageUrl: null, imageUrlEn: null, isCustom: false };
+    const pearRow = { id: 'pear', imageUrl: null, localizedImages: null, isCustom: false };
     const prisma = {
       ...noCatalogue(),
       emojiLibraryItem: library,
@@ -1838,7 +1886,7 @@ describe('a collision on either unique key never removes a file (AGE-1667 B3, ro
         groupKey: 'batch-009#2',
       },
     ]);
-    const pear = liveRow({ id: 'pear', imageUrl: null, imageUrlEn: null, isCustom: false });
+    const pear = liveRow({ id: 'pear', imageUrl: null, localizedImages: null, isCustom: false });
     const prisma = {
       ...noCatalogue(),
       emojiLibraryItem: library,
@@ -1859,7 +1907,7 @@ describe('a collision on either unique key never removes a file (AGE-1667 B3, ro
   it('keeps a fresh URL held by a catalogue record', async () => {
     const library = memoryLibrary();
     library.create.mockRejectedValueOnce(new Error('db write'));
-    const pear = liveRow({ id: 'pear', imageUrl: null, imageUrlEn: null, isCustom: false });
+    const pear = liveRow({ id: 'pear', imageUrl: null, localizedImages: null, isCustom: false });
     // Another catalogue record (a category, here) already holds the URL.
     const category = { findFirst: vi.fn(async () => ({ id: 'c-fruit' })) };
     const prisma = {
@@ -1884,7 +1932,7 @@ describe('a collision on either unique key never removes a file (AGE-1667 B3, ro
     const library = memoryLibrary();
     library.findUnique.mockResolvedValueOnce(null).mockRejectedValueOnce(new Error('db read'));
     library.create.mockRejectedValueOnce(new Error('db write'));
-    const pear = liveRow({ id: 'pear', imageUrl: null, imageUrlEn: null, isCustom: false });
+    const pear = liveRow({ id: 'pear', imageUrl: null, localizedImages: null, isCustom: false });
     const prisma = {
       ...noCatalogue(),
       emojiLibraryItem: library,
@@ -1902,7 +1950,7 @@ describe('a collision on either unique key never removes a file (AGE-1667 B3, ro
 
   it('keeps both distinct fresh URLs when they race: the loser stays unreferenced, nothing is deleted', async () => {
     const library = memoryLibrary([], { afterRead: readBarrier(2) });
-    const pear = liveRow({ id: 'pear', imageUrl: null, imageUrlEn: null, isCustom: false });
+    const pear = liveRow({ id: 'pear', imageUrl: null, localizedImages: null, isCustom: false });
     const prisma = {
       ...noCatalogue(),
       emojiLibraryItem: library,
@@ -1993,7 +2041,7 @@ describe('a failed write removes nothing, RU and EN alike (AGE-1667 B3, round 5)
     // The import reads no history row and deletes no file, so the failed RU upload stays in place.
     const library = memoryLibrary();
     library.create.mockRejectedValueOnce(new Error('db write'));
-    const pear = liveRow({ id: 'pear', imageUrl: null, imageUrlEn: null, isCustom: false });
+    const pear = liveRow({ id: 'pear', imageUrl: null, localizedImages: null, isCustom: false });
     const upload = vi.fn(async (_image: Buffer, name: string) => (name === 'Pear' ? EN : RU));
     const prisma = {
       ...noCatalogue(),
@@ -2016,7 +2064,7 @@ describe('a failed write removes nothing, RU and EN alike (AGE-1667 B3, round 5)
       if (++inserts === 2) throw new Error('db write en');
       return insert(args);
     });
-    const pear = liveRow({ id: 'pear', imageUrl: null, imageUrlEn: null, isCustom: false });
+    const pear = liveRow({ id: 'pear', imageUrl: null, localizedImages: null, isCustom: false });
     const upload = vi.fn(async (_image: Buffer, name: string) => (name === 'Pear' ? EN : RU));
     const prisma = {
       ...noCatalogue(),
@@ -2562,4 +2610,374 @@ describe('the replacement authorisation file (AGE-1667 C6)', () => {
     );
     expect(map.size).toBe(2);
   });
+});
+
+// The English picture is the `en` entry of the dictionary. An import writes that entry only and
+// never touches the entries of other languages, whether or not the picture list covers them.
+describe('an import keeps the other languages of the dictionary (AGE-1667 Ya3)', () => {
+  const RU = 'https://utfs.io/f/ru.webp';
+  const EN = 'https://utfs.io/f/en.webp';
+  const ES = 'https://utfs.io/f/es.webp';
+  const ES_LATE = 'https://utfs.io/f/es-late.webp';
+  const REF = 'queue-001#1';
+
+  type Kind = 'product' | 'variant';
+  const cellOf = (kind: Kind): ManifestCell => ({
+    cell: 1,
+    target: kind,
+    ...(kind === 'variant' ? { parent: 'Яблоко' } : {}),
+    category: 'Фрукты',
+    name: 'Груша',
+    nameEn: 'Pear',
+    action: 'update-image',
+  });
+  const planOf = (kind: Kind, mode: 'text' | 'universal', withEn: boolean): CellPlan => ({
+    ref: REF,
+    batch: 'queue-001',
+    batchKind: mode,
+    cell: cellOf(kind),
+    images: withEn ? { ru: Buffer.from('ru'), en: Buffer.from('en') } : { ru: Buffer.from('ru') },
+    stored: {},
+    product:
+      kind === 'product'
+        ? { kind: 'link', productId: 'pear', productName: 'Груша' }
+        : { kind: 'variant', variantId: 'v-pear', productName: 'Яблоко', variantName: 'Груша' },
+  });
+  const rowOf = (kind: Kind, slots: Record<string, unknown> = {}) =>
+    ({
+      id: kind === 'product' ? 'pear' : 'v-pear',
+      imageUrl: null,
+      localizedImages: null,
+      isCustom: false,
+      ...slots,
+    }) as Row;
+  const prismaOf = (kind: Kind, row: Row) => {
+    const record = liveRow(row);
+    return {
+      prisma: {
+        ...noCatalogue(),
+        emojiLibraryItem: memoryLibrary(),
+        ...(kind === 'product' ? { product: record } : { productVariant: record }),
+      } as unknown as PrismaClient,
+      record,
+    };
+  };
+  const upload = () => vi.fn(async (image: Buffer) => (image.toString() === 'en' ? EN : RU));
+
+  it.each(['product', 'variant'] as const)(
+    'adds the English entry beside an entry of another language (%s)',
+    async (kind) => {
+      const row = rowOf(kind, { localizedImages: { es: ES } });
+      const { prisma, record } = prismaOf(kind, row);
+
+      const result = await applyCell(prisma, planOf(kind, 'text', true), upload());
+
+      expect(result).toMatchObject({ changed: true, conflict: undefined });
+      expect(row).toMatchObject({ imageUrl: RU, localizedImages: { es: ES, en: EN } });
+      // The write is conditioned on the dictionary exactly as it was read.
+      expect(record.updateMany).toHaveBeenCalledWith({
+        where: {
+          id: row.id,
+          imageUrl: null,
+          localizedImages: { equals: { es: ES } },
+          imageUrlEn: null,
+        },
+        data: expect.objectContaining({ localizedImages: { es: ES, en: EN }, imageUrlEn: EN }),
+      });
+    }
+  );
+
+  it.each(['product', 'variant'] as const)(
+    'removes only the English entry when a text-free picture is queued (%s)',
+    async (kind) => {
+      const row = rowOf(kind, { localizedImages: { es: ES } });
+      const { prisma } = prismaOf(kind, row);
+
+      const result = await applyCell(prisma, planOf(kind, 'universal', false), upload());
+
+      expect(result).toMatchObject({ changed: true, conflict: undefined });
+      expect(row).toMatchObject({ imageUrl: RU, localizedImages: { es: ES }, imageUrlEn: null });
+    }
+  );
+
+  it.each(['product', 'variant'] as const)(
+    'refuses a queue write when another language is added between the read and the write (%s)',
+    async (kind) => {
+      const row = rowOf(kind, { localizedImages: { es: ES } });
+      const { prisma, record } = prismaOf(kind, row);
+      // The dictionary changes after this run has read it.
+      record.findUnique.mockImplementationOnce(async () => {
+        const seen = { ...row };
+        row.localizedImages = { es: ES, fr: ES_LATE };
+        return seen;
+      });
+
+      const result = await applyCell(prisma, planOf(kind, 'text', true), upload());
+
+      expect(result).toMatchObject({ product: 'conflict' });
+      expect(row).toMatchObject({ imageUrl: null, localizedImages: { es: ES, fr: ES_LATE } });
+    }
+  );
+
+  it.each(['product', 'variant'] as const)(
+    'does not lose an entry added between the read and the write of a historical cell (%s)',
+    async (kind) => {
+      const row = rowOf(kind, {
+        imageUrl: 'https://utfs.io/f/old.webp',
+        localizedImages: { es: ES },
+      });
+      const { prisma, record } = prismaOf(kind, row);
+      record.findUnique.mockImplementationOnce(async () => {
+        const seen = { ...row };
+        row.localizedImages = { es: ES, fr: ES_LATE };
+        return seen;
+      });
+      const historical = planOf(kind, 'text', true);
+      historical.cell = { ...historical.cell, target: undefined, parent: undefined };
+      historical.product =
+        kind === 'product'
+          ? { kind: 'link', productId: 'pear', productName: 'Груша' }
+          : { kind: 'variant', variantId: 'v-pear', productName: 'Яблоко', variantName: 'Груша' };
+
+      const result = await applyCell(prisma, historical, upload());
+
+      expect(result.product).toBe('conflict');
+      expect(row.localizedImages).toEqual({ es: ES, fr: ES_LATE });
+    }
+  );
+
+  it.each(['product', 'variant'] as const)(
+    'writes nothing on a repeat when the dictionary already holds the entry (%s)',
+    async (kind) => {
+      const row = rowOf(kind, {
+        imageUrl: RU,
+        localizedImages: { es: ES, en: EN },
+        isCustom: true,
+      });
+      const { prisma, record } = prismaOf(kind, row);
+      const library = memoryLibrary([
+        {
+          sourceRef: REF,
+          imageUrl: RU,
+          name: 'Груша',
+          nameEn: 'Pear',
+          tags: libraryTags(cellOf(kind)),
+          source: 'batch',
+          locale: 'ru',
+          groupKey: REF,
+        },
+        {
+          sourceRef: `${REF}:en`,
+          imageUrl: EN,
+          name: 'Груша',
+          nameEn: 'Pear',
+          tags: libraryTags(cellOf(kind)),
+          source: 'batch',
+          locale: 'en',
+          groupKey: REF,
+        },
+      ]);
+      (prisma as unknown as { emojiLibraryItem: unknown }).emojiLibraryItem = library;
+
+      const result = await applyCell(prisma, planOf(kind, 'text', true), vi.fn());
+
+      expect(result).toMatchObject({ changed: false, uploaded: 0, conflict: undefined });
+      expect(record.updateMany).not.toHaveBeenCalled();
+      expect(record.update).not.toHaveBeenCalled();
+    }
+  );
+});
+
+// The legacy English column is written by the previous release alone, so a row can hold the only
+// address of its English picture there (the dictionary has none), already or from between this
+// run's read and its write. The import never reads the column; the database write is conditioned
+// on it being empty, together with the dictionary as read, and a row that fails it keeps its
+// address (AGE-1667 Ya3, review round 4).
+describe('a queue write keeps an English address only the previous release holds (AGE-1667 Ya3)', () => {
+  const RU = 'https://utfs.io/f/ru.webp';
+  const EN = 'https://utfs.io/f/en.webp';
+  const LEGACY = 'https://utfs.io/f/legacy-only.webp';
+  const REF = 'queue-001#1';
+
+  type Kind = 'product' | 'variant';
+  type Mode = { label: string; batchKind: 'text' | 'universal'; withEn: boolean };
+  const MODES: Mode[] = [
+    { label: 'text, Russian and English sheets', batchKind: 'text', withEn: true },
+    { label: 'text, Russian sheet only', batchKind: 'text', withEn: false },
+    { label: 'universal, text-free picture', batchKind: 'universal', withEn: false },
+  ];
+  const CASES = (['product', 'variant'] as const).flatMap((kind) =>
+    MODES.map((mode) => [kind, mode.label, mode] as const)
+  );
+
+  const cellOf = (kind: Kind): ManifestCell => ({
+    cell: 1,
+    target: kind,
+    ...(kind === 'variant' ? { parent: 'Яблоко' } : {}),
+    category: 'Фрукты',
+    name: 'Груша',
+    nameEn: 'Pear',
+    action: 'update-image',
+  });
+  const planOf = (kind: Kind, { batchKind, withEn }: Mode): CellPlan => ({
+    ref: REF,
+    batch: 'queue-001',
+    batchKind,
+    cell: cellOf(kind),
+    images: withEn ? { ru: Buffer.from('ru'), en: Buffer.from('en') } : { ru: Buffer.from('ru') },
+    stored: {},
+    product:
+      kind === 'product'
+        ? { kind: 'link', productId: 'pear', productName: 'Груша' }
+        : { kind: 'variant', variantId: 'v-pear', productName: 'Яблоко', variantName: 'Груша' },
+  });
+  const rowOf = (kind: Kind, slots: Record<string, unknown> = {}) =>
+    ({
+      id: kind === 'product' ? 'pear' : 'v-pear',
+      imageUrl: null,
+      localizedImages: null,
+      imageUrlEn: null,
+      isCustom: false,
+      ...slots,
+    }) as Row;
+  const prismaOf = (kind: Kind, row: Row, library = memoryLibrary()) => {
+    const record = liveRow(row);
+    return {
+      prisma: {
+        ...noCatalogue(),
+        emojiLibraryItem: library,
+        ...(kind === 'product' ? { product: record } : { productVariant: record }),
+      } as unknown as PrismaClient,
+      record,
+    };
+  };
+  const upload = () => vi.fn(async (image: Buffer) => (image.toString() === 'en' ? EN : RU));
+  // The previous release writes its English address after this run has read the row.
+  const oldWriterAfterRead = (record: ReturnType<typeof liveRow>, row: Row) =>
+    record.findUnique.mockImplementationOnce(async () => {
+      const seen = { ...row };
+      row.imageUrlEn = LEGACY;
+      return seen;
+    });
+  // The record is read for its pictures and nothing else: no legacy column is selected.
+  const readsNoLegacy = (record: ReturnType<typeof liveRow>) => {
+    for (const [args] of record.findUnique.mock.calls as unknown as [{ select?: object }][]) {
+      expect(Object.keys(args.select ?? {})).not.toContain('imageUrlEn');
+    }
+  };
+
+  it.each(CASES)(
+    'keeps an address already in the legacy column of a free record (%s, %s)',
+    async (kind, _label, mode) => {
+      const row = rowOf(kind, { imageUrlEn: LEGACY });
+      const { prisma, record } = prismaOf(kind, row);
+
+      const result = await applyCell(prisma, planOf(kind, mode), upload());
+
+      expect(result).toMatchObject({ product: 'conflict' });
+      expect(result.conflict).toBeDefined();
+      expect(row).toMatchObject({
+        imageUrl: null,
+        localizedImages: null,
+        imageUrlEn: LEGACY,
+        isCustom: false,
+      });
+      expect(record.updateMany).toHaveBeenCalledTimes(1);
+      expect(record.updateMany.mock.calls[0][0].where).toMatchObject({ imageUrlEn: null });
+      expect(record.update).not.toHaveBeenCalled();
+      readsNoLegacy(record);
+    }
+  );
+
+  it.each(CASES)(
+    'keeps an address written to the legacy column after the read (%s, %s)',
+    async (kind, _label, mode) => {
+      const row = rowOf(kind);
+      const { prisma, record } = prismaOf(kind, row);
+      oldWriterAfterRead(record, row);
+
+      const result = await applyCell(prisma, planOf(kind, mode), upload());
+
+      expect(result).toMatchObject({ product: 'conflict' });
+      expect(result.conflict).toBeDefined();
+      expect(row).toMatchObject({
+        imageUrl: null,
+        localizedImages: null,
+        imageUrlEn: LEGACY,
+        isCustom: false,
+      });
+      expect(record.updateMany).toHaveBeenCalledTimes(1);
+      expect(record.update).not.toHaveBeenCalled();
+      readsNoLegacy(record);
+    }
+  );
+
+  it.each(['product', 'variant'] as const)(
+    'still writes a free record whose legacy column is empty (%s)',
+    async (kind) => {
+      const row = rowOf(kind);
+      const { prisma, record } = prismaOf(kind, row);
+
+      const result = await applyCell(prisma, planOf(kind, MODES[0]), upload());
+
+      expect(result).toMatchObject({ changed: true, conflict: undefined });
+      expect(row).toMatchObject({ imageUrl: RU, localizedImages: { en: EN }, imageUrlEn: EN });
+      expect(record.updateMany.mock.calls[0][0].where).toMatchObject({ imageUrlEn: null });
+    }
+  );
+
+  // A Russian picture this cell stored, its English sheet queued later: only an empty English slot
+  // is filled, and the legacy column counts as part of that slot.
+  describe.each(['product', 'variant'] as const)(
+    'an English sheet after the Russian one (%s)',
+    (kind) => {
+      const first = () => ({ ...planOf(kind, MODES[1]) });
+      const second = () => ({ ...planOf(kind, MODES[0]) });
+
+      it('keeps an address already in the legacy column', async () => {
+        const row = rowOf(kind);
+        const { prisma, record } = prismaOf(kind, row);
+        await applyCell(prisma, first(), upload());
+        expect(row).toMatchObject({ imageUrl: RU, localizedImages: null });
+        // The previous release writes its English address between the two runs.
+        row.imageUrlEn = LEGACY;
+
+        const result = await applyCell(prisma, second(), upload());
+
+        expect(result).toMatchObject({ product: 'conflict' });
+        expect(row).toMatchObject({ imageUrl: RU, localizedImages: null, imageUrlEn: LEGACY });
+        expect(record.updateMany).toHaveBeenCalledTimes(2);
+        expect(record.updateMany.mock.calls[1][0].where).toMatchObject({
+          imageUrl: RU,
+          imageUrlEn: null,
+        });
+        readsNoLegacy(record);
+      });
+
+      it('keeps an address written to the legacy column after the read', async () => {
+        const row = rowOf(kind);
+        const { prisma, record } = prismaOf(kind, row);
+        await applyCell(prisma, first(), upload());
+        oldWriterAfterRead(record, row);
+
+        const result = await applyCell(prisma, second(), upload());
+
+        expect(result).toMatchObject({ product: 'conflict' });
+        expect(row).toMatchObject({ imageUrl: RU, localizedImages: null, imageUrlEn: LEGACY });
+        expect(record.updateMany).toHaveBeenCalledTimes(2);
+        readsNoLegacy(record);
+      });
+
+      it('fills the empty English slot when nothing is in the legacy column', async () => {
+        const row = rowOf(kind);
+        const { prisma } = prismaOf(kind, row);
+        await applyCell(prisma, first(), upload());
+
+        const result = await applyCell(prisma, second(), upload());
+
+        expect(result).toMatchObject({ changed: true, conflict: undefined });
+        expect(row).toMatchObject({ imageUrl: RU, localizedImages: { en: EN }, imageUrlEn: EN });
+      });
+    }
+  );
 });

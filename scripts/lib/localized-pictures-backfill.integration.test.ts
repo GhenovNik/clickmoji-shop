@@ -3,7 +3,7 @@ import { spawnSync } from 'node:child_process';
 import { resolve } from 'node:path';
 import { PrismaClient } from '@prisma/client';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { createPrismaPgAdapter } from '../prisma-adapter';
+import { createPrismaPgAdapter } from '../../src/lib/prisma-adapter';
 import { applyBackfill, planBackfill, TEXT_LOCALE_NONE } from './localized-pictures-backfill';
 
 // Run only through npm run test:localized-pictures-postgres: it creates and removes its own Docker DB.

@@ -9,7 +9,8 @@ export interface ProductSearchResult {
   emoji: string;
   isCustom: boolean;
   imageUrl: string | null;
-  imageUrlEn: string | null;
+  imageTextLocale: string | null;
+  localizedImages: unknown;
   category: {
     id: string;
     name: string;
@@ -53,7 +54,8 @@ export async function searchProducts({
       p.emoji,
       p."isCustom",
       p."imageUrl",
-      p."imageUrlEn",
+      p."imageTextLocale",
+      p."localizedImages",
       json_build_object(
         'id', c.id,
         'name', c.name,

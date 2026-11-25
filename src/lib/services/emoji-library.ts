@@ -1,4 +1,7 @@
 import { prisma } from '@/lib/prisma';
+import { Prisma } from '@prisma/client';
+import { localizedImagesOf } from '@/lib/product-image';
+import { legacyEnglishReferenceExists } from '../../../scripts/lib/legacy-picture-references';
 
 export type EmojiLibrarySource = 'generated' | 'upload' | 'batch';
 
@@ -10,7 +13,7 @@ export type EmojiLibraryInput = {
   source: EmojiLibrarySource;
   sourceRef?: string | null;
   // null: no text on the picture; 'ru' / 'en': packaging text in that language.
-  locale?: 'ru' | 'en' | null;
+  locale?: string | null;
   groupKey?: string | null;
 };
 
@@ -84,27 +87,67 @@ export async function searchEmojiLibrary(query: string, limit = SEARCH_LIMIT) {
   return [...matches, ...siblings];
 }
 
+// How many rows hold the URL in a picture-language entry. A dictionary is read in full: a JSON
+// path filter would have to name each language, and a language that is not listed (yet) must keep
+// its file as much as a listed one. Products, variants and history snapshots each carry one.
+function dictionaryReferences(rows: Array<{ localizedImages: unknown }>, imageUrl: string) {
+  return rows.filter((row) =>
+    Object.values(localizedImagesOf(row.localizedImages)).includes(imageUrl)
+  ).length;
+}
+
+async function referencedByDictionary(imageUrl: string, exceptProductId?: string) {
+  const present = { localizedImages: { not: Prisma.DbNull } };
+  const select = { localizedImages: true } as const;
+  const [products, variants, history] = await Promise.all([
+    prisma.product.findMany({
+      where: { ...present, ...(exceptProductId && { id: { not: exceptProductId } }) },
+      select,
+    }),
+    prisma.productVariant.findMany({ where: present, select }),
+    prisma.listHistoryItem.findMany({ where: present, select }),
+  ]);
+  return (
+    dictionaryReferences(products, imageUrl) +
+    dictionaryReferences(variants, imageUrl) +
+    dictionaryReferences(history, imageUrl)
+  );
+}
+
 // A stored file may be deleted only when nothing else shows it: no library entry and no other
-// product or category. When the check itself fails the answer is "in use", so the file stays.
+// product, variant, history snapshot or category. When the check itself fails the answer is
+// "in use", so the file stays.
 export async function isStoredImageInUse(
   imageUrl: string,
   except: { productId?: string; categoryId?: string } = {}
 ) {
   try {
-    const [library, products, categories] = await Promise.all([
-      prisma.emojiLibraryItem.count({ where: { imageUrl } }),
-      // Either picture of a product keeps the file: the English one may be the only reference.
-      prisma.product.count({
-        where: {
-          OR: [{ imageUrl }, { imageUrlEn: imageUrl }],
-          ...(except.productId && { id: { not: except.productId } }),
-        },
-      }),
-      prisma.category.count({
-        where: { imageUrl, ...(except.categoryId && { id: { not: except.categoryId } }) },
-      }),
-    ]);
-    return library + products + categories > 0;
+    const [library, products, variants, history, dictionaries, legacy, categories] =
+      await Promise.all([
+        prisma.emojiLibraryItem.count({ where: { imageUrl } }),
+        // Any picture of a product keeps the file: the main one, and an entry of the dictionary
+        // whatever its language (a language the picture list does not cover yet included).
+        prisma.product.count({
+          where: {
+            imageUrl,
+            ...(except.productId && { id: { not: except.productId } }),
+          },
+        }),
+        // A variant's own picture and a history snapshot's picture keep the file just the same: a
+        // file referenced only there is still shown, so it must never be judged unused.
+        prisma.productVariant.count({ where: { imageUrl } }),
+        prisma.listHistoryItem.count({ where: { productImageUrl: imageUrl } }),
+        referencedByDictionary(imageUrl, except.productId),
+        // Transitional (until AGE-1667 Ya6 drops the columns): the previous release writes only the
+        // legacy English columns of products, variants and history rows, so a file may be
+        // referenced there alone. A boolean existence check, no legacy value is read; a failure
+        // keeps the file like every other check here.
+        legacyEnglishReferenceExists(prisma, imageUrl, except.productId),
+        prisma.category.count({
+          where: { imageUrl, ...(except.categoryId && { id: { not: except.categoryId } }) },
+        }),
+      ]);
+    return library + products + variants + history + dictionaries + categories > 0 || legacy;
   } catch (error) {
     console.error('Failed to check whether a stored image is in use:', error);
     return true;
