@@ -16,9 +16,9 @@ function timestamp() {
   return `${y}${m}${d}-${hh}${mm}${ss}`;
 }
 
-function run(cmd: string, args: string[]) {
+function run(cmd: string, args: string[], env: NodeJS.ProcessEnv) {
   return new Promise<void>((resolvePromise, rejectPromise) => {
-    const child = spawn(cmd, args, { stdio: 'inherit', shell: false });
+    const child = spawn(cmd, args, { stdio: 'inherit', shell: false, env });
     child.on('error', rejectPromise);
     child.on('close', (code) => {
       if (code === 0) return resolvePromise();
@@ -37,11 +37,9 @@ function sanitizeDatabaseUrl(rawUrl: string): string {
 }
 
 export function buildBackupDockerArgs({
-  pgUrl,
   backupDir,
   fileName,
 }: {
-  pgUrl: string;
   backupDir: string;
   fileName: string;
 }): string[] {
@@ -49,7 +47,8 @@ export function buildBackupDockerArgs({
     'run',
     '--rm',
     '-e',
-    `DATABASE_URL=${pgUrl}`,
+    // Forwarded by name: the value comes from the environment passed to docker, not argv.
+    'DATABASE_URL',
     '--mount',
     `type=bind,source=${backupDir},target=/backups`,
     POSTGRES_DOCKER_IMAGE,
@@ -76,7 +75,10 @@ async function main() {
 
   console.log(`Creating backup: backups/${fileName}`);
 
-  await run('docker', buildBackupDockerArgs({ pgUrl, backupDir, fileName }));
+  await run('docker', buildBackupDockerArgs({ backupDir, fileName }), {
+    ...process.env,
+    DATABASE_URL: pgUrl,
+  });
 
   console.log(`Backup created: backups/${fileName}`);
 }
