@@ -11,6 +11,7 @@ const doubles = vi.hoisted(() => ({
   funnelCreate: vi.fn(),
   funnelUpdateMany: vi.fn(),
   funnelFindFirst: vi.fn(),
+  funnelFindMany: vi.fn(),
   checkRateLimit: vi.fn(),
 }));
 
@@ -32,6 +33,7 @@ vi.mock('@/lib/prisma', () => {
       create: doubles.funnelCreate,
       updateMany: doubles.funnelUpdateMany,
       findFirst: doubles.funnelFindFirst,
+      findMany: doubles.funnelFindMany,
     },
     // Advisory lock taken before the once-per-guest milestone check (funnel.ts).
     $executeRaw: async () => 0,
@@ -81,6 +83,7 @@ beforeEach(() => {
   doubles.funnelCreate.mockReset().mockResolvedValue({ id: 'evt-1' });
   doubles.funnelUpdateMany.mockReset().mockResolvedValue({ count: 1 });
   doubles.funnelFindFirst.mockReset().mockResolvedValue(null);
+  doubles.funnelFindMany.mockReset().mockResolvedValue([]);
   doubles.checkRateLimit
     .mockReset()
     .mockResolvedValue({ allowed: true, remaining: 19, resetAt: 0 });
@@ -312,6 +315,43 @@ describe('POST /api/auth/guest', () => {
     expect(createdTypes.filter((type) => type === 'LIST_CREATE')).toHaveLength(1);
     // Correlation still attaches each new guest User.id to the funnel guestId.
     expect(doubles.funnelUpdateMany).toHaveBeenCalledTimes(2);
+  });
+
+  it('moves the stale chain owner shared milestones to the new guest inside the creation transaction', async () => {
+    // An older, stale guest of this funnel chain owns VISIT and REGISTER (a second REGISTER is a leftover).
+    doubles.funnelFindMany.mockResolvedValue([
+      { id: 'evt-visit', type: 'VISIT' },
+      { id: 'evt-register', type: 'REGISTER' },
+      { id: 'evt-register-old', type: 'REGISTER' },
+    ]);
+    // After adoption the new guest owns the chain's REGISTER, so its once-per-guest check finds it.
+    doubles.funnelFindFirst.mockImplementation(async ({ where }: { where: { type?: string } }) =>
+      where.type === 'REGISTER' ? { id: 'evt-register' } : null
+    );
+
+    const guestId = 'guest-adopt-0000000000001';
+    const cookie = `${FUNNEL_GUEST_COOKIE}=${signGuestId(guestId) ?? ''}`;
+    const response = await POST(
+      new Request('http://localhost:3000/api/auth/guest', { method: 'POST', headers: { cookie } })
+    );
+
+    expect(response.status).toBe(201);
+    expect(doubles.funnelFindMany).toHaveBeenCalledWith({
+      where: {
+        guestId,
+        type: { in: ['VISIT', 'REGISTER', 'LIST_CREATE'] },
+        user: expect.objectContaining({ isGuest: true, role: 'USER' }),
+      },
+      select: { id: true, type: true },
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+    });
+    // Only the earliest row of each type moves, and only to the new guest.
+    expect(doubles.funnelUpdateMany).toHaveBeenCalledWith({
+      where: { id: { in: ['evt-visit', 'evt-register'] } },
+      data: { userId: 'guest-user-1' },
+    });
+    // The REGISTER that adoption already gave the new guest is not written again.
+    expect(doubles.funnelCreate.mock.calls.map(([arg]) => arg.data.type)).toEqual(['LIST_CREATE']);
   });
 
   it('does not overwrite an existing regular user session', async () => {

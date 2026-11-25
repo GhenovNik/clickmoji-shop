@@ -161,12 +161,16 @@ type FunnelEventDelegateLike = {
 const GUEST_MILESTONE_LOCK_NAMESPACE = 'clickmoji:funnel-guest-milestone:v1:';
 
 /**
- * Lock key of one funnel guest chain. Every writer of that chain's once-per-guest milestones and
- * the guest cleanup hand-off takes the same transaction-scoped advisory lock, so they run in turn.
+ * Lock key of one funnel guest chain. Every writer of that chain's once-per-guest milestones, the
+ * guest start that adopts them and the guest cleanup hand-off takes the same transaction-scoped
+ * advisory lock, so they run in turn.
  */
 export function guestMilestoneLockKey(guestId: string): string {
   return `${GUEST_MILESTONE_LOCK_NAMESPACE}${guestId}`;
 }
+
+/** Once-per-chain milestones that a guest owns and that the chain still needs after a replacement. */
+export const SHARED_MILESTONE_TYPES = ['VISIT', 'REGISTER', 'LIST_CREATE'] as const;
 
 /**
  * Writes a once-per-guest milestone (REGISTER, LIST_CREATE). The check and the insert run in one

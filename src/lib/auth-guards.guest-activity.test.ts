@@ -97,7 +97,16 @@ vi.mock('@/lib/prisma', () => {
       return { count: before - store.users.length };
     },
   };
-  return { prisma: { user } };
+  // The batch hand-off and delete run in one transaction; this fake has no rollback, and the
+  // hand-off below is a no-op, so the callback just runs against the same in-memory rows.
+  const client: {
+    user: typeof user;
+    $transaction: (run: (tx: unknown) => Promise<unknown>) => Promise<unknown>;
+  } = {
+    user,
+    $transaction: async (run) => run(client),
+  };
+  return { prisma: client };
 });
 
 const { requireUser } = await import('./auth-guards');

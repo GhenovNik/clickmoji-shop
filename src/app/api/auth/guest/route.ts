@@ -11,6 +11,7 @@ import {
   rateLimitResponse,
 } from '@/lib/auth-security';
 import { getGuestIdFromRequest, recordFunnelEvent } from '@/lib/funnel';
+import { adoptGuestChainMilestones, staleGuestCutoff } from '@/lib/guest-cleanup';
 import { recordGuestActivity } from '@/lib/guest-activity';
 import {
   buildGuestPlaceholderEmail,
@@ -85,6 +86,8 @@ export async function POST(request: Request) {
     const now = new Date();
     // Immutable issuance claim: the same clock instant that the guest row was created with.
     const sessionIssuedAt = currentSessionIssuedAtSeconds(now);
+    // Read before the transaction: the chain lock that adoption takes must cover the new User row.
+    const guestId = getGuestIdFromRequest(request);
     const user = await prisma.$transaction(async (tx) => {
       const created = await tx.user.create({
         data: {
@@ -107,6 +110,17 @@ export async function POST(request: Request) {
         },
       });
 
+      // A newer start takes over the shared milestones (VISIT, REGISTER, LIST_CREATE) of a chain
+      // whose guest is already stale, under the chain lock and in this transaction. The chain then
+      // stays whole even if no event of this guest follows before that stale guest is cleaned up.
+      if (guestId) {
+        await adoptGuestChainMilestones(tx, {
+          userId: created.id,
+          guestId,
+          staleCutoff: staleGuestCutoff(now),
+        });
+      }
+
       await tx.list.createMany({
         data: starterListData(t, created.id),
       });
@@ -114,7 +128,6 @@ export async function POST(request: Request) {
       return created;
     });
 
-    const guestId = getGuestIdFromRequest(request);
     // One REGISTER and one LIST_CREATE per funnel guestId: recreating a guest from the same browser
     // (cookie kept, session lost) must not inflate the funnel. The new User.id is still correlated.
     await recordFunnelEvent({
