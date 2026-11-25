@@ -16,7 +16,9 @@ describe('requireUser', () => {
   });
 
   it('returns the session with the DB role for an existing account', async () => {
-    authMock.mockResolvedValue({ user: { id: 'user_current', email: 'ada@example.com', role: 'USER' } });
+    authMock.mockResolvedValue({
+      user: { id: 'user_current', email: 'ada@example.com', role: 'USER' },
+    });
     prismaUser.findUnique.mockResolvedValue({ id: 'user_current', role: 'ADMIN' });
 
     const result = await requireUser();
@@ -26,9 +28,12 @@ describe('requireUser', () => {
 
   it('does not fall back to the email when the session id no longer exists', async () => {
     // Deleted account; a re-registered account with the same email exists under a new id.
-    authMock.mockResolvedValue({ user: { id: 'user_old', email: 'ada@example.com', role: 'USER' } });
-    prismaUser.findUnique.mockImplementation(async (args: { where: { id?: string; email?: string } }) =>
-      args.where.email ? { id: 'user_new', role: 'USER' } : null
+    authMock.mockResolvedValue({
+      user: { id: 'user_old', email: 'ada@example.com', role: 'USER' },
+    });
+    prismaUser.findUnique.mockImplementation(
+      async (args: { where: { id?: string; email?: string } }) =>
+        args.where.email ? { id: 'user_new', role: 'USER' } : null
     );
 
     const result = await requireUser();

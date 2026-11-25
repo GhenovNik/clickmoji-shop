@@ -22,7 +22,9 @@ const callbacks = authOptions.callbacks as Required<Callbacks>;
 const NOW = Date.UTC(2026, 10, 24, 12, 0, 0);
 const DB_CREATED_AT = new Date(Date.UTC(2026, 10, 1));
 
-const dbUser = (overrides: Partial<{ id: string; email: string; role: string; createdAt: Date }> = {}) => ({
+const dbUser = (
+  overrides: Partial<{ id: string; email: string; role: string; createdAt: Date }> = {}
+) => ({
   id: 'user_current',
   email: 'ada@example.com',
   role: 'USER',
@@ -61,12 +63,18 @@ describe('auth jwt callback', () => {
   });
 
   it('gives a Google sign-in the DB id that signIn resolved, not the Google subject', async () => {
-    prismaUser.findUnique.mockResolvedValueOnce(null).mockResolvedValue(dbUser({ id: 'user_google' }));
+    prismaUser.findUnique
+      .mockResolvedValueOnce(null)
+      .mockResolvedValue(dbUser({ id: 'user_google' }));
     prismaUser.create.mockResolvedValue(dbUser({ id: 'user_google' }));
 
     const user = { id: 'google-sub-123', email: 'ada@example.com', name: 'Ada', image: null };
     await expect(
-      callbacks.signIn({ user, account: { provider: 'google' } as never, profile: {} as never } as never)
+      callbacks.signIn({
+        user,
+        account: { provider: 'google' } as never,
+        profile: {} as never,
+      } as never)
     ).resolves.toBe(true);
 
     const token = await callbacks.jwt({
@@ -84,7 +92,9 @@ describe('auth jwt callback', () => {
     const token = await callbacks.jwt({ token: sessionToken(), trigger: 'update' } as never);
 
     expect(token).toMatchObject({ id: 'user_current', authIssuedAt: NOW - 60_000, role: 'ADMIN' });
-    expect(prismaUser.findUnique).toHaveBeenCalledWith(expect.objectContaining({ where: { id: 'user_current' } }));
+    expect(prismaUser.findUnique).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 'user_current' } })
+    );
     expect(prismaUser.findUnique).not.toHaveBeenCalledWith(
       expect.objectContaining({ where: { email: expect.anything() } })
     );
@@ -92,13 +102,14 @@ describe('auth jwt callback', () => {
 
   it('rejects a deleted account: the old token does not rebind to a re-registered email', async () => {
     // Account deleted, then the same email registered again under a new id.
-    prismaUser.findUnique.mockImplementation(async (args: { where: { id?: string; email?: string } }) =>
-      args.where.email === 'ada@example.com' ? dbUser({ id: 'user_new' }) : null
+    prismaUser.findUnique.mockImplementation(
+      async (args: { where: { id?: string; email?: string } }) =>
+        args.where.email === 'ada@example.com' ? dbUser({ id: 'user_new' }) : null
     );
 
-    await expect(callbacks.jwt({ token: sessionToken(), trigger: 'update' } as never)).rejects.toThrow(
-      'InvalidSession'
-    );
+    await expect(
+      callbacks.jwt({ token: sessionToken(), trigger: 'update' } as never)
+    ).rejects.toThrow('InvalidSession');
     expect(prismaUser.findUnique).not.toHaveBeenCalledWith(
       expect.objectContaining({ where: { email: 'ada@example.com' } })
     );
@@ -108,7 +119,10 @@ describe('auth jwt callback', () => {
     prismaUser.findUnique.mockResolvedValue(dbUser({ createdAt: new Date(NOW - 1000) }));
 
     await expect(
-      callbacks.jwt({ token: sessionToken({ authIssuedAt: NOW - 60_000 }), trigger: 'update' } as never)
+      callbacks.jwt({
+        token: sessionToken({ authIssuedAt: NOW - 60_000 }),
+        trigger: 'update',
+      } as never)
     ).rejects.toThrow('InvalidSession');
   });
 

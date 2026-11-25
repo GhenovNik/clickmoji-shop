@@ -17,7 +17,9 @@ describe('readSessionClaims', () => {
   });
 
   it('rejects an issuance time given in seconds instead of milliseconds', () => {
-    expect(readSessionClaims({ id: 'cuid_1', authIssuedAt: Math.floor(NOW / 1000) }, NOW)).toBeNull();
+    expect(
+      readSessionClaims({ id: 'cuid_1', authIssuedAt: Math.floor(NOW / 1000) }, NOW)
+    ).toBeNull();
   });
 
   it('rejects an issuance time in the future beyond clock skew', () => {
