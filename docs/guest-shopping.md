@@ -112,12 +112,17 @@ The server, never the browser, decides which path a round trip takes:
 
 - **Arm.** `POST /api/auth/guest-upgrade` checks that the caller is a live guest (409 otherwise) and
   sets `clickmoji_guest_upgrade_arm`: a signed, httpOnly, SameSite Lax cookie bound to that guest's
-  `User.id`, valid for 120 seconds. The register page calls it, then `signIn('google')`.
-- **Start.** `POST /api/auth/signin/google` takes the explicit path only while the arm cookie is
-  present. It consumes the arm, re-checks that the caller is the armed live guest, runs the upgrade
-  instance, and binds the intent to the OAuth `state` in the authorization URL. Any refusal returns
-  `{ url: /register?upgrade=expired }` as JSON, because the NextAuth client navigates to that URL. A
-  redirect would break its JSON read. Without the arm, the start is ordinary.
+  `User.id`, valid for 120 seconds. The register page calls it, then `signIn('google', { callbackUrl,
+  guestUpgrade: 'explicit' })`.
+- **Start.** The request names the start. `next-auth/react` sends every `signIn` option as a form
+  field of the POST, so the explicit start is the POST body field `guestUpgrade=explicit`. Only that
+  POST takes the explicit path, and it requires the arm cookie and the armed live guest. It consumes
+  the arm, runs the upgrade instance, and binds the intent to the OAuth `state` in the authorization
+  URL. Any refusal returns `{ url: /register?upgrade=expired }` as JSON, because the NextAuth client
+  navigates to that URL. A redirect would break its JSON read. It never falls back to an ordinary
+  start. Every other POST to `/api/auth/signin/google` is ordinary: it does not read, consume or
+  update the arm, even when the arm cookie is present. The route reads the body from a clone, so
+  NextAuth receives the request unchanged.
 - **Intent.** `clickmoji_guest_upgrade` is a signed, httpOnly cookie bound to the guest's `User.id`
   and to that round trip's `state`, valid for 300 seconds.
 - **Callback.** `GET /api/auth/callback/google` is explicit when the returned `state` equals the
@@ -153,13 +158,14 @@ Limitations of this design, stated plainly:
   overwritten the intent and round-trip state. It fails inside NextAuth's ordinary checks (a generic
   OAuth error page), not on `/register?upgrade=expired`. It never signs anyone in.
 - The arm is a 120-second server-side marker. If the browser drops the arm cookie after the register
-  page armed it, that Google start is ordinary, exactly as an ordinary sign-in. The register page
-  arms and starts in the same click, so this window is the cookie being refused.
+  page armed it, the explicit start is refused with `/register?upgrade=expired` (JSON), not turned
+  into an ordinary sign-in. The register page arms and starts in the same click.
 
 Decisions:
 
-- A forged arm, intent or round-trip cookie can only select the stricter explicit path. It never
-  grants a promotion the guest session does not already hold.
+- Cookies never select the start mode. A forged arm, intent or round-trip cookie cannot start an
+  explicit upgrade, and cannot turn an ordinary start into a refusal. The explicit path needs the
+  request field and the arm, and the promotion still needs the live guest session the arm names.
 - The explicit callback clears its round-trip, arm and intent cookies whatever NextAuth decides
   (success, refusal, cancellation). A callback whose state does not match the intent is refused
   without touching cookies, because they may belong to a newer attempt still in progress. The intent
@@ -183,8 +189,9 @@ recovers an account.
 ## Decisions (AGE-1667)
 
 - **One Google provider and one redirect URI.** The explicit upgrade does not add a provider id or a
-  callback path to the Google client. The mode is chosen on the server: a signed arm at start, then
-  the intent and the round-trip state at callback. The browser never names the mode, and no
+  callback path to the Google client. The server picks the mode. The register page names only the
+  start (the `guestUpgrade=explicit` field of its own POST), and the server then requires the signed
+  arm and a live guest. The callback is decided by the intent and the round-trip state. No
   `google-upgrade` redirect URI is needed.
 - **Explicit callbacks never fall through.** An explicit callback with a missing or foreign intent is
   refused as `expired`, never routed to ordinary sign-up. The one exception is a state that matches

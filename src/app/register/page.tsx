@@ -12,7 +12,11 @@ import { getProviders, signIn, useSession } from 'next-auth/react';
 import Link from 'next/link';
 import { Eye, EyeOff } from 'lucide-react';
 import LegalLinks from '@/components/LegalLinks';
-import { GOOGLE_PROVIDER_ID } from '@/lib/guest-upgrade-intent';
+import {
+  GOOGLE_PROVIDER_ID,
+  GUEST_UPGRADE_START_FIELD,
+  GUEST_UPGRADE_START_VALUE,
+} from '@/lib/guest-upgrade-intent';
 
 /** Reasons the Google callback sends back as `/register?upgrade=<reason>` (AGE-1667). */
 function upgradeNoticeKeyFor(reason: string | null) {
@@ -71,7 +75,11 @@ export default function RegisterPage() {
         setUpgradeReason('expired');
         return;
       }
-      void signIn(GOOGLE_PROVIDER_ID, { callbackUrl: '/' });
+      // The option is sent as a form field of the POST, which is what makes the start explicit.
+      void signIn(GOOGLE_PROVIDER_ID, {
+        callbackUrl: '/',
+        [GUEST_UPGRADE_START_FIELD]: GUEST_UPGRADE_START_VALUE,
+      });
     } catch {
       setError(t('register.networkError'));
     }

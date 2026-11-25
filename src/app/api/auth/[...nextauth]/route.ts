@@ -15,6 +15,8 @@ import {
   GUEST_UPGRADE_ARM_COOKIE,
   GUEST_UPGRADE_INTENT_COOKIE,
   GUEST_UPGRADE_INTENT_MAX_AGE_SECONDS,
+  GUEST_UPGRADE_START_FIELD,
+  GUEST_UPGRADE_START_VALUE,
 } from '@/lib/guest-upgrade-intent';
 import {
   expiredCookieHeader,
@@ -25,12 +27,15 @@ import {
 
 /**
  * NextAuth routes (AGE-1667). The explicit guest upgrade uses the same Google provider and redirect
- * URI as ordinary sign-in, so the server tells the two apart, and the browser never names the mode:
+ * URI as ordinary sign-in, so the server tells the two apart by what each request carries:
  *
- *   - Start (POST /api/auth/signin/google). Explicit only while the server-side arm cookie is present
- *     (set by POST /api/auth/guest-upgrade for a live guest). The arm is consumed here. The explicit
- *     start runs the upgrade NextAuth instance and binds an intent cookie to the guest's User.id and
- *     to the OAuth `state` in the authorization URL. Otherwise the ordinary instance runs.
+ *   - Start (POST /api/auth/signin/google). Explicit only when the form body names the start (the
+ *     GUEST_UPGRADE_START_FIELD option that the register page passes to signIn). The explicit start
+ *     requires the server-side arm cookie (set by POST /api/auth/guest-upgrade for a live guest) and
+ *     consumes it. It runs the upgrade NextAuth instance and binds an intent cookie to the guest's
+ *     User.id and to the OAuth `state` in the authorization URL. Any refusal is returned as JSON,
+ *     never as an ordinary start. Every other POST is ordinary: it runs the ordinary instance and
+ *     does not read, consume or update the arm.
  *   - Callback (GET /api/auth/callback/google). The request's `state` decides the mode. It is explicit
  *     when it equals the intent's state, or the state of the upgrade instance's own round-trip cookie.
  *     An explicit callback whose intent is missing or names another attempt is refused, and nothing
@@ -107,9 +112,17 @@ async function upgradeRoundTripState(
 }
 
 /**
- * Explicit start. Runs only when the server-side arm cookie is present. The arm must be fresh, and
- * the caller must still be the live guest it names. Any refusal returns `expired` JSON with the arm
- * cleared, and never an ordinary start.
+ * Whether the POST body names the explicit start. The body is read from a clone, so the request that
+ * NextAuth receives is left intact. An unreadable body is an ordinary start.
+ */
+async function requestsExplicitStart(request: NextRequest): Promise<boolean> {
+  const form = await request.clone().text().catch(() => '');
+  return new URLSearchParams(form).get(GUEST_UPGRADE_START_FIELD) === GUEST_UPGRADE_START_VALUE;
+}
+
+/**
+ * Explicit start. The arm must be fresh, and the caller must still be the live guest it names. Any
+ * refusal returns `expired` JSON with the arm cleared, and never an ordinary start.
  */
 async function startGoogleUpgrade(
   request: NextRequest,
@@ -178,10 +191,9 @@ async function dispatch(request: NextRequest, context: RouteContext): Promise<Re
   const secure = shouldUseSecureSessionCookies(request);
 
   if (isGoogle && segments[0] === 'signin' && request.method === 'POST') {
-    if (request.cookies.has(GUEST_UPGRADE_ARM_COOKIE)) {
-      return startGoogleUpgrade(request, context, secure);
-    }
-    return ordinaryHandler(request, context);
+    // Ordinary unless the body names the explicit start. An armed cookie alone changes nothing here.
+    if (!(await requestsExplicitStart(request))) return ordinaryHandler(request, context);
+    return startGoogleUpgrade(request, context, secure);
   }
 
   if (isGoogle && segments[0] === 'callback' && request.method === 'GET') {

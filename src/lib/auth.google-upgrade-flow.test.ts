@@ -191,8 +191,12 @@ afterAll(() => {
 
 const { GET, POST } = await import('@/app/api/auth/[...nextauth]/route');
 const { POST: armGuestUpgrade } = await import('@/app/api/auth/guest-upgrade/route');
-const { GUEST_UPGRADE_ARM_COOKIE, GUEST_UPGRADE_INTENT_COOKIE } =
-  await import('@/lib/guest-upgrade-intent');
+const {
+  GUEST_UPGRADE_ARM_COOKIE,
+  GUEST_UPGRADE_INTENT_COOKIE,
+  GUEST_UPGRADE_START_FIELD,
+  GUEST_UPGRADE_START_VALUE,
+} = await import('@/lib/guest-upgrade-intent');
 
 const SECRET = 'test-secret-for-google-upgrade-flow';
 const BASE = 'http://localhost:3000';
@@ -263,18 +267,21 @@ async function csrf(jar: Jar): Promise<string> {
 }
 
 /**
- * Starts a round trip the way next-auth/react's signIn does: POST signin/google, then the URL it
- * returns. `explicit` arms the upgrade first, as the register page does. `url` is the URL the client
+ * Starts a round trip the way next-auth/react's signIn does: POST signin/google with the options as
+ * form fields, then the URL it returns. `explicit` is the register page's start: it sends the
+ * explicit-start field, and (unless `arm: false`) arms the upgrade first, as the page does. Without
+ * the field the POST is ordinary, whatever cookies the browser holds. `url` is the URL the client
  * would navigate to: Google's authorization URL, or the register page for a refused start.
  */
-async function startSignIn(jar: Jar, { explicit = false }: { explicit?: boolean } = {}) {
-  if (explicit) await arm(jar);
+async function startSignIn(
+  jar: Jar,
+  { explicit = false, arm: armFirst = explicit }: { explicit?: boolean; arm?: boolean } = {}
+) {
+  if (armFirst) await arm(jar);
   const csrfToken = await csrf(jar);
-  const response = await send(jar, 'POST', '/api/auth/signin/google', {
-    csrfToken,
-    callbackUrl: '/',
-    json: 'true',
-  });
+  const form: Record<string, string> = { csrfToken, callbackUrl: '/', json: 'true' };
+  if (explicit) form[GUEST_UPGRADE_START_FIELD] = GUEST_UPGRADE_START_VALUE;
+  const response = await send(jar, 'POST', '/api/auth/signin/google', form);
   const { url } = (await response.json()) as { url: string };
   const authorization = new URL(url);
   const state = authorization.searchParams.get('state');
@@ -418,6 +425,70 @@ describe('round-trip cookies are namespaced per flow (AGE-1667)', () => {
   });
 });
 
+describe('the request names the start, not the cookies (AGE-1667)', () => {
+  it('an ordinary start with a live arm in the browser stays ordinary and leaves the arm untouched', async () => {
+    const jar: Jar = new Map();
+    await seedGuest(jar);
+    await arm(jar);
+    const armBefore = jar.get(GUEST_UPGRADE_ARM_COOKIE);
+    expect(armBefore).toBeTruthy();
+
+    const ordinary = await startSignIn(jar, { arm: false });
+
+    expect(ordinary.state).toBeTruthy();
+    expect(refusedTo(ordinary.url)).toBeNull();
+    expect(jar.has(ORDINARY_STATE)).toBe(true);
+    expect(jar.has(UPGRADE_STATE)).toBe(false);
+    expect(jar.has(GUEST_UPGRADE_INTENT_COOKIE)).toBe(false);
+    expect(jar.get(GUEST_UPGRADE_ARM_COOKIE)).toBe(armBefore);
+  });
+
+  it('an explicit start that follows an ordinary start with the arm still set completes the upgrade', async () => {
+    const jar: Jar = new Map();
+    const guestId = await seedGuest(jar);
+    await arm(jar);
+    const ordinary = await startSignIn(jar, { arm: false });
+    expect(ordinary.state).toBeTruthy();
+
+    const upgrade = await startSignIn(jar, { explicit: true, arm: false });
+    expect(refusedTo(upgrade.url)).toBeNull();
+    expect(jar.has(GUEST_UPGRADE_ARM_COOKIE)).toBe(false);
+    expect(jar.has(GUEST_UPGRADE_INTENT_COOKIE)).toBe(true);
+
+    world.profile = shopper;
+    const upgraded = await finishSignIn(jar, upgrade.state);
+    expect(upgraded.headers.get('location')).not.toContain('upgrade=');
+    expect(await sessionSubjectOf(upgraded)).toBe(guestId);
+    expect(world.users.get(guestId)?.isGuest).toBe(false);
+  });
+
+  it('an explicit start without an arm is refused as JSON, and no ordinary start is made in its place', async () => {
+    const jar: Jar = new Map();
+    await seedGuest(jar);
+
+    const started = await startSignIn(jar, { explicit: true, arm: false });
+
+    expect(refusedTo(started.url)).toBe('/register?upgrade=expired');
+    expect(started.state).toBeNull();
+    expect(jar.has(ORDINARY_STATE)).toBe(false);
+    expect(jar.has(UPGRADE_STATE)).toBe(false);
+    expect(jar.has(GUEST_UPGRADE_INTENT_COOKIE)).toBe(false);
+  });
+
+  it('a forged arm does not turn an ordinary start into a refusal', async () => {
+    const jar: Jar = new Map();
+    await seedGuest(jar);
+    jar.set(GUEST_UPGRADE_ARM_COOKIE, 'forged-value');
+
+    const ordinary = await startSignIn(jar);
+
+    expect(refusedTo(ordinary.url)).toBeNull();
+    expect(ordinary.state).toBeTruthy();
+    expect(jar.has(UPGRADE_STATE)).toBe(false);
+    expect(jar.get(GUEST_UPGRADE_ARM_COOKIE)).toBe('forged-value');
+  });
+});
+
 describe('ordinary Google sign-in (AGE-1667)', () => {
   it('signs an existing account in with the same email, and the session names that account', async () => {
     const jar: Jar = new Map();
@@ -496,7 +567,7 @@ describe('explicit guest upgrade through Google (AGE-1667)', () => {
     // The session now names another guest, so the armed guest is no longer the caller.
     jar.set('next-auth.session-token', await guestSession('guest-2'));
 
-    const started = await startSignIn(jar);
+    const started = await startSignIn(jar, { explicit: true, arm: false });
 
     expect(refusedTo(started.url)).toBe('/register?upgrade=expired');
     expect(started.state).toBeNull();
@@ -510,7 +581,7 @@ describe('explicit guest upgrade through Google (AGE-1667)', () => {
     await seedGuest(jar);
     jar.set(GUEST_UPGRADE_ARM_COOKIE, 'forged-value');
 
-    const started = await startSignIn(jar);
+    const started = await startSignIn(jar, { explicit: true, arm: false });
 
     expect(refusedTo(started.url)).toBe('/register?upgrade=expired');
     expect(started.state).toBeNull();

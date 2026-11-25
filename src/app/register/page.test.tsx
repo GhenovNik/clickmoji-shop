@@ -238,8 +238,12 @@ describe('RegisterPage guest upgrade (AGE-1667)', () => {
 
     await waitFor(() => expect(auth.signIn).toHaveBeenCalledTimes(1));
     expect(fetchMock).toHaveBeenCalledWith('/api/auth/guest-upgrade', { method: 'POST' });
-    // The upgrade is the same Google provider and redirect URI; the server-side arm makes it explicit.
-    expect(auth.signIn).toHaveBeenCalledWith('google', { callbackUrl: '/' });
+    // The upgrade is the same Google provider and redirect URI. The explicit-start field in the
+    // options is what the server reads from the POST body; the arm alone does not make it explicit.
+    expect(auth.signIn).toHaveBeenCalledWith('google', {
+      callbackUrl: '/',
+      guestUpgrade: 'explicit',
+    });
     expect(auth.signIn).not.toHaveBeenCalledWith('google-upgrade', expect.anything());
     // The intent lives only in the server's httpOnly cookie; the page never sets a browser flag.
     expect(document.cookie).not.toContain('clickmoji_guest_upgrade');

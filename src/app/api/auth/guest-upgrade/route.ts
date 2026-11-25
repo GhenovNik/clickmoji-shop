@@ -7,9 +7,10 @@ import { armCookieHeader } from '@/lib/guest-upgrade-oauth';
 /**
  * POST /api/auth/guest-upgrade - arms the explicit Google upgrade for the live guest (AGE-1667). It
  * sets a short-lived, signed, httpOnly arm cookie bound to that guest's User.id. The register page
- * then calls signIn('google'), and the NextAuth route takes the explicit path only while the arm is
- * present (see src/app/api/auth/[...nextauth]/route.ts). A refusal (409) means the guest session is
- * no longer live, so the page shows the expired notice and starts nothing.
+ * then calls signIn('google') with the explicit-start option, and the NextAuth route takes the
+ * explicit path only for that POST, and only with the arm present (see
+ * src/app/api/auth/[...nextauth]/route.ts). An ordinary Google start ignores the arm. A refusal (409)
+ * means the guest session is no longer live, so the page shows the expired notice and starts nothing.
  */
 export async function POST(request: Request) {
   const guest = await resolveRegistrationGuest(request);
