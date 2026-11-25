@@ -1,5 +1,13 @@
 // @vitest-environment node
-import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  copyFileSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { PrismaClient } from '@prisma/client';
@@ -397,6 +405,45 @@ describe('batch prompts', () => {
       expect(prompt).toContain(
         'Category cells: Compose two or three items of the same group with the same lighting and simplification.'
       );
+    }
+  });
+});
+
+// Match explicit platform or visual-style references, not fruit names or metadata.
+const forbiddenVisualReference =
+  /\b(?:iphone|ios)\b|\bapple[\s-]+(?:emoji|style|styled|icons?|design|aesthetic|look)\b|\b(?:like|style of|inspired by)\s+apple\b/i;
+
+describe('prompt visual references', () => {
+  it('distinguishes brand references from product names and metadata', () => {
+    for (const text of [
+      'iPhone',
+      'IOS',
+      'Apple emoji',
+      'APPLE-style',
+      'like Apple',
+      'Apple icons',
+      'inspired by Apple',
+    ]) {
+      expect(forbiddenVisualReference.test(text), text).toBe(true);
+    }
+    for (const text of ['Apple juice', 'Pineapple', 'apple', 'apple-touch-icon', 'PWA']) {
+      expect(forbiddenVisualReference.test(text), text).toBe(false);
+    }
+  });
+
+  it('keeps checked-in prompts, instructions and generator free of visual brand references', () => {
+    const dir = 'docs/emoji-batches/batches';
+    const files = readdirSync(dir)
+      .filter((name) => name.endsWith('.md'))
+      .map((name) => join(dir, name));
+    expect(files.length).toBeGreaterThan(0);
+    files.push('docs/emoji-batches/README.md', 'scripts/emoji-batches.ts');
+    for (const file of files) {
+      const lines = readFileSync(file, 'utf8').split('\n');
+      const matches = lines.flatMap((line, index) =>
+        forbiddenVisualReference.test(line) ? [`${file}:${index + 1}: ${line}`] : []
+      );
+      expect(matches, matches.join('\n')).toEqual([]);
     }
   });
 });
