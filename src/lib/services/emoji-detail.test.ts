@@ -205,7 +205,9 @@ describe('two-path consistency and preview rendering (AGE-1667 C3)', () => {
         `детальность <b>${importScore2} Б</b> <span class="badge-outlier">выше порога (&gt; ${importScore1} Б)</span>`
       );
       // Existing summary and import preview info stay intact.
-      expect(cli.stdout).toContain('Целей: 9; каталог не проверялся (нет DATABASE_URL).');
+      expect(cli.stdout).toContain(
+        'Целей: 9; каталог не проверялся (C3 preview-only; сверка — --check-catalog).'
+      );
       expect(cli.stdout).toContain(`Детальность (байты WebP, порог > ${importScore1} Б):`);
     }
   );

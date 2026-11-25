@@ -1,13 +1,14 @@
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { isAbsolute, join, relative, resolve } from 'node:path';
+import { join, resolve } from 'node:path';
 import sharp from 'sharp';
 import {
   NORMALIZED_EMOJI_SIZE,
   normalizeEmojiImage,
   type NormalizeEmojiOptions,
 } from '@/lib/services/emoji-image-normalize';
+import { assertAuditOutputPath, assertPathOutsideRepo } from '@/lib/services/safe-paths';
 
 // Canonical detail metric for AGE-1667 C3: byte size of the 256×256 transparent WebP produced by
 // normalizeEmojiImage (quality 82, effort 6, 86% object fill, Lanczos3). Detailed or noisy
@@ -413,17 +414,7 @@ export function cacheKeyForUrl(url: string): string {
   return createHash('sha256').update(url).digest('hex').slice(0, 16);
 }
 
-// Ensures temporary downloaded images and audit artifacts stay outside the repository checkout.
-export function assertPathOutsideRepo(targetPath: string, repoRoot = process.cwd()): void {
-  const resolvedTarget = resolve(targetPath);
-  const resolvedRepo = resolve(repoRoot);
-  const rel = relative(resolvedRepo, resolvedTarget);
-  if (rel === '' || (!rel.startsWith('..') && !isAbsolute(rel))) {
-    throw new Error(
-      `Refusing path inside repository "${resolvedTarget}": downloaded catalog images and audit outputs must live outside the repo`
-    );
-  }
-}
+export { assertPathOutsideRepo };
 
 export type ImageLoader = (entry: CatalogImageEntry) => Promise<Buffer>;
 
@@ -434,10 +425,12 @@ export function createCachingImageLoader(options: {
   fetchImpl?: typeof fetch;
 }): ImageLoader {
   const { cacheDir, offline = false, timeoutMs = 15_000, fetchImpl = fetch } = options;
+  assertPathOutsideRepo(cacheDir);
   mkdirSync(cacheDir, { recursive: true });
 
   return async (entry: CatalogImageEntry) => {
     const file = join(cacheDir, cacheKeyForUrl(entry.url));
+    assertAuditOutputPath(file);
     if (existsSync(file)) {
       return readFileSync(file);
     }
@@ -461,6 +454,8 @@ export function createCachingImageLoader(options: {
     if (buf.byteLength === 0) {
       throw new Error('Empty HTTP response body');
     }
+    // The cache file may already exist as a link (even a dangling one): refuse before any write.
+    assertAuditOutputPath(file);
     writeFileSync(file, buf);
     return buf;
   };

@@ -15,6 +15,7 @@ import {
   parseDetailThreshold,
   type CatalogAuditScope,
 } from '../src/lib/services/emoji-detail';
+import { assertAuditOutputPath } from '../src/lib/services/safe-paths';
 
 // Measures the canonical detail score on public images from a catalogue export JSON without any
 // database connection. Downloaded images are cached only in a temporary directory outside the repo.
@@ -43,6 +44,7 @@ const USAGE = [
   `  --input <file.json>        Catalogue export JSON (default: ${DEFAULT_CATALOG_EXPORT_PATH})`,
   '  --cache-dir <dir>          Temp cache directory outside the repo (default: $TMPDIR/clickmoji-detail-cache)',
   '  --out <dir>                Output directory outside the repo for detail-report.json & .md',
+  '                             (the repo is located from the tool itself, not from the cwd)',
   `  --detail-threshold <bytes> Strict outlier threshold in bytes (default: ${DEFAULT_DETAIL_THRESHOLD_BYTES})`,
   '  --scope <products|all>     "products" (default: 227 primary product images) or "all" (all slots)',
   `  --style-refs <dir>         Style reference images folder (default: ${DEFAULT_STYLE_REFS_DIR})`,
@@ -111,8 +113,13 @@ export async function runAuditCli(argv = process.argv.slice(2)): Promise<number>
     '--concurrency'
   );
 
+  // Canonical checks run before anything is created, including the report files that may already exist as links.
   assertPathOutsideRepo(cacheDir);
-  if (outDir) assertPathOutsideRepo(outDir);
+  if (outDir) {
+    assertPathOutsideRepo(outDir);
+    assertAuditOutputPath(join(outDir, 'detail-report.json'));
+    assertAuditOutputPath(join(outDir, 'detail-report.md'));
+  }
 
   let rawJson: unknown;
   try {
@@ -144,6 +151,8 @@ export async function runAuditCli(argv = process.argv.slice(2)): Promise<number>
     mkdirSync(outDir, { recursive: true });
     const jsonPath = join(outDir, 'detail-report.json');
     const mdPath = join(outDir, 'detail-report.md');
+    assertAuditOutputPath(jsonPath);
+    assertAuditOutputPath(mdPath);
     writeFileSync(jsonPath, `${JSON.stringify(report, null, 2)}\n`);
     writeFileSync(mdPath, `${markdown}\n`);
     console.log(`Report files: ${jsonPath} | ${mdPath}`);

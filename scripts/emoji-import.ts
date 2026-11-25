@@ -1,17 +1,18 @@
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { PrismaClient } from '@prisma/client';
-import { createPrismaPgAdapter } from '../src/lib/prisma-adapter';
+import type { PrismaClient } from '@prisma/client';
 import {
   DEFAULT_DETAIL_THRESHOLD_BYTES,
   DEFAULT_STYLE_REFS_DIR,
+  STYLE_REF_SPECS,
   detailScoreFromNormalized,
   isDetailAboveThreshold,
   loadStyleRefs,
   parseDetailThreshold,
   type StyleRefSample,
 } from '../src/lib/services/emoji-detail';
+import { assertOutputsSeparate } from '../src/lib/services/safe-paths';
 import {
   applyCell,
   cellRef,
@@ -32,10 +33,13 @@ import {
 
 // Imports the operator's emoji sheets (AGE-1465 item 2, AGE-1667 queue, AGE-1667 C6 replacements).
 //   npx tsx scripts/emoji-import.ts [--dir <folder>] [--batch 001,002,text-001,queue-001] [--out <folder>] [--detail-threshold <bytes>]
-//   DATABASE_URL=... npx tsx scripts/emoji-import.ts ...            preview against the catalogue
-//   DATABASE_URL=... UPLOADTHING_TOKEN=... npx tsx scripts/emoji-import.ts --apply ...
+//       C3 preview-only: the catalogue is NOT opened, and an inherited DATABASE_URL is ignored.
+//   DATABASE_URL=... npx tsx scripts/emoji-import.ts ... --check-catalog
+//       opt-in C6 reconciliation with a local database; fails closed without DATABASE_URL.
+//   DATABASE_URL=... UPLOADTHING_TOKEN=... npx tsx scripts/emoji-import.ts --apply ...   (implies --check-catalog)
 //   ... --replace-auth <file.json>   the old URLs of the replaced categories (required for --apply)
 // Without --apply nothing is written: the normalized pictures, style refs and preview.html go to --out.
+// --out must be a different folder from --dir (also through a symlink or a hard link): sources are never overwritten.
 // DATABASE_URL is read from the environment only, never from .env. The replacement file is never
 // committed: it lists the picture URL the operator saw on each replaced category, see the README.
 
@@ -248,22 +252,56 @@ function argumentBatches(value: string) {
     .map((id) => (/^(batch|text|queue)-/.test(id) ? id : `batch-${id.padStart(3, '0')}`));
 }
 
+// Every file the run may write, by its name inside --out, for the check before the first write.
+function plannedOutputNames(batches: ManifestBatch[]) {
+  const names = ['preview.html', ...STYLE_REF_SPECS.map((spec) => `style-ref-${spec.filename}`)];
+  for (const batch of batches) {
+    for (const cell of batch.cells) {
+      names.push(`${batch.batch}-${cell.cell}.webp`, `${batch.batch}-${cell.cell}-en.webp`);
+    }
+  }
+  return names;
+}
+
+// Opens the catalogue only when the operator asked for it (C6 reconciliation or --apply).
+async function openCatalog(): Promise<PrismaClient> {
+  const prismaModule = await import('@prisma/client');
+  const { createPrismaPgAdapter } = await import('../src/lib/prisma-adapter');
+  return new prismaModule.PrismaClient({ adapter: createPrismaPgAdapter() });
+}
+
 export async function main() {
   const dir = resolve(expandHome(argument('--dir') ?? '~/Downloads/clickmoji-batches'));
   const out = resolve(expandHome(argument('--out') ?? join(dir, 'preview')));
   const only = argument('--batch') ? argumentBatches(argument('--batch')!) : undefined;
   const apply = process.argv.includes('--apply');
+  const checkCatalog = apply || process.argv.includes('--check-catalog');
   const threshold = parseDetailThreshold(argument('--detail-threshold'));
   const styleRefsDir = argument('--style-refs') ?? DEFAULT_STYLE_REFS_DIR;
 
   if (apply && (!process.env.DATABASE_URL || !process.env.UPLOADTHING_TOKEN)) {
     throw new Error('--apply needs DATABASE_URL and UPLOADTHING_TOKEN in the environment');
   }
+  if (checkCatalog && !process.env.DATABASE_URL) {
+    throw new Error(
+      '--check-catalog needs DATABASE_URL in the environment (C3 preview-only does not read the catalogue)'
+    );
+  }
 
   const manifest = MANIFESTS.flatMap(
     (path) => JSON.parse(readFileSync(path, 'utf8')) as ManifestBatch[]
   );
   const batches = manifest.filter((batch) => !only || only.includes(batch.batch));
+
+  // Before any read of a picture and before any write: the sources and every planned output stay apart.
+  assertOutputsSeparate({
+    inputDir: dir,
+    outDir: out,
+    inputFiles: STYLE_REF_SPECS.map((spec) =>
+      join(resolve(expandHome(styleRefsDir)), spec.filename)
+    ),
+    outputNames: plannedOutputNames(batches),
+  });
 
   // Checked before any file is read or uploaded: a replacement without an exact authorisation stops here.
   const authPath = argument('--replace-auth');
@@ -283,9 +321,12 @@ export async function main() {
     );
   }
   const styleRefs = await loadStyleRefs(styleRefsDir);
-  const prisma = process.env.DATABASE_URL
-    ? new PrismaClient({ adapter: createPrismaPgAdapter() })
-    : null;
+  const prisma = checkCatalog ? await openCatalog() : null;
+  if (!checkCatalog && process.env.DATABASE_URL) {
+    console.log(
+      'DATABASE_URL не читается в C3 preview-only: каталог не открыт. Сверка с каталогом — флагом --check-catalog.'
+    );
+  }
 
   mkdirSync(out, { recursive: true });
   for (const ref of styleRefs) {
@@ -365,7 +406,9 @@ export async function main() {
 
   const summary = index
     ? summarize(targets)
-    : [`Целей: ${targets.length}; каталог не проверялся (нет DATABASE_URL).`];
+    : [
+        `Целей: ${targets.length}; каталог не проверялся (C3 preview-only; сверка — --check-catalog).`,
+      ];
   const replaces = replaceCount(batches);
   if (replaces > 0) {
     summary.push(
