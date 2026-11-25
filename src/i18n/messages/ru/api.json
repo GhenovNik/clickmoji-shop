@@ -26,6 +26,20 @@
     "passwordUpdated": "Пароль обновлен",
     "resetFailed": "Не удалось сбросить пароль"
   },
+  "account": {
+    "fetchFailed": "Не удалось загрузить данные аккаунта",
+    "noLocalPassword": "Для этого аккаунта не задан локальный пароль (вход через Google)",
+    "currentPasswordRequired": "Введите текущий пароль",
+    "incorrectCurrentPassword": "Неверный текущий пароль",
+    "passwordUpdated": "Пароль обновлён",
+    "passwordChangedConcurrently": "Пароль был изменён другим запросом. Повторите попытку.",
+    "passwordUpdateFailed": "Не удалось сменить пароль",
+    "exportFailed": "Не удалось выгрузить данные аккаунта",
+    "passwordRequiredToDelete": "Введите текущий пароль для подтверждения удаления",
+    "deleteConfirmationRequired": "Введите слово «{word}» для подтверждения удаления",
+    "deleted": "Аккаунт удалён",
+    "deleteFailed": "Не удалось удалить аккаунт"
+  },
   "lists": {
     "defaultNames": {
       "main": "Основной",

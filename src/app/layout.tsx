@@ -6,6 +6,7 @@ import './globals.css';
 import Providers from '@/components/Providers';
 import PwaRegister from '@/components/PwaRegister';
 import MobileNav from '@/components/layout/MobileNav';
+import SiteFooter from '@/components/layout/SiteFooter';
 import UserMenu from '@/components/UserMenu';
 import Link from 'next/link';
 import { Home } from 'lucide-react';
@@ -94,6 +95,7 @@ export default async function RootLayout({
             <main className="pt-safe-main sm:pt-20 px-safe-4 max-w-7xl mx-auto min-h-screen">
               {children}
             </main>
+            <SiteFooter />
             <MobileNav />
           </Providers>
         </NextIntlClientProvider>

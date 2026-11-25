@@ -26,6 +26,20 @@
     "passwordUpdated": "Password updated",
     "resetFailed": "Could not reset the password"
   },
+  "account": {
+    "fetchFailed": "Failed to load account details",
+    "noLocalPassword": "This account has no local password set (Google sign-in)",
+    "currentPasswordRequired": "Enter your current password",
+    "incorrectCurrentPassword": "Current password is incorrect",
+    "passwordUpdated": "Password updated",
+    "passwordChangedConcurrently": "Password was changed by another request. Please try again.",
+    "passwordUpdateFailed": "Failed to update password",
+    "exportFailed": "Failed to export account data",
+    "passwordRequiredToDelete": "Enter your current password to confirm deletion",
+    "deleteConfirmationRequired": "Type \"{word}\" to confirm account deletion",
+    "deleted": "Account deleted",
+    "deleteFailed": "Failed to delete account"
+  },
   "lists": {
     "defaultNames": {
       "main": "Main",

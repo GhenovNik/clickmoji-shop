@@ -1,0 +1,63 @@
+{
+  "page": {
+    "title": "Account",
+    "subtitle": "Manage your password, data export, and account deletion",
+    "backHome": "Back home",
+    "loadError": "Failed to load account details"
+  },
+  "profile": {
+    "title": "Profile",
+    "nameLabel": "Name",
+    "nameNotSet": "Not set",
+    "emailLabel": "Email",
+    "roleLabel": "Role",
+    "roleAdmin": "Administrator",
+    "roleUser": "User",
+    "createdAtLabel": "Member since",
+    "signInMethodLabel": "Sign-in method",
+    "signInMethodPassword": "Email and password",
+    "signInMethodGoogle": "Google (no local password)"
+  },
+  "password": {
+    "title": "Change password",
+    "description": "Enter your current password and choose a new password.",
+    "currentLabel": "Current password",
+    "currentPlaceholder": "Your current password",
+    "newLabel": "New password",
+    "confirmLabel": "Confirm new password",
+    "submit": "Change password",
+    "submitting": "Saving...",
+    "success": "Password updated.",
+    "currentRequired": "Enter your current password",
+    "googleNoticeTitle": "Google sign-in",
+    "googleNoticeBody": "You sign in with Google and do not have a local password set for this account, so changing a local password is not available."
+  },
+  "export": {
+    "title": "Data export",
+    "description": "Download a single JSON file with your profile, shopping lists, history, favorites, and products you created. Other users' data, password hashes, and tokens are never included.",
+    "button": "Download my data (JSON)",
+    "downloading": "Preparing file...",
+    "success": "Your data export has been downloaded.",
+    "failed": "Failed to download account data"
+  },
+  "legal": {
+    "title": "Legal",
+    "description": "Service terms and privacy information."
+  },
+  "delete": {
+    "title": "Delete account",
+    "description": "Your account and all personal data (lists, history, favorites, and private products) will be permanently deleted.",
+    "passwordPrompt": "Enter your current password to confirm.",
+    "passwordLabel": "Current password",
+    "passwordPlaceholder": "Enter your current password",
+    "phrasePrompt": "Type {word} to confirm.",
+    "phraseLabel": "Confirmation word",
+    "phraseWord": "DELETE",
+    "submit": "Delete account permanently",
+    "submitting": "Deleting...",
+    "deletedTitle": "Account deleted",
+    "deletedBody": "Your account and associated data have been deleted. Your session has ended.",
+    "toHome": "Go to home",
+    "toLogin": "Sign in again"
+  }
+}

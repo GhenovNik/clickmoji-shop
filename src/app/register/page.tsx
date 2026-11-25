@@ -11,6 +11,7 @@ import { useRouter } from 'next/navigation';
 import { signIn } from 'next-auth/react';
 import Link from 'next/link';
 import { Eye, EyeOff } from 'lucide-react';
+import LegalLinks from '@/components/LegalLinks';
 
 export default function RegisterPage() {
   const t = useTranslations('auth');
@@ -190,6 +191,11 @@ export default function RegisterPage() {
               {t('register.login')}
             </Link>
           </p>
+
+          <LegalLinks
+            className="mt-4 justify-center"
+            linkClassName="text-gray-500 hover:text-gray-800"
+          />
         </div>
       </div>
     </div>

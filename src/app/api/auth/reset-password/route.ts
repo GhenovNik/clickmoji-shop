@@ -43,21 +43,37 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: passwordError }, { status: 400 });
     }
 
-    const result = await consumePasswordResetToken(normalizedEmail, token);
-    if (!result.success) {
-      return NextResponse.json({ error: result.reason }, { status: 400 });
-    }
-
-    const user = await prisma.user.findUnique({ where: { email: normalizedEmail } });
-    if (!user) {
-      return NextResponse.json({ error: t('api.auth.resetLinkInvalid') }, { status: 400 });
-    }
-
     const hashedPassword = await bcrypt.hash(password, 12);
-    await prisma.user.update({
-      where: { email: normalizedEmail },
-      data: { password: hashedPassword, emailVerified: user.emailVerified || new Date() },
+    const outcome = await prisma.$transaction(async (tx) => {
+      const user = await tx.user.findUnique({
+        where: { email: normalizedEmail },
+        select: { id: true, emailVerified: true },
+      });
+      if (!user) {
+        return { ok: false as const, reason: t('api.auth.resetLinkInvalid') };
+      }
+
+      const result = await consumePasswordResetToken(normalizedEmail, token, tx);
+      if (!result.success) {
+        return { ok: false as const, reason: result.reason };
+      }
+
+      await tx.user.update({
+        where: { id: user.id },
+        data: { password: hashedPassword, emailVerified: user.emailVerified || new Date() },
+      });
+
+      // Clear any remaining reset tokens for this email so stale links cannot be reused.
+      await tx.passwordResetToken.deleteMany({
+        where: { email: normalizedEmail },
+      });
+
+      return { ok: true as const };
     });
+
+    if (!outcome.ok) {
+      return NextResponse.json({ error: outcome.reason }, { status: 400 });
+    }
 
     return NextResponse.json({ message: t('api.auth.passwordUpdated') });
   } catch (error) {

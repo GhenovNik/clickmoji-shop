@@ -21,6 +21,8 @@ const publicRoutes = [
   '/register',
   '/forgot-password',
   '/reset-password',
+  '/terms',
+  '/privacy',
   '/manifest.json',
   '/sw.js',
   '/offline.html',

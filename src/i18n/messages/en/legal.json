@@ -1,0 +1,23 @@
+{
+  "links": {
+    "terms": "Terms of Service",
+    "privacy": "Privacy Policy",
+    "separator": "·"
+  },
+  "footer": {
+    "brand": "Clickmoji Shop"
+  },
+  "stub": {
+    "badge": "Text is being prepared",
+    "note": "The full text of this document is being prepared and will be published before launch.",
+    "backHome": "Back home"
+  },
+  "terms": {
+    "title": "Terms of Service",
+    "subtitle": "Clickmoji Shop"
+  },
+  "privacy": {
+    "title": "Privacy Policy",
+    "subtitle": "Clickmoji Shop"
+  }
+}
