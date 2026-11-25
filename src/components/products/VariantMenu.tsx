@@ -3,7 +3,7 @@
 import Image from 'next/image';
 import { useLocale, useTranslations } from 'next-intl';
 import type { Product } from '@/hooks/useProductSelection';
-import { localizedName, namesOf } from '@/lib/catalog-name';
+import { localizedName, namePair, namesOf } from '@/lib/catalog-name';
 import { productImageUrl } from '@/lib/product-image';
 import { productNameClassName } from './product-name';
 import Modal, { ModalBody, ModalFooter } from '@/components/ui/Modal';
@@ -62,6 +62,7 @@ export default function VariantMenu({
         <div className="grid grid-cols-3 gap-3">
           {(product.variants ?? []).map((variant) => {
             const name = localizedName(variant, locale);
+            const hasSecondary = namePair(namesOf(variant), locale).secondary !== undefined;
             // A variant without a picture or emoji of its own shows the product's.
             const variantImage = productImageUrl(
               { imageUrl: variant.imageUrl ?? null, imageUrlEn: variant.imageUrlEn },
@@ -84,25 +85,25 @@ export default function VariantMenu({
                     ${picked ? 'ring-4 ring-green-500' : 'ring-1 ring-gray-100 hover:shadow-lg'}
                   `}
                 >
-                  <div className="mx-auto mb-1 flex h-14 w-14 items-center justify-center overflow-hidden">
+                  <div className="mx-auto mb-1 flex h-12 w-12 items-center justify-center overflow-hidden">
                     {image ? (
                       <Image
                         src={image}
                         alt={name}
-                        width={56}
-                        height={56}
-                        className="h-14 w-14 object-contain"
+                        width={48}
+                        height={48}
+                        className="h-12 w-12 object-contain"
                       />
                     ) : (
                       <span className="text-4xl leading-none">{emoji}</span>
                     )}
                   </div>
-                  <div className="flex h-[42px] items-center justify-center">
+                  <div className="flex h-[44px] items-center justify-center">
                     <LocalizedName
                       names={namesOf(variant)}
                       locale={locale}
                       className="text-center"
-                      primaryClassName={productNameClassName(name)}
+                      primaryClassName={productNameClassName(name, hasSecondary)}
                       secondaryClassName="truncate"
                     />
                   </div>

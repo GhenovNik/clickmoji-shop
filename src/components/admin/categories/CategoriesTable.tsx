@@ -4,7 +4,7 @@ import Image from 'next/image';
 import { useLocale, useTranslations } from 'next-intl';
 import { openModalFromTrigger } from '@/components/ui/Modal';
 import { LocalizedName } from '@/components/ui/LocalizedName';
-import { namesOf } from '@/lib/catalog-name';
+import { localizedName, namesOf } from '@/lib/catalog-name';
 
 interface Category {
   id: string;
@@ -73,7 +73,7 @@ export default function CategoriesTable({
                     {category.isCustom && category.imageUrl ? (
                       <Image
                         src={category.imageUrl}
-                        alt={category.name}
+                        alt={localizedName(category, locale)}
                         width={48}
                         height={48}
                         className="w-12 h-12 object-contain"
@@ -134,7 +134,7 @@ export default function CategoriesTable({
                 {category.isCustom && category.imageUrl ? (
                   <Image
                     src={category.imageUrl}
-                    alt={category.name}
+                    alt={localizedName(category, locale)}
                     width={48}
                     height={48}
                     className="w-12 h-12 object-contain"

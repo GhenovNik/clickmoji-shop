@@ -24,22 +24,47 @@ function invalidate(queryClient: QueryClient, keys: ReadonlyArray<readonly unkno
   }
 }
 
+function apiErrorMessage(body: unknown): string | null {
+  if (!body || typeof body !== 'object' || !('error' in body)) return null;
+  const message = (body as { error: unknown }).error;
+  return typeof message === 'string' && message.trim() ? message : null;
+}
+
+function isImportResponse(body: unknown): body is { results: ImportResults } {
+  if (!body || typeof body !== 'object' || !('results' in body)) return false;
+  const results = (body as { results: unknown }).results;
+  if (!results || typeof results !== 'object') return false;
+  const fields = results as Record<string, unknown>;
+  return ['added', 'created', 'skipped', 'failed'].every((key) => Array.isArray(fields[key]));
+}
+
 export function useImportListText() {
   const queryClient = useQueryClient();
   const t = useTranslations('lists');
 
   return useMutation({
     mutationFn: async ({ listId, text }: { listId: string; text: string }) => {
-      const res = await fetch('/api/lists/import-text', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text, listId }),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.error || t('importMutation.failed'));
+      let res: Response;
+      try {
+        res = await fetch('/api/lists/import-text', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text, listId }),
+        });
+      } catch {
+        // No response at all (offline, dropped connection): never show the browser's own text.
+        throw new Error(t('importMutation.network'));
       }
-      return data as { results: ImportResults };
+      // A body that is not JSON (a gateway page, an empty body) is treated as an unknown body.
+      const data: unknown = await res.json().catch(() => null);
+      if (!res.ok) {
+        // The API's own error text is already in the request language; anything else is generic.
+        throw new Error(apiErrorMessage(data) ?? t('importMutation.failed'));
+      }
+      if (!isImportResponse(data)) {
+        throw new Error(t('importMutation.failed'));
+      }
+      return data;
     },
     onSuccess: (data, { listId }) => {
       // Preserve the import endpoint's real added/created/failed report even if refetch fails.

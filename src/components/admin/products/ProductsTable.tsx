@@ -113,7 +113,7 @@ export default function ProductsTable({ products, onEdit, onDelete }: ProductsTa
                     {product.isCustom && productImageUrl(product, locale) ? (
                       <Image
                         src={productImageUrl(product, locale)!}
-                        alt={product.name}
+                        alt={localizedName(product, locale)}
                         width={48}
                         height={48}
                         className="w-12 h-12 object-contain"
@@ -188,7 +188,7 @@ export default function ProductsTable({ products, onEdit, onDelete }: ProductsTa
                 {product.isCustom && productImageUrl(product, locale) ? (
                   <Image
                     src={productImageUrl(product, locale)!}
-                    alt={product.name}
+                    alt={localizedName(product, locale)}
                     width={64}
                     height={64}
                     className="w-16 h-16 object-contain"
