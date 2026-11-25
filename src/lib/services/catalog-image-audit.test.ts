@@ -151,7 +151,7 @@ describe('catalog-image-audit', () => {
     const brokenDb: CatalogAuditDbReader = {
       category: {
         findMany: async () => {
-          throw new Error('postgresql://user:secret@host/db failed');
+          throw new Error('postgresql://user:secret@localhost/db failed');
         },
       },
       product: { findMany: async () => [] },

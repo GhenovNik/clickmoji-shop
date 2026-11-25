@@ -6,7 +6,8 @@ export type ImageProbeResult =
   | { ok: false; kind: 'INVALID_URL' | 'TIMEOUT' | 'NETWORK_ERROR' };
 
 /**
- * Normalizes a catalogue entity name for matching (case-insensitive, ё→е, collapsed whitespace).
+ * Normalizes a catalogue entity name for matching (case-insensitive, Cyrillic yo-to-ye folding,
+ * collapsed whitespace).
  */
 export function normalizeCatalogName(value: string): string {
   return value.toLowerCase().replace(/ё/g, 'е').replace(/\s+/g, ' ').trim();
