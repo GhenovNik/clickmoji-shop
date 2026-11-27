@@ -153,7 +153,7 @@ describe('proxy guest handling: the account row is canonical', () => {
     expect(redirectLocation(await proxy(get('/register')))).toBeNull();
   });
 
-  it('does not trust a guest claim in the token when the DB row is a registered account', async () => {
+  it('signs out a superseded guest token whose row is now a registered account (AGE-1667)', async () => {
     getTokenMock.mockResolvedValue({ ...validToken, role: 'ADMIN', isGuest: true });
     findUserMock.mockResolvedValue({
       createdAt: new Date(NOW - 120_000),
@@ -161,7 +161,7 @@ describe('proxy guest handling: the account row is canonical', () => {
       isGuest: false,
     });
 
-    expect(redirectLocation(await proxy(get('/admin')))).toBeNull();
+    expect(redirectLocation(await proxy(get('/admin')))).toBe('http://localhost/login');
   });
 
   it('treats a token whose account row was deleted as signed out, even for a guest-looking token', async () => {
@@ -169,5 +169,46 @@ describe('proxy guest handling: the account row is canonical', () => {
     findUserMock.mockResolvedValue(null);
 
     expect(redirectLocation(await proxy(get('/lists')))).toBe('http://localhost/login');
+  });
+});
+
+describe('proxy and jwt agree on a promoted guest (AGE-1667)', () => {
+  const promotedRow = { createdAt: new Date(NOW - 120_000), role: 'USER', isGuest: false };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.stubEnv('PLAYWRIGHT_AUTH_BYPASS', '');
+  });
+
+  it('a stale guest token (minted before promotion, same id) cannot reach a protected page', async () => {
+    // Issued after the row was created, so the issuance check alone accepts it (the old gap).
+    getTokenMock.mockResolvedValue({ ...validToken, isGuest: true });
+    findUserMock.mockResolvedValue(promotedRow);
+
+    expect(redirectLocation(await proxy(get('/lists')))).toBe('http://localhost/login');
+  });
+
+  it('a stale guest token can still open the sign-in page, so the visitor can log in again', async () => {
+    getTokenMock.mockResolvedValue({ ...validToken, isGuest: true });
+    findUserMock.mockResolvedValue(promotedRow);
+
+    expect(redirectLocation(await proxy(get('/login')))).toBeNull();
+    expect(redirectLocation(await proxy(get('/register')))).toBeNull();
+  });
+
+  it('a fresh guest token for a live guest row still gets the guest session', async () => {
+    getTokenMock.mockResolvedValue({ ...validToken, isGuest: true });
+    findUserMock.mockResolvedValue({ ...promotedRow, isGuest: true });
+
+    expect(redirectLocation(await proxy(get('/lists')))).toBeNull();
+    // A live guest may visit the sign-in page; only an account is sent home from it.
+    expect(redirectLocation(await proxy(get('/login')))).toBeNull();
+  });
+
+  it('an ordinary token for an ordinary row is unchanged: sign-in page redirects home', async () => {
+    getTokenMock.mockResolvedValue({ ...validToken, isGuest: false });
+    findUserMock.mockResolvedValue(promotedRow);
+
+    expect(redirectLocation(await proxy(get('/login')))).toBe('http://localhost/');
   });
 });

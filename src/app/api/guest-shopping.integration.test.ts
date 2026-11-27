@@ -354,7 +354,7 @@ describe.skipIf(!url)('server guest shopping on PostgreSQL', () => {
     await expect(authOptions.callbacks!.jwt!({ token: decodedJwt! } as never)).rejects.toThrow();
   });
 
-  it('leaves a live guest untouched when a regular registration runs from the same browser', async () => {
+  it('promotes the live guest in place when registration runs from the same browser (AGE-1667)', async () => {
     const { FUNNEL_GUEST_COOKIE, signGuestId } = await import('@/lib/funnel');
     const { NEXTAUTH_SESSION_COOKIE } = await import('@/lib/guest');
     const { authOptions } = await import('@/lib/auth');
@@ -393,14 +393,12 @@ describe.skipIf(!url)('server guest shopping on PostgreSQL', () => {
       { params: Promise.resolve({ listId: activeList.id }) }
     );
     expect(addRes.status).toBe(200);
-    const guestBefore = await db.user.findUnique({ where: { id: guest.id } });
     const guestListsBefore = await db.list.count({ where: { userId: guest.id } });
 
-    // Regular registration with the guest cookie creates a separate account; it never adopts the guest.
+    // Registration with the live guest cookie promotes that guest in place: same User.id, lists kept.
     const previousVerification = process.env.AUTH_REQUIRE_EMAIL_VERIFICATION;
     process.env.AUTH_REQUIRE_EMAIL_VERIFICATION = 'false';
     const regularEmail = `regular-${suffix}@example.test`;
-    let registeredId = '';
     try {
       const registerRes = await routes.register.POST(
         new Request('http://localhost:3000/api/auth/register', {
@@ -418,36 +416,28 @@ describe.skipIf(!url)('server guest shopping on PostgreSQL', () => {
       );
       expect(registerRes.status).toBe(201);
       const registerBody = (await registerRes.json()) as {
-        converted?: boolean;
+        promoted?: boolean;
         user: { id: string; email: string };
       };
-      expect(registerBody.converted).toBeUndefined();
-      expect(registerBody.user.id).not.toBe(guest.id);
-      registeredId = registerBody.user.id;
-      createdUserIds.push(registeredId);
+      expect(registerBody.promoted).toBe(true);
+      expect(registerBody.user.id).toBe(guest.id);
     } finally {
       if (previousVerification === undefined) delete process.env.AUTH_REQUIRE_EMAIL_VERIFICATION;
       else process.env.AUTH_REQUIRE_EMAIL_VERIFICATION = previousVerification;
     }
 
-    // The guest row is unchanged: still a guest, same placeholder email, same lists and items.
+    // The same row is now an account: same id, same lists and items, the email the user chose.
     expect(await db.user.findUnique({ where: { id: guest.id } })).toMatchObject({
-      isGuest: true,
-      email: guestBefore!.email,
-    });
-    expect(await db.list.count({ where: { userId: guest.id } })).toBe(guestListsBefore);
-    expect(await db.item.count({ where: { listId: activeList.id } })).toBe(1);
-
-    // The regular account is a separate, non-guest row with its own starter lists.
-    expect(await db.user.findUnique({ where: { id: registeredId } })).toMatchObject({
       isGuest: false,
       email: regularEmail,
     });
-    expect(await db.list.count({ where: { userId: registeredId } })).toBeGreaterThan(0);
+    expect(await db.list.count({ where: { userId: guest.id } })).toBe(guestListsBefore);
+    expect(await db.item.count({ where: { listId: activeList.id } })).toBe(1);
+    expect(await db.user.count({ where: { email: regularEmail } })).toBe(1);
 
-    // The guest's old JWT still resolves to the guest row, not to the new account.
-    const refreshed = await authOptions.callbacks!.jwt!({ token: decoded! } as never);
-    expect(refreshed.id).toBe(guest.id);
-    expect(refreshed.isGuest).toBe(true);
+    // The guest's old JWT is rejected: the row is no longer a guest.
+    await expect(authOptions.callbacks!.jwt!({ token: decoded! } as never)).rejects.toThrow(
+      'Guest session superseded by account'
+    );
   });
 });

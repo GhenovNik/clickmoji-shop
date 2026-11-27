@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
 import { getToken } from 'next-auth/jwt';
-import { isSessionTokenFreshForUser } from '@/lib/guest';
+import { isSessionTokenValidForRow } from '@/lib/guest';
 import { prisma } from '@/lib/prisma';
 import {
   checkRateLimit,
@@ -107,10 +107,10 @@ export default async function proxy(request: NextRequest) {
           select: { id: true, createdAt: true, role: true, isGuest: true },
         })
       : null;
+  // Same predicate as the jwt callback (guest.ts): a guest token whose row is now an account is
+  // signed out here too, so the route guard and the session agree on who is logged in.
   const activeAccount =
-    account && isSessionTokenFreshForUser(token?.sessionIssuedAt, account.createdAt)
-      ? account
-      : null;
+    token && account && isSessionTokenValidForRow(token, account) ? account : null;
   const hasE2EAuth = hasPlaywrightAuthBypass(request);
   const isLoggedIn = Boolean(activeAccount) || hasE2EAuth;
   // Guest status comes from the DB label of the active account, never from the token alone.

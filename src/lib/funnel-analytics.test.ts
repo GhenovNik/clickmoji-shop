@@ -279,3 +279,64 @@ describe('guest chain identity', () => {
     expect(summary.stages.map((s) => s.count)).toEqual([1, 0, 0, 0, 0]);
   });
 });
+
+describe('funnel-analytics guest promotion (AGE-1667)', () => {
+  const authCount = (events: FunnelEventRecord[]) =>
+    aggregateFunnelWindow(events, 7, NOW).stages.find((stage) => stage.stage === 'auth')?.count;
+
+  it('counts a promoted guest once in the auth stage, whether or not it also has a REGISTER', () => {
+    const base: FunnelEventRecord[] = [
+      event('VISIT', hoursAgo(10), { guestId: 'g-p' }),
+      event('REGISTER', hoursAgo(9), { guestId: 'g-p', userId: 'u-p' }),
+    ];
+    const promoted: FunnelEventRecord = {
+      ...event('GUEST_REGISTERED', hoursAgo(8), { guestId: 'g-p', userId: 'u-p' }),
+      userIsGuest: false,
+    };
+
+    expect(authCount([...base, promoted])).toBe(1);
+    expect(authCount(base)).toBe(1);
+    expect(aggregateFunnelWindow([...base, promoted], 7, NOW).guestPromotions).toBe(1);
+    expect(aggregateFunnelWindow(base, 7, NOW).guestPromotions).toBe(0);
+  });
+
+  it('reports a promotion without the analytics cookie as a promotion, with no visit it could extend', () => {
+    const promotion: FunnelEventRecord = {
+      ...event('GUEST_REGISTERED', hoursAgo(3), { userId: 'u-nocookie' }),
+      userIsGuest: false,
+    };
+
+    const window = aggregateFunnelWindow([promotion], 7, NOW);
+
+    expect(window.guestPromotions).toBe(1);
+    // Like an ordinary REGISTER with no VISIT before it, the stage chain does not start from it.
+    expect(window.stages.map((stage) => stage.count)).toEqual([0, 0, 0, 0, 0]);
+  });
+
+  it('keeps one person per promoted guest chain: a guest REGISTER and the promotion do not double count', () => {
+    const events: FunnelEventRecord[] = [
+      {
+        ...event('VISIT', hoursAgo(10), { guestId: 'g-chain' }),
+        userId: 'u-chain',
+        userIsGuest: false,
+      },
+      {
+        ...event('REGISTER', hoursAgo(9), { guestId: 'g-chain', userId: 'u-chain' }),
+        userIsGuest: false,
+      },
+      {
+        ...event('LIST_CREATE', hoursAgo(8.5), { guestId: 'g-chain', userId: 'u-chain' }),
+        userIsGuest: false,
+      },
+      {
+        ...event('GUEST_REGISTERED', hoursAgo(8), { guestId: 'g-chain', userId: 'u-chain' }),
+        userIsGuest: false,
+      },
+    ];
+
+    const window = aggregateFunnelWindow(events, 7, NOW);
+
+    expect(window.stages.map((stage) => stage.count)).toEqual([1, 1, 1, 0, 0]);
+    expect(window.guestPromotions).toBe(1);
+  });
+});

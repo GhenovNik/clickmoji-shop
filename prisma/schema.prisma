@@ -339,6 +339,7 @@ model VariantFavorite {
 enum FunnelEventType {
   VISIT
   REGISTER
+  GUEST_REGISTERED
   LOGIN
   LIST_CREATE
   ITEM_ADD

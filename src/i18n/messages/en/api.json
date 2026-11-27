@@ -13,8 +13,9 @@
   "auth": {
     "emailAndPasswordRequired": "Email and password are required",
     "invalidEmail": "Invalid email",
-    "userExists": "A user with this email already exists",
+    "userExists": "This email is already registered — sign in",
     "verificationEmailFailed": "Could not send the confirmation email. Please try again later.",
+    "guestSessionExpired": "Your guest session has expired. Start shopping again.",
     "userCreated": "User created",
     "registrationFailed": "Registration failed",
     "verificationNotRequired": "Email confirmation is not required",

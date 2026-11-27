@@ -30,6 +30,11 @@ export type FunnelWindowSummary = {
   stages: FunnelStageSummary[];
   /** Overall conversion from visit to purchased (0..1), or null when visit count is zero. */
   overallRate: number | null;
+  /**
+   * Guest accounts promoted in place in the window (one per committed promotion, AGE-1667). Shown
+   * apart from the stages: a promotion is not a new REGISTER, and it adds no stage count of its own.
+   */
+  guestPromotions: number;
 };
 
 export type FunnelReport = {
@@ -42,6 +47,7 @@ const MS_PER_DAY = 24 * 60 * 60 * 1000;
 const STAGE_INDEX: Record<FunnelEventType, number> = {
   VISIT: 0,
   REGISTER: 1,
+  GUEST_REGISTERED: 1,
   LOGIN: 1,
   LIST_CREATE: 2,
   ITEM_ADD: 3,
@@ -163,12 +169,15 @@ export function aggregateFunnelWindow(
   const visitCount = counts[0];
   const purchaseCount = counts[FUNNEL_STAGES.length - 1];
 
+  const guestPromotions = inWindow.filter((event) => event.type === 'GUEST_REGISTERED').length;
+
   return {
     days,
     windowStart: windowStart.toISOString(),
     windowEnd: windowEnd.toISOString(),
     stages,
     overallRate: visitCount > 0 ? purchaseCount / visitCount : null,
+    guestPromotions,
   };
 }
 

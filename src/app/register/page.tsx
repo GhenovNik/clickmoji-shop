@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useTranslations } from 'next-intl';
 import {
   getPasswordIssue,
@@ -8,22 +8,87 @@ import {
   PASSWORD_MIN_LENGTH,
 } from '@/lib/validation/password';
 import { useRouter } from 'next/navigation';
-import { signIn } from 'next-auth/react';
+import { getProviders, signIn, useSession } from 'next-auth/react';
 import Link from 'next/link';
 import { Eye, EyeOff } from 'lucide-react';
 import LegalLinks from '@/components/LegalLinks';
+import {
+  GOOGLE_PROVIDER_ID,
+  GUEST_UPGRADE_START_FIELD,
+  GUEST_UPGRADE_START_VALUE,
+} from '@/lib/guest-upgrade-intent';
+
+/** Reasons the Google callback sends back as `/register?upgrade=<reason>` (AGE-1667). */
+function upgradeNoticeKeyFor(reason: string | null) {
+  switch (reason) {
+    case 'email-taken':
+      return 'register.upgradeEmailTaken' as const;
+    case 'unverified':
+      return 'register.upgradeUnverified' as const;
+    case 'expired':
+      return 'register.upgradeExpired' as const;
+    default:
+      return null;
+  }
+}
 
 export default function RegisterPage() {
   const t = useTranslations('auth');
   const router = useRouter();
+  const { data: session } = useSession();
+  const isGuest = Boolean(session?.user?.isGuest);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
+  const [googleEnabled, setGoogleEnabled] = useState(false);
+  const [upgradeReason, setUpgradeReason] = useState<string | null>(null);
+
+  useEffect(() => {
+    setUpgradeReason(new URLSearchParams(window.location.search).get('upgrade'));
+
+    let active = true;
+    getProviders()
+      .then((providers) => {
+        if (active) setGoogleEnabled(Boolean(providers?.[GOOGLE_PROVIDER_ID]));
+      })
+      .catch(() => {
+        if (active) setGoogleEnabled(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const upgradeNoticeKey = upgradeNoticeKeyFor(upgradeReason);
+  const shownError = error || (upgradeNoticeKey ? t(upgradeNoticeKey) : '');
+
+  async function startGoogleUpgrade() {
+    setError('');
+    setUpgradeReason(null);
+    try {
+      // The server arms the upgrade for this live guest (httpOnly cookie). A refusal means the
+      // guest session is no longer live, so the register page shows the expired notice. The same
+      // Google provider and redirect URI serve the upgrade: the armed cookie is what makes it one.
+      const res = await fetch('/api/auth/guest-upgrade', { method: 'POST' });
+      if (!res.ok) {
+        setUpgradeReason('expired');
+        return;
+      }
+      // The option is sent as a form field of the POST, which is what makes the start explicit.
+      void signIn(GOOGLE_PROVIDER_ID, {
+        callbackUrl: '/',
+        [GUEST_UPGRADE_START_FIELD]: GUEST_UPGRADE_START_VALUE,
+      });
+    } catch {
+      setError(t('register.networkError'));
+    }
+  }
 
   async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     setError('');
+    setUpgradeReason(null);
     setLoading(true);
 
     const formData = new FormData(e.currentTarget);
@@ -89,7 +154,22 @@ export default function RegisterPage() {
           <div className="text-center mb-8">
             <h1 className="text-3xl font-bold text-gray-900">🛒 {t('register.title')}</h1>
             <p className="text-gray-600 mt-2">{t('register.subtitle')}</p>
+            {isGuest && (
+              <p className="mt-4 rounded-lg bg-blue-50 px-4 py-3 text-left text-sm text-blue-900">
+                {t('register.guestNotice')}
+              </p>
+            )}
           </div>
+
+          {isGuest && googleEnabled && (
+            <button
+              type="button"
+              onClick={() => void startGoogleUpgrade()}
+              className="mb-4 w-full bg-white hover:bg-gray-50 text-gray-900 border border-gray-300 px-4 py-3 rounded-lg font-semibold transition-colors"
+            >
+              {t('register.saveWithGoogle')}
+            </button>
+          )}
 
           <form onSubmit={handleSubmit} className="space-y-4">
             <div>
@@ -172,8 +252,10 @@ export default function RegisterPage() {
               </div>
             </div>
 
-            {error && (
-              <div className="bg-red-50 text-red-600 px-4 py-3 rounded-lg text-sm">{error}</div>
+            {shownError && (
+              <div className="bg-red-50 text-red-600 px-4 py-3 rounded-lg text-sm">
+                {shownError}
+              </div>
             )}
 
             <button
@@ -181,7 +263,11 @@ export default function RegisterPage() {
               disabled={loading}
               className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-blue-400 text-white py-3 rounded-lg font-semibold transition-colors shadow-lg hover:shadow-xl"
             >
-              {loading ? t('register.submitting') : t('register.submit')}
+              {loading
+                ? t('register.submitting')
+                : isGuest
+                  ? t('register.saveAccount')
+                  : t('register.submit')}
             </button>
           </form>
 

@@ -4,9 +4,22 @@ import { renderWithIntl } from '@/test/intl';
 import RegisterPage from './page';
 
 const router = vi.hoisted(() => ({ push: vi.fn(), refresh: vi.fn() }));
-const auth = vi.hoisted(() => ({ signIn: vi.fn() }));
+const auth = vi.hoisted(() => ({
+  signIn: vi.fn(),
+  getProviders: vi.fn(async () => ({
+    google: { id: 'google' },
+  })),
+  session: null as null | { user: { isGuest: boolean } },
+}));
 vi.mock('next/navigation', () => ({ useRouter: () => router }));
-vi.mock('next-auth/react', () => ({ signIn: auth.signIn }));
+vi.mock('next-auth/react', () => ({
+  signIn: auth.signIn,
+  getProviders: auth.getProviders,
+  useSession: () => ({
+    data: auth.session,
+    status: auth.session ? 'authenticated' : 'unauthenticated',
+  }),
+}));
 
 function submit(password: string, confirmPassword = password) {
   fireEvent.change(document.getElementById('email')!, { target: { value: 'user@example.com' } });
@@ -25,9 +38,15 @@ function stubRegister(response: Record<string, unknown>, ok = true) {
 }
 
 beforeEach(() => {
+  auth.getProviders.mockReset();
+  auth.getProviders.mockResolvedValue({
+    google: { id: 'google' },
+  });
+  window.history.replaceState({}, '', '/register');
   router.push.mockReset();
   router.refresh.mockReset();
   auth.signIn.mockReset();
+  auth.session = null;
   window.localStorage.clear();
   window.sessionStorage.clear();
 });
@@ -43,6 +62,21 @@ describe('RegisterPage', () => {
     expect(screen.getByRole('heading', { name: /Регистрация/ })).toBeTruthy();
     expect(screen.getByLabelText('Электронная почта')).toBeTruthy();
     expect(screen.getByPlaceholderText('Минимум 8 символов')).toBeTruthy();
+  });
+
+  it('explains list retention to a guest, in both locales', () => {
+    auth.session = { user: { isGuest: true } };
+    const { unmount } = renderWithIntl(<RegisterPage />);
+    expect(screen.getByText(/Ваши списки, покупки и избранное сохранятся/)).toBeTruthy();
+    unmount();
+
+    renderWithIntl(<RegisterPage />, { locale: 'en' });
+    expect(screen.getByText(/Your lists, purchases and favorites will be kept/)).toBeTruthy();
+  });
+
+  it('shows no guest notice to a signed-out visitor', () => {
+    renderWithIntl(<RegisterPage />);
+    expect(screen.queryByText(/сохранятся/)).toBeNull();
   });
 
   it('renders the form and the password rules in English', async () => {
@@ -174,5 +208,80 @@ describe('RegisterPage server errors in both languages', () => {
     submit('password1');
 
     expect(await screen.findByText(text)).toBeTruthy();
+  });
+});
+
+describe('RegisterPage guest upgrade (AGE-1667)', () => {
+  it('labels the guest submit as the save-account action, in both locales', () => {
+    auth.session = { user: { isGuest: true } };
+    const { unmount } = renderWithIntl(<RegisterPage />);
+    expect(screen.getByRole('button', { name: 'Сохранить аккаунт' })).toBeTruthy();
+    unmount();
+
+    renderWithIntl(<RegisterPage />, { locale: 'en' });
+    expect(screen.getByRole('button', { name: 'Save account' })).toBeTruthy();
+  });
+
+  it('keeps the ordinary sign-up label for a signed-out visitor', () => {
+    renderWithIntl(<RegisterPage />);
+    expect(screen.getByRole('button', { name: 'Зарегистрироваться' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Сохранить аккаунт через Google' })).toBeNull();
+  });
+
+  it('arms the server-side upgrade first, then starts the same google provider', async () => {
+    auth.session = { user: { isGuest: true } };
+    const fetchMock = vi.fn(async () => Response.json({ ok: true }));
+    vi.stubGlobal('fetch', fetchMock);
+    renderWithIntl(<RegisterPage />, { locale: 'en' });
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Save account with Google' }));
+
+    await waitFor(() => expect(auth.signIn).toHaveBeenCalledTimes(1));
+    expect(fetchMock).toHaveBeenCalledWith('/api/auth/guest-upgrade', { method: 'POST' });
+    // The upgrade is the same Google provider and redirect URI. The explicit-start field in the
+    // options is what the server reads from the POST body; the arm alone does not make it explicit.
+    expect(auth.signIn).toHaveBeenCalledWith('google', {
+      callbackUrl: '/',
+      guestUpgrade: 'explicit',
+    });
+    expect(auth.signIn).not.toHaveBeenCalledWith('google-upgrade', expect.anything());
+    // The intent lives only in the server's httpOnly cookie; the page never sets a browser flag.
+    expect(document.cookie).not.toContain('clickmoji_guest_upgrade');
+  });
+
+  it('does not start Google when the guest is no longer live, and shows the expired notice', async () => {
+    auth.session = { user: { isGuest: true } };
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => Response.json({ error: 'guestSessionExpired' }, { status: 409 }))
+    );
+    renderWithIntl(<RegisterPage />, { locale: 'en' });
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Save account with Google' }));
+
+    expect(await screen.findByText(/Your guest session has expired/)).toBeTruthy();
+    expect(auth.signIn).not.toHaveBeenCalled();
+  });
+
+  it('shows no Google upgrade button when Google is not configured', async () => {
+    auth.session = { user: { isGuest: true } };
+    auth.getProviders.mockResolvedValue({} as never);
+    renderWithIntl(<RegisterPage />);
+
+    await waitFor(() => expect(auth.getProviders).toHaveBeenCalled());
+    expect(screen.queryByRole('button', { name: /через Google/ })).toBeNull();
+  });
+
+  it.each([
+    ['email-taken', 'ru', 'Эта почта уже зарегистрирована — войдите'],
+    ['email-taken', 'en', 'This email is already registered — sign in'],
+    ['unverified', 'ru', 'Google не подтвердил эту почту'],
+    ['expired', 'en', 'Your guest session has expired. Start shopping again.'],
+  ] as const)('shows the %s refusal from Google in %s', (reason, locale, text) => {
+    window.history.replaceState({}, '', `/register?upgrade=${reason}`);
+
+    renderWithIntl(<RegisterPage />, { locale });
+
+    expect(screen.getByText(text, { exact: false })).toBeTruthy();
   });
 });

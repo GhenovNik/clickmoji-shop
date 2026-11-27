@@ -51,6 +51,26 @@ export function isSessionTokenFreshForUser(
 }
 
 /**
+ * Shared invalidation rule (AGE-1667). A token that says guest is superseded once its row is an
+ * account: guest promotion keeps the id, so the issuance claim alone cannot reject it. Every session
+ * boundary (the jwt callback, the proxy and the guards) calls this one predicate.
+ */
+export function isGuestTokenSupersededByRow(tokenIsGuest: unknown, rowIsGuest: boolean): boolean {
+  return tokenIsGuest === true && rowIsGuest !== true;
+}
+
+/** A session token is valid for a user row only if it is not older than the row and not superseded. */
+export function isSessionTokenValidForRow(
+  claims: { sessionIssuedAt?: unknown; isGuest?: unknown },
+  row: { createdAt: Date | null | undefined; isGuest: boolean }
+): boolean {
+  return (
+    isSessionTokenFreshForUser(claims.sessionIssuedAt, row.createdAt) &&
+    !isGuestTokenSupersededByRow(claims.isGuest, row.isGuest)
+  );
+}
+
+/**
  * Matches NextAuth's session cookie security naming so `getServerSession` and `getToken` read the
  * cookie minted by `POST /api/auth/guest` in both local HTTP and HTTPS/Vercel deployments.
  */

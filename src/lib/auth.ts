@@ -8,11 +8,19 @@ import { isEmailVerificationRequired } from './email';
 import { normalizeEmail } from './auth-security';
 import { readGuestIdFromRequestScope, recordFunnelEvent } from './funnel';
 import {
+  readGuestUpgradeIntent,
+  resolveGuestFromCookieStore,
+  upgradeGuestWithGoogle,
+} from './guest-promotion';
+import {
   currentSessionIssuedAtSeconds,
   isGuestEmail,
+  isGuestTokenSupersededByRow,
   isSessionIssuedAtClaim,
   isSessionTokenFreshForUser,
 } from './guest';
+import { GOOGLE_PROVIDER_ID } from './guest-upgrade-intent';
+import { guestUpgradeOAuthCookies } from './guest-upgrade-oauth';
 
 const providers: NextAuthOptions['providers'] = [
   Credentials({
@@ -63,20 +71,107 @@ const providers: NextAuthOptions['providers'] = [
   }),
 ];
 
-if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET) {
-  providers.push(
-    Google({
-      clientId: process.env.GOOGLE_CLIENT_ID,
-      clientSecret: process.env.GOOGLE_CLIENT_SECRET,
-    })
-  );
+const googleConfigured = Boolean(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET);
+
+/**
+ * The one Google provider (`google`, redirect URI /api/auth/callback/google). The explicit upgrade
+ * (AGE-1667) uses a second NextAuth instance built from this same provider, see guestUpgradeAuthOptions.
+ * Nothing new is registered with Google.
+ */
+function googleProvider() {
+  return Google({
+    clientId: process.env.GOOGLE_CLIENT_ID as string,
+    clientSecret: process.env.GOOGLE_CLIENT_SECRET as string,
+  });
+}
+
+if (googleConfigured) {
+  providers.push(googleProvider());
+}
+
+/** Google identity from the ordinary provider: a verified identity, the same checks either way. */
+function isGoogleAccount(account: { provider?: string } | null | undefined): boolean {
+  return account?.provider === GOOGLE_PROVIDER_ID;
+}
+
+/**
+ * Explicit guest upgrade through Google (AGE-1667). Runs only in the upgrade NextAuth instance
+ * (guestUpgradeAuthOptions), whose state and PKCE cookies NextAuth has already verified for that
+ * round trip. It never falls back to ordinary sign-in: every refusal redirects to the register page
+ * with no session and no second user. Promotion keeps the guest's User.id.
+ *
+ * The guest must be the live guest the upgrade was armed for (the signed intent cookie names it),
+ * and the promotion itself is one conditional update `where { id, isGuest: true }`, so a replay of
+ * the same upgrade finds the guest already an account and is refused.
+ */
+async function completeGoogleUpgrade(
+  user: {
+    id?: string;
+    email?: string | null;
+    name?: string | null;
+    image?: string | null;
+    role?: string;
+  },
+  profile: { email?: string | null; email_verified?: unknown } | undefined
+): Promise<true | string> {
+  const intent = await readGuestUpgradeIntent();
+  const guest = await resolveGuestFromCookieStore();
+  if (!intent || guest.kind !== 'guest' || guest.userId !== intent.guestUserId) {
+    return '/register?upgrade=expired';
+  }
+
+  const email = normalizeEmail((user.email || profile?.email || '') as string);
+  if (!email || isGuestEmail(email)) {
+    return '/register?upgrade=unverified';
+  }
+
+  const existingUser = await prisma.user.findUnique({ where: { email } });
+  const outcome = await upgradeGuestWithGoogle({
+    guest,
+    email,
+    emailVerified: profile?.email_verified === true,
+    existingUserId: existingUser?.id ?? null,
+    name: user.name || null,
+    image: user.image || null,
+  });
+  if (outcome.status !== 'promoted') {
+    return `/register?upgrade=${outcome.status}`;
+  }
+
+  user.id = outcome.user.id;
+  (user as typeof user & { role?: string; isGuest?: boolean }).role = outcome.user.role;
+  (user as typeof user & { isGuest?: boolean }).isGuest = false;
+  return true;
+}
+
+/**
+ * The NextAuth instance that serves the explicit guest upgrade only (AGE-1667): the same `google`
+ * provider and redirect URI, the namespaced round-trip cookies of guest-upgrade-oauth.ts, and a
+ * sign-in callback that only promotes. Null when Google is not configured. The route picks this
+ * instance for a round trip that the server armed and bound to an intent (see the NextAuth route).
+ */
+export function guestUpgradeAuthOptions(secure: boolean): NextAuthOptions | null {
+  if (!googleConfigured) return null;
+  return {
+    ...authOptions,
+    providers: [googleProvider()],
+    useSecureCookies: secure,
+    cookies: guestUpgradeOAuthCookies(secure),
+    callbacks: {
+      ...authOptions.callbacks,
+      async signIn({ user, account, profile }) {
+        if (account?.provider !== GOOGLE_PROVIDER_ID) return false;
+        return completeGoogleUpgrade(user, profile);
+      },
+    },
+  };
 }
 
 export const authOptions: NextAuthOptions = {
   ...authConfig,
   callbacks: {
     async signIn({ user, account, profile }) {
-      if (account?.provider !== 'google') {
+      if (account?.provider !== GOOGLE_PROVIDER_ID) {
         if (user?.id) {
           const guestId = await readGuestIdFromRequestScope();
           await recordFunnelEvent({
@@ -94,7 +189,10 @@ export const authOptions: NextAuthOptions = {
         return false;
       }
 
+      // Ordinary Google sign-in (AGE-1667): it never reads the upgrade intent or arm and never
+      // promotes a guest, whatever cookies the browser carries. A guest row is refused, as before.
       const existingUser = await prisma.user.findUnique({ where: { email } });
+
       if (existingUser?.isGuest) {
         return false;
       }
@@ -151,7 +249,7 @@ export const authOptions: NextAuthOptions = {
         // Initial issuance: stamp the immutable claim once. Refreshes below copy it unchanged.
         const sessionIssuedAt = currentSessionIssuedAtSeconds();
 
-        if (account?.provider === 'google') {
+        if (isGoogleAccount(account)) {
           // The signIn callback already resolved or created the row and set user.id to its
           // User.id. Identify it by that id; never look the account up by email again here.
           const dbUser = user.id
@@ -197,6 +295,13 @@ export const authOptions: NextAuthOptions = {
 
       if (!dbUser || !isSessionTokenFreshForUser(token.sessionIssuedAt, dbUser.createdAt)) {
         throw new Error('Session user no longer valid');
+      }
+
+      // A guest token minted before the row was promoted in place (AGE-1667) keeps the same id and
+      // passes the issuance check, so the stored isGuest claim is compared with the row here.
+      // Checked before the claim is overwritten below.
+      if (isGuestTokenSupersededByRow(token.isGuest, dbUser.isGuest)) {
+        throw new Error('Guest session superseded by account');
       }
 
       token.role = dbUser.role;
